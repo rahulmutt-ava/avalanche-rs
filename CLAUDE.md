@@ -12,7 +12,7 @@ conform to conventions so your work passes CI on the first try.
 ## Repo at a glance
 
 - **Module:** a single Cargo workspace; `ava-*` crates under `crates/`; the binary
-  is `avalanchego`.
+  is `avalanchers`.
 - **Rust version:** pinned exactly in `rust-toolchain.toml`. CGO-equivalent FFI
   (rocksdb, firewood, blst, secp256k1) needs `clang`/`libclang` — provided by the
   Nix dev shell.
@@ -45,7 +45,7 @@ See `specs/11-saevm.md` and `00` §7.7.
 | `ava-vm`, `ava-vm-rpc`, `ava-secp256k1fx` | VM framework + rpcchainvm plugin |
 | `ava-platformvm`, `ava-avm`, `ava-evm`, `ava-saevm*` | the VMs |
 | `ava-chains`, `ava-api`, `ava-indexer`, `ava-wallet`, `ava-genesis`, `ava-config` | node services |
-| `ava-node`, `avalanchego` | node assembly + binary |
+| `ava-node`, `avalanchers` | node assembly + binary |
 
 ## Running tasks
 

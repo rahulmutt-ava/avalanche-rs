@@ -1,0 +1,12 @@
+[package]
+name = "avalanchers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Avalanche node (Rust) — drop-in replacement for avalanchego."
+
+[dependencies]
+clap = { workspace = true }

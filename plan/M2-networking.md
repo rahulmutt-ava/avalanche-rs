@@ -262,12 +262,12 @@ Wave D  (differential / exit)
 - [ ] **Step 2 — Confirm red:** run the full named set and observe any remaining red: `cargo nextest run --profile ci -E 'test(message_frames) + test(frame_roundtrip) + test(handshake_reaches_connected) + test(interop_handshake)'`.
 - [ ] **Step 3 — Green:** ensure all of the following pass (BUILDABLE-&-GREEN INVARIANT):
   - `cargo build --workspace`
-  - `cargo build -p avalanchego` (binary still builds; `--version`/`--help` work — smoke run them)
+  - `cargo build -p avalanchers` (binary still builds; `--version`/`--help` work — smoke run them)
   - `cargo nextest run --profile ci` (whole workspace)
   - `cargo clippy --workspace -- -D warnings`
   - the named exit tests: `golden::message_frames`, `prop::frame_roundtrip`, fuzz `decode_never_overreads` (smoke run), `prop::handshake_reaches_connected`, `differential::interop_handshake` (recorded-fallback in CI; live arm behind the `interop` feature/env, per M2.22).
   - update both crates' `tests/PORTING.md` matrices (no `wip` rows for the `05`/`15 §3`/`26` handshake surfaces).
-- [ ] **Step 4 — Confirm green:** the full invariant command block above is green; `./target/debug/avalanchego --version` and `--help` succeed.
+- [ ] **Step 4 — Confirm green:** the full invariant command block above is green; `./target/debug/avalanchers --version` and `--help` succeed.
 - [ ] **Step 5 — Commit:** `M2: networking handshake exit gate green (build + nextest + clippy + golden/prop/fuzz/differential)`.
 
 ---

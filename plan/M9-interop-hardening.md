@@ -6,7 +6,7 @@
 **Tier:** final (ava-vm-rpc + all crates)
 **Crates:** ava-vm-rpc (deepened) + all crates (hardening)
 **Owning specs:** `07` §5 (rpcchainvm host+guest, reverse-dial v45), `02` §10.3 (load), §10.4 (upgrade), §10.5 (reexecute), §11 (differential harness), `26` (handshake compatibility, version string, RPCChainVMProtocol=45), `27` (crash-consistency hardening), `16` §5 (drop-in acceptance criteria — definition of done), `00` §11.1.1 (reverse-dial), §11.2 (risks)
-**Depends on (prior milestones):** M8 (full node: `ava-node`, `ava-config`, `ava-api`, `ava-genesis`, `avalanchego` bin) + all of M0–M8 (every `ava-*` crate green at its own exit gate)
+**Depends on (prior milestones):** M8 (full node: `ava-node`, `ava-config`, `ava-api`, `ava-genesis`, `avalanchers` bin) + all of M0–M8 (every `ava-*` crate green at its own exit gate)
 **Exit gate (named tests):**
 - **`differential::plugin_rust_in_go`** + **`differential::plugin_go_in_rust`** — reverse-dial handshake v45, proxied services (rpcdb, appsender, sharedmemory, validatorstate, warp, aliasreader) work both ways (`00` §11.1.1, `07` §5).
 - **`differential::mixed_network`** — live Go+Rust nodes, all chains, no fork, same tip.
@@ -167,7 +167,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: RpcChainVm host client full ChainVm (serves callbacks, dials VM)`
 
 ### Task M9.12: `differential::plugin_go_in_rust` — Go test-VM hosted by a Rust node
-**Crate/area:** `ava-differential` + `ava-vm-rpc::host`  ·  **Depends on:** M9.11, M8 (avalanchego bin)  ·  **Spec:** `16` §5(7), `26` §5 (interop both directions), `07` §5.3, `02` §11
+**Crate/area:** `ava-differential` + `ava-vm-rpc::host`  ·  **Depends on:** M9.11, M8 (avalanchers bin)  ·  **Spec:** `16` §5(7), `26` §5 (interop both directions), `07` §5.3, `02` §11
 **Files:** `tests/differential/src/plugin.rs`, `tests/differential/tests/plugin_go_in_rust.rs`
 - [ ] **Step 1 — Red:** Write `differential::plugin_go_in_rust`: take a known **Go** rpcchainvm plugin binary (built against protocol 45, e.g. a Go test-VM or the timestampvm reference); configure the **Rust** `avalanchego` node to host it via the rpcchainvm host factory; assert the Rust host completes `Runtime.Initialize` reverse-dial (the Go plugin dials our `Runtime` and we record its VM addr), then drive build/verify/accept and assert the chain advances. Also assert a Go plugin built against protocol **44** is rejected by the Rust host with `ProtocolVersionMismatch`, identically to a Go host.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential plugin_go_in_rust` → fails.
@@ -185,7 +185,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 5 — Commit:** `differential: rpcchainvm four-way wire-identity matrix (proto/vm byte goldens)`
 
 ### Task M9.14: `ava-differential` mixed Go+Rust network bring-up + Observation
-**Crate/area:** `ava-differential`  ·  **Depends on:** M8 (avalanchego bin, all chains), M2 (handshake interop)  ·  **Spec:** `02` §11.1 (two-binary live), §11.3 (Observation), §11.4 (normalization), `26` §9(4)
+**Crate/area:** `ava-differential`  ·  **Depends on:** M8 (avalanchers bin, all chains), M2 (handshake interop)  ·  **Spec:** `02` §11.1 (two-binary live), §11.3 (Observation), §11.4 (normalization), `26` §9(4)
 **Files:** `tests/differential/src/network.rs`, `tests/differential/src/observation.rs`, `tests/differential/tests/mixed_network_smoke.rs`
 - [ ] **Step 1 — Red:** Write `mixed_network_bringup_smoke`: start a tmpnet network of N nodes where node `i` is alternately Go (`AVALANCHEGO_PATH`=Go) and Rust (`AVALANCHEGO_PATH`=Rust), identical genesis/config/seed (deterministic node IDs/TLS per `02` §11.4); assert all nodes complete handshakes, exchange PeerLists, and a Go node logs the Rust peer's version as `avalanchego/1.14.2` (`26` §9(4)). Assert `Observation::collect(node).normalized()` returns a comparable per-chain (LA block ID+height, state/merkle root, sorted validator set).
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network_bringup_smoke` → fails.
@@ -270,8 +270,8 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 **Files:** `xtask/src/commands/acceptance.rs`, every crate's `tests/PORTING.md`, `.github/workflows/ci.yml` (or Bazel equivalent), `tests/differential/tests/definition_of_done.rs`
 - [ ] **Step 1 — Red:** Write `definition_of_done` (an aggregating test/xtask `cargo xtask acceptance`) that asserts the full `16` §5 checklist is green simultaneously: (1) joins Mainnet & Fuji and tracks tip without forking; (2) `differential::mixed_network` (indistinguishable mixed net); (3) full `differential::*` suite incl. `test-reexecute` at target cases; (4) `golden::flag_parity` zero diff; (5) `differential::api_parity`; (6) `golden::genesis_block_id` (Mainnet+Fuji exact); (7) `differential::plugin_rust_in_go` + `differential::plugin_go_in_rust` (v45 both directions); (8) `test-upgrade` Go→Rust across activation height incl. Go-dir→RocksDB import; (9) `bench-guard` holds. Also assert every crate's `tests/PORTING.md` has **zero `wip` rows** (`cargo xtask porting-report`).
 - [ ] **Step 2 — Confirm red:** `cargo xtask acceptance` → fails (some checklist item or `wip` row outstanding).
-- [ ] **Step 3 — Green:** Drive every outstanding item green; update each crate's `tests/PORTING.md` to zero `wip` rows; wire CI so per-PR runs recorded-oracle + reexecute + plugin-handshake (`differential::plugin_rust_in_go`) while live two-binary differentials (`mixed_network`, `plugin_go_in_rust`, `test-upgrade`, `test-load`) run nightly/pre-release (`00` §11.7, `02` §11.7). Run the BUILDABLE-&-GREEN invariant: `cargo build --workspace`, `cargo build -p avalanchego`, `cargo nextest run --profile ci`, `cargo clippy --workspace -- -D warnings`, plus **all** named exit tests.
-- [ ] **Step 4 — Confirm green:** `cargo build --workspace && cargo build -p avalanchego && cargo nextest run --profile ci && cargo clippy --workspace -- -D warnings && cargo xtask acceptance` → all pass; the `16` §5 checklist is fully green; zero `wip` rows.
+- [ ] **Step 3 — Green:** Drive every outstanding item green; update each crate's `tests/PORTING.md` to zero `wip` rows; wire CI so per-PR runs recorded-oracle + reexecute + plugin-handshake (`differential::plugin_rust_in_go`) while live two-binary differentials (`mixed_network`, `plugin_go_in_rust`, `test-upgrade`, `test-load`) run nightly/pre-release (`00` §11.7, `02` §11.7). Run the BUILDABLE-&-GREEN invariant: `cargo build --workspace`, `cargo build -p avalanchers`, `cargo nextest run --profile ci`, `cargo clippy --workspace -- -D warnings`, plus **all** named exit tests.
+- [ ] **Step 4 — Confirm green:** `cargo build --workspace && cargo build -p avalanchers && cargo nextest run --profile ci && cargo clippy --workspace -- -D warnings && cargo xtask acceptance` → all pass; the `16` §5 checklist is fully green; zero `wip` rows.
 - [ ] **Step 5 — Commit:** `M9: final acceptance gate — drop-in replacement DoD green (R-final retired)`
 
 ---

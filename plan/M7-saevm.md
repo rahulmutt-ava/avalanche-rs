@@ -319,14 +319,14 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [ ] **Step 5 — Commit:** `sae(blocks): cargo-fuzz decode_block target + seed corpus`
 
 ### Task M7.32: Milestone exit gate
-**Sub-crate:** ava-saevm (all) + avalanchego bin  ·  **Depends on:** M7.1–M7.31  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
+**Sub-crate:** ava-saevm (all) + avalanchers bin  ·  **Depends on:** M7.1–M7.31  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
 **Files:** `crates/ava-saevm/*/tests/PORTING.md` (filled), `tests/PORTING.md` aggregate row, `.config/nextest.toml` (ci profile), CI workflow SAE job
 - [ ] **Step 1 — Red:** Add a milestone meta-test list / xtask `xtask saevm-exit-gate` that asserts the named exit tests exist and are referenced: `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery`, `differential::sae_streaming`, all `invariant::*` (11). Run it → fails until everything is wired and PORTING.md is complete.
 - [ ] **Step 2 — Confirm red:** `cargo xtask saevm-exit-gate` → reports missing/failing items.
 - [ ] **Step 3 — Green:** Ensure all sub-crates ship their proptest suite + committed `proptest-regressions/`, golden vectors under `tests/vectors/saevm/`, the cargo-fuzz target (M7.31), and `tests/PORTING.md` rows (no `wip`). Fill PORTING.md mapping every Go `vms/saevm/...` test to its Rust counterpart (or `na — reason`). Confirm the `TaskTracker`-drain goroutine-leak analog passes for the executor/gossip tasks.
 - [ ] **Step 4 — Confirm green:** Run the full gate:
   - `cargo build --workspace`
-  - `cargo build -p avalanchego`
+  - `cargo build -p avalanchers`
   - `cargo nextest run --profile ci` (includes `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery` recorded, all `invariant::*`)
   - `cargo clippy --workspace -- -D warnings` (SAE crates with `clippy::pedantic` + `arithmetic_side_effects`)
   - `cargo +nightly fuzz run decode_block -- -runs=10000` (smoke)

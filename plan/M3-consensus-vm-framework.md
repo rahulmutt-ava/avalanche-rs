@@ -57,7 +57,7 @@ Wave G (chains + rpc; last)
   M3.25 ava-vm-rpc: proxied callback services (rpcdb/appsender/sharedmemory/validatorstate/warp/aliasreader)
   M3.26 ava-chains: VmManager/Factory/VmRegistry + Aliaser + Subnet + SharedMemory
   M3.27 ava-chains: create_snowman_chain pipeline (EXACT wrapping order) + differential::testvm_finalizes
-  M3.28 avalanchego bin: construct chain manager + test VM in-process; conformance::snow_battery wiring
+  M3.28 avalanchers bin: construct chain manager + test VM in-process; conformance::snow_battery wiring
 
 Wave H
   M3.29 Milestone exit gate (build/test/clippy + named exit tests + PORTING.md)
@@ -312,21 +312,21 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-chains --test pipeline --test differential_testvm` passes (commit regression seeds); clippy clean.
 - [ ] **Step 5 — Commit:** `ava-chains: create_snowman_chain pipeline (exact wrapping order) + differential::testvm_finalizes`
 
-### Task M3.28: `avalanchego` bin — construct chain manager + test VM in-process; wire `conformance::snow_battery`
-**Crate:** `avalanchego` (bin) + workspace tests  ·  **Depends on:** M3.27  ·  **Spec:** 07 §8 (chain manager assembly), 02 §13 (snow battery), milestone buildable-&-green invariant
-**Files:** `crates/avalanchego/src/main.rs` (extend), `crates/avalanchego/src/wiring/chains.rs` (in-process chain-manager + test-VM factory registration), `crates/avalanchego/tests/in_process_chain.rs`
+### Task M3.28: `avalanchers` bin — construct chain manager + test VM in-process; wire `conformance::snow_battery`
+**Crate:** `avalanchers` (bin) + workspace tests  ·  **Depends on:** M3.27  ·  **Spec:** 07 §8 (chain manager assembly), 02 §13 (snow battery), milestone buildable-&-green invariant
+**Files:** `crates/avalanchers/src/main.rs` (extend), `crates/avalanchers/src/wiring/chains.rs` (in-process chain-manager + test-VM factory registration), `crates/avalanchers/tests/in_process_chain.rs`
 - [ ] **Step 1 — Red:** `binary_constructs_chain_manager` — the bin can build a `ChainManager`, register a no-op test-VM factory, create a Snowman chain in-process, and report a last-accepted height; `--version`/`--help` still work (assert exit 0 + expected stdout).
-- [ ] **Step 2 — Confirm red:** `cargo test -p avalanchego --test in_process_chain 2>&1 | grep -E "cannot find|ChainManager"` — fails.
+- [ ] **Step 2 — Confirm red:** `cargo test -p avalanchers --test in_process_chain 2>&1 | grep -E "cannot find|ChainManager"` — fails.
 - [ ] **Step 3 — Green:** Extend the bin's wiring (from M0 skeleton) to construct the `ava-chains` `ChainManager` with the M2 router/network handles, register a built-in no-op test-VM static `Factory`, and create one in-process Snowman chain. Keep `--version`/`--help` intact. Ensure `conformance::snow_battery` is wired into `cargo nextest` (the `ava-snow` battery from M3.5 runs in the CI profile).
-- [ ] **Step 4 — Confirm green:** `cargo test -p avalanchego --test in_process_chain` passes; `cargo build -p avalanchego` + `./target/debug/avalanchego --version` works; clippy clean.
-- [ ] **Step 5 — Commit:** `avalanchego: construct chain manager + register test VM in-process; wire snow battery`
+- [ ] **Step 4 — Confirm green:** `cargo test -p avalanchers --test in_process_chain` passes; `cargo build -p avalanchers` + `./target/debug/avalanchers --version` works; clippy clean.
+- [ ] **Step 5 — Commit:** `avalanchers: construct chain manager + register test VM in-process; wire snow battery`
 
 ### Task M3.29: Milestone exit gate
 **Crate:** workspace  ·  **Depends on:** M3.1–M3.28  ·  **Spec:** 02 §13 (per-crate contracts), 00 §11.1 (ratified decisions), milestone invariant
 **Files:** all touched crates' `tests/PORTING.md`, `plan/M3-consensus-vm-framework.md` (check boxes), any straggler `proptest-regressions/`
 - [ ] **Step 1 — Red:** Run the four invariant commands + the seven named exit tests; record any failures.
   - `cargo build --workspace`
-  - `cargo build -p avalanchego`
+  - `cargo build -p avalanchers`
   - `cargo nextest run --profile ci`
   - `cargo clippy --workspace -- -D warnings` (SAE crates n/a this milestone)
   - Named: `cargo nextest run --profile ci -E 'test(consensus_safety) | test(consensus_liveness) | test(preference_monotone) | test(proposervm_block) | test(windower_schedule) | test(snow_battery) | test(testvm_finalizes)'`

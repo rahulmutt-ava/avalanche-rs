@@ -8,7 +8,7 @@ conform to repo conventions so your work passes CI on the first try.
 ## Repo at a glance
 
 - **Workspace:** a single Cargo workspace; crates live under `crates/`, all named
-  `ava-*` (the binary is `avalanchego` for drop-in invocation).
+  `ava-*` (the binary is `avalanchers`; the node is a drop-in replacement for `avalanchego`).
 - **Rust version:** pinned exactly in `rust-toolchain.toml` (e.g. `1.90.0`). Bump
   it in lock-step with `MODULE.bazel` and the CI matrix; `check-rust-version`
   asserts they agree.
@@ -44,7 +44,7 @@ CI does **not** call `cargo`/`bazel` directly — it always goes through tasks.
 ## Build
 
 ```sh
-./scripts/run_task.sh build               # cargo build -p avalanchego --release
+./scripts/run_task.sh build               # cargo build -p avalanchers --release
 ./scripts/run_task.sh build-debug-checks  # overflow + debug assertions
 ./scripts/run_task.sh bazel-build         # hermetic Bazel build
 ```
@@ -110,7 +110,7 @@ Rust prefers build-time/macro generation; we commit **no** generated code.
   // See the file LICENSE for licensing terms.
   ```
 - **Errors:** per-crate `thiserror` `Error` enum + `pub type Result<T>`; `anyhow`
-  only in the `avalanchego` binary and tests. Preserve Go sentinel errors as
+  only in the `avalanchers` binary and tests. Preserve Go sentinel errors as
   variants; assert with `assert_matches!` (mirrors Go's `ErrorIs` rule).
 - **Imports:** grouped std → external → crate (`group_imports = "StdExternalCrate"`).
 - **No `unwrap()`/`expect()`** in non-test library code (clippy denies it) except

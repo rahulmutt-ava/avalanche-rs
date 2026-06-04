@@ -277,10 +277,10 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 - [ ] **Step 2 — Confirm red:** `cargo clippy --workspace -- -D warnings` and/or the named exit tests surface remaining issues.
 - [ ] **Step 3 — Green:** Run and pass all of:
   - `cargo build --workspace`
-  - `cargo build -p avalanchego` (the binary now runs the X-Chain)
+  - `cargo build -p avalanchers` (the binary now runs the X-Chain)
   - `cargo nextest run --profile ci` including the named exit tests: `golden::xchain_block_hash`, `golden::xchain_tx_codec`, `differential::xchain_issue_tx`, `differential::atomic_xp`
   - `cargo clippy --workspace -- -D warnings`
-  Confirm every per-crate contract artifact (02 §13): proptest suite + committed `crates/ava-avm/proptest-regressions/`, golden vectors under `tests/vectors/avm/` + `tests/vectors/atomic/`, the cargo-fuzz target, and `crates/ava-avm/tests/PORTING.md` (every Go `vms/avm`, `vms/nftfx`, `vms/propertyfx` test mapped to a Rust counterpart or `na` with reason). Confirm `avalanchego` boots an X-Chain end-to-end. Coordinate `differential::xchain_issue_tx` live mode behind feature/env with recorded-oracle fallback (cross-cutting harness X).
+  Confirm every per-crate contract artifact (02 §13): proptest suite + committed `crates/ava-avm/proptest-regressions/`, golden vectors under `tests/vectors/avm/` + `tests/vectors/atomic/`, the cargo-fuzz target, and `crates/ava-avm/tests/PORTING.md` (every Go `vms/avm`, `vms/nftfx`, `vms/propertyfx` test mapped to a Rust counterpart or `na` with reason). Confirm `avalanchers` boots an X-Chain end-to-end. Coordinate `differential::xchain_issue_tx` live mode behind feature/env with recorded-oracle fallback (cross-cutting harness X).
 - [ ] **Step 4 — Confirm green:** all four commands above pass; PORTING.md has no `wip` rows for ported surfaces.
 - [ ] **Step 5 — Commit:** `avm: M5 milestone exit gate — X-Chain full issue/accept green (M5.24)`
 

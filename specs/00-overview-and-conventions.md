@@ -113,7 +113,7 @@ avalanche-rs/                      # repo root (workspace)
 │   ├── ava-genesis/               # genesis configs + genesis block generation
 │   ├── ava-config/                # CLI flags + config loading (drop-in flag parity)
 │   ├── ava-node/                  # node assembly (the library)
-│   └── avalanchego/               # the binary (main) — name kept for drop-in invocation
+│   └── avalanchers/               # the binary (main) — drop-in replacement for avalanchego
 ├── proto/                         # .proto files (shared with Go); build.rs via tonic-build / prost
 └── tests/                         # cross-crate integration, differential harness (02)
 ```
@@ -199,7 +199,7 @@ job without amending this table.
 | Concern | Crate | Notes |
 |---|---|---|
 | Error types (libraries) | `thiserror` | typed errors per crate. |
-| Error context (binary/top) | `anyhow` | only in `avalanchego` bin & tests. |
+| Error context (binary/top) | `anyhow` | only in `avalanchers` bin & tests. |
 | CLI / flags | `clap` (derive) + custom layer | must reproduce avalanchego's flag names exactly; see `12`. Config precedence shim mirrors `spf13/viper`. |
 | Config files | `serde_json`, `serde_yaml`, `toml` | avalanchego accepts JSON config; keep JSON authoritative. |
 | Time | `std::time`, `chrono` (only for formatting) | Consensus time math must be integer/`Duration`-based (see SAE `Tau` rules). |
@@ -267,7 +267,7 @@ Consensus-affecting code must be deterministic and match Go bit-for-bit:
   `pub type Result<T> = std::result::Result<T, Error>;`.
 - Preserve Go sentinel errors as variants and assert on them in tests where Go uses
   `errors.Is` (mirrors the repo's `ErrorIs` lint rule).
-- `anyhow` only in `avalanchego` (bin) and test code.
+- `anyhow` only in `avalanchers` (bin) and test code.
 
 ### 7.2 Async & threading
 - One `tokio` multi-thread runtime owned by `ava-node`. Library crates accept a

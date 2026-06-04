@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Promote the M0 `avalanchego` skeleton into a byte-/behavior-exact full node — every CLI flag, every JSON-RPC/Connect/WS API across all chains, the indexer, the wallet SDK, and deterministic genesis generation — so `./avalanchego` and `./avalanchego --network-id=fuji` start and stop identically to Go.
+**Goal:** Promote the M0 `avalanchers` skeleton into a byte-/behavior-exact full node — every CLI flag, every JSON-RPC/Connect/WS API across all chains, the indexer, the wallet SDK, and deterministic genesis generation — so `./avalanchers` and `./avalanchers --network-id=fuji` start and stop identically to Go.
 **Tier:** T5 — Node/APIs
-**Crates:** ava-config, ava-genesis, ava-api, ava-indexer, ava-wallet, ava-node, avalanchego (bin)
+**Crates:** ava-config, ava-genesis, ava-api, ava-indexer, ava-wallet, ava-node, avalanchers (bin)
 **Owning specs:** 12 (node/config/api/wallet/genesis), 13 (flag catalog — flag oracle), 14 (API/RPC catalog — endpoint oracle), 23 (genesis construction), 17 (runtime/shutdown ordering), 18 (metrics & logging parity)
 **Depends on (prior milestones):** M4–M7 (P/X/C/SAE chains + their `service` handlers and tx types), M2/M3 (ava-network, ava-engine handlers/router/timeout, validators, message::Creator), plus M1 primitives (ava-codec, ava-crypto, ava-ids, ava-database, ava-consensus params, ava-version)
 **Exit gate (named tests):**
@@ -41,7 +41,7 @@ These are deterministic pure-function checks: fast, no I/O, no network — they 
 - `ava-node` trace + NAT + logging factory (M8.28).
 - `ava-node` assembly (`Node::new`, steps 1–26 from 12 §2.2) (M8.29).
 - `ava-node` dispatch + shutdown ordering (17 §4.3 / 12 §2.4) + lifecycle test (M8.30).
-- `avalanchego` binary promotion (M8.31).
+- `avalanchers` binary promotion (M8.31).
 
 **Wave F:** Milestone exit gate (M8.32).
 
@@ -72,7 +72,7 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 ### Task M8.3: build_command() — clap Command from FLAG_SPECS (names as data)
 **Crate:** ava-config  ·  **Depends on:** M8.2  ·  **Spec:** 12 §1.4, 13 §0 (pflag bool/duration grammar)
 **Files:** `crates/ava-config/src/flags.rs` (`build_command`), `crates/ava-config/src/duration.rs` (`parse_go_duration`)
-- [ ] **Step 1 — Red:** `duration.rs::tests::parse_go_duration_grammar` — table over `{"30s"→30s, "5m"→300s, "120ms", "22.5s", "1h", "1m0.5s"}` matching `time.ParseDuration` (12 §1.4 note). `flags.rs::tests::build_command_accepts_bool_forms` — assert `build_command(FLAG_SPECS).try_get_matches_from(["avalanchego","--sybil-protection-enabled"])` and `=true` both parse (pflag bools accept `--x` and `--x=true`, 12 §1.4).
+- [ ] **Step 1 — Red:** `duration.rs::tests::parse_go_duration_grammar` — table over `{"30s"→30s, "5m"→300s, "120ms", "22.5s", "1h", "1m0.5s"}` matching `time.ParseDuration` (12 §1.4 note). `flags.rs::tests::build_command_accepts_bool_forms` — assert `build_command(FLAG_SPECS).try_get_matches_from(["avalanchers","--sybil-protection-enabled"])` and `=true` both parse (pflag bools accept `--x` and `--x=true`, 12 §1.4).
 - [ ] **Step 2 — Confirm red:** `cargo test -p ava-config duration::tests::parse_go_duration_grammar` → fails.
 - [ ] **Step 3 — Green:** Implement `parse_go_duration` accepting Go's `ns,us,µs,ms,s,m,h` grammar (not humantime). Implement `build_command(specs) -> clap::Command` per the 12 §1.4 sketch: `disable_help_flag(false)`, `arg_required_else_help(false)`, Bool→`num_args(0..=1)`+`default_missing_value("true")`, Duration→`value_parser(parse_go_duration)`, StringSlice→`value_delimiter(',')`, deprecated→`DEPRECATED:` help prefix. Version from `ava_version::CURRENT`.
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-config duration:: flags::tests::build_command_accepts_bool_forms` passes.
@@ -321,21 +321,21 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-node dispatch:: shutdown::` passes.
 - [ ] **Step 5 — Commit:** `ava-node: dispatch + shutdown ordering + lifecycle test (12 §2.3/§2.4, 17 §4.3)`
 
-### Task M8.31: avalanchego binary promotion — main flow + signals + exit code
-**Crate:** avalanchego (bin)  ·  **Depends on:** M8.3 (build_command), M8.12 (get_node_config), M8.29/M8.30 (Node), M8.28 (logging), M1 ava-version  ·  **Spec:** 12 §9, 17 §1.1/§2.5/§5
-**Files:** `crates/avalanchego/src/main.rs`, `crates/avalanchego/src/app.rs` (banner, chmod, fd-limit, signals)
-- [ ] **Step 1 — Red:** `crates/avalanchego/tests/cli.rs::version_flags` — `--version` prints `version::get_versions().to_string()` and exits 0; `--version-json` pretty JSON exit 0; both set → error exit 1 (12 §9). `help_exits_0` — `--help` exit 0. `no_args_runs_mainnet` (parse-only smoke: builds Config with network-id mainnet). These use `assert_cmd` against the built binary.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p avalanchego version_flags` → fails.
+### Task M8.31: avalanchers binary promotion — main flow + signals + exit code
+**Crate:** avalanchers (bin)  ·  **Depends on:** M8.3 (build_command), M8.12 (get_node_config), M8.29/M8.30 (Node), M8.28 (logging), M1 ava-version  ·  **Spec:** 12 §9, 17 §1.1/§2.5/§5
+**Files:** `crates/avalanchers/src/main.rs`, `crates/avalanchers/src/app.rs` (banner, chmod, fd-limit, signals)
+- [ ] **Step 1 — Red:** `crates/avalanchers/tests/cli.rs::version_flags` — `--version` prints `version::get_versions().to_string()` and exits 0; `--version-json` pretty JSON exit 0; both set → error exit 1 (12 §9). `help_exits_0` — `--help` exit 0. `no_args_runs_mainnet` (parse-only smoke: builds Config with network-id mainnet). These use `assert_cmd` against the built binary.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p avalanchers version_flags` → fails.
 - [ ] **Step 3 — Green:** Implement `main` (12 §9): register EVM extras; `build_command(FLAG_SPECS)`; parse (`--help`→exit 0); `--version`/`--version-json` (both→exit 1); `Layered`→`get_node_config`→`Config`; TTY banner; `chmod_r` data/log dirs; build LogFactory; raise fd-limit; build the single tokio multi-thread runtime (17 §1.1); `Node::new`; install SIGINT/SIGTERM→`shutdown(0)` + SIGABRT→backtrace dump (17 §2.5); `block_on(dispatch)`; `std::process::exit(node.exit_code())`. Add a CI grep gate forbidding `Runtime::new`/`block_on` outside the bin/tests (17 §1.1).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p avalanchego` + `cargo build -p avalanchego` pass.
-- [ ] **Step 5 — Commit:** `avalanchego: full-node binary promotion (main/signals/exit, 12 §9, 17 §1.1)`
+- [ ] **Step 4 — Confirm green:** `cargo nextest run -p avalanchers` + `cargo build -p avalanchers` pass.
+- [ ] **Step 5 — Commit:** `avalanchers: full-node binary promotion (main/signals/exit, 12 §9, 17 §1.1)`
 
 ### Task M8.32: Milestone exit gate
-**Crate:** all M8 crates + avalanchego  ·  **Depends on:** M8.1–M8.31  ·  **Spec:** all M8 specs; 02 §10 (PORTING.md)
+**Crate:** all M8 crates + avalanchers  ·  **Depends on:** M8.1–M8.31  ·  **Spec:** all M8 specs; 02 §10 (PORTING.md)
 **Files:** `crates/*/tests/PORTING.md` (update), `tests/differential/` (live-mode wiring), workspace CI config
 - [ ] **Step 1 — Red:** Ensure all named exit-gate tests exist and are wired: `golden::flag_parity` (M8.4), `golden::genesis_block_id` (M8.8), `prop::config_precedence` (M8.11), `differential::api_parity` (M8.23), `differential::indexer_parity` (M8.24). A `tests/exit_gate.rs` aggregator asserts each is registered.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run --profile ci` → any missing/failing exit-gate test fails here.
-- [ ] **Step 3 — Green:** Run and make green: `cargo build --workspace`; `cargo build -p avalanchego`; `cargo nextest run --profile ci`; `cargo clippy --workspace -- -D warnings`; the five named exit tests (per-PR: flag_parity + genesis_block_id + config_precedence; recorded-oracle: api_parity + indexer_parity, with live mode CI-gated, coordinated with harness X). Update each crate's `tests/PORTING.md` (Go source mapping, vector regen commands, deferrals). Confirm `./avalanchego` and `./avalanchego --network-id=fuji` start and stop like Go (lifecycle smoke).
+- [ ] **Step 3 — Green:** Run and make green: `cargo build --workspace`; `cargo build -p avalanchers`; `cargo nextest run --profile ci`; `cargo clippy --workspace -- -D warnings`; the five named exit tests (per-PR: flag_parity + genesis_block_id + config_precedence; recorded-oracle: api_parity + indexer_parity, with live mode CI-gated, coordinated with harness X). Update each crate's `tests/PORTING.md` (Go source mapping, vector regen commands, deferrals). Confirm `./avalanchers` and `./avalanchers --network-id=fuji` start and stop like Go (lifecycle smoke).
 - [ ] **Step 4 — Confirm green:** all commands above pass; `git status` clean after any vector regen.
 - [ ] **Step 5 — Commit:** `M8: node/config/api/wallet/genesis exit gate green (full node drop-in)`
 
@@ -379,7 +379,7 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 | 12 §7 / 18 §6 (trace/OTel) | M8.28 | |
 | 12 §8 (nat) | M8.28 | |
 | 18 §5 (logging factory, AvaLevel, formats, per-chain files) | M8.28 | |
-| 12 §9 / 17 §1.1 (avalanchego binary) | M8.31 | |
+| 12 §9 / 17 §1.1 (avalanchers binary) | M8.31 | |
 | 12 §13 (wallet SDK P/X/C builder/signer/backend/facade/primary) | M8.25, M8.26, M8.27 | |
 | 12 §11 / 14 §16 (error model, sentinels, byte-stable messages) | M8.17 (shim) + M8.23 (snapshots) | per-crate domain Errors owned by M4–M7 |
 | 17 §3 (channel sizing/backpressure), §6 (determinism) | M8.29/M8.30 (token tree, drain) | channel-default golden (17 §9) lives in M2/M3; node wiring honors it |

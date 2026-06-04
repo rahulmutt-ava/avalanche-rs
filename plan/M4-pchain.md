@@ -400,16 +400,16 @@ Wave 7 (differential sync-to-tip + gate)
 
 ### Task M4.30: Milestone exit gate
 **Crate:** ava-platformvm  ·  **Depends on:** all M4.* tasks  ·  **Spec:** plan/README §2 (buildable-&-green invariant); 02 §10.1 (PORTING.md)
-**Files:** `crates/ava-platformvm/tests/PORTING.md`, `crates/avalanchego/src/main.rs` (P-Chain wiring), workspace `Cargo.toml`.
+**Files:** `crates/ava-platformvm/tests/PORTING.md`, `crates/avalanchers/src/main.rs` (P-Chain wiring), workspace `Cargo.toml`.
 - [ ] **Step 1 — Red:** Ensure the named exit tests exist and are collected: `golden::pchain_block_hash`, `golden::pchain_tx_codec`, `prop::pchain_tx_roundtrip`, `differential::pchain_sync_to_tip`, `differential::validatorstate_parity`. Run the full suite to surface any gap.
 - [ ] **Step 2 — Confirm red (if any):** `cargo nextest run --profile ci -p ava-platformvm` → any red is a real gap to close (loop back to the owning task).
-- [ ] **Step 3 — Green:** Wire `PlatformVm` into the `avalanchego` binary's chain manager so it boots far enough to bootstrap the P-Chain read-only (`--network-id=fuji`). Update `tests/PORTING.md` (no `wip` rows for ported P-Chain tests; record `na` with reasons for Go-plumbing-only tests). Ensure committed `proptest-regressions/` + golden vectors + the cargo-fuzz target are present.
+- [ ] **Step 3 — Green:** Wire `PlatformVm` into the `avalanchers` binary's chain manager so it boots far enough to bootstrap the P-Chain read-only (`--network-id=fuji`). Update `tests/PORTING.md` (no `wip` rows for ported P-Chain tests; record `na` with reasons for Go-plumbing-only tests). Ensure committed `proptest-regressions/` + golden vectors + the cargo-fuzz target are present.
 - [ ] **Step 4 — Confirm green:** Run the four buildable-&-green commands plus the exit tests:
   - `cargo build --workspace`
-  - `cargo build -p avalanchego`
+  - `cargo build -p avalanchers`
   - `cargo nextest run --profile ci` (incl. all M4 exit tests; `pchain_sync_to_tip` in recorded-oracle mode)
   - `cargo clippy --workspace -- -D warnings`
-  - confirm `avalanchego --network-id=fuji` begins P-Chain bootstrap read-only.
+  - confirm `avalanchers --network-id=fuji` begins P-Chain bootstrap read-only.
 - [ ] **Step 5 — Commit:** `ava-platformvm: M4 exit gate — P-Chain read-only sync green; binary boots Fuji P-Chain`
 
 ---

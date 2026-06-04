@@ -472,7 +472,7 @@ A bootstrap script enumerates Go tests (`go test -list '.*' ./...`) to seed each
 Go e2e uses ginkgo + `tests/fixture/tmpnet` to spin a local multi-node network and
 exercise it via the public API. **We reuse tmpnet as-is** (it manages networks of
 *any* avalanchego-compatible binary via `AVALANCHEGO_PATH`): point it at the Rust
-`avalanchego` binary. The Rust e2e harness lives in `tests/e2e/` and:
+`avalanchers` binary. The Rust e2e harness lives in `tests/e2e/` and:
 - shells out to / embeds tmpnet to start a network of N Rust nodes (and, for
   differential runs, mixed Go+Rust nodes — proving interop, `00 §1`),
 - drives scenarios with the Rust `ava-wallet` + an API client,
@@ -508,7 +508,7 @@ Go `blockexport` artifacts.
 ## 11. High-level differential testing — the key deliverable
 
 A property-based external harness that boots **both** the Go `avalanchego` and the
-Rust `avalanchego`, feeds identical randomized inputs, and asserts identical
+Rust `avalanchers`, feeds identical randomized inputs, and asserts identical
 observable outputs. This is the executable proof of the `00 §1` contract.
 
 ### 11.1 Location & shape

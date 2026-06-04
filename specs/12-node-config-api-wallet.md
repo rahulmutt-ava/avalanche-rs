@@ -10,14 +10,14 @@
 | Go area | Crate |
 |---|---|
 | `config/` (`config.go`, `flags.go`, `keys.go`, `viper.go`, `config.md`, `config/node/`) | `ava-config` |
-| `node/`, `app/`, `main/` | `ava-node` + `avalanchego` (bin) |
+| `node/`, `app/`, `main/` | `ava-node` + `avalanchers` (bin) |
 | `api/` (`server/`, `info/`, `admin/`, `health/`, `metrics/`, `connectclient/`, `traced_handler.go`) | `ava-api` |
 | `indexer/` | `ava-indexer` |
 | `wallet/` (`chain/{p,x,c}`, `subnet/primary`) | `ava-wallet` |
 | `genesis/` (`genesis_*.{go,json}`, `bootstrappers.json`, `params.go`, `checkpoints.json`) | `ava-genesis` |
 | `nat/`, `trace/`, `subnets/` | `ava-node` submodules (`nat`, `trace`), `ava-config::subnets` |
 
-This is the **drop-in-compat surface**: `./avalanchego` and `./avalanchego
+This is the **drop-in-compat surface**: `./avalanchers` and `./avalanchers
 --network-id=fuji` must behave identically to Go, accept every flag with the same
 name/default/precedence, expose the same JSON-RPC/Connect APIs, and produce
 identical genesis block IDs.
@@ -248,7 +248,7 @@ pub struct FlagSpec {
 }
 
 pub fn build_command(specs: &[FlagSpec]) -> clap::Command {
-    let mut cmd = clap::Command::new("avalanchego")
+    let mut cmd = clap::Command::new("avalanchers")
         .version(ava_version::CURRENT.to_string())
         .disable_help_flag(false)            // Go pflag prints help on --help (ErrHelp -> exit 0)
         .arg_required_else_help(false);      // no args => run mainnet node
@@ -383,7 +383,7 @@ top-level consensus flags; tracked subnets merge file overrides.
 
 ### 2.1 Runtime ownership (00 §7.2)
 
-`avalanchego` (bin) builds the single `tokio` multi-thread runtime and passes a
+`avalanchers` (bin) builds the single `tokio` multi-thread runtime and passes a
 `Handle` into `Node::new`. Library crates spawn onto it; none create their own
 runtime. A root `CancellationToken` is created in `Node` and child-cloned per
 subsystem; `Shutdown` cancels it and awaits joins.
@@ -506,7 +506,7 @@ The root `CancellationToken` is cancelled at step 8/9 so spawned tasks unwind; w
 
 ### 2.5 Signals & exit (mirror `app/` + `main/`)
 
-The `avalanchego` bin installs a `tokio::signal` handler for SIGINT/SIGTERM →
+The `avalanchers` bin installs a `tokio::signal` handler for SIGINT/SIGTERM →
 `node.shutdown(0)`, and SIGABRT → dump all task/thread backtraces to stderr (Go's
 `GetStacktrace(true)`). `exit_code()` blocks on the node's run future and returns
 the recorded code. Panics in the dispatch task are caught, logged, and re-raised
@@ -809,7 +809,7 @@ a small NAT-PMP client, or pure resolution if `public-ip` is static.
 
 ---
 
-## 9. `avalanchego` binary
+## 9. `avalanchers` binary
 
 `main` mirrors `main/main.go`:
 1. Register EVM extras (reth/coreth-equivalent init, 10).
@@ -823,7 +823,7 @@ a small NAT-PMP client, or pure resolution if `public-ip` is static.
 7. Build tokio runtime, `Node::new`, run `dispatch`, install signal handlers,
    block on exit code, `std::process::exit(code)`.
 
-Drop-in invocations validated: `./avalanchego`, `./avalanchego
+Drop-in invocations validated: `./avalanchers`, `./avalanchers
 --network-id=fuji`, `--config-file`, `--http-port=0`, `--version`,
 `--track-subnets=...`, etc.
 

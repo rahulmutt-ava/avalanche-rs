@@ -7,10 +7,10 @@
 **Goal:** Build, in dependency order, a from-scratch Rust node that is a byte-/behavior-exact
 drop-in replacement for `avalanchego`, per the specification in [`specs/`](../specs/).
 
-**Architecture:** A single Cargo workspace of `ava-*` crates (plus the `avalanchego` binary),
+**Architecture:** A single Cargo workspace of `ava-*` crates (plus the `avalanchers` binary),
 layered in strict tiers T0→T5 with a continuous cross-cutting tier X. EVM execution is rebuilt
 on `reth`/`revm`; merkle state on `firewood`. Each milestone exits on named differential/golden
-tests and leaves the `avalanchego` binary buildable and green.
+tests and leaves the `avalanchers` binary buildable and green.
 
 **Tech stack:** Rust (stable, pinned), `tokio`, `tonic`/`prost`, `secp256k1`, `blst`, `rustls`,
 `rust-rocksdb`, `firewood`, `reth`/`revm`, `proptest`, `cargo-nextest`, Bazel (bzlmod + rules_rust).
@@ -74,7 +74,7 @@ A tier may only depend on tiers above it. Within a tier, crates are independent 
 | **T2b — Consensus** | `ava-snow`, `ava-engine`, `ava-validators`, `ava-proposervm`, `ava-simplex` | M3 |
 | **T3 — VM framework** | `ava-vm`, `ava-vm-rpc`, `ava-secp256k1fx`, `ava-chains` | M3 |
 | **T4 — VMs** | `ava-platformvm`, `ava-avm`, `ava-evm`, `ava-saevm` | M4–M7 |
-| **T5 — Node/APIs** | `ava-api`, `ava-indexer`, `ava-wallet`, `ava-genesis`, `ava-config`, `ava-node`, `avalanchego` (bin) | M8 |
+| **T5 — Node/APIs** | `ava-api`, `ava-indexer`, `ava-wallet`, `ava-genesis`, `ava-config`, `ava-node`, `avalanchers` (bin) | M8 |
 | **X — Cross-cutting** | `ava-differential`, `tools/extract-vectors`, CI, metrics/error/obs | M0→M9 (continuous) |
 
 **Introduced internal sub-crates.** Beyond the 32 canonical crates above, the milestone plans
@@ -112,12 +112,12 @@ workspace MUST satisfy, with no exceptions deferred:
 
 ```
 cargo build --workspace                 # whole workspace compiles
-cargo build -p avalanchego              # the binary links
+cargo build -p avalanchers              # the binary links
 cargo nextest run --profile ci          # all tests green (incl. this milestone's exit tests)
 cargo clippy --workspace -- -D warnings # lint clean (SAE crates add clippy::pedantic)
 ```
 
-The `avalanchego` binary is created as a skeleton in M0 and grows each milestone (it must always
+The `avalanchers` binary is created as a skeleton in M0 and grows each milestone (it must always
 compile and respond to `--version`/`--help`; chains/APIs are wired in as their crates land). The
 **last task of every milestone** is an explicit "Milestone exit gate" task that runs the four
 commands above plus the milestone's named exit tests, and updates each touched crate's

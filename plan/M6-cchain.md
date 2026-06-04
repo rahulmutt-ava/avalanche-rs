@@ -287,19 +287,19 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 5 — Commit:** `ava-evm: fuzz targets (block/atomic-tx) + PORTING.md coverage matrix`
 
 ### Task M6.29: Milestone exit gate
-**Crate:** ava-evm (+ avalanchego binary)  ·  **Depends on:** all M6.1–M6.28  ·  **Spec:** 10 (all), 04 §4, 20 §7, 21; 02 §10.5/§11; BUILDABLE-&-GREEN INVARIANT
-**Files:** `crates/ava-evm/tests/PORTING.md` (final), workspace wiring for `avalanchego` to run C-Chain
+**Crate:** ava-evm (+ avalanchers binary)  ·  **Depends on:** all M6.1–M6.28  ·  **Spec:** 10 (all), 04 §4, 20 §7, 21; 02 §10.5/§11; BUILDABLE-&-GREEN INVARIANT
+**Files:** `crates/ava-evm/tests/PORTING.md` (final), workspace wiring for `avalanchers` to run C-Chain
 - [ ] **Step 1 — Red:** Ensure the four named exit tests exist and are wired into `cargo nextest --profile ci`: `golden::cchain_block_wire`, `golden::cchain_genesis_root`, `differential::cchain_state_root` (recorded-oracle/reexecute mode — deterministic, per-PR friendly, over a multi-block recorded mainnet range, 02 §10.5), `differential::atomic_xc` (recorded mode green per-PR; live mode `#[ignore]`/CI-gated, coordinate with cross-cutting harness X), `prop::evm_fee_schedule_per_fork`.
 - [ ] **Step 2 — Confirm red:** Run the full gate; record any failure.
-- [ ] **Step 3 — Green:** Fix remaining wiring so the `avalanchego` binary now boots and runs the C-Chain via `EvmVm`. Run and pass:
+- [ ] **Step 3 — Green:** Fix remaining wiring so the `avalanchers` binary now boots and runs the C-Chain via `EvmVm`. Run and pass:
   - `cargo build --workspace`
-  - `cargo build -p avalanchego`
+  - `cargo build -p avalanchers`
   - `cargo nextest run --profile ci`
   - `cargo clippy --workspace -- -D warnings`
   - the four named exit tests above.
   Update final PORTING.md; confirm `#![forbid(unsafe_code)]` holds everywhere except inside `ava-evm-reth` (binding wrappers).
 - [ ] **Step 4 — Confirm green:** All commands above exit 0; exit tests pass; differential::cchain_state_root green in recorded mode.
-- [ ] **Step 5 — Commit:** `ava-evm: M6 exit gate — C-Chain on reth green; avalanchego runs C-Chain`
+- [ ] **Step 5 — Commit:** `ava-evm: M6 exit gate — C-Chain on reth green; avalanchers runs C-Chain`
 
 ---
 

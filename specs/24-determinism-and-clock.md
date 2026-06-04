@@ -92,7 +92,7 @@ grep, and human review:
   and covers what clippy cannot express:
   - **Ban wall-clock** (#5): no `Instant::now`/`SystemTime::now`/`Utc::now`/
     `Local::now`/`tokio::time::Instant::now` outside `ava-utils::clock` and the
-    `avalanchego` bin's wiring module (allowlisted by path).
+    `avalanchers` bin's wiring module (allowlisted by path).
   - **Ban `HashMap`/`HashSet`/`IndexMap` fields in `#[derive(Codec)]` types** (#1):
     walk derive inputs; require `BTreeMap`/`BTreeSet` or a `#[codec(skip)]`/manual
     impl with a documented sort.
@@ -125,7 +125,7 @@ grep, and human review:
 
 Library crates **never** read the wall clock ambiently. They take an
 `Arc<dyn Clock>` handle, injected exactly where Go injects `mockable.Clock`.
-The only place a real wall clock is constructed is the `avalanchego` binary's
+The only place a real wall clock is constructed is the `avalanchers` binary's
 wiring (and test harnesses). This makes hazard #5 enforceable and makes every
 time-dependent behavior reproducible under a `MockClock`.
 

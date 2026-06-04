@@ -4,7 +4,7 @@
 
 **Goal:** Bootstrap the Cargo workspace and deliver the T0 primitive crates (`ava-types`, `ava-codec` + `ava-codec-derive`, `ava-crypto`, `ava-utils`, `ava-version`) byte-/behavior-exact with avalanchego, retiring R1 (gonum MT19937/-64 RNG parity) first.
 **Tier:** T0 — Primitives
-**Crates:** `ava-types`, `ava-codec`, `ava-codec-derive`, `ava-crypto`, `ava-utils`, `ava-version`, `avalanchego` (skeleton binary)
+**Crates:** `ava-types`, `ava-codec`, `ava-codec-derive`, `ava-crypto`, `ava-utils`, `ava-version`, `avalanchers` (skeleton binary)
 **Owning specs:** `03-core-primitives.md` (primary), `15-serialization-and-wire-formats.md` §4, `24-determinism-and-clock.md`, `25-key-management-and-signing.md`, `21-fee-economics-math.md` (constants only), `00`/`02` (conventions)
 **Depends on (prior milestones):** none (root + workspace bootstrap)
 **Exit gate (named tests):** `golden::codec_all_types`, `golden::cb58_addr_bech32`, `golden::bls_sign_pop`, `golden::secp_recover`, `golden::nodeid_from_cert`, **`golden::sampler_mt19937_stream`** (R1 gate), `prop::codec_roundtrip` (cases=4096), `conformance::run_codec_suite`
@@ -32,16 +32,16 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ## Tasks
 
-### Task M0.1: Bootstrap the Cargo workspace + skeleton `avalanchego` binary
+### Task M0.1: Bootstrap the Cargo workspace + skeleton `avalanchers` binary
 **Crate:** workspace · **Depends on:** none · **Spec:** `00` §3 (layout), §4 (canonical deps), §8 (lints, license header); `02` §1 (nextest)
 **Files:**
 - Create: `/Users/rahul.muttineni/avalanche-rs/Cargo.toml` (`[workspace]` + `[workspace.dependencies]`)
 - Create: `/Users/rahul.muttineni/avalanche-rs/rust-toolchain.toml`
 - Create: `/Users/rahul.muttineni/avalanche-rs/rustfmt.toml`
 - Create: `/Users/rahul.muttineni/avalanche-rs/.config/nextest.toml`
-- Create: `/Users/rahul.muttineni/avalanche-rs/crates/avalanchego/Cargo.toml`
-- Create: `/Users/rahul.muttineni/avalanche-rs/crates/avalanchego/src/main.rs`
-- Test: `/Users/rahul.muttineni/avalanche-rs/crates/avalanchego/tests/cli_version_help.rs`
+- Create: `/Users/rahul.muttineni/avalanche-rs/crates/avalanchers/Cargo.toml`
+- Create: `/Users/rahul.muttineni/avalanche-rs/crates/avalanchers/src/main.rs`
+- Test: `/Users/rahul.muttineni/avalanche-rs/crates/avalanchers/tests/cli_version_help.rs`
 
 - [ ] **Step 1 — Red:** Write `unit::binary_answers_version_and_help` in `tests/cli_version_help.rs`:
   ```rust
@@ -50,23 +50,23 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
   use std::process::Command;
   #[test]
   fn binary_answers_version_and_help() {
-      let exe = env!("CARGO_BIN_EXE_avalanchego");
+      let exe = env!("CARGO_BIN_EXE_avalanchers");
       let v = Command::new(exe).arg("--version").output().unwrap();
       assert!(v.status.success());
-      assert!(String::from_utf8_lossy(&v.stdout).contains("avalanchego/"));
+      assert!(String::from_utf8_lossy(&v.stdout).contains("avalanchers/"));
       let h = Command::new(exe).arg("--help").output().unwrap();
       assert!(h.status.success());
   }
   ```
-- [ ] **Step 2 — Confirm red:** Run `cd /Users/rahul.muttineni/avalanche-rs && cargo test -p avalanchego --test cli_version_help` → expect failure: no workspace / crate `avalanchego` not found (compile/manifest error).
+- [ ] **Step 2 — Confirm red:** Run `cd /Users/rahul.muttineni/avalanche-rs && cargo test -p avalanchers --test cli_version_help` → expect failure: no workspace / crate `avalanchers` not found (compile/manifest error).
 - [ ] **Step 3 — Green:**
   - Root `Cargo.toml`: `[workspace] resolver = "2"`, `members = ["crates/*"]`. Add `[workspace.package]` (edition 2021, license, authors). Add `[workspace.dependencies]` pinning the canonical crates from `00` §4 used in M0: `thiserror`, `anyhow`, `serde`, `serde_json`, `hex`, `sha2`, `sha3`, `ripemd`, `bs58`, `bech32 = "0.11"`, `secp256k1 = { version = "0.31", features = ["recovery","global-context"] }`, `blst = "0.3"`, `rcgen`, `x509-parser`, `rustls-pemfile`, `zeroize`, `num-bigint`, `parking_lot`, `arc-swap`, `indexmap`, `smallvec`, `bytes`, `chrono`, `clap = { version = "4", features=["derive"] }`, plus dev-deps `proptest`, `rstest`, `assert_matches`, `pretty_assertions`, `libfuzzer-sys`, `arbitrary`.
   - `rust-toolchain.toml`: pin a recent stable channel + components `rustfmt`, `clippy`.
   - `.config/nextest.toml`: a `[profile.ci]` with `slow-timeout = { period = "120s" }` and `leak-timeout = "120s"` (mirrors Go `-timeout=120s`, `02` §1).
-  - `crates/avalanchego/src/main.rs`: a `clap`-derive `Args` with global `--version`/`--help` wired (clap auto-handles `--help`; set `version` from a constant). Print `format!("avalanchego/{}.{}.{}", …)` for `--version` (the `ava_version::CURRENT.display()` form per `03` §5.1 — until `ava-version` exists, hardcode the M0 placeholder and add a `// TODO(M0.22)` to source from `ava-version::CURRENT`). License header on every `.rs` file; `#![forbid(unsafe_code)]`.
+  - `crates/avalanchers/src/main.rs`: a `clap`-derive `Args` with global `--version`/`--help` wired (clap auto-handles `--help`; set `version` from a constant). Print `format!("avalanchers/{}", env!("CARGO_PKG_VERSION"))` for `--version` — this is the **local CLI identity** (`avalanchers/<ver>`); the **wire/P2P client string** stays `avalanchego` (`ava_version::CLIENT`, `03` §5.1 / `26`). Until `ava-version` exists, hardcode the M0 placeholder and add a `// TODO(M0.22)` to source the numeric version from `ava_version::CURRENT` while keeping the `avalanchers/` prefix. License header on every `.rs` file; `#![forbid(unsafe_code)]`.
   - Note in a top comment: deeper dev-env (Nix, Bazel, cargo-deny, CI, run_task.sh/xtask, differential harness) is owned by **X-cross-cutting.md** — do not add here.
-- [ ] **Step 4 — Confirm green:** Run `cd /Users/rahul.muttineni/avalanche-rs && cargo build -p avalanchego && cargo test -p avalanchego --test cli_version_help` → expect PASS.
-- [ ] **Step 5 — Commit:** `git commit -m "M0.1: bootstrap cargo workspace + skeleton avalanchego binary"`
+- [ ] **Step 4 — Confirm green:** Run `cd /Users/rahul.muttineni/avalanche-rs && cargo build -p avalanchers && cargo test -p avalanchers --test cli_version_help` → expect PASS.
+- [ ] **Step 5 — Commit:** `git commit -m "M0.1: bootstrap cargo workspace + skeleton avalanchers binary"`
 
 ---
 
@@ -437,8 +437,8 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 - [ ] **Step 1 — Red:** Write `unit::application_display_compare`: `CURRENT.display() == "avalanchego/<maj>.<min>.<patch>"`, `semantic() == "v…"`, `compare` orders major→minor→patch; constants `RPC_CHAIN_VM_PROTOCOL == 45`, `CLIENT == "avalanchego"`; `Compatibility` accepts a peer `>= MINIMUM_COMPATIBLE` and applies `MinCompatibleAfterUpgrade` once `UpgradeTime` passed.
 - [ ] **Step 2 — Confirm red:** Run `cargo test -p ava-version --test version` → expect failure: types undefined.
-- [ ] **Step 3 — Green:** `application.rs`: `Application { name, major, minor, patch }` + `display/semantic/compare`; constants `CLIENT`, `RPC_CHAIN_VM_PROTOCOL=45`, `CURRENT_DATABASE`, `CURRENT`, `MINIMUM_COMPATIBLE`, `PREV_MINIMUM_COMPATIBLE` (pin to the Go tree at port time, doc-comment the Go path; `03` §5.1). `compatibility.rs`: port the version-vs-upgrade-time comparison. Wire `avalanchego --version` (M0.1) to `CURRENT.display()` (resolve the M0.1 TODO).
-- [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-version --test version && cargo run -p avalanchego -- --version` → expect PASS + correct version string.
+- [ ] **Step 3 — Green:** `application.rs`: `Application { name, major, minor, patch }` + `display/semantic/compare`; constants `CLIENT`, `RPC_CHAIN_VM_PROTOCOL=45`, `CURRENT_DATABASE`, `CURRENT`, `MINIMUM_COMPATIBLE`, `PREV_MINIMUM_COMPATIBLE` (pin to the Go tree at port time, doc-comment the Go path; `03` §5.1). `compatibility.rs`: port the version-vs-upgrade-time comparison. Wire `avalanchers --version` (M0.1) to use `ava_version::CURRENT`'s numeric version while keeping the local `avalanchers/` prefix (the wire client string `CLIENT` stays `avalanchego`); resolve the M0.1 TODO.
+- [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-version --test version && cargo run -p avalanchers -- --version` → expect PASS + correct version string.
 - [ ] **Step 5 — Commit:** `git commit -m "M0.22: ava-version Application + Compatibility; wire --version"`
 
 ---
@@ -486,9 +486,9 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
   ```sh
   cd /Users/rahul.muttineni/avalanche-rs
   cargo build --workspace
-  cargo build -p avalanchego
-  cargo run -p avalanchego -- --version   # prints avalanchego/<ver>
-  cargo run -p avalanchego -- --help      # exits 0
+  cargo build -p avalanchers
+  cargo run -p avalanchers -- --version   # prints avalanchers/<ver>
+  cargo run -p avalanchers -- --help      # exits 0
   cargo nextest run --profile ci --workspace
   cargo clippy --workspace -- -D warnings
   # named exit tests:
@@ -547,5 +547,5 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 | `02` §7 generic `run_codec_suite` (codectest) | M0.16 | |
 | `02` §8 cargo-fuzz targets (codec, cb58) | M0.24 | |
 | `02` §10.1 tests/PORTING.md per crate | M0.24, M0.25 | |
-| `00` §3 workspace bootstrap + `avalanchego` binary | M0.1 | |
+| `00` §3 workspace bootstrap + `avalanchers` binary | M0.1 | |
 | Dev-env (Nix/Bazel/cargo-deny/CI/xtask/run_task.sh/differential harness/extract-vectors maturation) | — | **Owned by X-cross-cutting.md** — not duplicated here |

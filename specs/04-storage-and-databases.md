@@ -1032,7 +1032,7 @@ The CLI auto-detects the backend from the directory layout (`v1.4.5/` ⇒ leveld
 ### 11.4 The tool: iterate + write + verify
 
 ```rust
-// `avalanchego db migrate --from <godir> --to <rocksdir> --db-type {leveldb|pebble}`
+// `avalanchers db migrate --from <godir> --to <rocksdir> --db-type {leveldb|pebble}`
 //                          [--verify {none|roots|full}] [--resume]
 
 use ava_database::{rocksdb::RocksDb, Database, KeyValueReader};

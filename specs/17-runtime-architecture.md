@@ -36,14 +36,14 @@
 ### 1.1 One runtime, owned by the binary
 
 There is **exactly one** `tokio` multi-thread runtime in the process. It is built
-by the `avalanchego` binary (`12` §9) and passed into `Node::new` as a
+by the `avalanchers` binary (`12` §9) and passed into `Node::new` as a
 `tokio::runtime::Handle`. Every library crate (`ava-network`, `ava-engine`,
 `ava-chains`, `ava-vm`, `ava-saevm`, `ava-api`, …) **spawns onto the ambient
 runtime** via `tokio::spawn`/the passed `Handle`; none constructs its own
 `Runtime`. This mirrors Go, where the entire node shares one goroutine scheduler.
 
 ```rust
-// avalanchego/src/main.rs (sketch)
+// avalanchers/src/main.rs (sketch)
 fn main() -> std::process::ExitCode {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -65,7 +65,7 @@ fn main() -> std::process::ExitCode {
 > **Rule (00 §7.2): no sub-runtimes.** `block_on`, `Runtime::new`, or
 > `Handle::current().block_on` inside library code is forbidden (nested runtimes
 > panic and break cancellation). A `clippy`/grep CI gate forbids
-> `Runtime::new`/`Builder::*::build` outside the `avalanchego` bin and tests.
+> `Runtime::new`/`Builder::*::build` outside the `avalanchers` bin and tests.
 
 ### 1.2 Dedicated blocking pools
 
@@ -98,7 +98,7 @@ sized to physical cores; they are created once and shared via `Arc`.
 
 ```
                               ┌──────────────────────────────────────────┐
-                              │            avalanchego (bin)               │
+                              │            avalanchers (bin)               │
                               │  owns Runtime + root CancellationToken     │
                               │  signal handler -> node.shutdown(0)        │
                               └───────────────────┬────────────────────────┘

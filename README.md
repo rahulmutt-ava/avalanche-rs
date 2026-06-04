@@ -53,7 +53,7 @@ prefixed `ava-`:
 `ava-network` · `ava-snow` · `ava-engine` · `ava-validators` · `ava-proposervm` ·
 `ava-simplex` · `ava-vm` · `ava-vm-rpc` · `ava-secp256k1fx` · `ava-platformvm` ·
 `ava-avm` · `ava-evm` · `ava-saevm` · `ava-chains` · `ava-api` · `ava-indexer` ·
-`ava-wallet` · `ava-genesis` · `ava-config` · `ava-node` · `avalanchego` (the binary).
+`ava-wallet` · `ava-genesis` · `ava-config` · `ava-node` · `avalanchers` (the binary).
 
 See [`00` §3](specs/00-overview-and-conventions.md) for the full layout and
 [`00` §4](specs/00-overview-and-conventions.md) for the binding external-crate

@@ -6,8 +6,8 @@
 **Tier:** X — Cross-cutting (continuous)
 **Crates/areas:** `ava-differential` (`tests/differential/`), `tools/extract-vectors/` (= `tools/vectorgen/`), `xtask/`, `ava-testvectors`, CI (`.github/workflows/`), `flake.nix`, `MODULE.bazel`/`BUILD.bazel`/`.bazelrc`, `deny.toml`, `.config/nextest.toml`, per-crate `thiserror` error enums, `ava-logging`/`ava-api` metrics + tracing
 **Owning specs:** 01 (dev-env), 02 (testing strategy), 18 (metrics/logging/OTel), 22 (vectors & oracle), 24 (determinism & clock)
-**Depends on:** M0 workspace bootstrap (root `Cargo.toml`, `rust-toolchain.toml`, skeleton `avalanchego` bin, minimal `.config/nextest.toml`); deepens every milestone M0→M9
-**Gate it enforces:** the buildable-&-green invariant (`cargo build --workspace`, `cargo build -p avalanchego`, `cargo nextest run --profile ci`, `cargo clippy --workspace -- -D warnings`) PLUS per-PR recorded-oracle differential + reexecute + fuzz-smoke + vectors-drift + dirty-tree + coverage floors, and a nightly job for live two-binary + mixed-net + upgrade + bench-guard.
+**Depends on:** M0 workspace bootstrap (root `Cargo.toml`, `rust-toolchain.toml`, skeleton `avalanchers` bin, minimal `.config/nextest.toml`); deepens every milestone M0→M9
+**Gate it enforces:** the buildable-&-green invariant (`cargo build --workspace`, `cargo build -p avalanchers`, `cargo nextest run --profile ci`, `cargo clippy --workspace -- -D warnings`) PLUS per-PR recorded-oracle differential + reexecute + fuzz-smoke + vectors-drift + dirty-tree + coverage floors, and a nightly job for live two-binary + mixed-net + upgrade + bench-guard.
 
 ---
 
@@ -31,11 +31,11 @@
 ## Tasks
 
 ### Task X.1: The buildable-&-green CI gate (`tests-required` aggregator + base build/lint/test jobs)
-**Workstream:** 6 (Bazel/Nix CI)  ·  **First lands:** M0  ·  **Depends on:** M0 bootstrap (`Cargo.toml`, `rust-toolchain.toml`, skeleton `avalanchego`)  ·  **Spec:** 01 §10, 02 §1
+**Workstream:** 6 (Bazel/Nix CI)  ·  **First lands:** M0  ·  **Depends on:** M0 bootstrap (`Cargo.toml`, `rust-toolchain.toml`, skeleton `avalanchers`)  ·  **Spec:** 01 §10, 02 §1
 **Files:** `.github/workflows/ci.yml`, `.github/actions/install-nix/action.yml`, `scripts/run_task.sh` (carried from M0/Go), `scripts/nix_run.sh`, `Taskfile.yml` (extend with `build`, `test-unit`, `lint`, `lint-all-ci`)
 - [ ] **Step 1 — Red/first check:** Add a `ci.yml` with a `tests-required` aggregator job whose `needs:` references the not-yet-existing jobs `Unit`, `Lint`. Push a branch; the gate must FAIL because the referenced jobs don't exist / the workspace doesn't yet build cleanly under `-D warnings`.
 - [ ] **Step 2 — Confirm red:** `act -j tests-required` (or push + observe Actions) → fails: "Failed: Unit Lint" or a clippy `-D warnings` error from the skeleton.
-- [ ] **Step 3 — Green:** Implement `.github/workflows/ci.yml` per 01 §10 verbatim shape: `concurrency` cancel-in-progress; `Unit` matrix (`macos-26, ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm`) running `./scripts/run_task.sh test-unit`; `Lint` running `lint-all-ci`; the `tests-required` aggregator that `jq`-checks every `needs.*.result == success`. Every job uses `.github/actions/install-nix` and `shell: nix develop --command bash -x {0}` (CI calls a TASK, never `cargo`/`bazel` directly). Define `build`/`test-unit`/`lint`/`lint-all-ci` tasks in `Taskfile.yml` (01 §5.2) wrapping `cargo build --workspace` + `cargo build -p avalanchego` + `cargo nextest run --workspace --all-features --profile ci` + `cargo test --doc` + `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- [ ] **Step 3 — Green:** Implement `.github/workflows/ci.yml` per 01 §10 verbatim shape: `concurrency` cancel-in-progress; `Unit` matrix (`macos-26, ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm`) running `./scripts/run_task.sh test-unit`; `Lint` running `lint-all-ci`; the `tests-required` aggregator that `jq`-checks every `needs.*.result == success`. Every job uses `.github/actions/install-nix` and `shell: nix develop --command bash -x {0}` (CI calls a TASK, never `cargo`/`bazel` directly). Define `build`/`test-unit`/`lint`/`lint-all-ci` tasks in `Taskfile.yml` (01 §5.2) wrapping `cargo build --workspace` + `cargo build -p avalanchers` + `cargo nextest run --workspace --all-features --profile ci` + `cargo test --doc` + `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - [ ] **Step 4 — Confirm green:** `./scripts/run_task.sh build && ./scripts/run_task.sh test-unit && ./scripts/run_task.sh lint` all pass locally; pushed `tests-required` is green.
 - [ ] **Step 5 — Commit:** `ci: tests-required aggregator + buildable-&-green base jobs (M0)`
 
@@ -295,9 +295,9 @@
 ### Task X.23: `AGENTS.md` / `CLAUDE.md` + `bazel-vs-cargo` smoke + final `tests-required` consolidation
 **Workstream:** 6 (CI) / docs  ·  **First lands:** M0 (docs); smoke M0  ·  **Depends on:** all prior X tasks  ·  **Spec:** 01 §12, §4.5
 **Files:** `AGENTS.md`, `CLAUDE.md`, `.github/workflows/ci.yml` (`bazel_vs_cargo` job; final `tests-required.needs` list)
-- [ ] **Step 1 — Red/first check:** Add a `bazel_vs_cargo` job that builds `avalanchego` both ways and asserts both succeed (01 §4.5). Before wired it fails; also assert `tests-required.needs` lists every gate added across X.1–X.22.
+- [ ] **Step 1 — Red/first check:** Add a `bazel_vs_cargo` job that builds `avalanchers` both ways and asserts both succeed (01 §4.5). Before wired it fails; also assert `tests-required.needs` lists every gate added across X.1–X.22.
 - [ ] **Step 2 — Confirm red:** Push → `bazel_vs_cargo` missing / `tests-required` doesn't reference all jobs.
-- [ ] **Step 3 — Green:** Copy `AGENTS.md` + `CLAUDE.md` verbatim from 01 §12.1/§12.2. Add the `bazel_vs_cargo` smoke job (01 §4.5: `cargo build -p avalanchego --release` and `bazel build //crates/ava-node:avalanchego` both green — proves Cargo/Bazel agree on `Cargo.lock`). Consolidate `tests-required.needs` to include: `Unit`, `Lint`, `taulint`, `check_generated_protobuf`, `check_mocks`, `check_deps_tidy`, `coverage`, `bazel`, `bazel_vs_cargo`, `vectors_verify`, `vectors_drift`, `differential`, `fuzz`, `porting_report`.
+- [ ] **Step 3 — Green:** Copy `AGENTS.md` + `CLAUDE.md` verbatim from 01 §12.1/§12.2. Add the `bazel_vs_cargo` smoke job (01 §4.5: `cargo build -p avalanchers --release` and `bazel build //crates/ava-node:avalanchers` both green — proves Cargo/Bazel agree on `Cargo.lock`). Consolidate `tests-required.needs` to include: `Unit`, `Lint`, `taulint`, `check_generated_protobuf`, `check_mocks`, `check_deps_tidy`, `coverage`, `bazel`, `bazel_vs_cargo`, `vectors_verify`, `vectors_drift`, `differential`, `fuzz`, `porting_report`.
 - [ ] **Step 4 — Confirm green:** `tests-required` green with the full needs list; `bazel_vs_cargo` green.
 - [ ] **Step 5 — Commit:** `ci: AGENTS/CLAUDE docs + bazel-vs-cargo smoke + consolidate tests-required (M0)`
 

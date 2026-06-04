@@ -339,10 +339,10 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 2 — Confirm red:** Run `cargo xtask porting-report` → expect remaining `wip` rows listed (or none if fully ported).
 - [ ] **Step 3 — Green:** Drive every named exit test green and resolve `wip` rows to `ported`/`na` (with reason). Confirm the full exit gate:
   - `cargo build --workspace`
-  - `cargo build -p avalanchego` (binary still builds)
+  - `cargo build -p avalanchers` (binary still builds)
   - `cargo nextest run --profile ci` (incl. `conformance::run_database_suite` + `prop::db_oracle_btreemap` for **every** backend: memdb, rocksdb, prefixdb, versiondb, meterdb, corruptabledb, rpcdb, heightindex; `golden::merkledb_root`; `golden::merkledb_proof`; `golden::range_proof`; `prop::merkle_order_independent_root`; `golden::firewood_ethhash_root`; `prop::blockdb_roundtrip`)
   - `cargo clippy --workspace -- -D warnings`
-  - `./target/debug/avalanchego --version` and `--help` answer correctly
+  - `./target/debug/avalanchers --version` and `--help` answer correctly
 - [ ] **Step 4 — Confirm green:** Run the five commands above → all PASS; `cargo xtask porting-report` shows no `wip` rows for M1 crates.
 - [ ] **Step 5 — Commit:** `git commit -m "M1 storage: exit gate green (all backends + merkledb roots/proofs/sync + firewood ethhash + blockdb), PORTING.md updated"`
 
