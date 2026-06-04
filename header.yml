@@ -1,0 +1,7 @@
+# header.yml — canonical license-header text (specs/00 §8, specs/01 §7.6).
+# Shared by scripts/check_license_headers.sh and scripts/add_license_headers.sh.
+# Mirrors avalanchego's header.yml. Every .rs file must begin with these two
+# lines; generated files (*.pb.rs, *mock_*.rs) are exempt.
+header: |
+  // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+  // See the file LICENSE for licensing terms.

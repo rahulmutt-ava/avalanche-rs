@@ -1,11 +1,7 @@
 # https://taskfile.dev
 # Run via ./scripts/run_task.sh (prefers `task` on PATH, else the stub fallback).
-#
-# M0 STUB. This is the canonical task runner (specs/01-development-environment.md
-# §5.2). Only the core build/test/lint tasks that work with the current toolchain
-# are defined here; the bazel / codegen / deps / shell-lint tasks and the full
-# CI aggregates (lint-all, lint-all-ci) are owned by plan/X-cross-cutting.md and
-# are added as their helper scripts land.
+# Canonical task runner (specs/01-development-environment.md §5.2). CI always
+# calls a task here, never `cargo`/`bazel` directly.
 version: '3'
 
 vars:
@@ -23,7 +19,7 @@ tasks:
 
   build-debug-checks:
     desc: Build with overflow + debug assertions (closest analogue of build-race)
-    cmd: '{{.NIX_RUN}} cargo build {{.WORKSPACE}} --profile ci'
+    cmd: '{{.NIX_RUN}} cargo build {{.WORKSPACE}} --profile dev-checks'
 
   # --- Test --------------------------------------------------------------
   test-unit:
@@ -40,15 +36,165 @@ tasks:
     desc: Run tests with coverage (analogue of -coverprofile/-covermode)
     cmd: '{{.NIX_RUN}} cargo llvm-cov nextest {{.WORKSPACE}} --all-features --lcov --output-path lcov.info'
 
+  test-differential:
+    desc: Differential harness vs the Go node (recorded-oracle + reexecute)
+    cmd: '{{.NIX_RUN}} cargo xtask test-differential --recorded'
+
+  test-reexecute:
+    desc: Reexecute golden block ranges, compare state roots
+    cmd: '{{.NIX_RUN}} cargo xtask test-reexecute'
+
+  test-fuzz:
+    desc: Run cargo-fuzz targets briefly (smoke)
+    cmd: '{{.NIX_RUN}} cargo xtask test-fuzz'
+
   # --- Lint / format -----------------------------------------------------
   lint:
-    desc: clippy (deny warnings) + rustfmt check
+    desc: clippy (deny warnings) + rustfmt check + TOML + license headers
     cmds:
       - '{{.NIX_RUN}} cargo clippy {{.WORKSPACE}} --all-targets --all-features -- -D warnings'
       - '{{.NIX_RUN}} cargo fmt --all -- --check'
+      - '{{.NIX_RUN}} taplo fmt --check'
+      - '{{.NIX_RUN}} ./scripts/check_license_headers.sh'
 
   lint-fix:
-    desc: Auto-fix clippy + format
+    desc: Auto-fix clippy + format + headers
     cmds:
       - '{{.NIX_RUN}} cargo clippy {{.WORKSPACE}} --all-targets --all-features --fix --allow-dirty --allow-staged'
       - '{{.NIX_RUN}} cargo fmt --all'
+      - '{{.NIX_RUN}} taplo fmt'
+      - '{{.NIX_RUN}} ./scripts/add_license_headers.sh'
+
+  lint-saevm:
+    desc: Stricter pedantic + overflow clippy on SAE crates (analogue of lint-saevm/G115)
+    cmd: '{{.NIX_RUN}} ./scripts/lint_saevm.sh'
+
+  lint-determinism:
+    desc: Determinism-audit AST pass (wall-clock / HashMap-in-codec / RNG bans)
+    cmd: '{{.NIX_RUN}} cargo xtask lint-determinism'
+
+  lint-shell:
+    desc: shellcheck (carried over from Go)
+    cmd: '{{.NIX_RUN}} ./scripts/shellcheck.sh'
+
+  lint-action:
+    desc: actionlint on GitHub workflows (carried over)
+    cmd: '{{.NIX_RUN}} actionlint'
+
+  check-yaml-fmt:
+    desc: Assert YAML is yamlfmt-clean (carried over)
+    cmds:
+      - '{{.NIX_RUN}} yamlfmt .'
+      - task: check-clean-branch
+
+  lint-all:
+    desc: Run all lint checks
+    deps: [lint, lint-saevm, lint-shell, lint-action]
+    cmds:
+      - task: check-yaml-fmt
+      - task: deps-tidy
+      - task: check-rust-version
+      - task: bazel-check-metadata
+
+  lint-all-ci:
+    desc: Run all lint checks sequentially (CI)
+    cmds:
+      - task: lint
+      - task: lint-saevm
+      - task: lint-shell
+      - task: lint-action
+      - task: check-yaml-fmt
+      - task: check-rust-version
+      - task: deps-tidy
+      - task: deps-unused
+
+  # --- Dependencies (go-mod-tidy analogue) -------------------------------
+  deps-tidy:
+    desc: Verify Cargo.lock is current and dependency policy passes
+    cmds:
+      - '{{.NIX_RUN}} cargo update --workspace --locked'   # fails if Cargo.lock stale
+      - '{{.NIX_RUN}} cargo deny check'
+      - '{{.NIX_RUN}} bazelisk mod tidy'
+
+  deps-unused:
+    desc: Detect unused dependencies
+    cmd: '{{.NIX_RUN}} cargo machete'
+
+  deps-audit:
+    desc: RustSec advisory scan
+    cmd: '{{.NIX_RUN}} cargo audit'
+
+  # --- Codegen -----------------------------------------------------------
+  generate-protobuf:
+    desc: Regenerate proto bindings (build.rs tonic/prost) and check buf
+    cmd: '{{.NIX_RUN}} ./scripts/protobuf_codegen.sh'
+
+  generate-mocks:
+    desc: Regenerate committed mocks (mockall) where applicable
+    cmd: '{{.NIX_RUN}} ./scripts/generate_mocks.sh'
+
+  check-generate-protobuf:
+    desc: Assert proto bindings are current (clean tree)
+    cmds:
+      - task: generate-protobuf
+      - task: check-clean-branch
+
+  check-generate-mocks:
+    desc: Assert mocks are current (clean tree)
+    cmds:
+      - task: generate-mocks
+      - task: check-clean-branch
+
+  # --- Bazel -------------------------------------------------------------
+  bazel-build:
+    desc: Build avalanchers with Bazel
+    cmd: '{{.NIX_RUN}} bazelisk build //crates/avalanchers:avalanchers'
+
+  bazel-build-opt:
+    desc: Build avalanchers with Bazel (optimized)
+    cmd: '{{.NIX_RUN}} bazelisk build --config=opt //crates/avalanchers:avalanchers'
+
+  bazel-test:
+    desc: Run unit tests with Bazel
+    cmd: '{{.NIX_RUN}} bazelisk test //...'
+
+  bazel-test-fast:
+    desc: Run unit tests with Bazel (no extra checks)
+    cmd: '{{.NIX_RUN}} bazelisk test --config=fast //...'
+
+  bazel-gazelle-generate:
+    desc: Regenerate BUILD files with gazelle_rust
+    cmd: '{{.NIX_RUN}} bazelisk run //:gazelle'
+
+  bazel-fmt:
+    desc: Format BUILD.bazel files
+    cmd: '{{.NIX_RUN}} buildifier -r .'
+
+  bazel-check-metadata:
+    desc: Check BUILD files + Cargo.lock are current (clean tree)
+    cmds:
+      - task: bazel-gazelle-generate
+      - task: bazel-fmt
+      - task: check-clean-branch
+
+  # --- Checks ------------------------------------------------------------
+  check-rust-version:
+    desc: Assert Rust version is consistent across toolchain/Bazel/CI
+    cmd: '{{.NIX_RUN}} ./scripts/check_rust_version.sh'
+
+  check-clean-branch:
+    desc: Assert the git working tree is clean
+    cmd: '{{.NIX_RUN}} ./scripts/check_clean_branch.sh'
+
+  # --- Cross-cutting (tier X) --------------------------------------------
+  vectors-verify:
+    desc: Validate the golden-vector corpus (schema/hashes/orphans)
+    cmd: '{{.NIX_RUN}} cargo xtask vectors verify'
+
+  porting-report:
+    desc: Aggregate the per-crate PORTING.md matrices
+    cmd: '{{.NIX_RUN}} cargo xtask porting-report'
+
+  install-nix:
+    desc: Install nix with an OS-appropriate installer
+    cmd: ./scripts/install_nix.sh

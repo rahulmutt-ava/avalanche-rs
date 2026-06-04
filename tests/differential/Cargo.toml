@@ -1,0 +1,19 @@
+[package]
+name = "ava-differential"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Differential test harness: LockstepDriver + Observation vs the Go node (tier X / X.13, specs/02 §11)."
+publish = false
+
+[dependencies]
+arbitrary = { workspace = true }
+
+# [dev-dependencies]
+# proptest = { workspace = true }  # added by X.13 with the recorded-oracle proptest
+
+[lints]
+workspace = true

@@ -33,6 +33,10 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) ];
+          # cargo-llvm-cov is flagged `broken` in nixos-25.11 (a stale marker —
+          # the prebuilt Rust binary still builds & runs). Allow it so the dev
+          # shell evaluates; revisit when the nixpkgs pin is bumped.
+          config.allowBroken = true;
         };
 
         # Single source of truth for the Rust version: rust-toolchain.toml.

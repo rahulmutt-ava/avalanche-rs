@@ -1,0 +1,19 @@
+# .github/actions/install-nix — install Nix and warm the flake dev shell.
+# Carried over from avalanchego (specs/01 §3, §10). Every CI job uses this so it
+# runs against the pinned toolchain from rust-toolchain.toml via the flake, then
+# invokes a task with `shell: nix develop --command bash -x {0}`.
+name: install-nix
+description: Install Nix (flakes enabled) and pre-build the dev shell.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@v16
+
+    - name: Enable Magic Nix Cache
+      uses: DeterminateSystems/magic-nix-cache-action@v8
+
+    - name: Warm the dev shell
+      shell: bash
+      run: nix develop --command true

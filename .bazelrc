@@ -1,0 +1,44 @@
+# .bazelrc — Bazel config (specs/01-development-environment.md §4.4).
+# Mirrors the Go .bazelrc: lockfile auto-update, platform-specific config,
+# default-on stricter mode, fast local mode, disk cache, release stamping. Go's
+# "race on by default" becomes "overflow-checks + debug-assertions on by default".
+
+# Keep MODULE.bazel.lock current automatically (matches Go).
+common --lockfile_mode=update
+
+# Platform-specific config sections (build:macos, build:linux).
+common --enable_platform_specific_config
+
+# Test output: errors only (matches Go).
+test --test_output=errors
+
+# Default ON: overflow + debug assertions (the Rust analogue of Go's race=on).
+# These catch latent arithmetic/logic bugs; disable for fast local iteration.
+build --@rules_rust//rust/settings:experimental_use_cc_common_link=False
+build --@rules_rust//:extra_rustc_flags=-Coverflow-checks=on,-Cdebug-assertions=on
+
+# Config: fast local iteration (drop assertions, like Go's --config=fast/norace).
+build:fast --@rules_rust//:extra_rustc_flags=
+test:fast --@rules_rust//:extra_rustc_flags=
+
+# Optimized release builds.
+build:opt --compilation_mode=opt
+build:opt --@rules_rust//:extra_rustc_flags=-Ccodegen-units=1
+
+# libclang / native build deps for rocksdb/firewood/secp256k1/blst.
+build --action_env=LIBCLANG_PATH
+build --repo_env=CARGO_BAZEL_REPIN=0   # set to 1 to force crate re-pin
+
+# macOS: use the default CommandLineTools toolchain (matches Go + CI runners).
+build:macos --repo_env=DEVELOPER_DIR=/Library/Developer/CommandLineTools
+build:macos --action_env=DEVELOPER_DIR=/Library/Developer/CommandLineTools
+build:macos --action_env=SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+
+# Disk cache for faster builds (matches Go).
+build --disk_cache=~/.cache/bazel-disk-cache
+
+# Release: stamp with git commit (matches Go).
+build:release --stamp
+build:release --workspace_status_command=scripts/bazel_workspace_status.sh
+
+try-import %workspace%/.bazelrc.local

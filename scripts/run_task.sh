@@ -2,14 +2,13 @@
 # Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 # See the file LICENSE for licensing terms.
 #
-# run_task.sh — the canonical task launcher (carried over from avalanchego).
+# run_task.sh — the canonical task launcher (carried over from avalanchego;
+# specs/01-development-environment.md §5).
 #
-# M0 STUB. X-cross-cutting (tasks X.1 / X.4) matures this to the verbatim Go
-# behavior: it should prefer `task` (go-task) on PATH and wrap every task in the
-# Nix dev shell. Until go-task + flake.nix land, this stub implements the core
-# tasks (build / test-unit / test-unit-fast / lint) directly via cargo so the
-# implementation loop has a working entrypoint. Any task not handled here is
-# delegated to `task` if it is installed.
+# Behavior (X.1/X.4): prefer `task` (go-task) and run it inside the Nix dev shell
+# so every task gets the pinned toolchain. The full task surface lives in
+# Taskfile.yml. If go-task is unavailable (no Nix, no `task` on PATH), fall back
+# to a small set of cargo stubs so the core inner loop still works.
 #
 # Usage: ./scripts/run_task.sh <task> [-- extra args]
 set -euo pipefail
@@ -19,9 +18,20 @@ NIX_RUN="${REPO_ROOT}/scripts/nix_run.sh"
 
 run() { "${NIX_RUN}" "$@"; }
 
+# Is go-task reachable, either directly or inside the Nix dev shell?
+have_task() {
+  command -v task >/dev/null 2>&1 && return 0
+  run task --version >/dev/null 2>&1 && return 0
+  return 1
+}
+
 usage() {
+  if have_task; then
+    run task --list-all
+    return
+  fi
   cat <<'EOF'
-Tasks (M0 stub — see specs/01-development-environment.md §5 for the full set):
+Tasks (fallback stub — install go-task / nix for the full Taskfile surface):
   build                Build the avalanchers binary (release)
   build-debug-checks   Build the workspace with overflow + debug assertions
   test-unit            Unit tests (all features, CI profile) + doctests
@@ -30,14 +40,32 @@ Tasks (M0 stub — see specs/01-development-environment.md §5 for the full set)
   lint-fix             clippy --fix + cargo fmt
   --list               Show this list
 
-Tasks not listed here are delegated to `task` (go-task) if installed; the full
-Taskfile.yml surface is owned by plan/X-cross-cutting.md.
+The full task surface (bazel-*, deps-*, generate-*, lint-all*, vectors-*, …)
+is defined in Taskfile.yml and runs once go-task is available.
 EOF
 }
 
 task="${1:-default}"
 shift || true
 
+# Preferred path: delegate to go-task (wrapped in the Nix dev shell).
+if have_task; then
+  case "${task}" in
+    default | --list | -l)
+      run task --list-all
+      ;;
+    help | --help | -h)
+      run task --list-all
+      ;;
+    *)
+      run task "${task}" "$@"
+      ;;
+  esac
+  exit 0
+fi
+
+# Fallback: go-task is not installed and Nix is unavailable. Implement the core
+# inner-loop tasks directly so contributors are never fully blocked.
 case "${task}" in
   default | --list | -l | help | --help | -h)
     usage
@@ -46,7 +74,7 @@ case "${task}" in
     run cargo build -p avalanchers --release "$@"
     ;;
   build-debug-checks)
-    run cargo build --workspace --profile ci "$@"
+    run cargo build --workspace --profile dev-checks "$@"
     ;;
   test-unit)
     if run cargo nextest --version >/dev/null 2>&1; then
@@ -73,11 +101,8 @@ case "${task}" in
     run cargo fmt --all
     ;;
   *)
-    if command -v task >/dev/null 2>&1; then
-      exec task "${task}" "$@"
-    fi
     echo "run_task.sh: unknown task '${task}' and go-task is not installed." >&2
-    echo "Run './scripts/run_task.sh --list' for the M0 task set." >&2
+    echo "Install go-task (or run inside 'nix develop') for the full Taskfile surface." >&2
     exit 2
     ;;
 esac

@@ -1,0 +1,25 @@
+# BUILD.bazel — root targets (specs/01-development-environment.md §4.3).
+# The gazelle binary (with the Rust language plugin) regenerates per-crate
+# BUILD.bazel from .rs files + Cargo.lock. `bazel run //:gazelle` regenerates;
+# `bazel run //:gazelle_check` (mode=diff) fails CI if they are stale.
+load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
+
+# gazelle:rust_cargo_lockfile //:Cargo.lock
+# gazelle:rust_crates_prefix @crates//:
+
+gazelle_binary(
+    name = "gazelle_bin",
+    languages = ["@gazelle_rust//rust_language"],
+)
+
+gazelle(
+    name = "gazelle",
+    gazelle = ":gazelle_bin",
+)
+
+# Verify generated BUILD files are current (analogue of //:gazelle_test).
+gazelle(
+    name = "gazelle_check",
+    gazelle = ":gazelle_bin",
+    mode = "diff",
+)

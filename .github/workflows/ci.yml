@@ -1,0 +1,117 @@
+name: Tests
+
+on:
+  push:
+    tags: ["*"]
+    branches: [master, dev]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests-required:
+    if: ${{ always() }}
+    needs:
+      - Unit
+      - Lint
+      - taulint
+      - check_generated_protobuf
+      - check_mocks
+      - check_deps_tidy
+      - bazel
+      - differential
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail unless all needed jobs succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          failed="$(jq -r 'to_entries[] | select(.value.result != "success") | .key' <<<"$NEEDS_JSON")"
+          if [[ -n "$failed" ]]; then echo "Failed: $failed"; exit 1; fi
+
+  Unit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - name: test-unit
+        shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh test-unit
+
+  Lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - name: lint-all-ci
+        shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh lint-all-ci
+
+  taulint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Forbid raw casts/unchecked Duration math on Tau (analogue of tausecondslint)
+        run: ./scripts/tau_lint.sh
+
+  check_generated_protobuf:
+    name: Up-to-date protobuf
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh check-generate-protobuf
+
+  check_mocks:
+    name: Mocks compile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh check-generate-mocks
+
+  check_deps_tidy:
+    name: Cargo.lock + dependency policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh deps-tidy
+
+  bazel:
+    name: Bazel build + test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - name: bazel build + test + metadata check
+        shell: nix develop --command bash -x {0}
+        run: |
+          ./scripts/run_task.sh bazel-check-metadata
+          ./scripts/run_task.sh bazel-build
+          ./scripts/run_task.sh bazel-test
+
+  differential:
+    name: Differential tests vs Go node
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      # Recorded-oracle + reexecute (specs/02 §11). Live two-binary + mixed-net
+      # run nightly (tier-X tasks X.15/X.22).
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh test-differential

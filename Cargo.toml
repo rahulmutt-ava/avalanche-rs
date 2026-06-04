@@ -10,7 +10,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "xtask", "tests/differential"]
 
 [workspace.package]
 version = "0.1.0"
@@ -69,6 +69,10 @@ bytes = "1"
 # Time (formatting only; consensus time math stays integer/Duration-based)
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+# Tracing / observability (ava-logging; specs/18). The subscriber/OTel layers
+# are wired in their owning milestones (X.18); the facade is pinned here.
+tracing = "0.1"
+
 # CLI
 clap = { version = "4", features = ["derive"] }
 
@@ -85,7 +89,30 @@ pretty_assertions = "1"
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 
+# Workspace-wide lints (specs/01 §7.3). Each crate opts in with `[lints]
+# workspace = true`. unsafe_code is forbidden except in the audited FFI wrapper
+# crates (ava-crypto's secp256k1/blst modules), which opt out per-crate (00 §7.6).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_crate_dependencies = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+# Project bans mirroring Go's forbidigo/depguard (specs/01 §7.5):
+unwrap_used = "deny"            # no unwrap() in non-test lib code (00 §8)
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"  # nudge toward checked arithmetic (00 §6.1)
+todo = "warn"
+dbg_macro = "deny"
+
 [profile.dev]
+overflow-checks = true
+debug-assertions = true
+
+[profile.dev-checks]            # build-race analogue: max runtime checking
+inherits = "dev"
 overflow-checks = true
 debug-assertions = true
 

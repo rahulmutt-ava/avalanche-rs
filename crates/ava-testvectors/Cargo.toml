@@ -1,0 +1,23 @@
+[package]
+name = "ava-testvectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Generic golden-vector loader for the tests/vectors/ corpus (tier X / X.11, specs/22 §6)."
+
+[features]
+# The loader is test-only utility code; gate it so it never ships in a release
+# dependency graph (mirrors the Go codectest `testutil` split).
+default = []
+testutil = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

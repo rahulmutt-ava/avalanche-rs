@@ -38,6 +38,5 @@ fn main() {
     let args = Args::parse();
     if args.version {
         println!("{VERSION}");
-        return;
     }
 }

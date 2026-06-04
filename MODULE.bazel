@@ -1,0 +1,57 @@
+# MODULE.bazel — Bazel bzlmod entrypoint (specs/01-development-environment.md §4.2).
+#
+# Decision (01 §4.1): Cargo is the source of truth; Bazel consumes Cargo.lock via
+# crate_universe so the two never disagree on dependency versions. `cargo` is the
+# inner-loop tool; `bazel build/test //...` is the hermetic/CI/cross-language path.
+module(
+    name = "avalanche_rs",
+    version = "0.0.0",
+)
+
+# --- Core rules -----------------------------------------------------------
+bazel_dep(name = "rules_rust", version = "0.70.0")
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "toolchains_protoc", version = "0.4.3")  # hermetic protoc
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+
+# Gazelle + the Rust language plugin (analogue of rules_go's gazelle).
+bazel_dep(name = "gazelle", version = "0.45.0")
+bazel_dep(name = "gazelle_rust", version = "0.2.0")
+
+# --- Rust toolchain: pinned to rust-toolchain.toml ------------------------
+# CI's check-rust-version asserts this stays in lock-step with rust-toolchain.toml.
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.96.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+# --- crate_universe: external crates from Cargo.lock ----------------------
+# Cargo is the source of truth. This reads the workspace manifests + Cargo.lock
+# and generates @crates//... repos for every third-party crate.
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],  # workspace root; members discovered via [workspace]
+)
+use_repo(crate, "crates")
+
+# --- prost/tonic toolchain for proto codegen under Bazel (see §8) ---------
+# DEFERRED until M2/M3: the prost toolchain references @crates//:prost / :tonic,
+# which only exist once a proto-consuming crate (ava-message, ava-vm-rpc) adds
+# prost/tonic to Cargo.lock. Enabling this block before then breaks `bazel
+# build //...`. Uncomment when those deps land (and run `bazelisk mod tidy`).
+#
+# prost = use_extension("@rules_rust//proto/prost:extensions.bzl", "rust_prost")
+# prost.toolchain(
+#     prost_runtime = "@crates//:prost",
+#     prost_types = "@crates//:prost-types",
+#     tonic_runtime = "@crates//:tonic",
+# )
+# use_repo(prost, "rules_rust_prost")
+# register_toolchains("@rules_rust_prost//:default_prost_toolchain")

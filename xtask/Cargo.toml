@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Repo automation task runner mirroring Taskfile.yml (specs/01 §5, tier X / X.4)."
+publish = false
+
+[dependencies]
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

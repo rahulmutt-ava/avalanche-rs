@@ -1,0 +1,47 @@
+# deny.toml — cargo-deny dependency policy (specs/01-development-environment.md §9).
+# Analogue of Go's `go mod tidy` consistency + license + depguard checks:
+# single-version-per-crate, license allow-list, banned crates, advisory scanning.
+[graph]
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []                      # add RUSTSEC-XXXX with justification + expiry
+
+[licenses]
+# Match avalanchego's permissive posture; the repo itself is BSD-3-Clause.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",          # used by some crypto deps; review case-by-case
+]
+confidence-threshold = 0.9
+exceptions = [
+    # { allow = ["..."], name = "some-crate" },
+]
+
+[bans]
+multiple-versions = "warn"       # tighten to "deny" once the tree stabilizes
+wildcards = "deny"               # no `*` version requirements (mirrors pinned go.mod)
+deny = [
+    # Enforce the single-crate-per-job rule from 00 §4 and §7.5:
+    { name = "openssl", wrappers = ["native-tls"] },  # prefer rustls (00 §4.3)
+    # { name = "<banned alt mock crate>" },           # mockall is the only mock lib
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    # Pinned git deps (reth/firewood may be git until crates.io releases land).
+    "https://github.com/paradigmxyz/reth",
+    "https://github.com/ava-labs/firewood",
+]
