@@ -2,7 +2,7 @@
 # Bump deliberately (one PR); CI asserts Bazel + Nix + workflow matrix agree.
 # See specs/01-development-environment.md §2.
 [toolchain]
-channel = "1.90.0"        # exact stable patch; bump in lock-step with reth's MSRV
+channel = "1.96.0"        # exact stable patch; bump in lock-step with reth's MSRV
 profile = "minimal"        # we add components explicitly below
 components = [
     "rustfmt",

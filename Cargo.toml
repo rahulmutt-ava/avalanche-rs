@@ -9,13 +9,13 @@
 # plan/X-cross-cutting.md and is intentionally NOT defined here.
 
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.90"
+edition = "2024"
+rust-version = "1.96"
 license = "BSD-3-Clause"
 authors = ["Ava Labs, Inc."]
 repository = "https://github.com/ava-labs/avalanche-rs"

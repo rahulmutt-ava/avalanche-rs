@@ -70,7 +70,7 @@ toolchain and the `nextest`/CI matrix agree with this file.
 # rust-toolchain.toml — single source of truth for the Rust version.
 # Bump deliberately (one PR); CI asserts Bazel + Nix + workflow matrix agree.
 [toolchain]
-channel = "1.90.0"        # exact stable patch; bump in lock-step with reth's MSRV
+channel = "1.96.0"        # exact stable patch; bump in lock-step with reth's MSRV
 profile = "minimal"        # we add components explicitly below
 components = [
     "rustfmt",
@@ -92,10 +92,9 @@ targets = [
 > release supports, exactly as Go pins to what the codebase requires. When reth is
 > bumped (`10-cchain-evm-reth.md`), bump this file in the same PR.
 
-Edition: `edition = "2021"` is set per-crate in each `Cargo.toml` (or `2024` once
-the whole tree compiles on it — decided workspace-wide, not here). The workspace
-`Cargo.toml` sets `[workspace.package] edition`/`rust-version` so all crates
-inherit it.
+Edition: `edition = "2024"` is set workspace-wide via `[workspace.package]` in the
+root `Cargo.toml`; each crate inherits it with `edition.workspace = true`. The
+workspace `Cargo.toml` also sets `rust-version` so all crates share one MSRV.
 
 ---
 
@@ -328,9 +327,9 @@ bazel_dep(name = "gazelle_rust", version = "0.2.0")
 # --- Rust toolchain: pinned to rust-toolchain.toml ------------------------
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
-    edition = "2021",
+    edition = "2024",
     # Keep in lock-step with rust-toolchain.toml; CI's check-rust-version asserts.
-    versions = ["1.90.0"],
+    versions = ["1.96.0"],
 )
 use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
@@ -756,7 +755,7 @@ tabs meaningfully for Rust; `.editorconfig` already sets `[*.rs]` to spaces).
 
 ```toml
 # rustfmt.toml
-edition = "2021"
+edition = "2024"
 max_width = 100
 use_small_heuristics = "Default"
 imports_granularity = "Module"     # group `use` per module path
@@ -1251,7 +1250,7 @@ conform to repo conventions so your work passes CI on the first try.
 
 - **Workspace:** a single Cargo workspace; crates live under `crates/`, all named
   `ava-*` (the binary is `avalanchers`; the node is a drop-in replacement for `avalanchego`).
-- **Rust version:** pinned exactly in `rust-toolchain.toml` (e.g. `1.90.0`). Bump
+- **Rust version:** pinned exactly in `rust-toolchain.toml` (e.g. `1.96.0`). Bump
   it in lock-step with `MODULE.bazel` and the CI matrix; `check-rust-version`
   asserts they agree.
 - **Goal:** byte-for-byte wire/codec/API/genesis compatibility with `avalanchego`.
@@ -1345,7 +1344,7 @@ Rust prefers build-time/macro generation; we commit **no** generated code.
 
 ## Conventions (see `00-overview-and-conventions.md` for the full set)
 
-- **Edition 2021**, tabs are *not* used for Rust (`.editorconfig` → 4 spaces).
+- **Edition 2024**, tabs are *not* used for Rust (`.editorconfig` → 4 spaces).
 - **License header** on every `.rs` file:
   ```rust
   // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.

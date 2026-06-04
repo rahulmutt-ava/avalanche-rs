@@ -307,7 +307,7 @@ Consensus-affecting code must be deterministic and match Go bit-for-bit:
 
 ## 8. Code style & lints (enforced)
 
-- Edition 2021 (or latest stable edition), `rustfmt` with a checked-in
+- Edition 2024 (or latest stable edition), `rustfmt` with a checked-in
   `rustfmt.toml`; `clippy` with `-D warnings`. SAE crates additionally enable
   `clippy::pedantic` + `overflow-checks = true` in all profiles.
 - License header on every `.rs` file (mirror Go header.yml):

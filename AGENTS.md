@@ -9,7 +9,7 @@ conform to repo conventions so your work passes CI on the first try.
 
 - **Workspace:** a single Cargo workspace; crates live under `crates/`, all named
   `ava-*` (the binary is `avalanchers`; the node is a drop-in replacement for `avalanchego`).
-- **Rust version:** pinned exactly in `rust-toolchain.toml` (e.g. `1.90.0`). Bump
+- **Rust version:** pinned exactly in `rust-toolchain.toml` (e.g. `1.96.0`). Bump
   it in lock-step with `MODULE.bazel` and the CI matrix; `check-rust-version`
   asserts they agree.
 - **Goal:** byte-for-byte wire/codec/API/genesis compatibility with `avalanchego`.
@@ -103,7 +103,7 @@ Rust prefers build-time/macro generation; we commit **no** generated code.
 
 ## Conventions (see `specs/00-overview-and-conventions.md` for the full set)
 
-- **Edition 2021**, tabs are *not* used for Rust (`.editorconfig` → 4 spaces).
+- **Edition 2024**, tabs are *not* used for Rust (`.editorconfig` → 4 spaces).
 - **License header** on every `.rs` file:
   ```rust
   // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
