@@ -1,0 +1,401 @@
+# M3 — Consensus Skeleton + VM Framework Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
+
+**Goal:** Build the determinism-critical Snowball/Snowman consensus core, the engine op state machine with bootstrap/getter/sender, the validator subsystem, the proposervm wrapper + windower, and the VM-trait framework (ChainVm/Block, fx/secp256k1fx, metervm/tracedvm, chain manager, rpcchainvm v45) so a no-op test VM reaches stable finalized height in a simulated multi-node cluster.
+
+**Tier:** T2b (consensus core) + T3 (VM framework)
+**Crates:** `ava-snow`, `ava-engine`, `ava-validators`, `ava-proposervm`, `ava-simplex`, `ava-vm`, `ava-vm-rpc`, `ava-secp256k1fx`, `ava-chains`
+**Owning specs:** `06-consensus.md` (primary), `07-vm-framework.md` (primary), `24-determinism-and-clock.md` (injected clock); conventions from `00`/`02`.
+**Depends on (prior milestones):** M0 (`ava-utils` sampler + vendored gonum MT19937/-64, `ava-codec`(+derive), `ava-crypto` secp256k1/bls, `ava-utils::clock`, `ava-types` ids/NodeId/ShortId/Bag/BiMap/Set), M1 (`ava-blockdb` height+block stores, `ava-database` `DynDatabase`/PrefixDb/MeterDb), M2 (`ava-message` wire ops + msg creator, `ava-network` outbound + inbound glue, rpcdb/appsender proxy scaffolding)
+**Exit gate (named tests):** `prop::consensus_safety` (no two conflicting decisions finalize, any vote seq); `prop::consensus_liveness` (coherent majority finalizes in bounded rounds); `prop::preference_monotone`; `golden::proposervm_block` (byte-exact block + signature); `golden::windower_schedule` (proposer ordering for fixed validator set — confirms R1 on the windower); `conformance::snow_battery`; `differential::testvm_finalizes` (simulated cluster reaches stable height).
+
+---
+
+## Dependency map & parallel waves
+
+A tier may only depend on tiers above it; within a wave, tasks are independent and may be dispatched concurrently to subagents.
+
+```
+Wave A (TDD entry; parallel)
+  M3.1  prop::consensus_safety harness + in-memory cluster of test VM   (ava-snow, RED-only seed)
+  M3.2  ava-snow scaffolding: ConsensusContext / Block / Status / EngineState / Acceptor / errors
+  M3.6  ava-validators: Validator / GetValidatorOutput / ValidatorManager / Set (+ sample reuse)
+  M3.14 ava-vm: error model + Vm/AppHandler/HealthCheck/Connector/AppSender base traits
+
+Wave B (consensus primitives + VM block traits; parallel)
+  M3.3  ava-snow snowball primitives (slush/snowflake/snowball unary/binary/nnary) + Parameters
+  M3.7  ava-validators: ValidatorState trait + cached/locked adapters + ConnectedValidators
+  M3.15 ava-vm::block ChainVm/Block re-export + batched/statesync/withcontext + GetAncestors fallback
+  M3.18 ava-vm components: avax UTXO model + verify + chain::State + gas (golden)
+
+Wave C
+  M3.4  ava-snow snowball Tree (Consensus/Factory)                         (after M3.3)
+  M3.8  ava-validators uptime manager                                      (after M3.6)
+  M3.16 ava-vm middleware: MeterVm + TracedVm (forward capability probes)  (after M3.15)
+  M3.19 ava-secp256k1fx: OutputOwners/Input/types + verify_credentials + golden (after M3.18 + M3.14)
+
+Wave D
+  M3.5  ava-snow Topological (Snowman) + consensus battery + safety GREEN  (after M3.4) -> retires M3.1 RED
+  M3.20 ava-vm fx framework (Fx/FxInstance/FxVm)                            (after M3.19)
+
+Wave E (engine; depends on snow + validators + message)
+  M3.9  ava-engine: op state machine traits (Handler/Engine/NoOpHandler) + AppError + Sender trait
+  M3.10 ava-engine networking: ChainRouter + ChainHandler actor + AdaptiveTimeoutManager + Benchlist + ResourceTracker
+  M3.11 ava-engine: Snowman engine (issue/poll/vote) + early-term PollSet + getter
+  M3.12 ava-engine: Bootstrapper + state-sync no-op handlers
+  M3.13 prop::consensus_liveness + prop::preference_monotone over engine-driven cluster
+
+Wave F (proposervm; confirms R1)
+  M3.21 ava-proposervm: block formats (statelessBlock/option/Granite) byte-exact + golden::proposervm_block
+  M3.22 ava-proposervm: windower (pre/post-Durango, gonum MT) + golden::windower_schedule  (CONFIRMS R1)
+  M3.23 ava-proposervm: VM wrapper (fork schedule, height index, sign/build, inner-VM delegation)
+
+Wave G (chains + rpc; last)
+  M3.17 ava-simplex: parameters + messages + stub engine behind cfg(feature="simplex")  (parallel, low priority)
+  M3.24 ava-vm-rpc: proto/tonic service map + guest VmServer + host RpcChainVm + runtime v45 handshake
+  M3.25 ava-vm-rpc: proxied callback services (rpcdb/appsender/sharedmemory/validatorstate/warp/aliasreader)
+  M3.26 ava-chains: VmManager/Factory/VmRegistry + Aliaser + Subnet + SharedMemory
+  M3.27 ava-chains: create_snowman_chain pipeline (EXACT wrapping order) + differential::testvm_finalizes
+  M3.28 avalanchego bin: construct chain manager + test VM in-process; conformance::snow_battery wiring
+
+Wave H
+  M3.29 Milestone exit gate (build/test/clippy + named exit tests + PORTING.md)
+```
+
+> **TDD ENTRY POINT:** M3.1 lands first (RED) — `prop::consensus_safety` against an in-memory cluster of the test VM. Safety is the non-negotiable invariant; it is written before the engine exists and turns GREEN at M3.5 (Topological) and is re-asserted end-to-end at M3.27.
+
+---
+
+## Tasks
+
+### Task M3.1: TDD entry — `prop::consensus_safety` harness + in-memory test-VM cluster (RED)
+**Crate:** `ava-snow` (+ `testutil` feature)  ·  **Depends on:** M0 (`ava-types` Id/NodeId/Bag), M2 (none directly; pure in-memory)  ·  **Spec:** 06 §2.4 (safety invariant), §10 (proptest — safety), 02 §4
+**Files:** `crates/ava-snow/tests/prop_safety.rs`, `crates/ava-snow/src/testutil/cluster.rs` (feature `testutil`), `crates/ava-snow/src/testutil/test_vm.rs`, `crates/ava-snow/Cargo.toml`, `crates/ava-snow/tests/PORTING.md`, `crates/ava-snow/proptest-regressions/.gitkeep`
+- [ ] **Step 1 — Red:** Write `prop::consensus_safety`: a proptest generating a random DAG of conflicting blocks (same-height siblings) + a random sequence of `record_poll` vote bags across an in-memory cluster of N test-VM Snowman instances; assert the property **no two conflicting blocks (same height, different id) are ever both accepted** and **the accepted set is always a chain rooted at genesis**. Use a hand-written `TestBlock`/`TestVm` (no-op verify/accept/reject recording acceptance into a shared oracle). Reference the Go `network_test` metastable model as oracle. The test must reference `ava_snow::snowman::Topological` which does not yet exist.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-snow --test prop_safety 2>&1 | grep -E "cannot find|unresolved import"` — fails to compile because `Topological` / `SnowmanConsensus` are absent (the right reason: the consensus instance does not exist yet).
+- [ ] **Step 3 — Green:** Do **not** implement consensus here. Only create the `testutil` cluster scaffolding (`TestVm`, `TestBlock`, `Cluster::new(n, params)`, `Cluster::step(votes)`, `Cluster::accepted_chain()`), feature-gate it (`[features] testutil = []`), commit the empty `proptest-regressions/` dir, and seed `PORTING.md` (rows for `consensus_test.go`, `network_test.go` marked `wip`). The proptest body compiles against the scaffolding but is `#[ignore]`d with a `// UN-IGNORE at M3.5` marker until `Topological` exists.
+- [ ] **Step 4 — Confirm green:** `cargo build -p ava-snow --features testutil` compiles; `cargo test -p ava-snow --test prop_safety -- --ignored --list` lists `consensus_safety`.
+- [ ] **Step 5 — Commit:** `ava-snow: add prop::consensus_safety harness + in-memory test-VM cluster (RED, TDD entry)`
+
+### Task M3.2: `ava-snow` scaffolding — ConsensusContext, Block, Status, EngineState, Acceptor, errors
+**Crate:** `ava-snow`  ·  **Depends on:** M0 (`ava-crypto` bls, `ava-version` upgrade::Config, `ava-utils::clock`), M2 (`ava-network` Logger/MultiGatherer handles), M1 (`ava-database`)  ·  **Spec:** 06 §3, §3.1, §9 (error model)
+**Files:** `crates/ava-snow/src/lib.rs`, `crates/ava-snow/src/context.rs` (`ChainContext`, `ConsensusContext`), `crates/ava-snow/src/decidable.rs` (`Block` trait), `crates/ava-snow/src/choices.rs` (`Status`), `crates/ava-snow/src/state.rs` (`EngineState`, `EngineType`), `crates/ava-snow/src/acceptor.rs` (`Acceptor`), `crates/ava-snow/src/error.rs`
+- [ ] **Step 1 — Red:** `mod tests` unit test `status_wire_values` asserting `Status::{Unknown,Processing,Rejected,Accepted} as u8 == [0,1,2,3]` and `EngineState`/`EngineType`/`StateSyncMode`-adjacent enum values match Go; a `chain_context_is_send_sync` static-assert (`fn _assert<T: Send+Sync>(){} _assert::<Arc<ChainContext>>()`).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-snow status_wire_values 2>&1 | grep -E "cannot find type|module"` — fails (types absent).
+- [ ] **Step 3 — Green:** Implement per 06 §3: `ChainContext` (immutable identity/handles, `Arc`-cloneable, NO `Lock`), `ConsensusContext` (adds `block_acceptor`/`tx_acceptor`/`state: ArcSwap<EngineState>`/`executing: AtomicBool`/`state_syncing`), the `#[async_trait] Block` trait (06 §2.4: `id/parent/height/timestamp/bytes/verify/accept/reject`), `Status` (repr-tagged), `EngineState`, `EngineType`, `#[async_trait] Acceptor`, and the crate `thiserror` `Error` + `Result<T>` alias with snowman sentinels (`DuplicateAdd`, `UnknownParentBlock`, `TooManyProcessingBlocks`, `BlockProcessingTooLong`, `AcceptanceTimeTooHigh`, `ParametersInvalid`). License header + `#![forbid(unsafe_code)]`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow status_wire_values` passes; `cargo clippy -p ava-snow -- -D warnings`.
+- [ ] **Step 5 — Commit:** `ava-snow: ConsensusContext/ChainContext, Block, Status, EngineState, Acceptor, error model`
+
+### Task M3.3: `ava-snow` snowball primitives + `Parameters`
+**Crate:** `ava-snow`  ·  **Depends on:** M3.2  ·  **Spec:** 06 §2.1 (Parameters + verify), §2.2 (slush/snowflake/snowball, unary/binary/nnary, TerminationCondition)
+**Files:** `crates/ava-snow/src/snowball/mod.rs`, `crates/ava-snow/src/snowball/parameters.rs`, `crates/ava-snow/src/snowball/unary_snowflake.rs`, `crates/ava-snow/src/snowball/nnary_snowflake.rs`, `crates/ava-snow/src/snowball/binary_slush.rs`, `crates/ava-snow/src/snowball/binary_snowflake.rs`, `crates/ava-snow/src/snowball/binary_snowball.rs`, `crates/ava-snow/src/snowball/unary_snowball.rs`, `crates/ava-snow/src/snowball/nnary_snowball.rs`, `crates/ava-snow/tests/golden_snowball.rs`
+- [ ] **Step 1 — Red:** (a) `golden::snowball_unit_vectors` — port the Go `*_snowflake_test.go` / `*_snowball_test.go` corpus as table tests asserting identical state transitions (record_poll counts → finalized/preference). (b) Unit `parameters_verify` table test asserting each invalid branch (06 §2.1) yields `Error::ParametersInvalid` via `assert_matches!`, in Go's exact branch order, **including** the easter-egg `alpha_confidence==3 && alpha_preference==28` guard, plus `DEFAULT_PARAMETERS` equals the copied constants.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-snow --test golden_snowball 2>&1 | grep -E "cannot find|unresolved"` — fails (modules absent).
+- [ ] **Step 3 — Green:** Implement `Parameters` (06 §2.1 exact field set + `DEFAULT_PARAMETERS` + `MIN_PERCENT_CONNECTED_BUFFER`) and `verify()` (exact branch order/variant). Implement `TerminationCondition`, `UnarySnowflake`/`NnarySnowflake` (record_poll per the spec snippets, fill-based confidence reset), and direct transliterations of `binary_slush`/`binary_snowflake`/`binary_snowball`/`unary_snowball`/`nnary_snowball` as pure integer state machines. No floats.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow --test golden_snowball` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-snow: snowball primitives (slush/snowflake/snowball) + Parameters::verify`
+
+### Task M3.4: `ava-snow` snowball `Tree` (`Consensus` + `Factory`)
+**Crate:** `ava-snow`  ·  **Depends on:** M3.3  ·  **Spec:** 06 §2.3 (Tree, Consensus/Factory traits, Bag-driven record_poll)
+**Files:** `crates/ava-snow/src/snowball/consensus.rs` (`Consensus`/`Factory`/`NnaryInstance`/`UnaryInstance` traits), `crates/ava-snow/src/snowball/tree.rs`, `crates/ava-snow/tests/golden_tree.rs`
+- [ ] **Step 1 — Red:** `golden::snowball_tree_vectors` — port `tree_test.go`: build a `Tree`, `add` choices that diverge at known bit prefixes, feed `Bag<Id>` polls, assert `preference()`/`finalized()` transitions match Go (prefix split at `commonPrefix` bit, vote push-down).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-snow --test golden_tree 2>&1 | grep -E "cannot find|Tree"` — fails.
+- [ ] **Step 3 — Green:** Implement object-safe `Consensus` (`add/preference/record_poll(&Bag<Id>)->bool/record_unsuccessful_poll/finalized` + `Display`) and `Factory`. Implement `Tree` as the modified Patricia/radix tree over 256-bit choice IDs splitting on first differing bit; `new_unary` for first child, `add` extends unary→binary at the divergence bit; `record_poll` routes the bag's plurality down the matching bit-prefix path to the snowflake/snowball nodes.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow --test golden_tree` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-snow: snowball Tree (multi-choice Consensus instance) + Factory`
+
+### Task M3.5: `ava-snow` `Topological` (Snowman) + consensus battery + safety GREEN
+**Crate:** `ava-snow`  ·  **Depends on:** M3.4, M3.1  ·  **Spec:** 06 §2.4 (the heart: add/record_poll/accept_preferred_child, Kahn sort, falter rules, HealthCheck, safety/liveness), 02 §13 (snow battery)
+**Files:** `crates/ava-snow/src/snowman/mod.rs`, `crates/ava-snow/src/snowman/consensus.rs` (`SnowmanConsensus` trait), `crates/ava-snow/src/snowman/topological.rs` (`Topological`, `SnowmanBlock`), `crates/ava-snow/src/snowman/block.rs`, `crates/ava-snow/src/snowtest.rs` (battery, feature `testutil`), `crates/ava-snow/tests/conformance_battery.rs`, `crates/ava-snow/tests/prop_safety.rs` (un-ignore)
+- [ ] **Step 1 — Red:** (a) un-ignore `prop::consensus_safety` from M3.1 (now compiles against `Topological`). (b) `conformance::snow_battery` — the `ava-snow` consensus-instance battery analog of dbtest/codectest: a generic `run_consensus_suite<C: SnowmanConsensus>(make)` ported from Go `topological/consensus_test.go` + `network_test.go` (add/record_poll/accept ordering, duplicate add → `DuplicateAdd`, unknown parent → `UnknownParentBlock`, linear acceptance, sibling rejection, preference walk). Wire it from `conformance_battery.rs` against `Topological`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-snow --features testutil --test conformance_battery 2>&1` — fails (battery references unimplemented `Topological` methods); `cargo test -p ava-snow --test prop_safety` fails on real safety logic.
+- [ ] **Step 3 — Green:** Implement `SnowmanConsensus` trait (06 §2.4 exact signature) and `Topological` with the **exact field set** (`factory/poll_number/ctx/params/last_accepted_id/last_accepted_height/blocks/preferred_ids/preferred_heights/preference` + Kahn scratch) and `SnowmanBlock` (`blk/should_falter/sb/children`). Implement `add` (dup/unknown-parent checks, `add_child` lazy Tree creation, preference extension), `record_poll` (poll_number++, `calculate_in_degree`/`push_votes`/`vote` stack, falter-on-empty, **accept only a child of last-accepted**, sibling falter, preferred-branch walk), and `accept_preferred_child` with the **critical ordering invariant**: `block_acceptor.accept(...)` BEFORE `child.accept()`; reject + `reject_transitively` siblings. Implement `health_check` JSON shape + thresholds (`max_outstanding_items`, `max_item_processing_time`, 15s avg). Export `run_consensus_suite` in `snowtest`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow --features testutil` passes including `prop::consensus_safety` and `conformance::snow_battery`; commit any new `proptest-regressions/` seed; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-snow: Topological (Snowman) consensus + snow battery; consensus_safety GREEN`
+
+### Task M3.6: `ava-validators` — Validator/Manager/Set + deterministic sampling
+**Crate:** `ava-validators`  ·  **Depends on:** M0 (`ava-utils::sampler` WeightedWithoutReplacement + DeterministicWeightedWithoutReplacement, `ava-crypto` bls, `ava-types` NodeId), M3.2 (re-uses `ava-snow` Id)  ·  **Spec:** 06 §6.1 (Set/Manager), §6.2 (deterministic weighted sampling, NodeId-sorted weights, BTreeMap order)
+**Files:** `crates/ava-validators/src/lib.rs`, `crates/ava-validators/src/validator.rs` (`Validator`, `GetValidatorOutput`), `crates/ava-validators/src/set.rs`, `crates/ava-validators/src/manager.rs` (`ValidatorManager`), `crates/ava-validators/tests/prop_sampling.rs`, `crates/ava-validators/tests/PORTING.md`, `crates/ava-validators/proptest-regressions/.gitkeep`
+- [ ] **Step 1 — Red:** (a) Unit `set_weight_overflow` — `total_weight` errors on u64 overflow (`assert_matches!`). (b) `prop::sample_determinism` — for a fixed `(validators, seed)`, `sample` over the `NodeId`-sorted weight slice reproduces the M0 sampler index sequence (consumes 03's sampler; assert exact `NodeId` order out). (c) Unit `add_remove_weight_roundtrip` + `subset_weight` over a `HashSet`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-validators 2>&1 | grep -E "cannot find|ValidatorManager"` — fails.
+- [ ] **Step 3 — Green:** Implement `Validator`/`GetValidatorOutput`; `Set` (per-subnet weights, NodeId-sorted snapshot for sampling; improvement candidate `ArcSwap<Set>` deferred to perf pass); `ValidatorManager` trait + a default impl (`add_staker/add_weight/remove_weight/get_weight/get_validator/get_validator_ids/subset_weight/total_weight(err on overflow via safemath)/num_validators/num_subnets/sample/register_callback_listener`). `sample` builds the weight array from the NodeId-sorted slice and feeds `ava-utils::sampler` (OS RNG for poll sampling). `ManagerCallbackListener` trait.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-validators` passes (commit regression seed); clippy clean.
+- [ ] **Step 5 — Commit:** `ava-validators: Validator/Set/Manager + deterministic weighted sampling (reuses ava-utils sampler)`
+
+### Task M3.7: `ava-validators` — `ValidatorState` trait + cached/locked adapters + `ConnectedValidators`
+**Crate:** `ava-validators`  ·  **Depends on:** M3.6  ·  **Spec:** 06 §6.1 (`ValidatorState`, BTreeMap determinism binding), §6.2 (`Connector`/`ConnectedValidators`, min_percent_connected)
+**Files:** `crates/ava-validators/src/state.rs` (`ValidatorState`, `GetCurrentValidatorOutput`, `WarpSet`), `crates/ava-validators/src/state_adapters.rs` (LRU cache adapter + lock adapter), `crates/ava-validators/src/connected.rs` (`ConnectedValidators`, `Connector`)
+- [ ] **Step 1 — Red:** Unit `validator_set_is_sorted` — `get_validator_set` returns a `BTreeMap<NodeId, _>` and iterating it is `NodeId`-ascending (the binding determinism contract the windower relies on); `connected_tracker_min_percent` — connectivity ratio computed over weighted connected stake.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-validators validator_set_is_sorted 2>&1 | grep -E "cannot find|ValidatorState"` — fails.
+- [ ] **Step 3 — Green:** Implement `#[async_trait] ValidatorState` (06 §6.1 exact signatures returning `BTreeMap`), the cached (LRU via `ava-utils`) and locked (`tokio::sync::Mutex`) composable adapters mirroring Go `cachedState`/`lockedState`, and `ConnectedValidators` + `Connector` (peer up/down, "sample one connected validator" support, `min_percent_connected` health input).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-validators` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-validators: ValidatorState + cached/locked adapters + ConnectedValidators tracker`
+
+### Task M3.8: `ava-validators` — uptime manager
+**Crate:** `ava-validators`  ·  **Depends on:** M3.6, M0 (`ava-utils::clock`)  ·  **Spec:** 06 §6.3 (uptime Manager/Calculator + LockedCalculator)
+**Files:** `crates/ava-validators/src/uptime/mod.rs`, `crates/ava-validators/src/uptime/manager.rs`, `crates/ava-validators/src/uptime/state.rs`, `crates/ava-validators/tests/uptime.rs`
+- [ ] **Step 1 — Red:** Unit `uptime_accumulates_on_connect_disconnect` (virtual clock via injected `MockClock`): start/stop tracking on connect/disconnect; `calculate_uptime` returns connected duration per subnet matching a hand-computed expectation under `clock.advance`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-validators uptime 2>&1 | grep -E "cannot find|uptime"` — fails.
+- [ ] **Step 3 — Green:** Port `manager.go` (`StartTracking`/`StopTracking`/`Connect`/`Disconnect`/`CalculateUptime`/`CalculateUptimePercent`) over an uptime `State` (persisted via `DynDatabase`), reading time through `Arc<dyn Clock>`; add the `LockedCalculator` `tokio::sync::Mutex` adapter. No consensus-determinism concern.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-validators uptime` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-validators: uptime manager/calculator + LockedCalculator adapter`
+
+### Task M3.9: `ava-engine` — op state machine traits (`Handler`/`Engine`/`NoOpHandler`) + `AppError` + `Sender`
+**Crate:** `ava-engine`  ·  **Depends on:** M3.2, M3.6, M2 (`ava-message` ops/VmToEngineMessage)  ·  **Spec:** 06 §4.1 (the op state machine, full op set, AppError codes), §5.3 (the engine-facing `Sender` trait + `SendConfig`)
+**Files:** `crates/ava-engine/src/lib.rs`, `crates/ava-engine/src/common/handler.rs` (per-op traits + `Handler`), `crates/ava-engine/src/common/engine.rs` (`Engine`), `crates/ava-engine/src/common/no_ops.rs` (`NoOpHandler` mixin), `crates/ava-engine/src/common/error.rs` (`AppError`), `crates/ava-engine/src/common/sender.rs` (`Sender`, `SendConfig`), `crates/ava-engine/tests/PORTING.md`, `crates/ava-engine/proptest-regressions/.gitkeep`
+- [ ] **Step 1 — Red:** Unit `app_error_codes` — `AppError::{UNDEFINED==0, TIMEOUT==-1}` and `Is`-by-code semantics; `handler_is_object_safe` static-assert `fn _o(_: &dyn Handler){}`; `noop_handler_drops_statesync` — a `NoOpHandler`-backed type returns `Ok(())` for state-summary ops.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-engine app_error_codes 2>&1 | grep -E "cannot find|Handler"` — fails.
+- [ ] **Step 3 — Green:** Define the per-op `#[async_trait]` traits (`AllGetsServer/StateSyncHandler/FrontierHandler/AcceptedHandler/AncestorsHandler/PutHandler/QueryHandler/ChitsHandler/AppHandler/InternalHandler`) covering the **full op set** (06 §4.1 list incl. every `*Failed`, `Connected/Disconnected/Gossip/Shutdown/Notify/Simplex`), composed into object-safe `Handler`; `Engine: Handler` (`start/health_check`); `NoOpHandler` default mixin (logs+drops). `AppError` (`thiserror`, `i32` code, `Is` by code, predefined codes). The engine-facing `Sender` trait + `SendConfig` (06 §5.3 exact signatures).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-engine app_error_codes handler_is_object_safe noop_handler_drops_statesync` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-engine: op state-machine traits (Handler/Engine/NoOpHandler), AppError, Sender trait`
+
+### Task M3.10: `ava-engine` networking — ChainRouter, ChainHandler actor, AdaptiveTimeoutManager, Benchlist, ResourceTracker
+**Crate:** `ava-engine`  ·  **Depends on:** M3.9, M2 (`ava-network` inbound/outbound), M0 (`ava-utils::clock` monotonic)  ·  **Spec:** 06 §5.1 (Router), §5.2 (per-chain Handler actor = goroutine→task), §5.4 (AdaptiveTimeoutManager), §5.5 (Benchlist), §5.6 (ResourceTracker/Targeter); 24 §B.2 (virtual-time timing tests)
+**Files:** `crates/ava-engine/src/networking/router.rs`, `crates/ava-engine/src/networking/handler.rs` (`ChainHandler`, `EngineManager`), `crates/ava-engine/src/networking/message_queue.rs`, `crates/ava-engine/src/networking/timeout.rs` (`AdaptiveTimeoutManager`, `AdaptiveTimeoutConfig`), `crates/ava-engine/src/networking/benchlist.rs`, `crates/ava-engine/src/networking/tracker.rs`, `crates/ava-engine/tests/timeout.rs`, `crates/ava-engine/tests/router.rs`
+- [ ] **Step 1 — Red:** (a) `deadline_fires_after_timeout` (`#[tokio::test(start_paused = true)]`, 24 §B.2): register a request with `AdaptiveTimeoutManager`, advance `clock.advance` + `tokio::time::advance` in lock-step, assert the timeout fires and the average lengthens; `AdaptiveTimeoutConfig::verify` rejects `coefficient<1`/`initial∉[min,max]`/`halflife==0`. (b) `router_routes_to_chain_handler` — `handle_inbound` dispatches to the right chain Handler and drops unknown-chain messages; on `register_request` timeout the matching `*Failed` op is synthesized into the handler.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-engine --test timeout 2>&1 | grep -E "cannot find|AdaptiveTimeout"` — fails.
+- [ ] **Step 3 — Green:** Implement `Router` trait + one process-wide `ChainRouter` (`chain_id->Handler`, request registry matched to `TimeoutManager`, timeout→`*Failed` synthesis, `should_handle` ACL drop, health). Implement `ChainHandler` as **one tokio task** owning consensus state, draining a bounded `mpsc` (sync class one-at-a-time + async class on a bounded `JoinSet`), `msg_from_vm` channel, gossip ticker, `tokio::select!` dispatch by `(EngineState, EngineType)` via `EngineManager`; `push`/`shutdown`/`halt: CancellationToken`; `syncProcessingTimeWarnLimit` (30s) warn. Implement `AdaptiveTimeoutManager` over `tokio::time` `DelayQueue` + half-life `Averager` (float OK — off consensus path) using `clock.monotonic()`; `AdaptiveTimeoutConfig` + verify. Implement `Benchlist` (consecutive-failure threshold + randomized cooldown) and `ResourceTracker`/`Targeter` (per-peer CPU/disk fair-share; float OK).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-engine --test timeout --test router` passes; assert no leaked tasks (drain `TaskTracker`); clippy clean.
+- [ ] **Step 5 — Commit:** `ava-engine: ChainRouter + ChainHandler actor + AdaptiveTimeoutManager + Benchlist + ResourceTracker`
+
+### Task M3.11: `ava-engine` — Snowman engine (issue/poll/vote) + early-term PollSet + getter
+**Crate:** `ava-engine`  ·  **Depends on:** M3.5, M3.9, M3.10, M3.15 (ChainVm trait)  ·  **Spec:** 06 §4.2 (issue/poll/vote/respond flows, early-term polls, concurrent_repolls/optimal_processing), §4.3 (getter server side)
+**Files:** `crates/ava-engine/src/snowman/engine.rs` (`SnowmanEngine`, `Config`), `crates/ava-engine/src/snowman/voter.rs`, `crates/ava-engine/src/snowman/issuer.rs`, `crates/ava-engine/src/snowman/poll.rs` (`PollSet`, `EarlyTermFactory`), `crates/ava-engine/src/snowman/getter.rs`, `crates/ava-engine/tests/engine_flows.rs`
+- [ ] **Step 1 — Red:** `engine_requests_missing_block` (mockall `MockChainVm` per 02 §7.1): a `Put` for a block whose parent is unknown triggers exactly one `Sender::send_get` to the providing node; `engine_records_poll_on_chits` — a completed poll's `Bag<Id>` is fed to `SnowmanConsensus::record_poll` then `ChainVm::set_preference(preference())`; `early_term_completes_poll` — a poll completes once outstanding responses can no longer change the alpha outcome.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-engine --test engine_flows 2>&1 | grep -E "cannot find|SnowmanEngine"` — fails.
+- [ ] **Step 3 — Green:** Implement `SnowmanEngine` with the **exact field set** (06 §4.2: `cfg/metrics/request_id/polls/blk_reqs/pending/unverified_id_to_ancestor/unverified_block_cache/accepted_frontiers/blocked/pending_build_blocks`). Implement the issue path (`issue_from` ancestry walk, `send_get`, verify+`Consensus::add`, parked issuer job), poll path (`repoll`/`Gossip`: weighted `k`-sample via `Sender`, register poll+timeout, `send_pull_query`/push; uniform single-validator gossip query), vote path (`voter` parks until issued, bubble to `get_processing_ancestor`, `record_poll`→`set_preference`, repoll while `num_processing()>0`), respond path (`send_chits` with current preferred/preferred_at_height/last_accepted **before** issuing). Implement early-term `PollSet`/`EarlyTermFactory` (incremental O(1) predicate). Implement the `getter` server (`Get/GetAncestors/GetAcceptedFrontier/GetAccepted` from the VM, bounded by `MaxContainersGetAncestors` + byte/time budget).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-engine --test engine_flows` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-engine: Snowman engine (issue/poll/vote) + early-term PollSet + getter`
+
+### Task M3.12: `ava-engine` — Bootstrapper + state-sync no-op handlers
+**Crate:** `ava-engine`  ·  **Depends on:** M3.11  ·  **Spec:** 06 §4.3 (bootstrap state machine + interval tree), §4.4 (state sync; no-op handlers for engines without it)
+**Files:** `crates/ava-engine/src/snowman/bootstrap/mod.rs`, `crates/ava-engine/src/snowman/bootstrap/interval.rs`, `crates/ava-engine/src/snowman/bootstrap/acceptor.rs`, `crates/ava-engine/src/snowman/syncer.rs`, `crates/ava-engine/tests/bootstrap.rs`
+- [ ] **Step 1 — Red:** `bootstrap_fetches_and_executes_range` — given a beacon set serving `AcceptedFrontier`/`Accepted`/`Ancestors` (fakes), the bootstrapper fetches the ancestry into the interval tree, replays/accepts in height order (sets `ConsensusContext.executing`), and transitions `Bootstrapping → NormalOp` on `on_finished`; `halt_aborts_bootstrap` — cancelling the `CancellationToken` aborts promptly.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-engine --test bootstrap 2>&1 | grep -E "cannot find|Bootstrapper"` — fails.
+- [ ] **Step 3 — Green:** Implement the bootstrap state machine (frontier discovery → frontier agreement by weight threshold → fetch ancestry via `SendGetAncestors` into the `interval` tree → execute/accept in height order via `acceptor.go` analog → handoff to the Snowman engine), `Halter`-aware via `CancellationToken`. Implement the state-`syncer` skeleton wired to the `StateSyncableVm` probe with no-op state-summary handlers (06 §4.4) for engines that don't support it.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-engine --test bootstrap` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-engine: Snowman bootstrapper (interval tree, execute, handoff) + state-sync no-op handlers`
+
+### Task M3.13: `prop::consensus_liveness` + `prop::preference_monotone` over an engine-driven cluster
+**Crate:** `ava-engine` (+ `ava-snow::testutil`)  ·  **Depends on:** M3.11, M3.12  ·  **Spec:** 06 §2.4 (liveness), §10 (proptest — liveness, preference monotone)
+**Files:** `crates/ava-engine/tests/prop_liveness.rs`, `crates/ava-engine/tests/prop_preference.rs`, `crates/ava-engine/proptest-regressions/` (committed seeds)
+- [ ] **Step 1 — Red:** `prop::consensus_liveness` — drive an in-memory cluster of `SnowmanEngine`s (mock `Sender`/`Router`, virtual time) where ≥`alpha` honest stake votes one branch each round; assert the branch finalizes within a bounded number of polls and faltering branches do not livelock. `prop::preference_monotone` — across any vote sequence, once the engine reports a preference at a given height it never regresses to an already-rejected sibling without a higher-height reason (monotone preference walk).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-engine --test prop_liveness` fails (cluster harness incomplete / property violated for the right reason).
+- [ ] **Step 3 — Green:** Build the engine-driven cluster harness (extends `ava-snow::testutil::cluster` with a mock `Sender` looped back through a mock `Router` and a `MockClock`); make both properties pass by exercising the real engine poll/vote loop.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-engine --test prop_liveness --test prop_preference` passes; commit regression seeds; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-engine: prop::consensus_liveness + prop::preference_monotone (engine-driven cluster)`
+
+### Task M3.14: `ava-vm` — error model + `Vm`/`AppHandler`/`HealthCheck`/`Connector`/`AppSender` base traits
+**Crate:** `ava-vm`  ·  **Depends on:** M3.2 (ChainContext/EngineState re-export), M1 (`ava-database` DynDatabase)  ·  **Spec:** 07 §2.1 (`Vm`), §2.2 (AppHandler/HealthCheck/Connector/AppError), §2.6 (AppSender), §9 (error model)
+**Files:** `crates/ava-vm/src/lib.rs`, `crates/ava-vm/src/vm.rs` (`Vm`, `VmEvent`, `HttpHandler`), `crates/ava-vm/src/app.rs` (`AppHandler`, `AppError`), `crates/ava-vm/src/health.rs`, `crates/ava-vm/src/connector.rs`, `crates/ava-vm/src/app_sender.rs` (`AppSender`), `crates/ava-vm/src/error.rs`, `crates/ava-vm/tests/PORTING.md`, `crates/ava-vm/proptest-regressions/.gitkeep`
+- [ ] **Step 1 — Red:** Unit `vm_event_values` — `VmEvent::{PendingTxs==1, StateSyncDone==2}`; `error_sentinels` — `Error::NotFound` and the rpc/fx sentinels exist and are `matches!`-assertable; `vm_object_safe` static-assert `fn _o(_: &dyn Vm){}`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm vm_event_values 2>&1 | grep -E "cannot find|Vm"` — fails.
+- [ ] **Step 3 — Green:** Implement the crate `thiserror` `Error` + sentinels (07 §9: `NotFound`, `RemoteVmNotImplemented`, `StateSyncableVmNotImplemented`, `ProtocolVersionMismatch`, `HandshakeFailed`, `ProcessNotFound`, and the fx wrong-type set re-exported by `ava-secp256k1fx`). Implement `#[async_trait] Vm` (07 §2.1 exact signature — `initialize` takes `Arc<ChainContext>` NOT `ConsensusContext`, plus `db/genesis/upgrade/config/fxs/app_sender`; `set_state/shutdown/version/create_handlers/new_http_handler/wait_for_event`), `VmEvent`, `HttpHandler` (tower service + `lock_options`), `AppHandler`/`HealthCheck`/`Connector`, `AppError` (re-export shape from engine or define locally with identical codes), and `AppSender` (07 §2.6 — VM-facing subset).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm vm_event_values error_sentinels vm_object_safe` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-vm: error model + Vm/AppHandler/HealthCheck/Connector/AppSender base traits`
+
+### Task M3.15: `ava-vm::block` — `ChainVm`/`Block` (re-export) + batched/statesync/withcontext + GetAncestors fallback
+**Crate:** `ava-vm`  ·  **Depends on:** M3.14, M3.2 (`Block` re-export)  ·  **Spec:** 07 §2.3 (Block re-export + WithVerifyContext/BlockContext), §2.4 (ChainVm + capability probes), §2.5 (batched + state-syncable + fallbacks)
+**Files:** `crates/ava-vm/src/block/mod.rs` (re-export `ava_snow::Block`), `crates/ava-vm/src/block/chain_vm.rs` (`ChainVm` + `BuildBlockWithContext`/`SetPreferenceWithContext`), `crates/ava-vm/src/block/batched.rs` (`BatchedChainVm` + `get_ancestors` fallback), `crates/ava-vm/src/block/state_sync.rs` (`StateSyncableVm`, `StateSummary`, `StateSyncMode`), `crates/ava-vm/src/block/with_context.rs` (`WithVerifyContext`, `BlockContext`), `crates/ava-vm/tests/conformance_vm.rs` (the `vm_conformance!` macro)
+- [ ] **Step 1 — Red:** `conformance::vm_battery` — implement the generic `vm_conformance!(make_vm)` macro (07 §10) and run it against a hand-written in-memory test VM: init → genesis last-accepted; build→verify→accept advances last_accepted + height index; parse round-trips `bytes`; `get_block` accepted/processing; `Err(NotFound)` for unknown id/height; set_preference; capability probes default `None`; set_state phase transitions; shutdown idempotent. Plus `get_ancestors_fallback_limits` — the non-batched fallback respects `maxBlocksNum`/`maxBlocksSize (+IntLen/elem)`/`maxBlocksRetrievalTime` and `Err(NotFound)⇒break`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm --test conformance_vm 2>&1 | grep -E "cannot find|ChainVm"` — fails.
+- [ ] **Step 3 — Green:** Re-export `ava_snow::Block`. Implement `#[async_trait] ChainVm: Vm` (07 §2.4 exact — `build_block/get_block/parse_block/set_preference/last_accepted/get_block_id_at_height` + `as_build_with_context/as_set_preference_with_context/as_batched/as_state_syncable` probes defaulting `None`). Implement `BatchedChainVm`/`StateSyncableVm`/`StateSummary`/`StateSyncMode` (values 1/2/3), `WithVerifyContext`/`BlockContext`, and the free-function fallbacks `get_ancestors`/`batched_parse_block` over `&dyn ChainVm` reproducing Go's accounting byte-for-byte. Provide the `vm_conformance!` macro + the in-memory test VM under `testutil`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm --test conformance_vm` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-vm: ChainVm/Block traits + batched/statesync/withcontext + GetAncestors fallback + vm_conformance macro`
+
+### Task M3.16: `ava-vm::middleware` — `MeterVm` + `TracedVm` (forward capability probes)
+**Crate:** `ava-vm`  ·  **Depends on:** M3.15  ·  **Spec:** 07 §6 (metervm/tracedvm decorators; must forward `as_batched`/`as_state_syncable`/`as_build_with_context`); 00 §11.1.2 (wrapping order)
+**Files:** `crates/ava-vm/src/middleware/meter.rs` (`MeterVm`, `BlockMetrics`), `crates/ava-vm/src/middleware/traced.rs` (`TracedVm`), `crates/ava-vm/tests/middleware.rs`
+- [ ] **Step 1 — Red:** `metervm_forwards_capabilities` — wrapping a VM that `as_batched()==Some` in `MeterVm` keeps `as_batched()==Some` (wrapped), and every `ChainVm` call is recorded into the per-method histogram (assert metric names/labels match Go — golden); `tracedvm_spans_end` — each method opens and ends a span (spancheck/Drop guard, 00 §4.6).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm --test middleware 2>&1 | grep -E "cannot find|MeterVm"` — fails.
+- [ ] **Step 3 — Green:** Implement `MeterVm<V: ChainVm>` (times every method into a Prometheus histogram with Go-parity names; probes inner optionals at construction and re-exposes them wrapped) and `TracedVm<V: ChainVm>` (OTel span per method, names mirror Go, ensures `.End()`). Both delegate `Vm`/`AppHandler`/`HealthCheck`/`Connector`/`ChainVm` and forward the capability probes (wrapping returned trait objects).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm --test middleware` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-vm: MeterVm + TracedVm middleware (forward batched/statesync/withcontext probes)`
+
+### Task M3.17: `ava-simplex` — parameters + messages + stub engine behind `cfg(feature="simplex")`
+**Crate:** `ava-simplex`  ·  **Depends on:** M3.9 (Handler/Sender surface), M0 (`ava-crypto::bls`)  ·  **Spec:** 06 §8 (Simplex integration; initial port may stub the engine behind a feature flag)
+**Files:** `crates/ava-simplex/src/lib.rs`, `crates/ava-simplex/src/parameters.rs`, `crates/ava-simplex/src/messages.rs` (canoto-encoded proposal/vote/finalization/QC), `crates/ava-simplex/src/block.rs`, `crates/ava-simplex/src/engine.rs` (`#[cfg(feature="simplex")]` stub), `crates/ava-simplex/Cargo.toml`, `crates/ava-simplex/tests/PORTING.md`
+- [ ] **Step 1 — Red:** `golden::simplex_qc_roundtrip` — a canoto-encoded QC/block round-trips byte-exact vs a captured Go vector (wire format must match even though the engine is stubbed); `parameters_defaults` unit test.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-simplex 2>&1 | grep -E "cannot find|simplex"` — fails.
+- [ ] **Step 3 — Green:** Implement Simplex `Parameters`, the canoto message types (proposal/vote/finalization/QC with BLS-aggregated quorum, reusing `ava-crypto::bls`), and the `block.go` wrapper. Provide a `SimplexHandler`/engine actor shape mirroring the Snowman engine but **`#[cfg(feature = "simplex")]`** and **off by default** (a compile-gated stub presenting the `common::Engine`/`Handler` surface). Reimplement BLS aggregation to match Go wire rules — no third-party BFT crate.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-simplex` (default features) passes; `cargo build -p ava-simplex --features simplex` compiles; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-simplex: parameters + canoto messages/QC + feature-gated engine stub`
+
+### Task M3.18: `ava-vm::components` — `avax` UTXO model + `verify` + `chain::State` + `gas` (golden)
+**Crate:** `ava-vm`  ·  **Depends on:** M3.14, M0 (`ava-codec`(+derive), `ava-utils::safemath`)  ·  **Spec:** 07 §3.1 (avax UTXO model, sorting, FlowChecker, SharedMemory trait), §3.2 (verify), §3.3 (chain::State decorator), §3.4 (gas, calculate_price)
+**Files:** `crates/ava-vm/src/components/avax/mod.rs` (`UtxoId`/`Asset`/`Utxo`/`TransferableInput`/`TransferableOutput`/`Metadata`/`BaseTx`/`FlowChecker`), `crates/ava-vm/src/components/avax/shared_memory.rs` (`SharedMemory`/`Requests`/`Element`), `crates/ava-vm/src/components/verify.rs`, `crates/ava-vm/src/components/chain/state.rs` (`ChainStateConfig`, `BlockWrapper`), `crates/ava-vm/src/components/gas.rs`, `crates/ava-vm/tests/golden_avax.rs`, `crates/ava-vm/tests/golden_gas.rs`
+- [ ] **Step 1 — Red:** (a) `golden::avax_utxoid_derivation` — `UtxoId::input_id()==TxID.prefix(be64(index))` vs vector; (b) `golden::transferable_sort` — outputs sort by (assetID, codec bytes), inputs by UTXOID, matching Go (consensus-affecting); (c) `golden::flowchecker_balances` — `VerifyTx` produce/consume per-asset ledger with checked overflow vs vector; (d) `golden::gas_calculate_price` — fixed-point `fakeExponential` output vs Go vector; (e) `chain_state_caches` unit test for the block cache tiers + idempotent get/parse.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm --test golden_avax 2>&1 | grep -E "cannot find|UtxoId"` — fails.
+- [ ] **Step 3 — Green:** Implement the `avax` codec types (`serialize:"true"`→`#[codec]` in registration order; `fx_id` is `serialize:"false"` runtime-only; `UtxoId.id` lazy `OnceCell`), exact `SortTransferableOutputs`/`SortTransferableInputs(WithSigners)` comparators, `FlowChecker::verify_tx` with `safemath::checked_add`, `Metadata`/`BaseTx` with cached `OnceCell<(bytes,id)>`, the `SharedMemory`/`Requests`/`Element` trait+types. Implement `verify::{Verifiable, State, all}` (encode `IsState`/`IsNotState` at the type level). Implement `chain::State` (generic `ChainStateConfig`, `verified_blocks` map + decided/unverified/missing/bytes_to_id LRUs, `BlockWrapper` intercepting verify/accept/reject). Implement `gas` (`Gas`/`Price`/`GasState`/`Dimensions`, integer-only `calculate_price` fixed-point loop, `advance`/`consume`).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm --test golden_avax --test golden_gas` passes; clippy clean (no floats).
+- [ ] **Step 5 — Commit:** `ava-vm: components avax (UTXO/sort/FlowChecker/SharedMemory) + verify + chain::State + gas (golden)`
+
+### Task M3.19: `ava-secp256k1fx` — types + `verify_credentials` multisig + golden vectors
+**Crate:** `ava-secp256k1fx`  ·  **Depends on:** M3.18 (verify::State, ChainContext), M3.14 (Error), M0 (`ava-crypto` secp256k1 recoverable + ripemd/sha256, `ava-utils::clock`)  ·  **Spec:** 07 §4.2 (types, codec order), §4.3 (OutputOwners multisig verify — bit-for-bit), §9 (fx sentinels)
+**Files:** `crates/ava-secp256k1fx/src/lib.rs`, `crates/ava-secp256k1fx/src/types.rs` (`OutputOwners`/`Input`/`TransferInput`/`TransferOutput`/`MintOutput`/`Credential`), `crates/ava-secp256k1fx/src/fx.rs` (`verify_credentials`), `crates/ava-secp256k1fx/src/error.rs`, `crates/ava-secp256k1fx/tests/golden_codec.rs`, `crates/ava-secp256k1fx/tests/prop_multisig.rs`, `crates/ava-secp256k1fx/tests/PORTING.md`, `crates/ava-secp256k1fx/proptest-regressions/.gitkeep`, `tests/vectors/secp256k1fx/` (OutputOwners multisig vectors)
+- [ ] **Step 1 — Red:** (a) `golden::secp256k1fx_codec` — every type round-trips byte-exact in typeID order `TransferInput(0)/MintOutput(1)/TransferOutput(2)/MintOperation(3)/Credential(4)` vs committed vectors under `tests/vectors/secp256k1fx/`. (b) `prop::multisig_verify` — generate random `OutputOwners`(threshold/addrs/locktime) + signer sets + sig-index permutations; assert `verify_credentials` accepts **iff** exactly `threshold` valid owner sigs at sorted-unique indices and locktime matured; rejects over/under-sign, wrong sig, OOB index, reordered indices, premature locktime (each via the matching `Error` variant). (c) `output_owners_verify` table (threshold>len⇒OutputUnspendable, threshold==0&&!empty⇒OutputUnoptimized, unsorted⇒AddrsNotSortedUnique).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-secp256k1fx --test prop_multisig 2>&1 | grep -E "cannot find|verify_credentials"` — fails.
+- [ ] **Step 3 — Green:** Implement the codec types (07 §4.2, embedded `Input`/`OutputOwners`, 65-byte `Credential` sigs, sorted-unique invariants). Implement `OutputOwners::verify` and `Input::cost` (1000/sig). Implement `verify_credentials` **bit-for-bit** per 07 §4.3 (locktime vs `clock_unix`, `threshold==num_sigs` exact, one sig per index, bootstrap skip, `sha256(unsigned_tx)` recover→`ripemd160(sha256(pubkey))` address compare at `addrs[index]`, all the fx sentinel errors). Generate the golden vectors from Go (provenance note citing `vms/secp256k1fx`).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-secp256k1fx` passes (commit regression seeds + vectors); clippy clean.
+- [ ] **Step 5 — Commit:** `ava-secp256k1fx: types + OutputOwners multisig verify_credentials + golden vectors`
+
+### Task M3.20: `ava-vm::fx` — `Fx`/`FxInstance`/`FxVm` framework + secp256k1fx registration
+**Crate:** `ava-vm` (+ `ava-secp256k1fx`)  ·  **Depends on:** M3.19  ·  **Spec:** 07 §4.1 (Fx trait + &dyn Any boundary + wrong-type sentinels)
+**Files:** `crates/ava-vm/src/fx.rs` (`Fx`, `FxInstance`, `FxVm`, `UnsignedTx`), `crates/ava-secp256k1fx/src/instance.rs` (impl `FxInstance`), `crates/ava-vm/tests/fx.rs`
+- [ ] **Step 1 — Red:** `fx_wrong_type_downcast` — passing a mismatched `&dyn Any` to `verify_transfer`/`verify_permission`/`verify_operation`/`create_output` yields the exact Go sentinel (`WrongTxType`/`WrongInputType`/`WrongCredentialType`/`WrongOwnerType`/`WrongUtxoType`/`WrongOpType`); `secp256k1fx_registers_codec_types` — `initialize` registers the 5 typeIDs into the VM codec registry.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm --test fx 2>&1 | grep -E "cannot find|FxInstance"` — fails.
+- [ ] **Step 3 — Green:** Implement `Fx{id, fx: Arc<dyn FxInstance>}`, `FxInstance` (`initialize/bootstrapping/bootstrapped/verify_transfer/verify_permission/verify_operation/create_output` with `&dyn Any` params + `downcast_ref`→sentinel mapping), `FxVm` (codec_registry/clock/logger), `UnsignedTx` marker. Implement `ava-secp256k1fx`'s `FxInstance` delegating to `verify_credentials` and registering its codec types at `initialize`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm --test fx` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-vm: fx framework (Fx/FxInstance/FxVm) + secp256k1fx instance registration`
+
+### Task M3.21: `ava-proposervm` — block formats (byte-exact) + `golden::proposervm_block`
+**Crate:** `ava-proposervm`  ·  **Depends on:** M3.15 (ChainVm/Block), M0 (`ava-codec` linearcodec, `ava-crypto` staking cert check_signature, `ava-utils::clock`)  ·  **Spec:** 07-consensus §7.1 (block formats, registration order, ID = sha256 of unsigned bytes, Header signing), §7.2 (oracle/option), 24 §B.3 (maxSkew 10s)
+**Files:** `crates/ava-proposervm/src/lib.rs`, `crates/ava-proposervm/src/block/codec.rs` (registration order: statelessBlock(0)/option(1)/statelessGraniteBlock(2)), `crates/ava-proposervm/src/block/stateless.rs` (`StatelessUnsignedBlock`/`StatelessUnsignedGraniteBlock`/`Epoch`), `crates/ava-proposervm/src/block/post_fork.rs`, `crates/ava-proposervm/src/block/pre_fork.rs`, `crates/ava-proposervm/src/block/option.rs`, `crates/ava-proposervm/src/block/header.rs`, `crates/ava-proposervm/tests/golden_block.rs`, `crates/ava-proposervm/tests/PORTING.md`, `crates/ava-proposervm/proptest-regressions/.gitkeep`, `tests/vectors/proposervm/blocks/`
+- [ ] **Step 1 — Red:** `golden::proposervm_block` — decode Go-produced block bytes (pre-fork, post-fork **signed** + **unsigned**, Granite, option), re-encode and assert **byte-identical**; assert `id == sha256(bytes[.. len - 4 - len(sig)])` matches Go; **verify a Go-signed block's signature** over `Header::build(chain,parent,body_id).bytes()` via `staking::check_signature`; `verify` rejects a zero `Epoch` on a Granite block.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-proposervm --test golden_block 2>&1 | grep -E "cannot find|StatelessUnsignedBlock"` — fails.
+- [ ] **Step 3 — Green:** Implement the linearcodec block codec with the **exact registration order** (typeID = index), `StatelessUnsignedBlock`/`StatelessUnsignedGraniteBlock`/`Epoch` with exact serialize field order, pre-fork (passthrough inner bytes), post-fork signed/unsigned (`id` strips the 4-byte-length-prefixed signature suffix; signature over the `Header`), option (`id=sha256(bytes)`), Granite (`Epoch`, zero-epoch rejection). Generate vectors from Go (provenance citing `vms/proposervm/block`).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-proposervm --test golden_block` passes (commit vectors); clippy clean.
+- [ ] **Step 5 — Commit:** `ava-proposervm: byte-exact block formats + golden::proposervm_block (blocks + signature)`
+
+### Task M3.22: `ava-proposervm` — windower (gonum MT) + `golden::windower_schedule` (CONFIRMS R1)
+**Crate:** `ava-proposervm`  ·  **Depends on:** M3.21, M3.7 (ValidatorState BTreeMap order), M0 (`ava-utils::mt19937` vendored gonum MT19937/-64 + `DeterministicWeightedWithoutReplacement`)  ·  **Spec:** 06 §7.3 (windower, constants, make_sampler, pre/post-Durango, gonum MT seeding — **R1 confirm**), 00 §11.2 R1
+**Files:** `crates/ava-proposervm/src/proposer/windower.rs` (`Windower`, `ValidatorData`, constants, `chain_source`, `make_sampler`, `proposers`/`delay`, `expected_proposer`/`min_delay_for_proposer`, `time_to_slot`), `crates/ava-proposervm/tests/golden_windower.rs`, `tests/vectors/proposervm/windower/`
+- [ ] **Step 1 — Red:** `golden::windower_schedule` — for a **fixed validator set** (NodeId-sorted, empty-NodeID dropped) and many `(block_height, slot, p_chain_height)` tuples, assert `ExpectedProposer` (post-Durango, MT19937_64, seed `chain_source ^ height ^ reverse_bits64(slot)`) and `Proposers`/`Delay` (pre-Durango, 32-bit MT, seed `chain_source ^ height`) produce **bit-exact** the captured Go `NodeId` ordering. This is the gonum-MT compatibility gate that **confirms R1 on the windower**.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-proposervm --test golden_windower 2>&1` — fails (Windower absent, or MT stream mismatch — the right reason, proving the gate is real).
+- [ ] **Step 3 — Green:** Implement `Windower` per 06 §7.3: constants (`WINDOW_DURATION=5s`, `MAX_VERIFY_WINDOWS=6`, `MAX_BUILD_WINDOWS=60`, `MAX_LOOK_AHEAD_SLOTS=720`), `chain_source` (BE u64 of first 8 bytes of chain_id), `make_sampler` (fetch set at p_chain_height via `ValidatorState`, drop empty NodeID, NodeId-sorted `ValidatorData`, feed weights into `DeterministicWeightedWithoutReplacement` seeded from the MT source), `proposers`/`delay` (32-bit MT, `min(max_windows,total_weight)` indices, delay = index × WINDOW_DURATION), `expected_proposer`/`min_delay_for_proposer` (MT19937_64, per-slot seed with `slot.reverse_bits()`), `time_to_slot`. **Reuse the vendored `ava-utils::mt19937` from M0 — do not introduce another MT.**
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-proposervm --test golden_windower` passes (commit vectors + provenance) — **R1 confirmed on the windower**; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-proposervm: windower (gonum MT19937/-64) + golden::windower_schedule (confirms R1)`
+
+### Task M3.23: `ava-proposervm` — VM wrapper (fork schedule, height index, sign/build, inner-VM delegation)
+**Crate:** `ava-proposervm`  ·  **Depends on:** M3.21, M3.22, M3.16 (composes after metervm/tracedvm)  ·  **Spec:** 06 §7.2 (fork schedule, oracle/option), §7.4 (height index + inner-VM wiring + slot-wait build)
+**Files:** `crates/ava-proposervm/src/vm.rs` (`ProposerVm`), `crates/ava-proposervm/src/height_index.rs`, `crates/ava-proposervm/src/state.rs`, `crates/ava-proposervm/tests/vm.rs`
+- [ ] **Step 1 — Red:** `proposervm_wraps_inner` — `ProposerVm` over an in-memory inner test VM passes the `vm_conformance!` battery; `build_block` waits for this node's slot (virtual clock), signs with the staking cert, emits a post-fork block; pre-fork height returns the bare inner block; `get_block_id_at_height` serves via the height index; `as_batched`/`as_state_syncable` delegate to the inner VM.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-proposervm --test vm 2>&1 | grep -E "cannot find|ProposerVm"` — fails.
+- [ ] **Step 3 — Green:** Implement `ProposerVm<V: ChainVm>` middleware: fork-regime selection by inner timestamp/height vs `upgrade::Config` (pre-fork / post-fork pre-Durango / post-Durango / Granite), oracle/option wrapping, the `height -> proposervm blockID` index, delegation of `BuildBlock/ParseBlock/SetPreference/LastAccepted/GetBlock/GetBlockIDAtHeight` + batched/state-syncable, and the build path (`getPreDurango/PostDurangoSlotTime`, wait for slot via `Arc<dyn Clock>` with `maxSkew=10s` + `unix_time()` truncation, sign, emit). It presents itself as a `ChainVm`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-proposervm --test vm` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-proposervm: VM wrapper (fork schedule, height index, slot-wait sign/build, inner-VM delegation)`
+
+### Task M3.24: `ava-vm-rpc` — proto/tonic service map + guest `VmServer` + host `RpcChainVm` + runtime v45 handshake
+**Crate:** `ava-vm-rpc`  ·  **Depends on:** M3.15 (ChainVm), M2 (proto build.rs + rpcdb/appsender proxy scaffolding)  ·  **Spec:** 07 §5.1 (handshake), §5.2 (host), §5.3 (guest), §5.4 (proto→tonic map); 00 §11.1.1 (v45 reverse-dial, NOT go-plugin)
+**Files:** `crates/ava-vm-rpc/src/lib.rs` (constants `ENGINE_ADDRESS_KEY`/`RPC_CHAIN_VM_PROTOCOL=45`/`DEFAULT_HANDSHAKE_TIMEOUT`/`DEFAULT_GRACEFUL_TIMEOUT`), `crates/ava-vm-rpc/src/runtime.rs` (`Runtime.Initialize`), `crates/ava-vm-rpc/src/host/mod.rs` (`RpcChainVm` impl ChainVm), `crates/ava-vm-rpc/src/guest/mod.rs` (`VmServer<V>`, `serve`), `crates/ava-vm-rpc/build.rs` (tonic-build over shared proto/vm + proto/vm/runtime), `crates/ava-vm-rpc/tests/handshake.rs`, `crates/ava-vm-rpc/tests/PORTING.md`
+- [ ] **Step 1 — Red:** `handshake_protocol_mismatch` — a guest reporting protocol≠45 yields `Error::ProtocolVersionMismatch`; `handshake_timeout` — no `Runtime.Initialize` within `DEFAULT_HANDSHAKE_TIMEOUT` yields `Error::HandshakeFailed`; `rust_host_rust_guest_roundtrip` — a Rust host hosting a Rust guest wrapping the in-memory test VM drives build→verify→accept identically (the in-process leg of the four-way matrix).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm-rpc --test handshake 2>&1 | grep -E "cannot find|RpcChainVm"` — fails.
+- [ ] **Step 3 — Green:** Generate `proto/vm` + `proto/vm/runtime` via `build.rs` (tonic/prost over the **shared** proto tree; gRPC max msg sizes = p2p limit; insecure loopback). Implement the **reverse-dial handshake** (host binds Runtime listener R, sets `AVALANCHE_VM_RUNTIME_ENGINE_ADDR`, spawns guest; guest binds V, dials R, calls `Runtime.Initialize(45, V.addr)`; host asserts version, dials V). Implement guest `VmServer<V: ChainVm>` (delegates `proto/vm` VM service incl. batched/statesync/withcontext RPCs to local `V`) + `serve(vm)` entrypoint, and host `RpcChainVm` (implements full `ChainVm` by translating each method to a `proto/vm` RPC). Linux `Pdeathsig` via isolated `unsafe` `pre_exec` (00 §7.6) with `// SAFETY:`; non-Linux kill-on-drop.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm-rpc --test handshake` passes; clippy clean (unsafe only in the audited pre_exec).
+- [ ] **Step 5 — Commit:** `ava-vm-rpc: proto/vm tonic services + guest VmServer + host RpcChainVm + runtime v45 reverse-dial handshake`
+
+### Task M3.25: `ava-vm-rpc` — proxied callback services (rpcdb/appsender/sharedmemory/validatorstate/warp/aliasreader)
+**Crate:** `ava-vm-rpc`  ·  **Depends on:** M3.24, M3.7 (ValidatorState), M3.18 (SharedMemory), M1 (rpcdb DynDatabase)  ·  **Spec:** 07 §5.2/§5.3/§5.4 (proxied callback services; plugin always dials, node always serves)
+**Files:** `crates/ava-vm-rpc/src/proxy/rpcdb.rs`, `crates/ava-vm-rpc/src/proxy/appsender.rs`, `crates/ava-vm-rpc/src/proxy/sharedmemory.rs`, `crates/ava-vm-rpc/src/proxy/validatorstate.rs`, `crates/ava-vm-rpc/src/proxy/warp.rs`, `crates/ava-vm-rpc/src/proxy/aliasreader.rs`, `crates/ava-vm-rpc/tests/proxy.rs`
+- [ ] **Step 1 — Red:** `rpcdb_roundtrip` — a guest-side `RpcDatabase` (proto/rpcdb client implementing `DynDatabase`) put/get/delete/iterate round-trips against a host-served `memdb`, incl. the `ErrEnumToError` table and server-side iterator handles; `appsender_roundtrip` — `RpcAppSender` send_app_request reaches the host `AppSender`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-vm-rpc --test proxy 2>&1 | grep -E "cannot find|RpcDatabase"` — fails.
+- [ ] **Step 3 — Green:** Generate + implement the proxied services from the shared proto tree: host-served servers (the node side) and guest-side clients implementing the corresponding traits — `RpcDatabase`(`DynDatabase`, batched `IteratorNext`, `ErrEnumToError`), `RpcAppSender`(`AppSender`), `RpcSharedMemory`(`SharedMemory`), `RpcValidatorState`(`ValidatorState`), `RpcWarpSigner`(`warp::Signer`), `RpcAliasReader`(`AliaserReader`). Symmetry: plugin dials, node serves. `InitializeRequest` carries the `ChainContext` identity + db/server addrs (07 §5.2).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-vm-rpc --test proxy` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-vm-rpc: proxied callback services (rpcdb/appsender/sharedmemory/validatorstate/warp/aliasreader)`
+
+### Task M3.26: `ava-chains` — `VmManager`/`Factory`/`VmRegistry` + `Aliaser` + `Subnet` + `SharedMemory`
+**Crate:** `ava-chains`  ·  **Depends on:** M3.15 (ChainVm), M3.18 (SharedMemory), M3.6 (ValidatorManager)  ·  **Spec:** 07 §8.1 (registry/manager/factory), §8.3 (aliasing & subnets), §3.1 (atomic SharedMemory owner)
+**Files:** `crates/ava-chains/src/lib.rs`, `crates/ava-chains/src/manager.rs` (`VmManager`, `Factory`, `ChainParameters`), `crates/ava-chains/src/registry.rs` (`VmRegistry`, `VmGetter`), `crates/ava-chains/src/aliaser.rs` (`Aliaser`, `AliaserReader`), `crates/ava-chains/src/subnet.rs` (`Subnet`), `crates/ava-chains/src/atomic/shared_memory.rs`, `crates/ava-chains/tests/manager.rs`, `crates/ava-chains/tests/PORTING.md`, `crates/ava-chains/proptest-regressions/.gitkeep`
+- [ ] **Step 1 — Red:** `register_factory_dup_errors` — duplicate VM ID registration errors (probes Version then Shutdown); `aliaser_primary_alias` — `primary_alias(chainID)` returns the canonical alias and `lookup`/`alias` round-trip; `shared_memory_apply_atomic` — `apply` commits per-chain Put/Remove together with batches.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-chains 2>&1 | grep -E "cannot find|VmManager"` — fails.
+- [ ] **Step 3 — Green:** Implement `Factory` trait, `VmManager` (factories/versions under `RwLock` + embedded `Aliaser`; `get_factory`/`register_factory`/`list_factories`/`versions`), `VmRegistry`+`VmGetter` (`reload`→(installed,failed)), `Aliaser`/`AliaserReader` (bidirectional alias↔chainID + `primary_alias`), `Subnet` (consensus `Parameters`, allowed-nodes ACL→`should_handle`, per-subnet config, `PRIMARY_NETWORK_ID=Id::EMPTY`), and the atomic `SharedMemory` impl (`get`/`indexed`/`apply` over `DynDatabase`).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-chains --test manager` passes; clippy clean.
+- [ ] **Step 5 — Commit:** `ava-chains: VmManager/Factory/VmRegistry + Aliaser + Subnet + atomic SharedMemory`
+
+### Task M3.27: `ava-chains` — `create_snowman_chain` pipeline (EXACT wrapping order) + `differential::testvm_finalizes`
+**Crate:** `ava-chains`  ·  **Depends on:** M3.26, M3.16, M3.23, M3.11, M3.12, M3.10  ·  **Spec:** 07 §8.2 (createSnowmanChain pipeline, DB stack, wrapping order, engine/handler/router wiring); 00 §11.1.2 (EXACT VM wrapping order)
+**Files:** `crates/ava-chains/src/create_chain.rs` (`create_snowman_chain`, `build_chain`, `ChangeNotifier`), `crates/ava-chains/tests/pipeline.rs`, `crates/ava-chains/tests/differential_testvm.rs`, `crates/ava-chains/tests/differential/proptest-regressions/.gitkeep`
+- [ ] **Step 1 — Red:** (a) `pipeline_wrapping_order` — assert the constructed VM stack is exactly `inner → tracedvm? → proposervm → metervm? → tracedvm? → change-notifier`, then `initialize`, and the DB stack is `base→meterdb→prefixdb(chainID)→{prefix(VM),prefix(bootstrapping)}`; handler registered with router + timeout manager. (b) `differential::testvm_finalizes` — boot an in-memory N-node cluster (each: full pipeline around the no-op/test VM, looped-back Sender/Router, `MockClock`), issue blocks, drive `AwaitFinalization`, assert **every node reaches the same stable last-accepted height/ID** and no fork (the simulated-cluster exit gate).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-chains --test differential_testvm 2>&1 | grep -E "cannot find|create_snowman_chain"` — fails.
+- [ ] **Step 3 — Green:** Implement `build_chain` (per-chain `chain_data_dir`/`Logger`/`ConsensusContext`+`ChainContext` population, `get_factory().new()`, `Vec<Fx>` from fx_ids, dispatch) and `create_snowman_chain` reproducing 07 §8.2 **exactly**: DB stack, `OutboundSender`(+TracedSender), the **VM wrapping order** (inner→tracedvm→proposervm→metervm→tracedvm→`ChangeNotifier`), `initialize` with `ChainContext`+vm_db+fxs+app_sender, build `Topological`+engines(snowman/bootstrapper/syncer)+`ChainHandler`, register with timeout manager + router. Build the in-memory cluster harness for the differential test (reuse `ava-engine` cluster + the test VM).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-chains --test pipeline --test differential_testvm` passes (commit regression seeds); clippy clean.
+- [ ] **Step 5 — Commit:** `ava-chains: create_snowman_chain pipeline (exact wrapping order) + differential::testvm_finalizes`
+
+### Task M3.28: `avalanchego` bin — construct chain manager + test VM in-process; wire `conformance::snow_battery`
+**Crate:** `avalanchego` (bin) + workspace tests  ·  **Depends on:** M3.27  ·  **Spec:** 07 §8 (chain manager assembly), 02 §13 (snow battery), milestone buildable-&-green invariant
+**Files:** `crates/avalanchego/src/main.rs` (extend), `crates/avalanchego/src/wiring/chains.rs` (in-process chain-manager + test-VM factory registration), `crates/avalanchego/tests/in_process_chain.rs`
+- [ ] **Step 1 — Red:** `binary_constructs_chain_manager` — the bin can build a `ChainManager`, register a no-op test-VM factory, create a Snowman chain in-process, and report a last-accepted height; `--version`/`--help` still work (assert exit 0 + expected stdout).
+- [ ] **Step 2 — Confirm red:** `cargo test -p avalanchego --test in_process_chain 2>&1 | grep -E "cannot find|ChainManager"` — fails.
+- [ ] **Step 3 — Green:** Extend the bin's wiring (from M0 skeleton) to construct the `ava-chains` `ChainManager` with the M2 router/network handles, register a built-in no-op test-VM static `Factory`, and create one in-process Snowman chain. Keep `--version`/`--help` intact. Ensure `conformance::snow_battery` is wired into `cargo nextest` (the `ava-snow` battery from M3.5 runs in the CI profile).
+- [ ] **Step 4 — Confirm green:** `cargo test -p avalanchego --test in_process_chain` passes; `cargo build -p avalanchego` + `./target/debug/avalanchego --version` works; clippy clean.
+- [ ] **Step 5 — Commit:** `avalanchego: construct chain manager + register test VM in-process; wire snow battery`
+
+### Task M3.29: Milestone exit gate
+**Crate:** workspace  ·  **Depends on:** M3.1–M3.28  ·  **Spec:** 02 §13 (per-crate contracts), 00 §11.1 (ratified decisions), milestone invariant
+**Files:** all touched crates' `tests/PORTING.md`, `plan/M3-consensus-vm-framework.md` (check boxes), any straggler `proptest-regressions/`
+- [ ] **Step 1 — Red:** Run the four invariant commands + the seven named exit tests; record any failures.
+  - `cargo build --workspace`
+  - `cargo build -p avalanchego`
+  - `cargo nextest run --profile ci`
+  - `cargo clippy --workspace -- -D warnings` (SAE crates n/a this milestone)
+  - Named: `cargo nextest run --profile ci -E 'test(consensus_safety) | test(consensus_liveness) | test(preference_monotone) | test(proposervm_block) | test(windower_schedule) | test(snow_battery) | test(testvm_finalizes)'`
+- [ ] **Step 2 — Confirm red:** Capture any failing command/test verbatim; fix the owning task (do not patch around it in the gate).
+- [ ] **Step 3 — Green:** Resolve failures in the responsible crate; re-run until all four commands and all seven named tests pass. Confirm the **VM wrapping order** (00 §11.1.2) and **rpcchainvm v45 reverse-dial** (00 §11.1.1) are exercised by their tests. Confirm R1 is **confirmed on the windower** by `golden::windower_schedule`.
+- [ ] **Step 4 — Confirm green:** All four commands exit 0; the named exit tests pass; every touched crate ships a `proptest` suite + committed `proptest-regressions/`, golden vectors under `tests/vectors/{proposervm,secp256k1fx}/`, and an updated `tests/PORTING.md` (no `wip` rows for ported Go packages); `ava-snow` ships the consensus battery (`run_consensus_suite`).
+- [ ] **Step 5 — Commit:** `M3: consensus skeleton + VM framework — milestone exit gate green (R1 windower confirmed)`
+
+---
+
+## Spec coverage check
+
+| Spec section | Covered by task(s) | Notes / deferrals |
+|---|---|---|
+| 06 §1 data-flow pipeline | M3.10, M3.27 | router→handler→engine→consensus→VM wired in the pipeline |
+| 06 §2.1 Parameters + verify | M3.3 | exact branch order + easter-egg guard |
+| 06 §2.2 slush/snowflake/snowball primitives | M3.3 | unary/binary/nnary transliterations |
+| 06 §2.3 Tree (Consensus/Factory) | M3.4 | radix tree over choice IDs |
+| 06 §2.4 Topological (Snowman) | M3.5 | add/record_poll/accept ordering invariant; safety/liveness |
+| 06 §3 / §3.1 ConsensusContext/Acceptor/Status/EngineState | M3.2 | ChainContext vs ConsensusContext split |
+| 06 §4.1 engine op state machine + AppError | M3.9 | full op set + NoOpHandler |
+| 06 §4.2 Snowman engine issue/poll/vote + early-term | M3.11 | exact field set; getter |
+| 06 §4.3 bootstrapping + getter | M3.11 (getter), M3.12 (bootstrap) | interval tree, execute, handoff |
+| 06 §4.4 state sync | M3.12 | syncer skeleton + no-op handlers; full state-sync deferred to per-VM milestones |
+| 06 §5.1 ChainRouter | M3.10 | |
+| 06 §5.2 per-chain Handler actor | M3.10 | goroutine→tokio task mapping |
+| 06 §5.3 OutboundSender / Sender trait | M3.9 (trait), M3.27 (OutboundSender) | |
+| 06 §5.4 AdaptiveTimeoutManager | M3.10 | virtual-time tested |
+| 06 §5.5 Benchlist | M3.10 | |
+| 06 §5.6 ResourceTracker/Targeter | M3.10 | |
+| 06 §6.1 Validators Set/Manager/State | M3.6, M3.7 | BTreeMap determinism binding |
+| 06 §6.2 deterministic weighted sampling | M3.6 | reuses M0 ava-utils sampler |
+| 06 §6.3 uptime | M3.8 | |
+| 06 §7.1 proposervm block formats | M3.21 | byte-exact + golden |
+| 06 §7.2 fork schedule / oracle / option | M3.21, M3.23 | |
+| 06 §7.3 windower (gonum MT) | M3.22 | **R1 confirmed** |
+| 06 §7.4 height index + inner-VM wiring | M3.23 | |
+| 06 §8 Simplex | M3.17 | feature-gated stub; full BFT engine deferred |
+| 06 §9 Go→Rust mapping / error model | M3.2, M3.9, M3.14 | sentinels via thiserror |
+| 06 §10 test plan | M3.1, M3.5, M3.13, M3.21, M3.22, M3.27 | safety/liveness/golden/differential |
+| 06 §11 perf notes | (deferred refactor) | ArcSwap validator reads, parallel bootstrap verify — noted, gated behind differential, done in later perf passes |
+| 07 §2.1 Vm base | M3.14 | Arc<ChainContext> at initialize |
+| 07 §2.2 AppHandler/HealthCheck/Connector/AppError | M3.14 | |
+| 07 §2.3 Block + WithVerifyContext | M3.15 | re-export from ava-snow |
+| 07 §2.4 ChainVm + capability probes | M3.15 | |
+| 07 §2.5 batched + state-syncable + fallbacks | M3.15 | GetAncestors/BatchedParseBlock fallbacks |
+| 07 §2.6 AppSender | M3.14 | |
+| 07 §3.1 avax UTXO model + SharedMemory | M3.18 (model), M3.26 (atomic impl) | sort comparators consensus-affecting |
+| 07 §3.2 verify | M3.18 | IsState/IsNotState at type level |
+| 07 §3.3 chain::State decorator | M3.18 | |
+| 07 §3.4 gas | M3.18 | calculate_price fixed-point, golden |
+| 07 §4.1 fx framework | M3.20 | &dyn Any boundary + sentinels |
+| 07 §4.2 secp256k1fx types | M3.19 | codec typeID order |
+| 07 §4.3 OutputOwners multisig verify | M3.19 | bit-for-bit + prop multisig |
+| 07 §4.4 nftfx/propertyfx | (deferred to M5/09) | same FxInstance shape; X-Chain milestone |
+| 07 §5.1 handshake (v45 reverse-dial) | M3.24 | NOT go-plugin |
+| 07 §5.2 host (RpcChainVm) | M3.24 | |
+| 07 §5.3 guest (VmServer) | M3.24 | |
+| 07 §5.4 proto→tonic service map | M3.24, M3.25 | |
+| 07 §5.5 go-plugin legacy | (out of scope) | documented only, per spec |
+| 07 §6 metervm/tracedvm | M3.16 | forward capability probes |
+| 07 §7 mempool | (deferred to per-VM milestones) | generic Mempool<T> built where first consumed (M4/M5) |
+| 07 §8.1 VmManager/Factory/VmRegistry | M3.26 | |
+| 07 §8.2 create_snowman_chain pipeline | M3.27 | exact wrapping order |
+| 07 §8.3 aliasing & subnets | M3.26 | |
+| 07 §9 error model | M3.14, M3.19, M3.26 | preserved Go sentinels |
+| 07 §10 test plan (vm conformance, rpc interop, fx proptests, golden) | M3.15, M3.19, M3.24, M3.27 | Go-guest/Go-host legs of the 4-way matrix deferred to M9 interop |
+| 07 §11 perf notes | (deferred refactor) | zero-copy bytes, parallel sig recovery — gated behind differential |
+| 24 §B clock injection (engine/proposervm/validators) | M3.8, M3.10, M3.13, M3.22, M3.23 | MockClock + tokio virtual time; no wall-clock sleeps |
+| 24 §A determinism hazards (#1 sort, #4 RNG, #5 clock) | M3.6, M3.7, M3.22 (RNG/sort/clock) | windower reuses vendored MT; BTreeMap validator order |
+
+**Deferrals (tracked, not gaps):** Avalanche DAG consensus (`avalanche`/`snowstorm`) — documented, not built (06 §1). Full state-sync state machine + per-VM syncers — per-VM milestones (06 §4.4). Simplex full BFT engine — feature-gated stub now, completed if/when a subnet needs it (06 §8). Mempool — built where first consumed (M4/M5, 07 §7). nftfx/propertyfx — M5/09. Go↔Rust rpcchainvm interop legs — M9. §11 perf improvements in both specs — later perf passes, each gated behind the differential suite.

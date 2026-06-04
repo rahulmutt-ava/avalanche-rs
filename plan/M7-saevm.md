@@ -1,0 +1,386 @@
+# M7 — SAE VM (ACP-194) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
+
+**Goal:** Implement the SAE VM (ACP-194 streaming asynchronous execution) as the `ava-saevm` sub-workspace — a Tau-disciplined gas-as-time clock, three-frontier streaming pipeline that settles to identical state regardless of pipeline scheduling, byte-exact SAE blocks, consensus-vs-execution state on Firewood revisions, a Snowman adaptor, a C-Chain on SAE, crash recovery, and the §10 invariants — all behavior-/byte-exact with the Go `vms/saevm`.
+**Tier:** T4 — VMs (SAE sub-workspace)
+**Crates:** ava-saevm (sub-crates: `ava-saevm-params`, `ava-saevm-intmath`, `ava-saevm-cmputils`, `ava-saevm-proxytime`, `ava-saevm-gastime`, `ava-saevm-gasprice`, `ava-saevm-types`, `ava-saevm-hook`, `ava-saevm-worstcase`, `ava-saevm-blocks`, `ava-saevm-adaptor`, `ava-saevm-db` (saedb), `ava-saevm-exec` (saexec), `ava-saevm-txgossip`, `ava-saevm-core` (sae + sae-rpc), `ava-saevm-cchain`, `ava-saevm-testutil` (saetest, dev-only))
+**Owning specs:** `11-saevm.md` (PRIMARY), `21-fee-economics-math.md` §0/§6 (gas-as-time math + golden vectors), `27-crash-consistency-and-recovery.md` §2.4/§3/§5.4 (SAE recovery, CC-ORDER), `00-overview-and-conventions.md` §6.1/§7.7/§8/§9/§11.1.4/§11.1.5, `02-testing-strategy.md` §4/§6/§13
+**Depends on (prior milestones):** M6 (`ava-evm` reuse-contract per `00` §11.1.5: revm `BlockExecutor`/executor factory + Firewood `StateProvider` exposed as reusable public APIs — SAE is the ASYNC ACP-194 driver, ava-evm is the SYNC driver; one EVM engine, two drivers), M3 (`ava-engine` `block::ChainVm` Snowman traits + `block::Context`; adaptor target), M1 (`ava-database` `HeightIndex`, `VersionDb`; Firewood `Db` revisions for saedb), and the shared `ava-types::{Gas, GasPrice}` + `ava-gas::calculate_price` (the §0 exponential) from the fee crates.
+**Exit gate (named tests):**
+- `golden::sae_block_hash`
+- `prop::sae_execution_determinism` (same block stream → same settled state regardless of pipeline scheduling)
+- `differential::sae_recovery` (crash+restart resettles to identical state, `11` §1.4)
+- `differential::sae_streaming` (vs Go SAE node)
+- the invariants from `11` §10 as tests (`invariant::frontier_ordering`, `invariant::stage_causality`, `invariant::persist_order_execute`, `invariant::persist_order_accept`, `invariant::settle_in_order`, `invariant::atomics_before_broadcast`, `invariant::recovery_equivalence`, `invariant::gc_settled_ancestry`, `invariant::no_reorg`, `invariant::receipt_root_match`, `invariant::determinism`)
+
+---
+
+## Dependency map & parallel waves
+
+Dependency direction is strictly downward (`11` §3). The TDD entry point (`prop::sae_execution_determinism`, M7.16) is the headline risk and is written/forced *before* any pipeline optimization.
+
+- **Wave 0 — sub-workspace scaffolding (M7.1).** Create the `ava-saevm` sub-workspace, all empty sub-crates, the SAE stricter-lint bar (`clippy::pedantic` + `overflow-checks = true` in all profiles + `#![deny(clippy::arithmetic_side_effects)]` on gas-time crates), license headers, `#![forbid(unsafe_code)]`, `proptest.toml`, the `tests/vectors/saevm/` + `tests/PORTING.md` skeletons.
+- **Wave 1 — leaf utils (parallel): M7.2 params, M7.3 intmath, M7.4 cmputils.** No intra-SAE deps. `params` carries the **Tau discipline** type (`BlockInstant`, no `Add<u64>`) — the structural `tausecondslint`.
+- **Wave 2 — gas clock & types (parallel after Wave 1): M7.5 proxytime → M7.6 gastime → M7.7 gasprice; M7.8 types.** gastime depends on proxytime + intmath + `ava-types::{Gas,GasPrice}` + `ava-gas::calculate_price`.
+- **Wave 3 — blocks & adaptor: M7.9 hook, M7.10 adaptor (no SAE deps — parallel), M7.11 blocks (needs hook+gastime+adaptor+types+ava-evm block types).**
+- **Wave 4 — storage: M7.12 saedb (Tracker on Firewood revisions; consensus-vs-execution state; CC-ORDER).**
+- **Wave 5 — worst-case + executor: M7.13 worstcase, M7.14 saexec (uses ava-evm reuse APIs), M7.15 the eventual/receipt buffer + chain-head events.**
+- **Wave 6 — DETERMINISM TDD GATE: M7.16 `prop::sae_execution_determinism`** (2-tx block under two forced pipeline schedules) — written here as the first failing test that pins the executor's determinism contract before the pipeline is optimized.
+- **Wave 7 — the SAE core VM: M7.17 the three frontiers + settlement, M7.18 BuildBlock/VerifyBlock/Accept lifecycle, M7.19 sae-rpc (frontier→RPC label mapping).**
+- **Wave 8 — networking/gossip: M7.20 txgossip.**
+- **Wave 9 — cchain-on-SAE: M7.21 hooks impl, M7.22 atomic state/tx/txpool, M7.23 cchain VM Initialize harness + /avax API.**
+- **Wave 10 — recovery & invariants: M7.24 recovery (`11` §1.4), M7.25 the §10 invariants as a harness, M7.26 backpressure/queue-full, M7.27 worst-case bounds as proptests.**
+- **Wave 11 — differentials & exit: M7.28 `golden::sae_block_hash` + settlement/recovery transcript vectors, M7.29 `differential::sae_recovery`, M7.30 `differential::sae_streaming` (CI-gated live), M7.31 cargo-fuzz block decoder, M7.32 Milestone exit gate.**
+
+Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16** (TDD entry point) and re-asserted in the exit gate; **`differential::sae_recovery` is implemented in M7.29**.
+
+---
+
+## Tasks
+
+### Task M7.1: SAE sub-workspace scaffolding + stricter-lint bar
+**Sub-crate:** ava-saevm (all)  ·  **Depends on:** M0 workspace, M1/M3/M6 crates present  ·  **Spec:** `11` §3, `00` §3/§7.6/§7.7/§8
+**Files:** `crates/ava-saevm/Cargo.toml` (sub-workspace virtual manifest or path members), `crates/ava-saevm/{params,intmath,cmputils,proxytime,gastime,gasprice,types,hook,worstcase,blocks,adaptor,db,exec,txgossip,core,cchain,testutil}/Cargo.toml` + `src/lib.rs`, `crates/ava-saevm/clippy.toml`, workspace `[profile.*] overflow-checks = true` lines, `crates/ava-saevm/proptest.toml`, `crates/ava-saevm/tests/PORTING.md`, `tests/vectors/saevm/.gitkeep`
+- [ ] **Step 1 — Red:** Add `crates/ava-saevm/lints_test.rs` style integration check: a `#[test] fn sae_lint_bar()` is not meaningful at runtime, so instead add a `tests/scaffolding.rs` in `ava-saevm-params` asserting the crate compiles and `params::TAU_SECONDS == 5`; and a workspace check task `cargo xtask check-sae-lints` (script) that greps each `ava-saevm-*/src/lib.rs` for `#![forbid(unsafe_code)]`, the license header, and (for gas-time crates) `#![deny(clippy::arithmetic_side_effects)]`. First run fails because crates/files do not exist.
+- [ ] **Step 2 — Confirm red:** `cargo build -p ava-saevm-params` → fails (crate missing); `bash scripts/check-sae-lints.sh` → fails (no lib.rs files).
+- [ ] **Step 3 — Green:** Create every sub-crate with `lib.rs` containing the license header, `#![forbid(unsafe_code)]`, `#![warn(missing_docs)]`, `#![warn(clippy::pedantic)]`; add `#![deny(clippy::arithmetic_side_effects)]` to `proxytime`/`gastime`/`gasprice`/`intmath`. Set `overflow-checks = true` in ALL workspace profiles (dev + release) so SAE inherits it (`00` §8). Wire dependency edges per `11` §3 (downward only). Add `proptest.toml`, empty `PORTING.md` table header, `tests/vectors/saevm/.gitkeep`.
+- [ ] **Step 4 — Confirm green:** `cargo build -p ava-saevm-params` ok; `bash scripts/check-sae-lints.sh` passes; `cargo clippy -p ava-saevm-params -- -D warnings` clean.
+- [ ] **Step 5 — Commit:** `sae: scaffold ava-saevm sub-workspace + stricter lint bar (overflow-checks, pedantic, arithmetic_side_effects)`
+
+### Task M7.2: `ava-saevm-params` — Tau discipline (BlockInstant, no `Add<u64>`) + queue limits
+**Sub-crate:** ava-saevm-params  ·  **Depends on:** M7.1  ·  **Spec:** `11` §2.3/§2.4, `00` §11.1 (tausecondslint analog)
+**Files:** `crates/ava-saevm/params/src/lib.rs`, `crates/ava-saevm/params/tests/tau_discipline.rs`, `crates/ava-saevm/params/tests/compile_fail/instant_minus_u64.rs` (trybuild)
+- [ ] **Step 1 — Red:** Write `tests/tau_discipline.rs`: `block_instant_minus_tau` asserts `BlockInstant::from_unix(100).minus(params::TAU)` is `from_unix(95)` and that `minus` saturates at the epoch; `max_queue_wall_time_is_duration_mul` asserts `MAX_QUEUE_WALL_TIME == TAU * (MAX_FULL_BLOCKS_IN_CLOSED_QUEUE * LAMBDA)` as a `Duration`. Add a **trybuild** compile-fail case `compile_fail/instant_minus_u64.rs` doing `BlockInstant::from_unix(100) - 5u64` and a `tests/compile_fail.rs` running `trybuild::TestCases::compile_fail`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-params` → unresolved `BlockInstant`/`TAU` (fails to compile for the right reason).
+- [ ] **Step 3 — Green:** Implement per `11` §2.3: `pub const TAU_SECONDS: u64 = 5; pub const TAU: Duration = Duration::from_secs(TAU_SECONDS); pub const LAMBDA: u64 = 2;` and queue constants `MAX_FULL_BLOCKS_IN_OPEN_QUEUE = 2`, `MAX_FULL_BLOCKS_IN_CLOSED_QUEUE = 3`, `MAX_QUEUE_WALL_TIME = TAU * ((MAX_FULL_BLOCKS_IN_CLOSED_QUEUE * LAMBDA) as u32)`, `MAX_FUTURE_BLOCK = Duration::from_secs(10)`. Implement `BlockInstant(SystemTime)` with `from_unix`, saturating `minus(Duration)`/`plus(Duration)`, `PartialOrd`/`Ord` — and deliberately **no** `impl Add<u64>`/`Sub<u64>`. Cite `params.go`/`block_builder.go::lastToSettle`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-params` passes incl. the trybuild compile-fail.
+- [ ] **Step 5 — Commit:** `sae(params): Tau-discipline BlockInstant (no Add<u64>) + derived queue limits`
+
+### Task M7.3: `ava-saevm-intmath` — checked mul_div / bounded ops
+**Sub-crate:** ava-saevm-intmath  ·  **Depends on:** M7.1  ·  **Spec:** `21` §6/§8 (`intmath.MulDiv/MulDivCeil`, `BoundedAdd/Multiply/Subtract`)
+**Files:** `crates/ava-saevm/intmath/src/lib.rs`, `crates/ava-saevm/intmath/tests/intmath_prop.rs`, `crates/ava-saevm/intmath/proptest-regressions/`
+- [ ] **Step 1 — Red:** `tests/intmath_prop.rs`: golden `mul_div_floor(1_000_000, 1_000_000, 2_000_000) == 500_000` (the `11` §6 worked Tick accrual) and `mul_div_ceil` rounds up by 1 where floor truncates; proptest `mul_div_no_overflow` (uses `u128`/`U256` intermediate, never panics, `ratio<1 ⇒ result<a`), `bounded_add_saturates_to_u64_max`, `bounded_sub_floors_at_0`, `bounded_multiply_caps`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-intmath` → unresolved functions.
+- [ ] **Step 3 — Green:** Implement `mul_div_floor(a,b,c)`/`mul_div_ceil(a,b,c)` via `U256` intermediate (`ruint`), `ceil_div(a,b)`, `bounded_add`/`bounded_sub`/`bounded_multiply` (`checked_*().unwrap_or(u64::MAX/0)`). Mirror `intmath.go`. No floats; checked everywhere.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-intmath` passes; commit `proptest-regressions/` if any.
+- [ ] **Step 5 — Commit:** `sae(intmath): checked mul_div/bounded arithmetic (U256 intermediate)`
+
+### Task M7.4: `ava-saevm-cmputils` — comparison/test helpers (dev)
+**Sub-crate:** ava-saevm-cmputils  ·  **Depends on:** M7.1  ·  **Spec:** `11` §3 (cmputils, dev only)
+**Files:** `crates/ava-saevm/cmputils/src/lib.rs`, `crates/ava-saevm/cmputils/tests/cmp.rs`
+- [ ] **Step 1 — Red:** `tests/cmp.rs`: `cross_mul_compare_matches_widening` asserts a `FractionalSecond`-style cross-multiply compare uses 128-bit widening (`u64::widening_mul`/`u128`) and matches a reference table including the differing-denominator case (the `11` §2.1 cross-multiplication-compare requirement).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-cmputils` → missing `compare_fractions`.
+- [ ] **Step 3 — Green:** Implement `compare_fractions(n1,d1,n2,d2) -> Ordering` via `u128` widening (`bits.Mul64` analog) and any small ordering/diff helpers used by tests. Behind `testutil` feature where dev-only.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-cmputils` passes.
+- [ ] **Step 5 — Commit:** `sae(cmputils): 128-bit-widening fraction comparison helper`
+
+### Task M7.5: `ava-saevm-proxytime` — `Time<D: ProxyUnit>` (tick/fast_forward/set_rate/compare)
+**Sub-crate:** ava-saevm-proxytime  ·  **Depends on:** M7.3  ·  **Spec:** `11` §2.1, `21` §6
+**Files:** `crates/ava-saevm/proxytime/src/lib.rs`, `crates/ava-saevm/proxytime/tests/proxytime_prop.rs`, `crates/ava-saevm/proxytime/proptest-regressions/`
+- [ ] **Step 1 — Red:** `tests/proxytime_prop.rs`: proptest `tick_monotone` (never goes backward), `fraction_invariant` (`fraction < hertz` always holds), `set_rate_rounds_up` (rescale rounds up for monotonicity), `fast_forward_only_forward` (returns 0 if `to` not in future), `compare_consistent_across_rates` (two instants at different `hertz` compare identically to a widening reference, using M7.4 `compare_fractions`).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-proxytime` → missing `Time`.
+- [ ] **Step 3 — Green:** Implement `pub trait ProxyUnit: Copy + Ord + Into<u128>` and `pub struct Time<D: ProxyUnit> { seconds: u64, fraction: D, hertz: D }` with `tick(d)`, `rate()`, `fraction() -> FractionalSecond<D>`, `fast_forward_to(to, to_frac) -> (u64, FractionalSecond<D>)`, `set_rate(hertz)` (round up), `compare(&self,&Self) -> Ordering` (cross-multiply via M7.4), `as_time() -> SystemTime` (metrics only). Mirror `proxytime.go`. Persisted form is canoto-compatible (`ava-codec`); add a round-trip test.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-proxytime` passes; commit regressions.
+- [ ] **Step 5 — Commit:** `sae(proxytime): newtype-parameterised Time<D> with checked tick/fast-forward/set-rate`
+
+### Task M7.6: `ava-saevm-gastime` — the SAE gas clock (Tau-pinned rate, excess, before/tick/after_block)
+**Sub-crate:** ava-saevm-gastime  ·  **Depends on:** M7.2, M7.3, M7.5, M6 (`ava-types::{Gas,GasPrice}`, `ava-gas::calculate_price`)  ·  **Spec:** `11` §2.2, `21` §6 (gastime/acp176/config)
+**Files:** `crates/ava-saevm/gastime/src/lib.rs`, `crates/ava-saevm/gastime/src/config.rs`, `crates/ava-saevm/gastime/tests/gastime_golden.rs`, `crates/ava-saevm/gastime/tests/gastime_prop.rs`, `crates/ava-saevm/gastime/proptest-regressions/`, `tests/vectors/saevm/gastime/*.json`
+- [ ] **Step 1 — Red:** `tests/gastime_golden.rs` freezes the `21` §6 worked vectors: target=1e6 ⇒ K=87e6; `excess=0 ⇒ price=1`; `excess=87e6 ⇒ price=2`; Tick accrual `Δexcess = ⌊g·(R−T)/R⌋ = 500_000` for `g=1e6`, R=2e6; fast-forward decay `excess −= s·T` saturating to 0; the `21` §0 `CalculatePrice` table routed through `price()`. `tests/gastime_prop.rs`: `price_ge_min_price`, `tick_excess_monotone`, `after_block_scale_excess_round_up` (vs `21` §6 ceil), `excess_for_price_inverse_bounds` (binary-search round-trip), `compare_across_rates`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-gastime` → missing `GasTime`.
+- [ ] **Step 3 — Green:** Implement `GasTime { inner: proxytime::Time<Gas>, target, excess, config }` with constants `TARGET_TO_RATE=2`, `MIN_TARGET=1`, `MAX_TARGET=u64::MAX/2`; `new(at,target,starting_excess,cfg)`; `target()/excess()/rate()`; `price()` = `max(min_price, calculate_price(1, excess, K))` with `K = bounded_multiply(scaling, target)`; `before_block(t)` (fast-forward to `>= t`, ns→gas via `mul_div_ceil(ns, rate, 1e9)`); `tick(used)` (advance + `excess += mul_div_floor(used, R−T, R)` bounded); `after_block(used,target,cfg)` (tick then **scaleExcess ceil** via U256 `⌈oldX·newK/oldK⌉` saturating, re-pin rate to `2·target`, `enforce_min_excess` binary search); `compare`. `config.rs`: `GasPriceConfig{min_price, target_to_excess_scaling=87, static_pricing}`. Cite `gastime/{gastime,acp176,config}.go`. **NEVER** add raw Tau seconds — clock advances by gas only.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-gastime` passes; `clippy -p ava-saevm-gastime -- -D warnings` (pedantic + arithmetic_side_effects) clean; commit vectors + regressions.
+- [ ] **Step 5 — Commit:** `sae(gastime): SAE gas clock (Tau-pinned rate, excess scaling, ACP-176 price) with golden vectors`
+
+### Task M7.7: `ava-saevm-gasprice` — eth_gasPrice/feeHistory estimator
+**Sub-crate:** ava-saevm-gasprice  ·  **Depends on:** M7.6, M7.11 (blocks — soft; can stub block accessor trait first)  ·  **Spec:** `11` §3 (gasprice → gastime, blocks)
+**Files:** `crates/ava-saevm/gasprice/src/lib.rs`, `crates/ava-saevm/gasprice/tests/estimator.rs`
+- [ ] **Step 1 — Red:** `tests/estimator.rs`: `gas_price_uses_executed_base_fee` — over a small synthetic chain of executed blocks (fake `BlockSource`), `suggest_gas_price()` returns the executed-block base fee tip estimate matching a frozen table; `fee_history_percentiles` returns the expected reward percentiles.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-gasprice` → missing `Estimator`.
+- [ ] **Step 3 — Green:** Implement `Estimator` over a `BlockSource` trait (parameterized so it does not hard-depend on the full block type) computing `eth_gasPrice`/`eth_feeHistory` from the SAE executed/settled frontier base fees + effective tips. Mirror Go `gasprice`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-gasprice` passes.
+- [ ] **Step 5 — Commit:** `sae(gasprice): eth_gasPrice/feeHistory estimator over executed frontier`
+
+### Task M7.8: `ava-saevm-types` — ExecutionResults (canoto blob) + HeightIndex wrapper
+**Sub-crate:** ava-saevm-types  ·  **Depends on:** M7.1, M1 (`ava-database::HeightIndex`), M6 (`ava-evm` reth header/block types)  ·  **Spec:** `11` §4.1/§7, `21` §6
+**Files:** `crates/ava-saevm/types/src/lib.rs`, `crates/ava-saevm/types/src/execution.rs`, `crates/ava-saevm/types/tests/execution_codec.rs`, `crates/ava-saevm/types/fuzz/` (decoder fuzz seed dir), `tests/vectors/saevm/execution/*.json`
+- [ ] **Step 1 — Red:** `tests/execution_codec.rs`: `execution_results_roundtrip` proptest (`decode(encode(x)) == x`) and `execution_results_golden` asserting the canoto blob `{gas_time, base_fee, receipt_root, post_state_root}` encodes byte-identically to a committed Go-extracted vector under `tests/vectors/saevm/execution/`; `height_index_get_put` against a temp `ava-database`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-types` → missing `ExecutionResults`.
+- [ ] **Step 3 — Green:** Define `ExecutionResults { gas_time: proxytime::Time<Gas>, base_fee: GasPrice, receipt_root: B256, post_state_root: B256 }` with a canoto-compatible `ava-codec` derive (persisted only, per `11` §4.1) and an `ExecutionResultsDb` wrapping `database::HeightIndex`. Re-export the reth block/header alias types from `ava-evm` used across SAE. Cite `blocks/execution.canoto.go`, `types`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-types` passes; commit vectors + regressions.
+- [ ] **Step 5 — Commit:** `sae(types): canoto ExecutionResults blob + HeightIndex-backed results DB`
+
+### Task M7.9: `ava-saevm-hook` — `Points`/`PointsG<Tx>`, `Op`, `Settled`, `BlockBuilder`
+**Sub-crate:** ava-saevm-hook  ·  **Depends on:** M7.2, M7.5, M7.6, M7.8, M6 (ava-evm)  ·  **Spec:** `11` §9.1, §1.3 (`hook.Settled`)
+**Files:** `crates/ava-saevm/hook/src/lib.rs`, `crates/ava-saevm/hook/src/op.rs`, `crates/ava-saevm/hook/src/settled.rs`, `crates/ava-saevm/hook/tests/op.rs`
+- [ ] **Step 1 — Red:** `tests/op.rs`: `op_mint_burn_nonce_and_min_balance` — applying a burn `Op` checks nonce-authorized debit + min-balance guard (rejects under-balance); `settled_gas_time_roundtrip` — `Settled{Height,GasUnix,GasNumerator,Excess}` reconstructs the gas clock (`SettledGasTime`) matching a frozen value.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-hook` → missing `Op`/`Settled`.
+- [ ] **Step 3 — Green:** Define object-safe `#[async_trait] trait Points` (`execution_results_db`, `gas_config_after`, `block_time`, `settled_by`, `end_of_block_ops`, `can_execute_transaction`, `before_executing_block`, `after_executing_block`) and generic `trait BlockBuilder<Tx: Transaction>` (`build_header`, `potential_end_of_block_ops`, `build_block`, `block_rebuilder_from`). `Op` (mint/burn with nonce + min-balance guard, `U256`), `Settled` + `settled_gas_time()`. Cite `hook/hook.go`. Used behind `Arc<dyn Points>` where dynamic.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-hook` passes.
+- [ ] **Step 5 — Commit:** `sae(hook): Points/PointsG trait seam + Op (mint/burn) + Settled gas-clock`
+
+### Task M7.10: `ava-saevm-adaptor` — generic `ChainVm<BP>` → Snowman `block::ChainVm`
+**Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.1, M3 (`ava-engine::block`, `ava-vm::CommonVm`)  ·  **Spec:** `11` §5
+**Files:** `crates/ava-saevm/adaptor/src/lib.rs`, `crates/ava-saevm/adaptor/tests/adaptor_conformance.rs`
+- [ ] **Step 1 — Red:** `tests/adaptor_conformance.rs`: implement a tiny in-memory `FakeChainVm` returning `FakeBlockProperties`; `convert()` it and assert the resulting `block::ChainVm` forwards `verify/accept/reject` back to the VM (`AcceptBlock` called once), returns `ShouldVerifyWithContext == true`, and threads `block::Context`. (`06`/`07` conformance.)
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-adaptor` → missing `ChainVm`/`convert`.
+- [ ] **Step 3 — Green:** Define `trait BlockProperties` (`id/parent/bytes/height/timestamp`) and `#[async_trait] trait ChainVm<BP: BlockProperties>: CommonVm` (state-changing methods on the VM: `verify_block/accept_block/reject_block/set_preference/build_block/get_block/parse_block/last_accepted/get_block_id_at_height`). Implement `pub fn convert<BP,V>(vm: Arc<V>) -> impl block::ChainVm` with a wrapper `Block` that forwards `snowman::Block` calls to its owning VM (block does not know the VM). Cite `adaptor/`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-adaptor` passes.
+- [ ] **Step 5 — Commit:** `sae(adaptor): generic ChainVm<BP> → Snowman block::ChainVm bridge`
+
+### Task M7.11: `ava-saevm-blocks` — byte-exact SAE block + lifecycle state machine
+**Sub-crate:** ava-saevm-blocks  ·  **Depends on:** M7.6, M7.5, M7.2, M7.8, M7.9, M7.10, M6 (`reth_primitives::SealedBlock`, alloy_rlp)  ·  **Spec:** `11` §4, §1.2/§1.3, §10 (invariants 3/5/8)
+**Files:** `crates/ava-saevm/blocks/src/lib.rs`, `crates/ava-saevm/blocks/src/lifecycle.rs`, `crates/ava-saevm/blocks/src/settlement.rs`, `crates/ava-saevm/blocks/src/parse.rs`, `crates/ava-saevm/blocks/tests/block_hash_golden.rs`, `crates/ava-saevm/blocks/tests/settlement.rs`, `crates/ava-saevm/blocks/tests/lifecycle.rs`, `tests/vectors/saevm/blocks/*.json`
+- [ ] **Step 1 — Red:** `tests/block_hash_golden.rs`: `sae_block_rlp_keccak_matches_geth` — RLP-encode a fixed eth block (`Root` repurposed as settled-ancestor root) and assert Keccak header hash equals a committed Go/geth vector (the seed for the exit-gate `golden::sae_block_hash`). `tests/settlement.rs`: table for `Range`/`Settles`/`last_to_settle_at` incl. the `known=false` execution-lagging path and the synchronous-block self-settling edge; `last_to_settle` uses `block_time.minus(params::TAU)` (Duration op only). `tests/lifecycle.rs`: `mark_executed_then_mark_settled_clears_ancestry` (CAS to None → GC), `in_memory_block_count_returns_to_baseline` (Drop decrements `AtomicI64`), `mark_executed_is_idempotent`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-blocks` → missing `Block`.
+- [ ] **Step 3 — Green:** Implement `Block { eth: SealedBlock, ancestry: ArcSwapOption<Ancestry>, synchronous: bool, bounds: OnceLock<WorstCaseBounds>, execution: ArcSwapOption<ExecutionResults>, interim_execution_time: ArcSwapOption<proxytime::Time<Gas>>, executed: Notify, settled: Notify }`, `enum LifeCycleStage { NotExecuted, Executed, Settled }`. Methods: `mark_executed` (write D first, then M/I, then fire X — strict D→M→I→X), `mark_settled` (CAS ancestry → None, fire settled), `mark_synchronous`, `settles() -> Range`, `executed_by_gas_time`/`post_execution_state_root`/`receipts` (block on `executed`), `restore_execution_artefacts`/`restore_settled_block`. `parse.rs::parse_block` (RLP decode, height fits u64, reject `> now + MAX_FUTURE_BLOCK`, verify tx/uncle/withdrawals hashes; ancestry NOT set at parse). `Drop` decrements `InMemoryBlockCount`. Implement `adaptor::BlockProperties`. Cite `blocks/{snow,execution,settlement,export}.go`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-blocks` passes; commit vectors + regressions.
+- [ ] **Step 5 — Commit:** `sae(blocks): byte-exact SAE block, D→M→I→X lifecycle, settlement Range, GC counter`
+
+### Task M7.12: `ava-saevm-db` (saedb) — Tracker: consensus-vs-execution state on Firewood revisions
+**Sub-crate:** ava-saevm-db  ·  **Depends on:** M7.8, M7.9, M1 (`ava-database`), M6 (`ava-evm::FirewoodStateProvider`)  ·  **Spec:** `11` §7, `27` §2.4 (CC-ORDER), §1.1
+**Files:** `crates/ava-saevm/db/src/lib.rs`, `crates/ava-saevm/db/src/tracker.rs`, `crates/ava-saevm/db/tests/tracker.rs`, `crates/ava-saevm/db/tests/commit_policy.rs`
+- [ ] **Step 1 — Red:** `tests/commit_policy.rs`: `maybe_commit_archival_commits_every_block`, `maybe_commit_interval_commits_settled_root_on_boundary`, `maybe_commit_else_keeps_root_in_memory_readable`; `tests/tracker.rs`: `track_untrack_refcount_bounds_revisions` (retained revisions bounded by the consensus-critical window), `state_db_opens_any_retained_revision`, `last_height_with_execution_root_committed_rounds_down_to_interval` (and returns head if archival), `close_flattens_to_last_root` (no reorgs).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-db` → missing `Tracker`.
+- [ ] **Step 3 — Green:** Implement `Tracker { state: Arc<FirewoodStateProvider>, config: Config{commit_interval=4096, archival} }` with `track(root)`/`untrack(root)` (ref-count over Firewood `RevisionManager`, mapping `triedb.Reference`/`Dereference`), `maybe_commit(settled_root, execution_root, height)` (archival → commit execution_root every block; `height % N == 0` → commit settled_root; else nothing — pipelined per `00` §9 / `04` §4.2), `state_db(root) -> StateDb`, `last_height_with_execution_root_committed()`, `close(last_root)` (flatten — no reorgs). Keep consensus KV on `ava-database`, execution trie on Firewood directly (`11` §7 deviation note). Enforce CC-ORDER: commit execution durably before pointer advance (the executor calls in this order).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-db` passes; commit regressions.
+- [ ] **Step 5 — Commit:** `sae(saedb): Firewood-revision Tracker (commit interval, refcount, CC-ORDER, no-reorg flatten)`
+
+### Task M7.13: `ava-saevm-worstcase` — predictive bounds + assertions
+**Sub-crate:** ava-saevm-worstcase  ·  **Depends on:** M7.11, M7.6, M7.9, M7.12, M7.2, M6 (ava-evm)  ·  **Spec:** `11` §9.3, §2.4 (Ω_B), §6.1 (CheckBaseFeeBound/CheckSenderBalanceBound)
+**Files:** `crates/ava-saevm/worstcase/src/lib.rs`, `crates/ava-saevm/worstcase/src/state.rs`, `crates/ava-saevm/worstcase/tests/worstcase.rs`, `crates/ava-saevm/worstcase/proptest-regressions/`
+- [ ] **Step 1 — Red:** `tests/worstcase.rs`: `max_block_gas_is_R_tau_lambda` asserts `Ω_B = R·Tau·Lambda` (with Tau=5, Lambda=2 ⇒ `10·R`, capped so a closed queue fits u64); `min_gas_consumption_ceil` asserts `max(gas_used, ceil(gas_limit/Lambda))`; `worst_case_affordability_mul_add` (U256 `gas·fee_cap + value`); `check_base_fee_bound_rejects_above_max`; `err_queue_full_when_open_queue_exceeds_2_omega_b`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-worstcase` → missing `State`/`WorstCaseBounds`.
+- [ ] **Step 3 — Green:** Implement `worstcase::State` replaying settled→parent history then the candidate block on a state DB, tracking worst-case gas clock, base fee, per-op min-balances, `Ω_B`. `WorstCaseBounds{ max_base_fee, latest_end_time, min_op_burner_balances }` attached to the block. Includability check (intrinsic validation + EOA/nonce + `can_execute_transaction` hook + affordability via U256 `mul_add`). `check_base_fee_bound`/`check_sender_balance_bound` (test-fatal on violation), `ErrQueueFull`. Cite `worstcase/state.go`. `rayon` batch for independent affordability/sender checks (ordering unchanged — `11` §13.3).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-worstcase` passes; commit regressions.
+- [ ] **Step 5 — Commit:** `sae(worstcase): predictive WorstCaseBounds + base-fee/balance assertions + ErrQueueFull`
+
+### Task M7.14: `ava-saevm-exec` (saexec) — single-task streaming executor on the ava-evm reuse APIs
+**Sub-crate:** ava-saevm-exec  ·  **Depends on:** M7.11, M7.6, M7.9, M7.12, M7.8, M7.13, M6 (ava-evm revm `BlockExecutor` + `StateProvider` reuse APIs, `00` §11.1.5)  ·  **Spec:** `11` §6, `27` §5.4, `00` §6.1/§7.2
+**Files:** `crates/ava-saevm/exec/src/lib.rs`, `crates/ava-saevm/exec/src/executor.rs`, `crates/ava-saevm/exec/src/execute_step.rs`, `crates/ava-saevm/exec/src/error.rs`, `crates/ava-saevm/exec/tests/execute_step.rs`
+- [ ] **Step 1 — Red:** `tests/execute_step.rs`: `execute_single_block_advances_E_and_commits` — enqueue one block whose parent is `last_executed`, assert post-state root, receipts, gas-time match a frozen expectation and `mark_executed` ran D→M→I→X; `parent_hash_mismatch_is_fatal`; `errored_tx_is_fatal_reverted_tx_is_normal` (a revert still consumes gas, an EVM *error* stops the executor); `base_fee_checked_against_worst_case_bound`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-exec` → missing `Executor`.
+- [ ] **Step 3 — Green:** Implement `Executor` per `11` §6: bounded `mpsc::Sender<Arc<Block>>` (cap `2 * commit_interval`), `arc_swap::ArcSwap<Block> last_executed`, `broadcast` chain-head, `DashMap<TxHash, Eventual<Receipt>>`, `ChainContext` LRU for BLOCKHASH, `Arc<dyn hook::Points>`, `CancellationToken`, `JoinHandle`. The **execute step** runs on a **dedicated execution thread** owning the Firewood handle (synchronous per `04` §4.2): (1) parent-hash sanity (fatal on mismatch), (2) clone parent gas clock + `before_block`, (3) open `state_db` at parent post-exec root (M7.12), (4) `hooks.before_executing_block`, (5) `base_fee=clock.price()` + `check_base_fee_bound`, (6) per-tx: worst-case balance check → `ava-evm` revm `ApplyTransaction` → `per_tx_clock.tick(gas_used)` → `set_interim_execution_time` → fix receipt `BlockHash`/`EffectiveGasPrice` → publish Eventual, (7) `end_of_block_ops`, (8) `after_executing_block`, (9) `clock.after_block(...)`, (10) commit: `state.commit()` → root → `tracker.maybe_commit` → `tracker.track` → `mark_executed` (D→M→I→X) → emit events. `error.rs`: `Fatal` vs recoverable (`thiserror`). **No wall-clock in any consensus output; no unsorted-map iteration** (`00` §6.1). Pure function of `(ordered block, parent state, chainspec, hooks)`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-exec` passes; clippy pedantic clean.
+- [ ] **Step 5 — Commit:** `sae(saexec): single-task streaming executor on ava-evm revm + Firewood (pure, D→M→I→X)`
+
+### Task M7.15: `ava-saevm-exec` — Eventual<T> receipt buffer + ChainHead/WaitUntilExecuted events
+**Sub-crate:** ava-saevm-exec  ·  **Depends on:** M7.14  ·  **Spec:** `11` §1.5, §10 (invariant 6 atomics-before-broadcast), `00` §11 (eventual.Value → OnceCell/watch)
+**Files:** `crates/ava-saevm/exec/src/eventual.rs`, `crates/ava-saevm/exec/src/events.rs`, `crates/ava-saevm/exec/tests/events.rs`
+- [ ] **Step 1 — Red:** `tests/events.rs`: `wait_until_executed_observes_pointer_first` — a waiter woken by the `executed` notify always reads the advanced internal pointer (invariant 6: I updated before X fires); `receipt_eventual_resolves_after_publish`; `subscribe_chain_head_receives_event_per_block`; `task_tracker_drains_on_shutdown` (no leaked tasks — `02` §5).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-exec --test events` → missing `Eventual`/event wiring.
+- [ ] **Step 3 — Green:** Implement `Eventual<T>` (`OnceCell`/`watch`-backed) for receipts, `ChainHeadEvent`, `subscribe_chain_head`, `wait_until_executed`/`wait_until_settled` via `Notify`. Ensure internal pointer (`I`) is set before the notify (`X`) fires (invariant 6). Use a `TaskTracker` so shutdown drains the executor task; `CancellationToken` finishes the in-flight block then `tracker.close(last_root)`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-exec --test events` passes.
+- [ ] **Step 5 — Commit:** `sae(saexec): Eventual receipt buffer + chain-head/wait-until events (atomics-before-broadcast)`
+
+### Task M7.16: `prop::sae_execution_determinism` — TDD ENTRY POINT (2-tx block, two forced schedules)
+**Sub-crate:** ava-saevm-exec  ·  **Depends on:** M7.14, M7.15, M7.11, M7.12  ·  **Spec:** `11` §6.1, §10 (invariant 11), `00` §6.1, `02` §4
+**Files:** `crates/ava-saevm/exec/tests/determinism.rs`, `crates/ava-saevm/exec/proptest-regressions/`, `crates/ava-saevm/testutil/src/schedule.rs` (a `PipelineSchedule` injection seam)
+- [ ] **Step 1 — Red:** `tests/determinism.rs::prop::sae_execution_determinism` — build a 2-tx block on top of genesis; run the executor under **two forced pipeline schedules** (e.g. commit-after-block-N vs commit-deferred-to-interval; interim-execution-time set mid-block vs at end) via a `PipelineSchedule` seam, and `prop_assert_eq!` the settled post-state root, receipt roots, gas-times, base fee, and A/E/S frontier heights are identical across schedules and across N=64 random 2-tx programs. This is the headline determinism gate; it MUST be the first failing test before the pipeline is optimized.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-exec -E 'test(sae_execution_determinism)'` → fails (no `PipelineSchedule` seam / divergence) for the right reason.
+- [ ] **Step 3 — Green:** Add the `PipelineSchedule` injection seam (only changes *when* commit/interim-time happen, never the inputs) and ensure the execute step is a pure function so both schedules settle identically. No optimization beyond what determinism requires.
+- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-saevm-exec -E 'test(sae_execution_determinism)'` passes; commit the `proptest-regressions/` corpus.
+- [ ] **Step 5 — Commit:** `sae(saexec): prop::sae_execution_determinism — settled state invariant under forced schedules (TDD gate)`
+
+### Task M7.17: `ava-saevm-core` — three frontiers + settlement (S/E/A pointers, consensus-critical map)
+**Sub-crate:** ava-saevm-core  ·  **Depends on:** M7.14, M7.15, M7.11, M7.12, M7.6  ·  **Spec:** `11` §1.1/§1.2, §10 (invariants 1/2/5/9), `00` §11 (arc_swap/DashMap)
+**Files:** `crates/ava-saevm/core/src/lib.rs`, `crates/ava-saevm/core/src/frontier.rs`, `crates/ava-saevm/core/src/settle.rs`, `crates/ava-saevm/core/tests/frontier.rs`
+- [ ] **Step 1 — Red:** `tests/frontier.rs`: `frontier_ordering_S_le_E_le_A` over a built/accepted/executed/settled chain; `stage_causality_settle_implies_exec_implies_accept`; `settle_in_increasing_height`; `consensus_critical_map_holds_A_to_S`; `settle_when_known_false_reports_execution_lagging`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-core --test frontier` → missing frontier types.
+- [ ] **Step 3 — Green:** Implement the three monotonic `arc_swap::ArcSwap<Block>` pointers (LastSettled/LastExecuted/LastAccepted), the `DashMap<Id, Arc<Block>>` consensus-critical map (A..S window), and `settle()` driving `mark_settled` on `Σ_n` in increasing height where gas-time ≤ `BlockTime − Tau` (`last_to_settle_at`, returning `(block, known)`; `ErrExecutionLagging` when `known=false`). Cite `blocks/access.go::Frontier`, `settlement.go`. Lock-free reads (`11` §13.5).
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-core --test frontier` passes.
+- [ ] **Step 5 — Commit:** `sae(core): three frontiers (S/E/A) + settlement on the gas-time clock`
+
+### Task M7.18: `ava-saevm-core` — VM lifecycle (BuildBlock / VerifyBlock / AcceptBlock / SetPreference)
+**Sub-crate:** ava-saevm-core  ·  **Depends on:** M7.17, M7.13, M7.10, M7.9, M7.16  ·  **Spec:** `11` §1.2/§1.3, §5, `27` §2.4/§5.4 (accept ordering, bootstrap blocking)
+**Files:** `crates/ava-saevm/core/src/vm.rs`, `crates/ava-saevm/core/tests/lifecycle.rs`
+- [ ] **Step 1 — Red:** `tests/lifecycle.rs`: `build_then_verify_rebuilds_and_matches_hash` (VerifyBlock rebuilds block from parent + hook builder, compares hashes, no execution); `accept_enqueues_and_marks_settled_in_DMIX_order`; `verify_skipped_during_bootstrap_blocks_on_wait_until_executed` (engine accept-in-a-loop cannot outrun executor); `settled_state_root_is_settled_ancestor_root` (Root field repurpose); `build_block_uses_worstcase_prediction` for GasLimit/BaseFee/GasUsed.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-core --test lifecycle` → missing `Vm` methods.
+- [ ] **Step 3 — Green:** Implement `ava-saevm-core::Vm` (everything except `Initialize`, supplied by the harness — `11` §5) implementing `adaptor::ChainVm<Block>`: `build_block` (txgossip priority → worstcase predict → hook `build_block`), `verify_block` (rebuild + hash compare; skip rebuild during bootstrapping, block on `wait_until_executed`), `accept_block` (mark settled Σ in D→M→I→X, enqueue to executor — `verifyWhenBootstrapping`), `set_preference`, `parse_block`, `get_block`, `last_accepted`, `get_block_id_at_height`. Returns `ShouldVerifyWithContext = true`. Cite `sae/{vm,blocks}.go::{BuildBlock,VerifyBlock,AcceptBlock}`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-core --test lifecycle` passes.
+- [ ] **Step 5 — Commit:** `sae(core): VM lifecycle (cheap verify-by-rebuild, accept→enqueue, bootstrap blocking)`
+
+### Task M7.19: `ava-saevm-core` sae-rpc — frontier → RPC label mapping
+**Sub-crate:** ava-saevm-core  ·  **Depends on:** M7.18, M7.7  ·  **Spec:** `11` §1.1 (RPC label table), §3 (sae/rpc)
+**Files:** `crates/ava-saevm/core/src/rpc.rs`, `crates/ava-saevm/core/tests/rpc_labels.rs`
+- [ ] **Step 1 — Red:** `tests/rpc_labels.rs`: `resolve_rpc_number` table — `pending → LastAccepted(A)`, `latest → LastExecuted(E)`, `safe`/`finalized → LastSettled(S)`; `future_block_not_resolved_errors`; `non_canonical_block_errors`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-core --test rpc_labels` → missing `resolve_rpc_number`.
+- [ ] **Step 3 — Green:** Implement `resolve_rpc_number(label)` mapping per the `11` §1.1 table and the eth-RPC surface mounting (block/receipt/gasPrice via M7.7) with sentinel errors `ErrFutureBlockNotResolved`/`ErrNonCanonicalBlock`. Cite `blocks/access.go::ResolveRPCNumber`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-core --test rpc_labels` passes.
+- [ ] **Step 5 — Commit:** `sae(core): RPC frontier label mapping (pending/latest/safe/finalized)`
+
+### Task M7.20: `ava-saevm-txgossip` — EVM mempool + push/pull gossip + priority
+**Sub-crate:** ava-saevm-txgossip  ·  **Depends on:** M7.11, M7.14, M6 (ava-evm reth pool), M5 (`ava-network` gossip)  ·  **Spec:** `11` §9.2
+**Files:** `crates/ava-saevm/txgossip/src/lib.rs`, `crates/ava-saevm/txgossip/src/priority.rs`, `crates/ava-saevm/txgossip/tests/priority.rs`, `crates/ava-saevm/txgossip/proptest-regressions/`
+- [ ] **Step 1 — Red:** `tests/priority.rs`: `transactions_by_priority_orders_by_effective_tip` table; proptest `pop_order_total_order_by_tip_nonce_arrival` (matches Go; `02` §4 mempool invariant), `add_remove_idempotent`, `no_tx_lost`. `gossipable_rlp_roundtrip`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-txgossip` → missing `Set`/`TransactionsByPriority`.
+- [ ] **Step 3 — Green:** Implement `Transaction: gossip::Gossipable` (RLP), `Set` coupling `gossip::BloomSet` + reth pool, `TransactionsByPriority` (orders by effective tip — `priority.go`), push (100 ms)/pull (1 s) gossipers as tokio tasks under the `TaskTracker`. Cite `sae/vm.go::NewVM` P2P section, `txgossip/`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-txgossip` passes; commit regressions.
+- [ ] **Step 5 — Commit:** `sae(txgossip): EVM mempool + push/pull gossip + effective-tip priority`
+
+### Task M7.21: `ava-saevm-cchain` — C-Chain hooks (Points impl: header, gas config, mint/burn, rebuild)
+**Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.9, M7.18, M6 (ava-evm)  ·  **Spec:** `11` §8 (cchain/hooks.go), §8 reuse decision
+**Files:** `crates/ava-saevm/cchain/src/hooks.rs`, `crates/ava-saevm/cchain/tests/hooks.rs`
+- [ ] **Step 1 — Red:** `tests/hooks.rs`: `gas_config_after_returns_expected`, `end_of_block_ops_apply_import_export_mint_burn`, `build_header_matches_rebuild` (verification rebuild produces identical header), `can_execute_transaction_gates_atomic`.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-cchain --test hooks` → missing `CChainHooks`.
+- [ ] **Step 3 — Green:** Implement `CChainHooks: hook::PointsG<Tx>` — header building, `gas_config_after`, end-of-block mint/burn `Op`s for atomic Import/Export of AVAX, block rebuild for verification. Reuse `ava-evm`'s `ConfigureEvm`/precompile/fee-recipient config for EVM-internal customization (`11` §8 reuse decision; one revm, two drivers). Cite `cchain/hooks.go`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-cchain --test hooks` passes.
+- [ ] **Step 5 — Commit:** `sae(cchain): C-Chain hook::Points (header/gas-config/atomic mint-burn/rebuild)`
+
+### Task M7.22: `ava-saevm-cchain` — atomic state / tx / txpool (cross-chain shared memory)
+**Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.21, M3/M7 (`ava-codec` linear codec, `ava-secp256k1fx`, `ava-chains::atomic`)  ·  **Spec:** `11` §8 (state/tx/txpool), `27` §2.3/§3.1 (shared-memory atomic, ATOMIC-1)
+**Files:** `crates/ava-saevm/cchain/src/state.rs`, `crates/ava-saevm/cchain/src/tx.rs`, `crates/ava-saevm/cchain/src/txpool.rs`, `crates/ava-saevm/cchain/tests/atomic_tx.rs`, `tests/vectors/saevm/atomic/*.json`
+- [ ] **Step 1 — Red:** `tests/atomic_tx.rs`: `import_export_tx_codec_roundtrip` + golden bytes (ATOMIC-1 UTXO byte contract); `atomic_txpool_separate_from_evm_pool`; `wait_for_event_selects_across_both_pools`; `export_import_shared_memory_all_or_nothing` (the `27` §3.1 two-sided consistency seam, against a fake shared memory).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-cchain --test atomic_tx` → missing tx types.
+- [ ] **Step 3 — Green:** Implement Import/Export tx types + fx + avalanchego linear codec (`03`), `state` (cross-chain shared-memory/atomic-tx state, codec'd over a `Database`), `txpool` for atomic txs (separate from `txgossip`; `WaitForEvent` selects across both). Shared-memory mutations go through `ava-chains::atomic::write_all` merged into the accept batch (`27` §2.3). Cite `cchain/{state,tx,txpool}`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-cchain --test atomic_tx` passes; commit vectors.
+- [ ] **Step 5 — Commit:** `sae(cchain): atomic Import/Export tx + state + txpool (ATOMIC-1, single-batch shared memory)`
+
+### Task M7.23: `ava-saevm-cchain` — VM Initialize harness + /avax API
+**Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.22, M7.18, M7.20  ·  **Spec:** `11` §8 (cchain/vm.go, api.go), §5 (harness supplies Initialize)
+**Files:** `crates/ava-saevm/cchain/src/vm.rs`, `crates/ava-saevm/cchain/src/api.rs`, `crates/ava-saevm/cchain/tests/vm_init.rs`
+- [ ] **Step 1 — Red:** `tests/vm_init.rs`: `initialize_builds_genesis_hooks_sae_and_atomic_pool` — `Initialize` constructs genesis, builds hooks, `sae::Vm::new`, then the atomic txpool, and reports the genesis last-accepted; `avax_api_import_export_mounted_at_avax` smoke (the /avax JSON-RPC service responds).
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-cchain --test vm_init` → missing `cchain::Vm`.
+- [ ] **Step 3 — Green:** Implement `cchain::Vm` composing `sae::Vm` + C-Chain pieces; `Initialize` (genesis setup → hooks → `sae::NewVM` → atomic txpool) — the harness supplying the `Initialize` that `sae::Vm` omits (`11` §5). `api.rs`: the `avax` JSON-RPC service (import/export) mounted at `/avax` alongside the SAE EVM RPC. Cite `cchain/{vm,api}.go`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-cchain --test vm_init` passes.
+- [ ] **Step 5 — Commit:** `sae(cchain): VM Initialize harness (compose sae::Vm) + /avax API`
+
+### Task M7.24: `ava-saevm-core` recovery — rebuild A/E/S from disk after restart
+**Sub-crate:** ava-saevm-core  ·  **Depends on:** M7.18, M7.12, M7.14  ·  **Spec:** `11` §1.4, `27` §3 (C6), §5.4
+**Files:** `crates/ava-saevm/core/src/recovery.rs`, `crates/ava-saevm/core/tests/recovery.rs`
+- [ ] **Step 1 — Red:** `tests/recovery.rs`: `recovery_rebuilds_identical_frontiers_and_roots` — build→accept→execute→settle a chain, snapshot disk, drop the VM, reconstruct, assert identical A/E/S frontiers + post-state roots (invariant 7); `recovery_re_executes_from_last_committed_root` (re-execution is pure ⇒ same roots, `maybe_commit` lands on same heights); parameterized crash point (mid-execute, between commit interval and head) via the `27` §9 `FailpointDb`/schedule seam.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-core --test recovery` → missing recovery fns.
+- [ ] **Step 3 — Green:** Implement `recover()` per `11` §1.4: (1) `last_committed_block` via `saedb::last_height_with_execution_root_committed`, (2) `execute_all_accepted` re-enqueue every accepted-but-unexecuted canonical block + `wait_until_executed` tip → rebuild E, (3) walk back from executed tip over `consensus_critical_blocks`, `mark_settled` where gas-time ≤ `BlockTime − Tau` → rebuild S. No trust in in-memory state. Cite `sae/recovery.go`.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-core --test recovery` passes.
+- [ ] **Step 5 — Commit:** `sae(core): recovery — rebuild A/E/S from disk via pure re-execution (C6 handler)`
+
+### Task M7.25: §10 invariants as a dedicated test harness
+**Sub-crate:** ava-saevm-core + ava-saevm-testutil  ·  **Depends on:** M7.18, M7.24, M7.17  ·  **Spec:** `11` §10 (invariants 1–11)
+**Files:** `crates/ava-saevm/testutil/src/invariants.rs`, `crates/ava-saevm/core/tests/invariants.rs`
+- [ ] **Step 1 — Red:** `tests/invariants.rs` — one named test per invariant: `invariant::frontier_ordering` (1), `invariant::stage_causality` (2), `invariant::persist_order_execute` (3, a reader observing X can always read D), `invariant::persist_order_accept` (4, settled hash persisted before canonical hash), `invariant::settle_in_order` (5), `invariant::atomics_before_broadcast` (6), `invariant::recovery_equivalence` (7, delegates to M7.24), `invariant::gc_settled_ancestry` (8, parent/last_settled None + `InMemoryBlockCount` baseline), `invariant::no_reorg` (9), `invariant::receipt_root_match` (10, `receipt_root == derive_sha(receipts)`), `invariant::determinism` (11, delegates to M7.16).
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-core -E 'test(invariant)'` → fails (harness missing).
+- [ ] **Step 3 — Green:** Build `testutil::invariants` assertion helpers (drive a chain through build/accept/execute/settle/restart and check each property) and wire the 11 named tests. Reuse `02` §5 `TaskTracker` drain + `InMemoryBlockCount` counter.
+- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-saevm-core -E 'test(invariant)'` all green.
+- [ ] **Step 5 — Commit:** `sae(core): §10 invariants 1–11 as a dedicated test harness`
+
+### Task M7.26: Backpressure / queue-full pacing
+**Sub-crate:** ava-saevm-exec + ava-saevm-core  ·  **Depends on:** M7.14, M7.18, M7.13  ·  **Spec:** `11` §6.2, §2.4 (Ω_Q), `12` §test plan (backpressure)
+**Files:** `crates/ava-saevm/exec/tests/backpressure.rs`
+- [ ] **Step 1 — Red:** `tests/backpressure.rs`: `flood_accept_keeps_queue_bounded` — issue accepts faster than execution; assert the `mpsc` queue stays bounded (`enqueue` awaits when full) and the *builder* refuses to build (`worstcase::ErrQueueFull`) once worst-case queue > `MaxFullBlocksInOpenQueue · Ω_B` rather than growing unbounded.
+- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-exec --test backpressure` → fails (no queue-full gate).
+- [ ] **Step 3 — Green:** Wire bounded `mpsc` backpressure on `enqueue` and the builder's `ErrQueueFull` refusal so consensus paces itself to execution (`11` §6.2). No unbounded growth.
+- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-exec --test backpressure` passes.
+- [ ] **Step 5 — Commit:** `sae(saexec): bounded-queue backpressure + ErrQueueFull builder pacing`
+
+### Task M7.27: Worst-case bounds as proptests (actual ≤/≥ predicted, never violated)
+**Sub-crate:** ava-saevm-worstcase + ava-saevm-exec  ·  **Depends on:** M7.13, M7.14  ·  **Spec:** `11` §12 (worst-case as property tests), §9.3
+**Files:** `crates/ava-saevm/worstcase/tests/bounds_prop.rs`, `crates/ava-saevm/worstcase/proptest-regressions/`
+- [ ] **Step 1 — Red:** `tests/bounds_prop.rs`: proptest over random tx sets `actual_base_fee_le_max_base_fee` and `sender_balances_ge_min_op_burner_balances` — the executor's *actual* base fee never exceeds `WorstCaseBounds.max_base_fee` and balances never drop below `min_op_burner_balances`; the bound must NEVER be violated.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-worstcase -E 'test(bounds_prop)'` → fails (until executor asserts/holds the bounds end-to-end).
+- [ ] **Step 3 — Green:** Ensure the executor's `check_base_fee_bound`/`check_sender_balance_bound` (M7.13/M7.14) hold over the property space; fix any prediction-model gaps the proptest surfaces.
+- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-saevm-worstcase -E 'test(bounds_prop)'` passes; commit regressions.
+- [ ] **Step 5 — Commit:** `sae(worstcase): proptest bounds never violated (base-fee/balance)`
+
+### Task M7.28: `golden::sae_block_hash` + settlement & recovery-transcript vectors
+**Sub-crate:** ava-saevm-core (golden) + ava-saevm-blocks  ·  **Depends on:** M7.11, M7.18, M7.24  ·  **Spec:** `11` §4.1/§1.2/§1.4, `02` §6, milestone "New golden vectors: saevm/"
+**Files:** `crates/ava-saevm/core/tests/golden.rs`, `tests/vectors/saevm/blocks/*.json`, `tests/vectors/saevm/settlement/*.json`, `tests/vectors/saevm/recovery/*.json`, `tests/vectors/saevm/MANIFEST.json`
+- [ ] **Step 1 — Red:** `tests/golden.rs::golden::sae_block_hash` — assert SAE block hashes for a fixed set of blocks equal committed vectors; `golden::settlement_vectors` — for a fixed chain, the `(b.LastSettled, settled-receipt-roots, settled-state-root)` choices equal committed vectors; `golden::recovery_transcript` — a recorded crash+restart transcript reconstructs the recorded A/E/S frontiers + roots. Manifest provenance cites the Go `vms/saevm` source/commit.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-core -E 'test(golden)'` → fails (vectors absent / mismatch).
+- [ ] **Step 3 — Green:** Extract vectors from the Go `saevm` (per `02` §6.2 extraction) into `tests/vectors/saevm/{blocks,settlement,recovery}/` + `MANIFEST.json`; wire the golden loaders.
+- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-saevm-core -E 'test(golden)'` passes.
+- [ ] **Step 5 — Commit:** `sae: golden::sae_block_hash + settlement & recovery-transcript vectors (provenance-tracked)`
+
+### Task M7.29: `differential::sae_recovery` — crash+restart resettles to identical state
+**Sub-crate:** ava-differential (workspace `tests/differential/`)  ·  **Depends on:** M7.24, M7.28, X (cross-cutting differential harness)  ·  **Spec:** `11` §1.4/§10 invariant 7, `27` §9 (crash-injection), `02` §11
+**Files:** `tests/differential/src/saevm.rs`, `tests/differential/tests/sae_recovery.rs`, `tests/differential/proptest-regressions/`
+- [ ] **Step 1 — Red:** `tests/sae_recovery.rs::differential::sae_recovery` — a proptest over `(seed, block-stream, crash-point ∈ {mid-execute, between commit interval and head, after-commit-before-pointer})`: drive the Rust SAE node, inject the crash via the `27` §9 `FailpointDb`/out-of-process `kill` seam, restart, and `prop_assert_eq!` the post-recovery A/E/S frontiers + state roots equal the Go SAE node driven through the same crash+restart (recorded-oracle mode per-PR).
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential -E 'test(sae_recovery)'` → fails (no SAE driver / mismatch).
+- [ ] **Step 3 — Green:** Implement the `ava-differential` SAE driver + `Observation` collector (A/E/S frontier heights, state/receipt roots) and the crash-injection seam; reach Go-identical post-recovery state. Commit the regression corpus.
+- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential -E 'test(sae_recovery)'` passes (recorded mode).
+- [ ] **Step 5 — Commit:** `sae(differential): sae_recovery — crash+restart resettles to Go-identical state`
+
+### Task M7.30: `differential::sae_streaming` — vs Go SAE node (CI-gated live)
+**Sub-crate:** ava-differential  ·  **Depends on:** M7.18, M7.23, M7.29, X  ·  **Spec:** `11` §12 (differential vs Go saevm), §13 (validate §9 pipelined-commit), `02` §11.1/§11.7
+**Files:** `tests/differential/tests/sae_streaming.rs`, `tests/differential/src/saevm.rs`
+- [ ] **Step 1 — Red:** `tests/sae_streaming.rs::differential::sae_streaming` — drive identical block/tx sequences through Rust and Go SAE nodes; `prop_assert_eq!` byte-identical block hashes, state roots, receipt roots, base fees, settlement choices, and S/E/A frontier heights at every `AwaitFinalization` barrier. Live two-binary mode gated behind a CI feature/env (`02` §11.7 nightly); a recorded-oracle subset runs per-PR.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential -E 'test(sae_streaming)' --features live` → fails (no live driver wired).
+- [ ] **Step 3 — Green:** Extend the SAE differential driver to the streaming comparison (issue txs, advance time identically, observe per-frontier state). Mark live mode CI-gated (coordinate with cross-cutting harness X); recorded subset per-PR. This validates the `00` §9 pipelined-commit optimization is observably-neutral.
+- [ ] **Step 4 — Confirm green:** recorded subset green per-PR; live mode green in the nightly CI job.
+- [ ] **Step 5 — Commit:** `sae(differential): sae_streaming vs Go SAE node (live CI-gated, recorded per-PR)`
+
+### Task M7.31: cargo-fuzz target for the SAE block decoder
+**Sub-crate:** ava-saevm-blocks (fuzz)  ·  **Depends on:** M7.11  ·  **Spec:** `11` §4.1 (ParseBlock), `02` §8/§13 (parsers ship a fuzz target)
+**Files:** `crates/ava-saevm/blocks/fuzz/Cargo.toml`, `crates/ava-saevm/blocks/fuzz/fuzz_targets/decode_block.rs`, `crates/ava-saevm/blocks/fuzz/corpus/decode_block/` (seeds)
+- [ ] **Step 1 — Red:** Add `fuzz_targets/decode_block.rs`: `parse_block(arbitrary &[u8])` must never panic/over-read; anything that decodes round-trips byte-stably (RLP re-encode → re-decode equal). Seed corpus from the M7.28 block vectors. Run `cargo +nightly fuzz run decode_block -- -runs=0` → fails (target/seeds absent).
+- [ ] **Step 2 — Confirm red:** `cargo +nightly fuzz run decode_block -- -runs=1000` → build/seed failure.
+- [ ] **Step 3 — Green:** Wire the fuzz sub-crate (`libfuzzer-sys`), implement the target calling `blocks::parse_block` + round-trip assert, commit seeds. Hook into `cargo xtask test-fuzz` smoke.
+- [ ] **Step 4 — Confirm green:** `cargo +nightly fuzz run decode_block -- -runs=10000` clean (smoke); `cargo xtask test-fuzz` includes it.
+- [ ] **Step 5 — Commit:** `sae(blocks): cargo-fuzz decode_block target + seed corpus`
+
+### Task M7.32: Milestone exit gate
+**Sub-crate:** ava-saevm (all) + avalanchego bin  ·  **Depends on:** M7.1–M7.31  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
+**Files:** `crates/ava-saevm/*/tests/PORTING.md` (filled), `tests/PORTING.md` aggregate row, `.config/nextest.toml` (ci profile), CI workflow SAE job
+- [ ] **Step 1 — Red:** Add a milestone meta-test list / xtask `xtask saevm-exit-gate` that asserts the named exit tests exist and are referenced: `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery`, `differential::sae_streaming`, all `invariant::*` (11). Run it → fails until everything is wired and PORTING.md is complete.
+- [ ] **Step 2 — Confirm red:** `cargo xtask saevm-exit-gate` → reports missing/failing items.
+- [ ] **Step 3 — Green:** Ensure all sub-crates ship their proptest suite + committed `proptest-regressions/`, golden vectors under `tests/vectors/saevm/`, the cargo-fuzz target (M7.31), and `tests/PORTING.md` rows (no `wip`). Fill PORTING.md mapping every Go `vms/saevm/...` test to its Rust counterpart (or `na — reason`). Confirm the `TaskTracker`-drain goroutine-leak analog passes for the executor/gossip tasks.
+- [ ] **Step 4 — Confirm green:** Run the full gate:
+  - `cargo build --workspace`
+  - `cargo build -p avalanchego`
+  - `cargo nextest run --profile ci` (includes `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery` recorded, all `invariant::*`)
+  - `cargo clippy --workspace -- -D warnings` (SAE crates with `clippy::pedantic` + `arithmetic_side_effects`)
+  - `cargo +nightly fuzz run decode_block -- -runs=10000` (smoke)
+  - `differential::sae_streaming` live mode green in the CI-gated nightly job (coordinate with cross-cutting harness X); `prop::sae_execution_determinism` + `differential::sae_recovery` green per-PR.
+- [ ] **Step 5 — Commit:** `sae: M7 exit gate — determinism + recovery + streaming differentials, §10 invariants, PORTING.md complete`
+
+---
+
+## Spec coverage check
+
+| Spec section | Subject | Task(s) |
+|---|---|---|
+| `11` §1 / §1.1 | SAE model; three frontiers (S/E/A) + RPC label table | M7.17 (frontiers), M7.19 (RPC labels) |
+| `11` §1.2 | Settlement rule (`Settles`/`Range`/`last_to_settle_at`, `known=false`) | M7.11 (settlement), M7.17 (settle) |
+| `11` §1.3 | What a block carries (Root repurpose, `hook.Settled`, worst-case fields) | M7.11, M7.9, M7.18 |
+| `11` §1.4 | Recovery after restart (rebuild A/E/S) | **M7.24**, M7.29, M7.28 |
+| `11` §1.5 | Data-flow (builder→executor→events) | M7.14, M7.15, M7.18, M7.20 |
+| `11` §2.1 | `proxytime::Time<D>` | M7.5, M7.4 (compare) |
+| `11` §2.2 | `gastime` SAE gas clock (before/tick/after_block, price) | M7.6 |
+| `11` §2.3 | Tau discipline (`BlockInstant`, no `Add<u64>`) | **M7.2** (trybuild compile-fail) |
+| `11` §2.4 | Derived block/queue limits (Ω_B, Ω_Q, min-gas) | M7.2, M7.13, M7.26 |
+| `11` §3 | Crate layout / sub-workspace + lint bar | M7.1 |
+| `11` §4 | Blocks: byte-exact format, codec, lifecycle, parse | M7.11, M7.8 (canoto), M7.31 (fuzz) |
+| `11` §5 | Adaptor → Snowman `ChainVm` | M7.10, M7.18 |
+| `11` §6 / §6.1 | saexec streaming engine; pure execute step | M7.14, M7.15 |
+| `11` §6.2 | Backpressure, ordering, recovery | M7.26, M7.24 |
+| `11` §7 | saedb: consensus-vs-execution state, Firewood-revision Tracker | M7.12 |
+| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23 |
+| `11` §9.1 | Hooks (`Points`/`PointsG`, `Op`, `Settled`, `BlockBuilder`) | M7.9 |
+| `11` §9.2 | txgossip (mempool + push/pull + priority) | M7.20 |
+| `11` §9.3 | worst-case analysis + assertions | M7.13, M7.27 |
+| `11` §10 | Invariants 1–11 as tests | **M7.25** (all), M7.16 (11), M7.24 (7), M7.11 (3/5/8), M7.15 (6), M7.12 (9) |
+| `11` §11 | Go→Rust mapping + error model (`Fatal` vs recoverable) | M7.14 (error.rs), each sub-crate `thiserror` |
+| `11` §12 | Test plan (determinism, recovery, worst-case, differential) | M7.16, M7.24, M7.27, M7.29, M7.30 |
+| `11` §13 | Perf (pipelining, rayon, lock-free frontiers) — observably-neutral | M7.12/M7.14 (pipelining), M7.13/M7.27 (rayon), M7.17 (lock-free), gated by M7.30 |
+| `21` §0 | `CalculatePrice` exponential (reused from fee crates) | M7.6 (golden table routed through `price()`) |
+| `21` §6 | SAE gas-as-time formulas + worked vectors | M7.5, M7.6, M7.3 (mul_div) |
+| `27` §2.4 | CC-ORDER (state durable before pointer) | M7.12, M7.14 |
+| `27` §3 | Crash points C6 (mid-execute) | M7.24, M7.29 |
+| `27` §3.1 | Shared-memory two-sided consistency (ATOMIC-1) | M7.22 |
+| `27` §5.4 | SAE recovery procedure | M7.24, M7.29 |
+| `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
+| `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
+| `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |
+| `00` §11.1.5 | ava-evm reuse contract (one EVM, two drivers) | M7.14 (uses revm + StateProvider APIs), M7.21 |
+| `02` §4 / §13.1 | per-crate proptest + committed regressions | every sub-crate (M7.3/5/6/11/13/16/20/27/29) |
+| `02` §6 / §13.2 | golden vectors under `tests/vectors/saevm/` | M7.6, M7.8, M7.11, M7.22, M7.28 |
+| `02` §5 / §13.7 | TaskTracker drain (goroutine-leak analog) | M7.15, M7.20, M7.32 |
+| `02` §8 / §13.5 | cargo-fuzz block decoder | M7.31 |
+| `02` §10 / §13.4 | `tests/PORTING.md` per sub-crate | M7.1 (skeleton), M7.32 (filled) |
+
+**Deferrals / cross-milestone coordination:**
+- `ava-saevm-worstcase` is created as a sub-crate here even though `11` §11 lists it under the SAE family; it is fully in M7 scope (M7.13/M7.27).
+- `differential::sae_streaming` **live two-binary mode** depends on the cross-cutting differential harness **X** (`tests/differential` / tmpnet Go-binary path) and is **CI-gated nightly** (`02` §11.7); the recorded-oracle subset runs per-PR (M7.30).
+- State-sync of SAE execution state is **out of scope for M7** (handled by the `19`/`27` state-sync milestone); recovery here is restart re-execution only (`11` §1.4).
+- The `21` §0 `CalculatePrice` exponential and `ava-types::{Gas, GasPrice}` are **reused** from the fee-economics/M6 crates, not re-implemented (M7.6 only freezes the SAE-routed golden table).
+- `proxytime`/`gastime` canoto persisted forms reuse `ava-codec`'s canoto-compatible derive (M1/M0); no new codec engine.
