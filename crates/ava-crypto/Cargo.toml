@@ -1,0 +1,45 @@
+[package]
+name = "ava-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Hashing, CB58/bech32 encodings, secp256k1, BLS12-381, staking certs (M0 / specs 03 §3, 25)."
+
+# Dependency direction (specs/03 §0): ava-crypto -> ava-types (+ ava-utils for
+# the shared CB58 codec). It is NOT depended on by ava-types/ava-codec.
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-utils = { path = "../ava-utils" }
+thiserror = { workspace = true }
+hex = { workspace = true }
+
+# Hashing
+sha2 = { workspace = true }
+sha3 = { workspace = true }
+ripemd = { workspace = true }
+
+# Encodings
+bs58 = { workspace = true }
+bech32 = { workspace = true }
+
+# Cert parsing / key hygiene (pure-Rust; safe to wire up now)
+x509-parser = { workspace = true }
+rustls-pemfile = { workspace = true }
+zeroize = { workspace = true }
+
+# FFI-backed deps. These compile vendored C via the `cc` crate using the system
+# (or Nix-provided) clang; no cmake needed (rcgen uses the `ring` backend, set in
+# the workspace manifest). Used by the secp256k1 (M0.18), bls (M0.19/M0.21), and
+# staking (M0.20) modules.
+secp256k1 = { workspace = true }
+blst = { workspace = true }
+rcgen = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+proptest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }

@@ -1,0 +1,30 @@
+[package]
+name = "ava-utils"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Standalone utilities: deterministic RNG/samplers, set/bag/Bits, CB58, clock, safemath (M0 / specs 03 §4, 24)."
+
+# Dependency direction (specs/03 §0): ava-utils is standalone — it depends on no
+# other ava-* crate. CB58 lives here (not ava-crypto) to break the
+# ava-types -> ava-crypto cycle (plan M0.6/M0.11); its checksum uses sha2 directly.
+[dependencies]
+thiserror = { workspace = true }
+num-bigint = { workspace = true }
+indexmap = { workspace = true }
+bs58 = { workspace = true }
+sha2 = { workspace = true }
+# chrono powers the injectable Clock (M0.12); tokio (monotonic Instant) is added
+# by that task to keep this scaffold buildable outside the Nix dev shell.
+chrono = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }

@@ -47,8 +47,11 @@ ripemd = "0.1"
 secp256k1 = { version = "0.31", features = ["recovery", "global-context"] }
 blst = "0.3"
 
-# Staking TLS / X.509 certs
-rcgen = "0.13"
+# Staking TLS / X.509 certs.
+# Use the `ring` crypto backend (cc + perl) rather than the default `aws_lc_rs`
+# (needs cmake/nasm) so the workspace builds with just a C toolchain. The Nix
+# dev shell still ships cmake for the rocksdb/firewood crates (M1).
+rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "ring"] }
 x509-parser = "0.16"
 rustls-pemfile = "2"
 
@@ -68,6 +71,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+
+# Proc-macro support (ava-codec-derive)
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 
 # Dev / test
 proptest = "1"

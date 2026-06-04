@@ -1,0 +1,22 @@
+[
+  {
+    "bytes_hex": "",
+    "cb58": "45PJLL"
+  },
+  {
+    "bytes_hex": "00",
+    "cb58": "1c7hwa"
+  },
+  {
+    "bytes_hex": "deadbeef",
+    "cb58": "eFGDJT5xfjY"
+  },
+  {
+    "bytes_hex": "000102030405060708090a0b0c0d0e0f10111213",
+    "cb58": "12D2adLM3UKy4Z4giRbReR6gjWsUiMiw"
+  },
+  {
+    "bytes_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "cb58": "16qJFWMMHFy3xDdLmvUeyc2S6FrWRhJP51HsvDYdz9cWcm5W"
+  }
+]

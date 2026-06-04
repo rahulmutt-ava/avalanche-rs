@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "id",
+    "bytes_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "string": "11111111111111111111111111111111LpoYY"
+  },
+  {
+    "kind": "id",
+    "bytes_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "string": "SeLqn3UAUoRymWmwW7axrzJK7JfNaBR2cHCryA6cFscgkny8"
+  },
+  {
+    "kind": "id",
+    "bytes_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "string": "16qJFWMMHFy3xDdLmvUeyc2S6FrWRhJP51HsvDYdz9cWcm5W"
+  },
+  {
+    "kind": "id",
+    "bytes_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "string": "2wkBET2rRgE8pahuaczxKbmv7ciehqsne57F9gtzf1PVcUJEQG"
+  },
+  {
+    "kind": "short_id",
+    "bytes_hex": "0000000000000000000000000000000000000000",
+    "string": "111111111111111111116DBWJs"
+  },
+  {
+    "kind": "node_id",
+    "bytes_hex": "0000000000000000000000000000000000000000",
+    "string": "NodeID-111111111111111111116DBWJs"
+  },
+  {
+    "kind": "short_id",
+    "bytes_hex": "000102030405060708090a0b0c0d0e0f10111213",
+    "string": "12D2adLM3UKy4Z4giRbReR6gjWsUiMiw"
+  },
+  {
+    "kind": "node_id",
+    "bytes_hex": "000102030405060708090a0b0c0d0e0f10111213",
+    "string": "NodeID-12D2adLM3UKy4Z4giRbReR6gjWsUiMiw"
+  },
+  {
+    "kind": "short_id",
+    "bytes_hex": "abababababababababababababababababababab",
+    "string": "GeiCghwCEqjGS3hDZ1g1SM95h6FB8hKeV"
+  },
+  {
+    "kind": "node_id",
+    "bytes_hex": "abababababababababababababababababababab",
+    "string": "NodeID-GeiCghwCEqjGS3hDZ1g1SM95h6FB8hKeV"
+  }
+]

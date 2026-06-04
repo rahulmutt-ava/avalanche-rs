@@ -1,0 +1,29 @@
+[package]
+name = "ava-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core Avalanche primitive types: ids, fixed byte arrays, errors (M0 / specs 03 §1)."
+
+# Dependency direction (specs/03 §0): ava-types is the lowest primitive crate.
+# It depends on NO other ava-* crate. `Id::prefix/append` use an inline BE writer
+# + sha2 directly to avoid an ava-codec / ava-crypto dependency cycle.
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+parking_lot = { workspace = true }
+hex = { workspace = true }
+
+# CB58 string forms (M0.6) are provided by ava-utils to break the
+# types -> crypto cycle (specs/03 §0, plan M0.6/M0.11). Wired in by that task:
+# ava-utils = { path = "../ava-utils" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+proptest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }

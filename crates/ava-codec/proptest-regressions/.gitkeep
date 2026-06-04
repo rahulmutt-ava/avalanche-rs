@@ -1,0 +1,3 @@
+# Committed proptest regression corpus for ava-codec (specs/02 §4.1).
+# proptest appends `*.txt` failure seeds here; they are committed so a once-seen
+# counterexample is replayed forever. Placeholder so the dir is tracked.

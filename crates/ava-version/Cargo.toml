@@ -1,0 +1,22 @@
+[package]
+name = "ava-version"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Client version, compatibility, and the network-upgrade activation schedule (M0 / specs 03 §5, 11, 26)."
+
+# Dependency direction (specs/03 §0): ava-version -> ava-types (for `Id` in the
+# upgrade side-params). Independent of ava-codec / ava-crypto.
+[dependencies]
+ava-types = { path = "../ava-types" }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }

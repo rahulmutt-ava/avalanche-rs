@@ -1,0 +1,55 @@
+{
+  "_provenance": {
+    "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+    "extracted_by": "tools/extract-vectors/extract.go"
+  },
+  "bech32": [
+    {
+      "alias": "X",
+      "hrp": "avax",
+      "payload_hex": "000102030405060708090a0b0c0d0e0f10111213",
+      "bech32": "avax1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnk5ungy",
+      "formatted": "X-avax1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnk5ungy"
+    },
+    {
+      "alias": "P",
+      "hrp": "fuji",
+      "payload_hex": "000102030405060708090a0b0c0d0e0f10111213",
+      "bech32": "fuji1qqqsyqcyq5rqwzqfpg9scrgwpugpzysn6xcvym",
+      "formatted": "P-fuji1qqqsyqcyq5rqwzqfpg9scrgwpugpzysn6xcvym"
+    },
+    {
+      "alias": "C",
+      "hrp": "avax",
+      "payload_hex": "000102030405060708090a0b0c0d0e0f10111213",
+      "bech32": "avax1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnk5ungy",
+      "formatted": "C-avax1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnk5ungy"
+    }
+  ],
+  "hex": [
+    {
+      "payload_hex": "",
+      "hex": "0x7852b855",
+      "hex_nc": "0x",
+      "hex_c": "0x7852b855"
+    },
+    {
+      "payload_hex": "00",
+      "hex": "0x0017afa01d",
+      "hex_nc": "0x00",
+      "hex_c": "0x0017afa01d"
+    },
+    {
+      "payload_hex": "deadbeef",
+      "hex": "0xdeadbeefaa813953",
+      "hex_nc": "0xdeadbeef",
+      "hex_c": "0xdeadbeefaa813953"
+    },
+    {
+      "payload_hex": "000102030405060708090a0b0c0d0e0f10111213",
+      "hex": "0x000102030405060708090a0b0c0d0e0f101112132ae779e8",
+      "hex_nc": "0x000102030405060708090a0b0c0d0e0f10111213",
+      "hex_c": "0x000102030405060708090a0b0c0d0e0f101112132ae779e8"
+    }
+  ]
+}

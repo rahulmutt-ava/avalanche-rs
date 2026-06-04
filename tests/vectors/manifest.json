@@ -1,0 +1,18 @@
+{
+  "_comment": "Provenance manifest for golden test vectors (plan/M0-foundations.md M0.2, specs/02 §6.1). Vectors are produced by tools/extract-vectors/extract.go run against the pinned avalanchego revision below; per-surface schemas are documented in each <surface>/MANIFEST.md.",
+  "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+  "extracted_by": "tools/extract-vectors/extract.go",
+  "surfaces": {
+    "rng": "committed — mt19937_64.json, mt19937_32.json",
+    "sampler": "committed — uint64_inclusive.json, samplers.json",
+    "ids": "committed — cb58.json, cb58_raw.json",
+    "crypto": "committed — addr.json, encodings.json, secp.json, bls.json, nodeid.json, signer.key",
+    "upgrade": "committed — activation.json",
+    "codec": "TODO — linear-codec golden bytes; produce alongside the Rust type registry (M0.15/M0.16) so Go structs mirror the Rust types exactly"
+  },
+  "todo": [
+    "codec/*.json (M0.16)",
+    "crypto/nodeid.json: add the large_rsa_key REJECT cert (RSA-3072) for M0.20",
+    "crypto/encodings.json: add Json-encoding error cases if M0.17 needs them"
+  ]
+}

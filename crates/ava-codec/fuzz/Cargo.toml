@@ -1,0 +1,24 @@
+# cargo-fuzz crate for ava-codec. Detached from the root workspace (own
+# `[workspace]` table) so `cargo build --workspace` ignores it; build with
+# `cargo +nightly fuzz build` (see plan/M0-foundations.md M0.24).
+[package]
+name = "ava-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ava-codec = { path = ".." }
+
+[[bin]]
+name = "codec_roundtrip"
+path = "fuzz_targets/codec_roundtrip.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,136 @@
+{
+  "_provenance": {
+    "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+    "extracted_by": "tools/extract-vectors/extract.go"
+  },
+  "cases": [
+    {
+      "kind": "uniform",
+      "seed": 0,
+      "length": 20,
+      "count": 8,
+      "sampled_indices": [
+        14,
+        15,
+        1,
+        11,
+        16,
+        13,
+        9,
+        2
+      ]
+    },
+    {
+      "kind": "uniform",
+      "seed": 1,
+      "length": 20,
+      "count": 8,
+      "sampled_indices": [
+        8,
+        4,
+        2,
+        18,
+        12,
+        6,
+        1,
+        11
+      ]
+    },
+    {
+      "kind": "uniform",
+      "seed": 5489,
+      "length": 20,
+      "count": 8,
+      "sampled_indices": [
+        2,
+        9,
+        14,
+        3,
+        16,
+        18,
+        11,
+        4
+      ]
+    },
+    {
+      "kind": "weighted",
+      "seed": 0,
+      "weights": [
+        1,
+        2,
+        3,
+        4,
+        10
+      ],
+      "sample_values": [
+        0,
+        1,
+        3,
+        6,
+        10,
+        15,
+        19
+      ],
+      "sampled_indices": [
+        4,
+        4,
+        4,
+        4,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "wwr",
+      "seed": 0,
+      "weights": [
+        1,
+        2,
+        3,
+        4,
+        10
+      ],
+      "count": 3,
+      "sampled_indices": [
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "kind": "wwr",
+      "seed": 1,
+      "weights": [
+        1,
+        2,
+        3,
+        4,
+        10
+      ],
+      "count": 3,
+      "sampled_indices": [
+        4,
+        4,
+        4
+      ]
+    },
+    {
+      "kind": "wwr",
+      "seed": 5489,
+      "weights": [
+        1,
+        2,
+        3,
+        4,
+        10
+      ],
+      "count": 3,
+      "sampled_indices": [
+        4,
+        4,
+        1
+      ]
+    }
+  ]
+}

@@ -1,0 +1,578 @@
+{
+  "_provenance": {
+    "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+    "extracted_by": "tools/extract-vectors/extract.go"
+  },
+  "cases": [
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_1",
+      "fork_time_rfc3339_nano": "2021-03-31T14:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-03-31T13:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-03-31T14:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-03-31T14:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_2",
+      "fork_time_rfc3339_nano": "2021-05-10T11:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-05-10T10:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-05-10T11:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-05-10T11:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_3",
+      "fork_time_rfc3339_nano": "2021-08-24T14:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-08-24T13:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-08-24T14:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-08-24T14:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_4",
+      "fork_time_rfc3339_nano": "2021-09-22T21:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-09-22T20:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-09-22T21:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-09-22T21:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_5",
+      "fork_time_rfc3339_nano": "2021-12-02T18:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-12-02T17:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-12-02T18:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-12-02T18:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_pre_6",
+      "fork_time_rfc3339_nano": "2022-09-05T01:30:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-09-05T01:29:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-09-05T01:30:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-09-05T01:30:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_6",
+      "fork_time_rfc3339_nano": "2022-09-06T20:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-09-06T19:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-09-06T20:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-09-06T20:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "apricot_phase_post_6",
+      "fork_time_rfc3339_nano": "2022-09-07T03:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-09-07T02:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-09-07T03:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-09-07T03:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "banff",
+      "fork_time_rfc3339_nano": "2022-10-18T16:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-10-18T15:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-10-18T16:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-10-18T16:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "cortina",
+      "fork_time_rfc3339_nano": "2023-04-25T15:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2023-04-25T14:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2023-04-25T15:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2023-04-25T15:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "durango",
+      "fork_time_rfc3339_nano": "2024-03-06T16:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2024-03-06T15:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2024-03-06T16:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2024-03-06T16:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "etna",
+      "fork_time_rfc3339_nano": "2024-12-16T17:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2024-12-16T16:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2024-12-16T17:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2024-12-16T17:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "fortuna",
+      "fork_time_rfc3339_nano": "2025-04-08T15:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2025-04-08T14:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2025-04-08T15:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2025-04-08T15:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "granite",
+      "fork_time_rfc3339_nano": "2025-11-19T16:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2025-11-19T15:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2025-11-19T16:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2025-11-19T16:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "fork": "helicon",
+      "fork_time_rfc3339_nano": "9999-12-01T00:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "9999-11-30T23:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "9999-12-01T00:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "9999-12-01T00:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_1",
+      "fork_time_rfc3339_nano": "2021-03-26T14:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-03-26T13:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-03-26T14:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-03-26T14:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_2",
+      "fork_time_rfc3339_nano": "2021-05-05T14:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-05-05T13:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-05-05T14:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-05-05T14:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_3",
+      "fork_time_rfc3339_nano": "2021-08-16T19:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-08-16T18:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-08-16T19:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-08-16T19:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_4",
+      "fork_time_rfc3339_nano": "2021-09-16T21:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-09-16T20:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-09-16T21:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-09-16T21:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_5",
+      "fork_time_rfc3339_nano": "2021-11-24T15:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2021-11-24T14:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2021-11-24T15:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2021-11-24T15:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_pre_6",
+      "fork_time_rfc3339_nano": "2022-09-06T20:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-09-06T19:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-09-06T20:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-09-06T20:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_6",
+      "fork_time_rfc3339_nano": "2022-09-06T20:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-09-06T19:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-09-06T20:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-09-06T20:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "apricot_phase_post_6",
+      "fork_time_rfc3339_nano": "2022-09-07T06:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-09-07T05:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-09-07T06:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-09-07T06:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "banff",
+      "fork_time_rfc3339_nano": "2022-10-03T14:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2022-10-03T13:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2022-10-03T14:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2022-10-03T14:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "cortina",
+      "fork_time_rfc3339_nano": "2023-04-06T15:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2023-04-06T14:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2023-04-06T15:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2023-04-06T15:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "durango",
+      "fork_time_rfc3339_nano": "2024-02-13T16:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2024-02-13T15:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2024-02-13T16:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2024-02-13T16:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "etna",
+      "fork_time_rfc3339_nano": "2024-11-25T16:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2024-11-25T15:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2024-11-25T16:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2024-11-25T16:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "fortuna",
+      "fork_time_rfc3339_nano": "2025-03-13T15:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2025-03-13T14:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2025-03-13T15:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2025-03-13T15:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "granite",
+      "fork_time_rfc3339_nano": "2025-10-29T15:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "2025-10-29T14:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "2025-10-29T15:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "2025-10-29T15:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    },
+    {
+      "network": "fuji",
+      "fork": "helicon",
+      "fork_time_rfc3339_nano": "9999-12-01T00:00:00Z",
+      "samples": [
+        {
+          "at_rfc3339_nano": "9999-11-30T23:59:59.999999999Z",
+          "is_active": false
+        },
+        {
+          "at_rfc3339_nano": "9999-12-01T00:00:00Z",
+          "is_active": true
+        },
+        {
+          "at_rfc3339_nano": "9999-12-01T00:00:00.000000001Z",
+          "is_active": true
+        }
+      ]
+    }
+  ]
+}

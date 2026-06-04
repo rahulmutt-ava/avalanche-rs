@@ -1,0 +1,24 @@
+# cargo-fuzz crate for ava-utils. Detached from the root workspace (own
+# `[workspace]` table) so `cargo build --workspace` ignores it; build with
+# `cargo +nightly fuzz build` (see plan/M0-foundations.md M0.24).
+[package]
+name = "ava-utils-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ava-utils = { path = ".." }
+
+[[bin]]
+name = "cb58_roundtrip"
+path = "fuzz_targets/cb58_roundtrip.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,54 @@
+# https://taskfile.dev
+# Run via ./scripts/run_task.sh (prefers `task` on PATH, else the stub fallback).
+#
+# M0 STUB. This is the canonical task runner (specs/01-development-environment.md
+# §5.2). Only the core build/test/lint tasks that work with the current toolchain
+# are defined here; the bazel / codegen / deps / shell-lint tasks and the full
+# CI aggregates (lint-all, lint-all-ci) are owned by plan/X-cross-cutting.md and
+# are added as their helper scripts land.
+version: '3'
+
+vars:
+  # Wrap entrypoints in the nix dev shell when available (carried over from Go).
+  NIX_RUN: '{{printf "%s/scripts/nix_run.sh" .TASKFILE_DIR}}'
+  WORKSPACE: '--workspace'
+
+tasks:
+  default: ./scripts/run_task.sh --list
+
+  # --- Build -------------------------------------------------------------
+  build:
+    desc: Build the avalanchers binary (release)
+    cmd: '{{.NIX_RUN}} cargo build -p avalanchers --release'
+
+  build-debug-checks:
+    desc: Build with overflow + debug assertions (closest analogue of build-race)
+    cmd: '{{.NIX_RUN}} cargo build {{.WORKSPACE}} --profile ci'
+
+  # --- Test --------------------------------------------------------------
+  test-unit:
+    desc: Run unit tests (all features, CI profile) + doctests
+    cmds:
+      - '{{.NIX_RUN}} cargo nextest run {{.WORKSPACE}} --all-features --profile ci'
+      - '{{.NIX_RUN}} cargo test --doc {{.WORKSPACE}} --all-features'
+
+  test-unit-fast:
+    desc: Fast local unit tests (no all-features, no checks profile)
+    cmd: '{{.NIX_RUN}} cargo nextest run {{.WORKSPACE}}'
+
+  test-coverage:
+    desc: Run tests with coverage (analogue of -coverprofile/-covermode)
+    cmd: '{{.NIX_RUN}} cargo llvm-cov nextest {{.WORKSPACE}} --all-features --lcov --output-path lcov.info'
+
+  # --- Lint / format -----------------------------------------------------
+  lint:
+    desc: clippy (deny warnings) + rustfmt check
+    cmds:
+      - '{{.NIX_RUN}} cargo clippy {{.WORKSPACE}} --all-targets --all-features -- -D warnings'
+      - '{{.NIX_RUN}} cargo fmt --all -- --check'
+
+  lint-fix:
+    desc: Auto-fix clippy + format
+    cmds:
+      - '{{.NIX_RUN}} cargo clippy {{.WORKSPACE}} --all-targets --all-features --fix --allow-dirty --allow-staged'
+      - '{{.NIX_RUN}} cargo fmt --all'
