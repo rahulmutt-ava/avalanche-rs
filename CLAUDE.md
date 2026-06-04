@@ -7,7 +7,7 @@ conform to conventions so your work passes CI on the first try.
 
 > The canonical, tool-neutral version of this guidance is `AGENTS.md`. This file
 > is identical in substance with Claude-Code-specific notes. When they diverge,
-> `AGENTS.md` + `specs-rust/00-overview-and-conventions.md` win.
+> `AGENTS.md` + `specs/00-overview-and-conventions.md` win.
 
 ## Repo at a glance
 
@@ -28,7 +28,7 @@ conform to conventions so your work passes CI on the first try.
 SAE (Streaming Asynchronous Execution, ACP-194). No API-stability guarantees.
 Dedicated stricter lint pass `lint-saevm` (clippy pedantic + `arithmetic_side_effects`
 + `cast_*` deny, overflow checks). Use `checked_*`/`saturating_*`, never raw casts.
-See `specs-rust/11-saevm.md` and `00` §7.7.
+See `specs/11-saevm.md` and `00` §7.7.
 
 ## Directory map (crates under `crates/`)
 
@@ -121,11 +121,11 @@ Single test: `cargo nextest run -p <crate> -E 'test(Name)'`.
 - Table tests via arrays/`rstest`; assertions via `assert_matches!` /
   `pretty_assertions`.
 - Differential tests against the Go node guard protocol parity — see
-  `specs-rust/02-testing-strategy.md`.
+  `specs/02-testing-strategy.md`.
 
 ## Key files
 
 `Cargo.toml` · `rust-toolchain.toml` · `Taskfile.yml` · `scripts/run_task.sh` ·
 `flake.nix` · `MODULE.bazel` · `.bazelrc` · `rustfmt.toml` · `clippy.toml` ·
 `deny.toml` · `.config/nextest.toml` · `.github/workflows/ci.yml` ·
-`specs-rust/00-overview-and-conventions.md`
+`specs/00-overview-and-conventions.md`

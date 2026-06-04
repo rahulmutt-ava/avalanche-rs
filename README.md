@@ -11,17 +11,17 @@ Two deliberate technology swaps from the Go node:
 - **EVM execution** (C-Chain and EVM subnets) is rebuilt on [**reth**](https://github.com/paradigmxyz/reth) / `revm` instead of `coreth`/`libevm`.
 - **Merkle state DB** uses [**Firewood**](https://github.com/ava-labs/firewood) as a direct Rust dependency (no CGO/FFI shim).
 
-> **Status:** Specification phase. The [`specs-rust/`](specs-rust/) directory is a
+> **Status:** Specification phase. The [`specs/`](specs/) directory is a
 > complete, standalone specification from which the implementation is derived. The
 > Cargo workspace (`crates/…`) described below is the *target* layout, not yet built.
 
 ## Start here
 
-Read [`specs-rust/00-overview-and-conventions.md`](specs-rust/00-overview-and-conventions.md)
+Read [`specs/00-overview-and-conventions.md`](specs/00-overview-and-conventions.md)
 first — it is the canonical reference (goals, compatibility surface, crate layout,
 binding dependency choices, engineering conventions, the Go→Rust idiom mapping, and
 §11 the **ratified decisions and open risks**). Every other spec conforms to it.
-[`specs-rust/README.md`](specs-rust/README.md) is the annotated table of all 28 spec
+[`specs/README.md`](specs/README.md) is the annotated table of all 28 spec
 documents in reading order.
 
 ## Compatibility surface (the contract)
@@ -55,8 +55,8 @@ prefixed `ava-`:
 `ava-avm` · `ava-evm` · `ava-saevm` · `ava-chains` · `ava-api` · `ava-indexer` ·
 `ava-wallet` · `ava-genesis` · `ava-config` · `ava-node` · `avalanchego` (the binary).
 
-See [`00` §3](specs-rust/00-overview-and-conventions.md) for the full layout and
-[`00` §4](specs-rust/00-overview-and-conventions.md) for the binding external-crate
+See [`00` §3](specs/00-overview-and-conventions.md) for the full layout and
+[`00` §4](specs/00-overview-and-conventions.md) for the binding external-crate
 table (tokio, tonic/prost, secp256k1, blst, rustls, rocksdb, firewood, reth, etc.).
 
 ## Build, test & tooling
@@ -69,25 +69,25 @@ Tooling mirrors the Go repo. **Cargo is the source of truth; Bazel consumes it.*
 - **Test runner:** [`cargo-nextest`](https://nexte.st) (`--profile ci`); coverage via `cargo llvm-cov`.
 - **Lint/deps:** `clippy -D warnings`, `rustfmt`, `cargo-deny`, `cargo-audit`.
 
-Details: [`01-development-environment.md`](specs-rust/01-development-environment.md).
+Details: [`01-development-environment.md`](specs/01-development-environment.md).
 
 ### Testing strategy
 
 A five-layer pyramid — unit → `proptest` property tests → golden/conformance vectors
 → integration → **differential**. The headline deliverable is the **differential
-Go-vs-Rust harness** ([`tests/differential/`](specs-rust/02-testing-strategy.md)):
+Go-vs-Rust harness** ([`tests/differential/`](specs/02-testing-strategy.md)):
 proptest generates a randomized program of actions (issue tx, API call, advance time,
 restart, partition), replays it against both a Go and a Rust node under a controlled
 clock, and asserts identical block IDs, state/merkle roots, API responses, and
 validator sets. It runs in a cheap recorded-oracle mode per PR and a live two-binary
 mode nightly. Plus fuzzing (`cargo-fuzz`), `criterion` benchmarks, and `loom` for
-concurrency. See [`02-testing-strategy.md`](specs-rust/02-testing-strategy.md) and
-[`22-test-vectors-and-oracle.md`](specs-rust/22-test-vectors-and-oracle.md).
+concurrency. See [`02-testing-strategy.md`](specs/02-testing-strategy.md) and
+[`22-test-vectors-and-oracle.md`](specs/22-test-vectors-and-oracle.md).
 
 ## Implementation roadmap
 
 Dependency-ordered milestones, each ending in an *automatable* exit criterion (see
-[`16-implementation-roadmap.md`](specs-rust/16-implementation-roadmap.md)):
+[`16-implementation-roadmap.md`](specs/16-implementation-roadmap.md)):
 
 | | Milestone | Exit criterion |
 |---|---|---|
@@ -108,7 +108,7 @@ Dependency-ordered milestones, each ending in an *automatable* exit criterion (s
 - **R2 — On-disk migration.** RocksDB replaces Go's Pebble/LevelDB; booting from a Go data dir needs an import tool.
 - **R3 — reth API instability.** reth's library crates have no stable public API — pin a vendored revision and wrap every touch-point.
 
-Full list with mitigations: [`00` §11.2](specs-rust/00-overview-and-conventions.md).
+Full list with mitigations: [`00` §11.2](specs/00-overview-and-conventions.md).
 
 ## License
 

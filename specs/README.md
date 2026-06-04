@@ -1,4 +1,4 @@
-# specs-rust — Rust port of avalanchego
+# specs — Rust port of avalanchego
 
 This directory is a **complete, standalone specification** for a from-scratch Rust
 implementation of an Avalanche node that is a **drop-in replacement** for

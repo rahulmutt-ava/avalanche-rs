@@ -101,7 +101,7 @@ Rust prefers build-time/macro generation; we commit **no** generated code.
    quantity — the `taulint` CI gate (`scripts/tau_lint.sh`) fails on it. Use
    `params::TAU` (a typed `Duration`) and `checked_*`.
 
-## Conventions (see `specs-rust/00-overview-and-conventions.md` for the full set)
+## Conventions (see `specs/00-overview-and-conventions.md` for the full set)
 
 - **Edition 2021**, tabs are *not* used for Rust (`.editorconfig` → 4 spaces).
 - **License header** on every `.rs` file:
@@ -137,4 +137,4 @@ Rust prefers build-time/macro generation; we commit **no** generated code.
 `Cargo.toml` · `rust-toolchain.toml` · `Taskfile.yml` · `scripts/run_task.sh` ·
 `flake.nix` · `MODULE.bazel` · `.bazelrc` · `rustfmt.toml` · `clippy.toml` ·
 `deny.toml` · `.config/nextest.toml` · `.github/workflows/ci.yml` ·
-`specs-rust/00-overview-and-conventions.md`
+`specs/00-overview-and-conventions.md`

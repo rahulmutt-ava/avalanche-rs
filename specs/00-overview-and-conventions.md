@@ -1,7 +1,7 @@
 # 00 — Overview & Cross-Cutting Conventions
 
 > **Status:** Canonical reference for the Rust port of `avalanchego`. Every other
-> spec under `specs-rust/` MUST conform to the decisions recorded here. When a
+> spec under `specs/` MUST conform to the decisions recorded here. When a
 > later spec needs to deviate, it must say so explicitly and justify it.
 
 This document defines the goals, the workspace/crate layout, the canonical set of

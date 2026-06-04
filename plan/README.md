@@ -5,7 +5,7 @@
 > Tasks use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build, in dependency order, a from-scratch Rust node that is a byte-/behavior-exact
-drop-in replacement for `avalanchego`, per the specification in [`specs-rust/`](../specs-rust/).
+drop-in replacement for `avalanchego`, per the specification in [`specs/`](../specs/).
 
 **Architecture:** A single Cargo workspace of `ava-*` crates (plus the `avalanchego` binary),
 layered in strict tiers T0→T5 with a continuous cross-cutting tier X. EVM execution is rebuilt
@@ -19,7 +19,7 @@ tests and leaves the `avalanchego` binary buildable and green.
 
 ## 0. How to read this plan
 
-This directory decomposes the roadmap ([`specs-rust/16-implementation-roadmap.md`](../specs-rust/16-implementation-roadmap.md))
+This directory decomposes the roadmap ([`specs/16-implementation-roadmap.md`](../specs/16-implementation-roadmap.md))
 into **PR-sized tasks**. One file per milestone, in build order:
 
 | Plan file | Milestone | Owning specs | Exit gate (headline) |
@@ -36,8 +36,8 @@ into **PR-sized tasks**. One file per milestone, in build order:
 | [`M9-interop-hardening.md`](M9-interop-hardening.md) | M9 — Plugin interop + hardening | 07§5, 02§10–11, 26 | Bidirectional rpcchainvm; mixed Go+Rust net, no fork (**R-final**) |
 | [`X-cross-cutting.md`](X-cross-cutting.md) | X — Continuous workstreams | 01, 02, 18, 22, 24 | Differential harness, golden extraction, CI, metrics/error/obs parity |
 
-Read [`specs-rust/00-overview-and-conventions.md`](../specs-rust/00-overview-and-conventions.md)
-and [`specs-rust/02-testing-strategy.md`](../specs-rust/02-testing-strategy.md) **before any task** —
+Read [`specs/00-overview-and-conventions.md`](../specs/00-overview-and-conventions.md)
+and [`specs/02-testing-strategy.md`](../specs/02-testing-strategy.md) **before any task** —
 they are the canonical conventions every task inherits. The owning spec(s) named in each task are
 the code-level source of truth; tasks reference spec sections rather than duplicating them.
 
