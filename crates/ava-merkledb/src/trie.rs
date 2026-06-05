@@ -286,9 +286,8 @@ impl Trie {
         }
     }
 
-    /// Returns the value at `key`, if present. Reserved for proof construction
-    /// (M1.17); the view's value lookups go through the merged map.
-    #[allow(dead_code)]
+    /// Returns the value at `key`, if present. Used by proof construction; the
+    /// view's value lookups go through the merged map.
     pub(crate) fn get(&self, key: &Key) -> Option<Bytes> {
         let mut current = self.root.as_ref()?;
         if !key.has_prefix(&current.key) {
@@ -321,6 +320,114 @@ impl Trie {
         }
         out
     }
+
+    /// `true` iff the trie has no root node (empty trie). Mirrors Go
+    /// `t.getRoot().IsNothing()`.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    /// Returns the proof path for `key`: the nodes from the root down to the
+    /// closest node along the path to `key` (plus, on exclusion, the child that
+    /// sits at the index `key` would occupy). Also returns the proven value
+    /// (`Some` iff there is a node exactly at `key`). Byte-exact-in-behavior
+    /// port of Go `getProof` (`trie.go`).
+    pub(crate) fn get_proof<H: Hasher>(
+        &self,
+        hasher: &H,
+        key: &Key,
+    ) -> Option<(Vec<crate::proof::ProofNode>, Maybe<Bytes>)> {
+        let token_size = self.token_size;
+        // Build the per-key node map so each node carries its children IDs and
+        // value digest, exactly like Go's `node.asProofNode`.
+        let nodes = self.nodes(hasher);
+
+        let root = self.root.as_ref()?;
+
+        let mut path: Vec<crate::proof::ProofNode> = Vec::new();
+        let mut closest_key: Option<Key> = None;
+
+        if key.has_prefix(&root.key) {
+            // Walk from the root toward `key`, mirroring `visitPathToKey`.
+            let mut current = root;
+            path.push(proof_node_for(&nodes, &current.key));
+            closest_key = Some(current.key.clone());
+            while current.key.length() < key.length() {
+                let branch = key.token(current.key.length(), token_size);
+                let Some(next) = current.children.get(&branch) else {
+                    break;
+                };
+                let next_compressed = next.key.skip(current.key.length() + token_size);
+                if !key.iterated_has_prefix(
+                    &next_compressed,
+                    current.key.length() + token_size,
+                    token_size,
+                ) {
+                    break;
+                }
+                path.push(proof_node_for(&nodes, &next.key));
+                closest_key = Some(next.key.clone());
+                current = next;
+            }
+        }
+
+        if path.is_empty() {
+            // No key in the trie is a prefix of `key`: the root alone proves
+            // `key` isn't present.
+            path.push(proof_node_for(&nodes, &root.key));
+            return Some((path, Maybe::Nothing));
+        }
+
+        let closest_key = closest_key.expect("non-empty path has a closest key");
+        if &closest_key == key {
+            // Inclusion: the proven value is the value at `key`.
+            let value = self.get(key).map(Maybe::Some).unwrap_or(Maybe::Nothing);
+            return Some((path, value));
+        }
+
+        // Exclusion: include the child at the index `key` would occupy, if any.
+        let closest = node_for_key(root, &closest_key, token_size)?;
+        let next_index = key.token(closest.key.length(), token_size);
+        if let Some(child) = closest.children.get(&next_index) {
+            path.push(proof_node_for(&nodes, &child.key));
+        }
+        Some((path, Maybe::Nothing))
+    }
+}
+
+/// Builds a [`crate::proof::ProofNode`] for the node at `full_key`, from the
+/// pre-computed node map. Mirrors Go `node.asProofNode`: `value_or_hash` is the
+/// node's value digest, and `children` maps branch index -> child ID.
+fn proof_node_for(nodes: &BTreeMap<Key, Node>, full_key: &Key) -> crate::proof::ProofNode {
+    let node = nodes.get(full_key).expect("node present in map");
+    let mut children: BTreeMap<u8, Id> = BTreeMap::new();
+    for (index, child) in &node.db_node.children {
+        children.insert(*index, child.id);
+    }
+    crate::proof::ProofNode {
+        key: full_key.clone(),
+        value_or_hash: node.value_digest.clone(),
+        children,
+    }
+}
+
+/// Returns the [`OwnedNode`] whose full key is `target`, by descending from
+/// `root` following matching branch tokens. Used by exclusion-proof child
+/// lookup.
+fn node_for_key<'a>(root: &'a OwnedNode, target: &Key, token_size: usize) -> Option<&'a OwnedNode> {
+    let mut current = root;
+    if &current.key == target {
+        return Some(current);
+    }
+    while current.key.length() < target.length() {
+        let branch = target.token(current.key.length(), token_size);
+        let next = current.children.get(&branch)?;
+        if &next.key == target {
+            return Some(next);
+        }
+        current = next;
+    }
+    None
 }
 
 /// The full key-length of `parent` (helper for borrow clarity in compaction).

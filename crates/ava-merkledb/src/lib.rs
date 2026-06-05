@@ -35,6 +35,7 @@ pub mod key;
 pub mod maybe;
 pub mod node;
 mod node_store;
+pub mod proof;
 mod trie;
 pub mod view;
 
@@ -46,4 +47,5 @@ pub use history::{ChangeSummary, History, KeyChange};
 pub use key::{BranchFactor, Key};
 pub use maybe::Maybe;
 pub use node::{Child, DbNode, Node};
+pub use proof::{ChangeProof, KeyValue, Proof, ProofNode, RangeProof};
 pub use view::{BatchOp, View};

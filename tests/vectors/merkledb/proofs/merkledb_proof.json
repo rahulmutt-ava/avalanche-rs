@@ -1,0 +1,59 @@
+{
+  "_provenance": "Extracted from Go x/merkledb (avalanchego rev fb174e8925, go1.25.9) via a scratch _test.go using db.GetProof over the basic batch fixture {i}->{i} for i in [0,4] at BranchFactor16. Proto bytes use proto.MarshalOptions{Deterministic:true} (sorted ProofNode.children) because Go's default proto.Marshal randomizes map iteration order — see FINDING in the M1.17/M1.18 report. The single-Proof path is encoded as a `repeated ProofNode` (sync.RangeProof.start_proof field 1) since proto/sync has NO single-Proof message.",
+  "branch_factor": "BranchFactor16",
+  "root_hex": "f3b6b7d99184423b41b68f09d2c3ac0fe7d3325c5d67d31fdb8ca5a17d62d38a",
+  "kvs": [
+    { "key_hex": "00", "value_hex": "00" },
+    { "key_hex": "01", "value_hex": "01" },
+    { "key_hex": "02", "value_hex": "02" },
+    { "key_hex": "03", "value_hex": "03" },
+    { "key_hex": "04", "value_hex": "04" }
+  ],
+  "inclusion": {
+    "key_hex": "02",
+    "value_hex": "02",
+    "path": [
+      {
+        "key_length_bits": 4,
+        "key_value_hex": "00",
+        "has_value_or_hash": false,
+        "value_or_hash_hex": "",
+        "children": {
+          "00": "073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9",
+          "01": "f3ff56d1d653abfb464b689a09cd6109cca840e930d6f805d34a9403e47244ea",
+          "02": "f9b0e4c620c9a3ac1f4cce07b3aeb6ceaa2e9c65a6f3e0145d874b090dad3bce",
+          "03": "ef57b1dd004d23fe901c4f1aba3b8acac03f0f8140cf1f2a87e88757252ae260",
+          "04": "7e0218ec3de4c3ebdcf9d7525f1796ee7561ac5a3af26cffc740d319f5d295d2"
+        }
+      },
+      {
+        "key_length_bits": 8,
+        "key_value_hex": "02",
+        "has_value_or_hash": true,
+        "value_or_hash_hex": "02",
+        "children": {}
+      }
+    ],
+    "path_proto_hex": "0ac5010a0508041201001a2408001220073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b91a2408011220f3ff56d1d653abfb464b689a09cd6109cca840e930d6f805d34a9403e47244ea1a2408021220f9b0e4c620c9a3ac1f4cce07b3aeb6ceaa2e9c65a6f3e0145d874b090dad3bce1a2408031220ef57b1dd004d23fe901c4f1aba3b8acac03f0f8140cf1f2a87e88757252ae2601a24080412207e0218ec3de4c3ebdcf9d7525f1796ee7561ac5a3af26cffc740d319f5d295d20a0c0a05080812010212030a0102"
+  },
+  "exclusion": {
+    "key_hex": "06",
+    "has_value": false,
+    "path": [
+      {
+        "key_length_bits": 4,
+        "key_value_hex": "00",
+        "has_value_or_hash": false,
+        "value_or_hash_hex": "",
+        "children": {
+          "00": "073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9",
+          "01": "f3ff56d1d653abfb464b689a09cd6109cca840e930d6f805d34a9403e47244ea",
+          "02": "f9b0e4c620c9a3ac1f4cce07b3aeb6ceaa2e9c65a6f3e0145d874b090dad3bce",
+          "03": "ef57b1dd004d23fe901c4f1aba3b8acac03f0f8140cf1f2a87e88757252ae260",
+          "04": "7e0218ec3de4c3ebdcf9d7525f1796ee7561ac5a3af26cffc740d319f5d295d2"
+        }
+      }
+    ],
+    "path_proto_hex": "0ac5010a0508041201001a2408001220073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b91a2408011220f3ff56d1d653abfb464b689a09cd6109cca840e930d6f805d34a9403e47244ea1a2408021220f9b0e4c620c9a3ac1f4cce07b3aeb6ceaa2e9c65a6f3e0145d874b090dad3bce1a2408031220ef57b1dd004d23fe901c4f1aba3b8acac03f0f8140cf1f2a87e88757252ae2601a24080412207e0218ec3de4c3ebdcf9d7525f1796ee7561ac5a3af26cffc740d319f5d295d2"
+  }
+}
