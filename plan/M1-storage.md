@@ -11,6 +11,67 @@
 
 ---
 
+## Progress
+
+> **Status (2026-06-05, M1 IN PROGRESS — Wave 1 landed):** First parallel wave merged to
+> `main` via three isolated worktree agents (distinct crates → conflict-free merges):
+> - **`ava-database` contract + reference backend (M1.1, M1.2, M1.3):** `Database` trait family +
+>   sentinel `Error` + byte-exact helpers; the `dbtest` conformance battery + BTreeMap-oracle
+>   proptest behind the `testutil` feature; `MemDb`. Green: `conformance::run_database_suite`,
+>   `prop::db_oracle_btreemap`, `unit::helpers_byte_exact`, `unit::error_variants`.
+> - **`ava-merkledb` core (M1.12, M1.13, M1.14):** `Key`/`BranchFactor` bit-path, `DbNode`
+>   model + `encodeDBNode` byte-exact (+ all decode rejections), SHA-256 `HashNode`. Green:
+>   `golden::key_pack`, `golden::node_codec_encode`, `golden::node_codec_decode_rejects`,
+>   **`golden::merkledb_root`** (empty→single→multi, 18 cases over BranchFactor 256/16/2).
+> - **`ava-blockdb` (M1.22):** append-optimized height-indexed store + torn-write recovery scan.
+>   Green: **`prop::blockdb_roundtrip`**, `golden::blockdb_header_layout`, `unit::recovery_rebuilds_index`.
+>
+> **All Wave-1 golden vectors are REAL Go-extracted** (scratch programs run against the
+> `../avalanchego` tree at rev `fb174e8…`, then removed): merkledb keys/nodes/roots from
+> `x/merkledb`, blockdb header/checksum from `x/blockdb`, timestamp from `time.Time.MarshalBinary`.
+> Workspace after merge: **152 tests pass** (`--all-features`, was 124 at M0 exit), `cargo build
+> --workspace --all-features`, `cargo build -p avalanchers`, `cargo clippy --workspace
+> --all-targets --all-features -- -D warnings`, `cargo fmt --all --check` — all clean.
+>
+> **Findings recorded during Wave 1 (specs updated where noted):**
+> - **`Batch` supertrait correction (spec 04 §1.3):** the spec's `Batch: KeyValueWriter +
+>   KeyValueDeleter` (both `&self`) is internally inconsistent — a batch accumulates ops (`&mut
+>   self`) and serves as a `replay` target. Implemented as **`Batch: WriteDelete`** (the `&mut`
+>   Put/Delete trait). Spec 04 §1.3 updated.
+> - **merkledb codec decode-rejections (spec 04 §3.3):** Go `decodeDBNode` does **not** validate
+>   child index against the configured branch factor (that happens at trie-construction time). The
+>   codec rejects `index > 255`, out-of-order/duplicate index (`errChildIndexTooLarge`), and
+>   `num_children > 256` (`errTooManyChildren`). Spec 04 §3.3 clarified.
+> - **blockdb on-disk format (spec 04 §5.1):** all headers are **little-endian**; the index-entry
+>   and block-entry `size` fields store the **compressed** length while the checksum
+>   (`xxhash.Sum64` = **XXH64 seed 0**, `github.com/cespare/xxhash/v2`) is over the **uncompressed**
+>   bytes; `MarshalBinary` leaves reserved bytes zero. Cross-implementation byte-replay of
+>   *compressed* `.dat` payloads is not asserted (each side owns its zstd encoder; checksum is over
+>   uncompressed data). Spec 04 §5.1 updated.
+> - **`Maybe<T>`** is defined locally in `ava-merkledb` (`src/maybe.rs`), not added to `ava-types`
+>   (kept M0 crates untouched for parallel-merge safety). The M1 header above still lists
+>   `ava-types/Maybe`; revisit if a second consumer appears (then promote to `ava-types`).
+> - **`[lints] workspace = true` not opted into by the new crates** (matches the M0-crate
+>   majority). With it on, `unused_crate_dependencies` fires on every integration-test binary, and
+>   the workspace `arithmetic_side_effects`/`indexing_slicing` warn-lints + `-D warnings` reject
+>   byte-manipulation ports wholesale. Crates still pass `cargo clippy -- -D warnings` (clippy::all).
+>   This remains the **open X-cross-cutting decision** carried over from M0.
+> - **`unused_crate_dependencies` test-binary gotcha (for M1.4–M1.11 backend agents):**
+>   `ava-database` opts into `[lints] workspace = true`, so each integration test needs
+>   `#![allow(unused_crate_dependencies)]` at its crate root, and `testutil`-gated test files must
+>   guard items with `#[cfg(feature = "testutil")]` (not a crate-level `#![cfg]`).
+> - **New third-party deps introduced (owed to X-cross-cutting for workspace-dep promotion):**
+>   `ava-blockdb` pins `twox-hash`, `zstd`, `lru` (+ dev `tempfile`) directly in its crate
+>   `Cargo.toml` (root `Cargo.toml` left untouched to avoid parallel-merge conflicts).
+> - **In-memory trie builder (M1.14)** is a faithful port of `view.insert` sufficient for fixed-K/V
+>   roots; full DB-backed View/history is M1.15 (not yet done).
+>
+> **Next waves (not yet started):** remaining `ava-database` backends (M1.4 rocksdb, M1.5–M1.11),
+> merkledb View/history/proofs/sync (M1.15–M1.19), Firewood (M1.20–M1.21), `ava-archivedb` (M1.23),
+> R2 import tool (M1.24), fuzz + exit gate (M1.25, M1.26).
+
+---
+
 ## Dependency map & parallel waves
 
 The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/proptest battery (M1.2) defines the contract every backend must pass. Once both land, **all KV backends parallelize**; once the trait lands, `ava-merkledb`/`ava-blockdb`/`ava-archivedb` parallelize against any backend (they only need `memdb`/`rocksdb` to test).
@@ -29,7 +90,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 
 ## Tasks
 
-### Task M1.1: `Database` trait family, sentinel errors, shared helpers
+### Task M1.1: `Database` trait family, sentinel errors, shared helpers ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M0 (ava-types `Id`/`Maybe`, ava-codec, ava-crypto SHA-256)  ·  **Spec:** 04 §1.1–§1.4, 00 §11.1.3 (sentinels), 15 §3.4 (Error enum maps to rpcdb), 27 §6.1 (Closed/NotFound are control flow, not poison)
 **Files:**
 - Create: `crates/ava-database/Cargo.toml`, `crates/ava-database/src/lib.rs`, `crates/ava-database/src/error.rs`, `crates/ava-database/src/traits.rs`, `crates/ava-database/src/batch.rs`, `crates/ava-database/src/helpers.rs`
@@ -41,7 +102,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --lib helpers_byte_exact error_variants` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: Database trait family, sentinel errors, byte-exact helpers (04 §1)"`
 
-### Task M1.2: dbtest conformance battery + proptest BTreeMap oracle (`testutil` feature)
+### Task M1.2: dbtest conformance battery + proptest BTreeMap oracle (`testutil` feature) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1  ·  **Spec:** 04 §6.1, 02 §7.2, 02 §13.3 (every backend MUST pass)
 **Files:**
 - Create: `crates/ava-database/src/dbtest.rs` (gated `#[cfg(feature = "testutil")]`), `crates/ava-database/Cargo.toml` (`testutil` feature + dev `proptest`, `tempfile`)
@@ -53,7 +114,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo build -p ava-database --features testutil` → PASS (full green proven by M1.3 onward).
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: dbtest conformance battery + BTreeMap oracle proptest (testutil, 02 §7.2)"`
 
-### Task M1.3: `memdb` backend (BTreeMap) — reference backend
+### Task M1.3: `memdb` backend (BTreeMap) — reference backend ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2  ·  **Spec:** 04 §2.2
 **Files:**
 - Create: `crates/ava-database/src/memdb.rs`
@@ -161,7 +222,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test conformance_rpcdb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: rpcdb tonic client/server over rpcdb.proto, passing dbtest (04 §2.8, 15 §3.4)"`
 
-### Task M1.12: `ava-merkledb` Key / Path (bit-path over branch factor)
+### Task M1.12: `ava-merkledb` Key / Path (bit-path over branch factor) ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.1, M0 (ava-types, ava-codec)  ·  **Spec:** 04 §3.2
 **Files:**
 - Create: `crates/ava-merkledb/Cargo.toml`, `crates/ava-merkledb/src/lib.rs`, `crates/ava-merkledb/src/key.rs`
@@ -173,7 +234,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test golden_key` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: Key/Path bit-path over BranchFactor (byte-exact key.go) (04 §3.2)"`
 
-### Task M1.13: node model + on-disk codec (`encodeDBNode`, byte-exact)
+### Task M1.13: node model + on-disk codec (`encodeDBNode`, byte-exact) ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.12  ·  **Spec:** 04 §3.3, 04 §10.8 (on-disk node key spaces), 02 §6
 **Files:**
 - Create: `crates/ava-merkledb/src/node.rs`, `crates/ava-merkledb/src/codec.rs`
@@ -185,7 +246,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test golden_node_codec` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: node model + encodeDBNode byte-exact + decode rejections (04 §3.3)"`
 
-### Task M1.14: hashing + `golden::merkledb_root` (TDD ANCHOR — empty → single-key → multi)
+### Task M1.14: hashing + `golden::merkledb_root` (TDD ANCHOR — empty → single-key → multi) ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.13  ·  **Spec:** 04 §3.4 (HashNode), 00 §11.1.4 (SHA-256 default), 02 §6.3
 **Files:**
 - Create: `crates/ava-merkledb/src/hashing.rs`
@@ -281,7 +342,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --features firewood-ethhash --test golden_firewood_ethhash` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: firewood ethhash feature + golden::firewood_ethhash_root vs Go EVM root (04 §4.1)"`
 
-### Task M1.22: `ava-blockdb` (append-optimized height-indexed block store) + `prop::blockdb_roundtrip`
+### Task M1.22: `ava-blockdb` (append-optimized height-indexed block store) + `prop::blockdb_roundtrip` ✅ COMPLETED
 **Crate:** `ava-blockdb`  ·  **Depends on:** M1.1  ·  **Spec:** 04 §5.1, 27 §4.1/§5.1 (torn-write recovery scan), 02 §6
 **Files:**
 - Create: `crates/ava-blockdb/Cargo.toml`, `crates/ava-blockdb/src/lib.rs`, `crates/ava-blockdb/src/index.rs`, `crates/ava-blockdb/src/data.rs`, `crates/ava-blockdb/src/recovery.rs`

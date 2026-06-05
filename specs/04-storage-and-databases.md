@@ -136,7 +136,10 @@ pub trait Iteratee {
     fn new_iterator_with_start_and_prefix(&self, start: &[u8], prefix: &[u8]) -> Self::Iter<'_>;
 }
 
-pub trait Batch: KeyValueWriter + KeyValueDeleter {
+// NOTE (M1.1 finding): a `Batch` accumulates ops (`&mut self` Put/Delete) AND is itself a
+// `replay` target, so it must be `WriteDelete`, not `KeyValueWriter + KeyValueDeleter` (those
+// take `&self`). The supertrait is `WriteDelete`.
+pub trait Batch: WriteDelete {
     fn size(&self) -> usize;
     fn write(&mut self) -> Result<()>;
     fn reset(&mut self);
@@ -398,9 +401,14 @@ struct Node { db_node: DbNode, key: Key, value_digest: Maybe<Bytes> }
   **no-leading-zeroes** decode check (`errLeadingZeroes`); `Bytes`/`Key` are
   uvarint-length-prefixed; `Key` packs `length` (bits) + `bytesNeeded(length)`
   bytes with the **partial-byte-must-be-zero-padded** rule (`errNonZeroKeyPadding`).
-  Decode rejects: child index ≥ branch factor, too many children, int overflow,
-  trailing bytes (`errExtraSpace`). These error conditions are part of the
-  conformance surface (a Go node a Rust node both reject the same bad bytes).
+  Decode rejects (M1.13 finding — matches Go `decodeDBNode` exactly): child index
+  `> 255` **or** out-of-order/duplicate index, i.e. `index <= previousChild`
+  (both `errChildIndexTooLarge`); `num_children > 256` = `BranchFactorLargest`
+  (`errTooManyChildren`); int overflow; trailing bytes (`errExtraSpace`). Note the
+  codec does **not** validate the child index against the *configured* branch factor
+  — branch-factor-specific validation happens at trie-construction time, not in the
+  codec. These error conditions are part of the conformance surface (a Go node and a
+  Rust node both reject the same bad bytes).
 
 ### 3.4 Hashing (`hashing.go`) — MUST match Go byte-for-byte
 
@@ -606,10 +614,17 @@ local persisted format; reproduce so a migrated data dir is readable — §7):
 - One **index file** (`.idx`): 64-byte header `{version, max_data_file_size,
   min_height, max_height, next_write_offset, reserved[24]}` + fixed **16-byte
   entries** `{data_offset:u64, block_size:u32, reserved:u32}` → O(1) seek by
-  height. All little/big-endian widths copied from the README/code.
+  height. **All headers are little-endian** (M1.22 finding); `MarshalBinary` leaves
+  the reserved bytes zero.
 - Multiple **data files** (`.dat`): each block = 22-byte entry header
   `{height:u64, size:u32, checksum:u64, version:u16}` + raw bytes; split across
-  files at `max_data_file_size`.
+  files at `max_data_file_size`. **`size` (both here and in the index entry) is the
+  *compressed* length; the `checksum` is over the *uncompressed* bytes** (M1.22
+  finding). The checksum is `xxhash.Sum64` (XXH64, seed 0,
+  `github.com/cespare/xxhash/v2`) — empty-input constant `0xef46db3751d8e999`.
+  Cross-implementation byte-replay of *compressed* `.dat` payloads is NOT a
+  conformance requirement (each side owns its zstd encoder; only the header layout,
+  the uncompressed-bytes checksum, and round-trip readability are byte-pinned).
 - **Recovery:** on open, if `data_file_size > indexed_size`, scan from
   `next_write_offset`, validate header+checksum per block, rewrite index entries,
   recompute `max_height`.
@@ -618,8 +633,8 @@ local persisted format; reproduce so a migrated data dir is readable — §7):
 
 Rust: memory-map or positioned `pread`/`pwrite` (`std::os::unix::fs::FileExt` /
 `positioned-io`) under an `RwLock`-free design (atomic `next_write_offset`), an
-`lru` block cache, `zstd` crate for compression, `crc`/`xxhash` matching the Go
-checksum algorithm. Concurrency uses per-file handles so reads don't block writes.
+`lru` block cache, `zstd` crate for compression, and `twox-hash` (`XxHash64::with_seed(0)`)
+for the Go-matching XXH64 checksum. Concurrency uses per-file handles so reads don't block writes.
 
 ### 5.2 `ava-archivedb` (`x/archivedb`)
 
