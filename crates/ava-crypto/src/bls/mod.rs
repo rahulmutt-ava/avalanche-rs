@@ -4,8 +4,8 @@
 //! BLS12-381 (`min_pk`) — sign / aggregate / proof-of-possession / verify,
 //! plus the `Signer` trait and `LocalSigner` lifecycle.
 //!
-//! Wraps the C-FFI `blst` crate behind a safe API (`specs/00` §7.6); add the
-//! `blst` dependency (Cargo.toml) when implementing.
+//! Wraps the C-FFI `blst` crate behind a safe API (`specs/00` §7.6). All
+//! `unsafe` is encapsulated inside `blst`.
 //!
 //! Submodules:
 //! - [`ciphersuite`] — the SIGNATURE / POP DST byte strings (M0.19)
@@ -19,3 +19,10 @@ pub mod keys;
 pub mod local_signer;
 pub mod sign;
 pub mod signer;
+
+pub use ciphersuite::{CIPHERSUITE_POP, CIPHERSUITE_SIGNATURE};
+pub use keys::{
+    aggregate_public_keys, PublicKey, SecretKey, PUBLIC_KEY_LEN, SECRET_KEY_LEN,
+    UNCOMPRESSED_PUBLIC_KEY_LEN,
+};
+pub use sign::{aggregate_signatures, verify, verify_pop, Signature, SIGNATURE_LEN};
