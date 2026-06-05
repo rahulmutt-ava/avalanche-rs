@@ -10,6 +10,11 @@ rust_binary(
         "src/vectors.rs",
     ],
     compile_data = ["Cargo.toml"],
+    # xtask shells out to cargo (Command::new(env!("CARGO"))). Cargo defines
+    # CARGO at compile time; Bazel does not. xtask is a dev-loop tool run via
+    # `cargo xtask`, not under Bazel — building it here only needs to compile,
+    # so fall back to `cargo` on PATH.
+    rustc_env = {"CARGO": "cargo"},
     visibility = ["//visibility:public"],
     deps = [
         "@crates//:anyhow",

@@ -1,0 +1,11 @@
+# The golden-vector corpus, exposed as runfiles for Bazel tests that load it
+# via ava-testvectors (which reads AVA_VECTORS_ROOT). Under Cargo the same files
+# are found relative to CARGO_MANIFEST_DIR; see crates/ava-testvectors/src/lib.rs.
+filegroup(
+    name = "corpus",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    visibility = ["//visibility:public"],
+)

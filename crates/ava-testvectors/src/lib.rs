@@ -62,6 +62,12 @@ pub struct Vector<I, O> {
 /// crate's test harness.
 #[must_use]
 pub fn vectors_root() -> PathBuf {
+    // Under Bazel the corpus is supplied through runfiles and its location is
+    // passed in `AVA_VECTORS_ROOT` (the manifest dir is not the repo source
+    // tree there); under Cargo it sits at a fixed offset from the manifest dir.
+    if let Some(root) = std::env::var_os("AVA_VECTORS_ROOT") {
+        return PathBuf::from(root);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/vectors")
 }
 

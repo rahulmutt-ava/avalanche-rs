@@ -12,5 +12,11 @@ rust_test(
     name = "cli_version_help",
     srcs = ["tests/cli_version_help.rs"],
     compile_data = ["Cargo.toml"],
+    # Cargo sets CARGO_BIN_EXE_<name> at compile time for integration tests
+    # (read via env!); Bazel does not, so wire it here. The runfiles-relative
+    # path is baked at compile time and resolved at runtime (rust_test runs
+    # from the runfiles root), with the binary supplied via data.
+    data = [":avalanchers"],
+    rustc_env = {"CARGO_BIN_EXE_avalanchers": "$(rootpath :avalanchers)"},
     visibility = ["//visibility:public"],
 )

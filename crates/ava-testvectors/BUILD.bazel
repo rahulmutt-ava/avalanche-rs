@@ -16,4 +16,8 @@ rust_test(
     name = "ava_testvectors_test",
     compile_data = ["Cargo.toml"],
     crate = ":ava_testvectors",
+    # Supply the golden-vector corpus via runfiles and point the loader at it;
+    # under Cargo the corpus is found relative to CARGO_MANIFEST_DIR instead.
+    data = ["//tests/vectors:corpus"],
+    env = {"AVA_VECTORS_ROOT": "tests/vectors"},
 )
