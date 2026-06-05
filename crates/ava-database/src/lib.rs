@@ -35,6 +35,9 @@ pub mod versiondb;
 #[cfg(feature = "rocksdb")]
 pub mod rocksdb;
 
+#[cfg(feature = "rpcdb")]
+pub mod rpcdb;
+
 pub use batch::{BatchOp, BatchOps};
 pub use corruptabledb::CorruptableDb;
 pub use error::{Error, Result};
@@ -45,6 +48,8 @@ pub use meterdb::MeterDb;
 pub use prefixdb::{PrefixDb, join_prefixes, make_prefix};
 #[cfg(feature = "rocksdb")]
 pub use rocksdb::{RocksDb, RocksDbConfig};
+#[cfg(feature = "rpcdb")]
+pub use rpcdb::{DatabaseClient, DatabaseServer};
 pub use traits::{
     Batch, Batcher, BoxIter, Compacter, Database, DynDatabase, Iteratee, Iterator, IteratorError,
     KeyValueDeleter, KeyValueReader, KeyValueWriter, WriteDelete,
