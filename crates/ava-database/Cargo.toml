@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
+sha2 = { workspace = true }
 ava-types = { path = "../ava-types" }
 
 # The conformance battery (dbtest) + BTreeMap-oracle proptest ship behind the
