@@ -1,0 +1,96 @@
+{
+  "_provenance": {
+    "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+    "extracted_by": "x/merkledb/avars_extract_test.go (TestAvarsExtract)",
+    "note": "Go merkledb golden vectors for avalanche-rs ava-merkledb (M1.12/13/14)."
+  },
+  "cases": [
+    {
+      "name": "empty",
+      "encoded_hex": "0000",
+      "has_value": false,
+      "value_hex": "",
+      "children": null
+    },
+    {
+      "name": "value_short",
+      "encoded_hex": "01017600",
+      "has_value": true,
+      "value_hex": "76",
+      "children": null
+    },
+    {
+      "name": "value_long",
+      "encoded_hex": "0128000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262700",
+      "has_value": true,
+      "value_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627",
+      "children": null
+    },
+    {
+      "name": "children_no_value",
+      "encoded_hex": "0003000022222222222222222222222222222222222222222222222222222222222222220010100102333333333333333333333333333333333333333333333333333333333333333301ff0108aa111111111111111111111111111111111111111111111111111111111111111101",
+      "has_value": false,
+      "value_hex": "",
+      "children": [
+        {
+          "index": 0,
+          "compressed_key_hex": "",
+          "compressed_key_len": 0,
+          "id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+          "has_value": false
+        },
+        {
+          "index": 16,
+          "compressed_key_hex": "0102",
+          "compressed_key_len": 16,
+          "id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+          "has_value": true
+        },
+        {
+          "index": 255,
+          "compressed_key_hex": "aa",
+          "compressed_key_len": 8,
+          "id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+          "has_value": true
+        }
+      ]
+    },
+    {
+      "name": "value_and_children",
+      "encoded_hex": "013068656c6c6f20776f726c642076616c756520626967676572207468616e207468697274792d74776f2062797465732121020110dead444444444444444444444444444444444444444444444444444444444444444400800100555555555555555555555555555555555555555555555555555555555555555501",
+      "has_value": true,
+      "value_hex": "68656c6c6f20776f726c642076616c756520626967676572207468616e207468697274792d74776f2062797465732121",
+      "children": [
+        {
+          "index": 1,
+          "compressed_key_hex": "dead",
+          "compressed_key_len": 16,
+          "id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+          "has_value": false
+        },
+        {
+          "index": 128,
+          "compressed_key_hex": "",
+          "compressed_key_len": 0,
+          "id_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+          "has_value": true
+        }
+      ]
+    },
+    {
+      "name": "partial_byte_child_key",
+      "encoded_hex": "00010504f0666666666666666666666666666666666666666666666666666666666666666600",
+      "has_value": false,
+      "value_hex": "",
+      "children": [
+        {
+          "index": 5,
+          "compressed_key_hex": "f0",
+          "compressed_key_len": 4,
+          "id_hex": "6666666666666666666666666666666666666666666666666666666666666666",
+          "has_value": false
+        }
+      ]
+    }
+  ]
+}
