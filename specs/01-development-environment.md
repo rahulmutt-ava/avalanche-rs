@@ -799,6 +799,20 @@ indent_size = 4
 Workspace-wide lints live in the root `Cargo.toml` `[workspace.lints]` so every
 crate inherits them (each crate sets `[lints] workspace = true`):
 
+> **M0 implementation note (2026-06-05):** the `unused_crate_dependencies = "warn"`
+> lint, once a crate opts in via `[lints] workspace = true`, fires **spuriously on
+> every integration-test binary** — it flags the crate's own normal deps and
+> dev-deps as "unused" from each `tests/*.rs` target, which fails a `-D warnings`
+> gate. Until that is resolved, the landed M0 crates (`ava-types`, `ava-utils`,
+> `ava-codec`(+derive), `ava-crypto`, `ava-version`, `avalanchers`) **do not** set
+> `[lints] workspace = true`; instead each enforces `#![forbid(unsafe_code)]` (and
+> the relevant clippy bans) via per-file/per-crate inner attributes, and CI runs
+> `cargo clippy --workspace --all-targets -- -D warnings` + `cargo fmt --all --
+> --check` which stays green. **Open decision (X-cross-cutting):** either (a) keep
+> the opt-in and add `use <dep> as _;` suppressions in the offending test crates,
+> or (b) drop `unused_crate_dependencies` from the workspace set and run it as a
+> separate non-`--all-targets` check. Resolve before the lint policy is frozen.
+
 ```toml
 [workspace.lints.rust]
 unsafe_code = "forbid"          # opt out per-crate for blst/firewood/rocksdb/secp256k1 (00 §7.6)

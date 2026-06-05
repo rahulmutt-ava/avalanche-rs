@@ -13,15 +13,53 @@
 
 ## Progress
 
-> **Status (2026-06-05):** W0 bootstrap (M0.1, M0.2) ✅, W1 RNG R1 gate (M0.3, M0.4) ✅,
-> and the independent-primitives wave is largely landed — `ava-utils` is **fully complete**
-> (M0.3, M0.4, M0.9, M0.10, M0.11, M0.12) and `ava-types` core is complete (M0.5, M0.7, M0.8).
-> **R1 retired:** `golden::sampler_mt19937_stream` is green (MT19937/-64 byte-exact vs gonum).
-> All landed crates pass `cargo test` + `cargo clippy -- -D warnings`.
-> **Remaining in M0:** M0.6 (ID CB58 string/JSON — unblocked now that `ava_utils::cb58` exists),
-> M0.13–M0.21 (`ava-crypto`: hashing, formatting/bech32, secp256k1, BLS, staking certs),
-> M0.14–M0.16 (`ava-codec`: Packer, derive macro, Manager), M0.22–M0.23 (`ava-version`),
-> M0.24 (per-crate contracts), M0.25 (exit gate).
+> **Status (2026-06-05, updated):** All M0 **implementation** tasks are landed and merged to
+> `main`. Completed: W0 bootstrap (M0.1, M0.2); W1 RNG R1 gate (M0.3, M0.4); `ava-utils`
+> fully (M0.3, M0.4, M0.9, M0.10, M0.11, M0.12); `ava-types` fully (M0.5, M0.6, M0.7, M0.8);
+> `ava-codec` (+ derive) fully (M0.14, M0.15, M0.16); `ava-crypto` fully (M0.13, M0.17, M0.18,
+> M0.19, M0.20, M0.21); `ava-version` fully (M0.22, M0.23). The `avalanchers --version`
+> wiring (M0.22 cont.) sources the numeric version from `ava_version::CURRENT`.
+> **R1 retired:** `golden::sampler_mt19937_stream` green (MT19937/-64 byte-exact vs gonum).
+> **Exit-gate tests green:** `golden::{codec_all_types, cb58_addr_bech32, bls_sign_pop,
+> secp_recover, nodeid_from_cert, sampler_mt19937_stream}`, `prop::packer_roundtrip`,
+> `conformance::run_codec_suite`. Workspace: 96 tests pass, `cargo build --workspace`,
+> `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo fmt --all -- --check`
+> all clean.
+> **Remaining in M0:** M0.24 (per-crate proptest suites at cases=4096 incl. `prop::codec_roundtrip`,
+> committed `proptest-regressions/`, cargo-fuzz targets, PORTING.md matrices) and
+> M0.25 (formal milestone exit gate). These are the only open tasks.
+>
+> **Implementation notes / decisions made during the parallel build (2026-06-05):**
+> - **Codec golden vectors are hand-derived from spec, not Go-extracted.** `tests/vectors/codec/`
+>   had only a MANIFEST; M0.2's extract-vectors stub produced no codec `.json`. M0.16 hand-authored
+>   `tests/vectors/codec/{codec.json,typeid_table.json}` directly from `specs/03 §2.4` + `specs/15
+>   §4.1/§6`, each tagged with a `_provenance` note. A Go cross-check of these vectors is owed to
+>   **X-cross-cutting** (extract-vectors maturation). `conformance::run_codec_suite` (Go-vector-free)
+>   is the primary correctness anchor in the interim.
+> - **`Vec<u8>` uses the generic `Vec<T>` codec path** (one byte per element) — byte-identical to
+>   Go's bulk-copy, just without the fast-copy optimization (Rust trait coherence forbids a
+>   `Vec<u8>` specialization without unstable `specialization`). Maps are `BTreeMap`-only (no
+>   `HashMap` serialization), satisfying the determinism rule.
+> - **`[lints] workspace = true` opt-in is NOT used by M0 crates.** With it on,
+>   `unused_crate_dependencies` fires spuriously on every integration-test binary. CLAUDE.md /
+>   `specs/01 §7.3` say "each crate opts in"; current repo reality diverges. `#![forbid(unsafe_code)]`
+>   is enforced per-crate via inner attribute regardless. **Open decision for X-cross-cutting:** either
+>   fix all crates to opt in (+ `use X as _;` test suppressions) or relax the spec guidance.
+> - **`ava-crypto` gained two FFI-adjacent deps:** `ring` (ECDSA-P256/RSA signature verification in
+>   `staking::verify` — secp256k1 is k1-only and cannot verify P-256) and `time` (cert validity
+>   window). Both were already transitively in the build graph via `rcgen`'s pinned `ring` backend,
+>   so `Cargo.lock` changed by only two dependency edges (no new packages).
+> - **BLS `Signer` trait is synchronous, not `#[async_trait]`** (`specs/25 §3.1` shows async).
+>   `async-trait` is not an `ava-crypto` dep and M0 forbids adding new deps here; the trait is
+>   object-safe + `Send + Sync` and can go async when the deferred `RpcSigner` lands with proto
+>   codegen (`ava-vm-rpc`).
+> - **M0.20 RSA-reject vectors are synthesized in-test** (a tiny TLV encoder builds minimal X.509
+>   DER with an out-of-policy RSA SPKI) because the committed `nodeid.json` omits the `large_rsa_key`
+>   case and rcgen's `ring` backend cannot emit RSA keys. Covers `UnsupportedRsaModulusBitLen`
+>   (RSA-3072) and `UnsupportedRsaPublicExponent` (exp 3). Folding these into the Go-extracted
+>   `nodeid.json` is owed to X-cross-cutting.
+> - **`ava-version::CURRENT` is a `LazyLock<Application>`, not a `const`** (`Application.name` is a
+>   `String`). Matches `specs/03 §5.1`'s own use of `LazyLock`; no behavioral difference.
 
 ## Dependency map & parallel waves
 
@@ -186,7 +224,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.6: ID string/JSON forms (CB58 Display/FromStr, NodeID prefix)
+### Task M0.6: ID string/JSON forms (CB58 Display/FromStr, NodeID prefix) ✅ COMPLETED
 **Crate:** `ava-types` (+ depends on crypto cb58) · **Depends on:** M0.5, M0.17 · **Spec:** `03` §1.1 (Display/FromStr/JSON), §3.2 (CB58); `15` §4.4
 **Files:**
 - Modify: `crates/ava-types/src/{id.rs,short_id.rs,node_id.rs}`
@@ -298,7 +336,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.13: `ava-crypto` hashing (sha256 / ripemd160 / keccak / checksum / address)
+### Task M0.13: `ava-crypto` hashing (sha256 / ripemd160 / keccak / checksum / address) ✅ COMPLETED
 **Crate:** `ava-crypto` · **Depends on:** M0.5 · **Spec:** `03` §3.1 (`utils/hashing`)
 **Files:**
 - Create: `crates/ava-crypto/Cargo.toml`, `crates/ava-crypto/src/lib.rs`, `crates/ava-crypto/src/hashing.rs`, `crates/ava-crypto/src/error.rs`
@@ -312,7 +350,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.14: `ava-codec` Packer (BE primitive reader/writer, sticky errors)
+### Task M0.14: `ava-codec` Packer (BE primitive reader/writer, sticky errors) ✅ COMPLETED
 **Crate:** `ava-codec` · **Depends on:** M0.5 · **Spec:** `03` §2.1 (Packer), §7 (PackerError); `15` §4.1
 **Files:**
 - Create: `crates/ava-codec/Cargo.toml`, `crates/ava-codec/src/lib.rs`, `crates/ava-codec/src/packer.rs`, `crates/ava-codec/src/error.rs`
@@ -326,7 +364,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.15: `ava-codec-derive` macro + `Serializable`/`Deserializable` traits
+### Task M0.15: `ava-codec-derive` macro + `Serializable`/`Deserializable` traits ✅ COMPLETED
 **Crate:** `ava-codec-derive` (+ `ava-codec` traits) · **Depends on:** M0.14 · **Spec:** `03` §2.4 (reflectcodec rules), §2.5 (derive surface), §9 (field order/size)
 **Files:**
 - Create: `crates/ava-codec-derive/Cargo.toml` (`proc-macro = true`), `crates/ava-codec-derive/src/lib.rs`
@@ -343,7 +381,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.16: Codec `Manager` + linearcodec typeID registry + version framing
+### Task M0.16: Codec `Manager` + linearcodec typeID registry + version framing ✅ COMPLETED
 **Crate:** `ava-codec` · **Depends on:** M0.15 · **Spec:** `03` §2.2 (Manager/Codec), §2.3 (typeID registry); `15` §4.1, §6 (version bytes)
 **Files:**
 - Create: `crates/ava-codec/src/manager.rs`, `crates/ava-codec/src/linearcodec.rs`, `crates/ava-codec/src/codectest.rs` (feature `testutil`)
@@ -363,7 +401,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.17: CB58 re-export + `formatting` (Hex/HexC/HexNC) + bech32 addresses
+### Task M0.17: CB58 re-export + `formatting` (Hex/HexC/HexNC) + bech32 addresses ✅ COMPLETED
 **Crate:** `ava-crypto` · **Depends on:** M0.11, M0.13, M0.8 · **Spec:** `03` §3.2 (formatting), §3.3 (bech32); `15` §4.4
 **Files:**
 - Create: `crates/ava-crypto/src/cb58.rs` (re-export `ava_utils::cb58`), `crates/ava-crypto/src/formatting.rs`, `crates/ava-crypto/src/address.rs`
@@ -377,7 +415,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.18: secp256k1 (recoverable, low-S enforce, recover→address)
+### Task M0.18: secp256k1 (recoverable, low-S enforce, recover→address) ✅ COMPLETED
 **Crate:** `ava-crypto` · **Depends on:** M0.13, M0.17 · **Spec:** `03` §3.4 (secp256k1); `00` §7.6 (FFI boundary)
 **Files:**
 - Create: `crates/ava-crypto/src/secp256k1.rs`
@@ -391,7 +429,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.19: BLS12-381 (`min_pk`): sign / aggregate / PoP / verify
+### Task M0.19: BLS12-381 (`min_pk`): sign / aggregate / PoP / verify ✅ COMPLETED
 **Crate:** `ava-crypto` · **Depends on:** M0.13 · **Spec:** `03` §3.5 (BLS); `25` §3.1 (Signer trait shape — trait deferred to M0.21)
 **Files:**
 - Create: `crates/ava-crypto/src/bls/mod.rs`, `crates/ava-crypto/src/bls/{keys.rs,sign.rs,ciphersuite.rs}`
@@ -405,7 +443,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.20: Staking cert generation + strict parse + NodeID-from-cert
+### Task M0.20: Staking cert generation + strict parse + NodeID-from-cert ✅ COMPLETED
 **Crate:** `ava-crypto` (+ `ava-types::NodeId`) · **Depends on:** M0.13, M0.5 · **Spec:** `03` §3.6 (staking certs, NodeID); `25` §2.1, §8.1
 **Files:**
 - Create: `crates/ava-crypto/src/staking/{mod.rs,tls.rs,parse.rs,verify.rs,certificate.rs}`
@@ -425,7 +463,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.21: BLS `Signer` trait + `LocalSigner` lifecycle (file/zeroize)
+### Task M0.21: BLS `Signer` trait + `LocalSigner` lifecycle (file/zeroize) ✅ COMPLETED
 **Crate:** `ava-crypto` · **Depends on:** M0.19 · **Spec:** `25` §3.1–§3.2 (Signer trait, LocalSigner); `25` §6 (zeroize, perms)
 **Files:**
 - Create: `crates/ava-crypto/src/bls/signer.rs`, `crates/ava-crypto/src/bls/local_signer.rs`
@@ -441,7 +479,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.22: `ava-version` `Application` + `Compatibility`
+### Task M0.22: `ava-version` `Application` + `Compatibility` ✅ COMPLETED
 **Crate:** `ava-version` · **Depends on:** M0.5 · **Spec:** `03` §5.1 (`version/`); `26` (version taxonomy)
 **Files:**
 - Create: `crates/ava-version/Cargo.toml`, `crates/ava-version/src/lib.rs`, `crates/ava-version/src/application.rs`, `crates/ava-version/src/compatibility.rs`
@@ -455,7 +493,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.23: `UpgradeConfig` + `Fork` + activation schedule (protocol constants)
+### Task M0.23: `UpgradeConfig` + `Fork` + activation schedule (protocol constants) ✅ COMPLETED
 **Crate:** `ava-version` · **Depends on:** M0.22, M0.5 · **Spec:** `03` §5.2 + §11 (upgrade gating, verbatim tables); `15` (constants)
 **Files:**
 - Create: `crates/ava-version/src/upgrade.rs`
