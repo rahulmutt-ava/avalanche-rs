@@ -479,7 +479,9 @@ fn batch_inner<D: Database>(db: D) {
     let inner_first = first.inner();
     {
         let inner_second = second.inner();
-        inner_first.replay(inner_second_as_wd(inner_second)).unwrap();
+        inner_first
+            .replay(inner_second_as_wd(inner_second))
+            .unwrap();
     }
     second.write().unwrap();
 

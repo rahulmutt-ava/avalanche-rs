@@ -24,8 +24,11 @@ pub mod traits;
 #[cfg(feature = "testutil")]
 pub mod dbtest;
 
+pub mod memdb;
+
 pub use batch::{BatchOp, BatchOps};
 pub use error::{Error, Result};
+pub use memdb::MemDb;
 pub use traits::{
     Batch, Batcher, BoxIter, Compacter, Database, DynDatabase, Iteratee, Iterator, IteratorError,
     KeyValueDeleter, KeyValueReader, KeyValueWriter, WriteDelete,
