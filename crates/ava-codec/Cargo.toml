@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Hand-written byte-exact linear codec (Packer + Manager + linearcodec registry) (M0 / specs 03 §2)."
 
 # Dependency direction (specs/03 §0): ava-codec depends only on ava-types
@@ -24,4 +25,4 @@ pretty_assertions = { workspace = true }
 
 [features]
 # `testutil` exposes the generic codec conformance suite (codectest analogue).
-testutil = []
+testutil = [  ]

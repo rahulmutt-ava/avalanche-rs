@@ -230,7 +230,7 @@ The Rust flake keeps the **same shape and the same supported-systems list**, add
           shellHook = ''
             export PATH="$PWD/scripts:$PWD/bin:$PATH"
             # Faster, reproducible incremental builds
-            export CARGO_HOME="''${CARGO_HOME:-$PWD/.cargo-home}"
+            export CARGO_HOME="''${CARGO_HOME:-$HOME/.cargo}"
           '';
         };
       });

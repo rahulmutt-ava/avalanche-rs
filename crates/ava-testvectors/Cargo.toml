@@ -6,13 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Generic golden-vector loader for the tests/vectors/ corpus (tier X / X.11, specs/22 §6)."
 
 [features]
 # The loader is test-only utility code; gate it so it never ships in a release
 # dependency graph (mirrors the Go codectest `testutil` split).
-default = []
-testutil = []
+default = [  ]
+testutil = [  ]
 
 [dependencies]
 serde = { workspace = true }

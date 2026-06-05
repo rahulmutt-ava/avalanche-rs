@@ -1,11 +1,13 @@
 # rustfmt.toml — see specs/01-development-environment.md §7.1.
+# NOTE: only stable rustfmt options are set here. The import-grouping /
+# doc-comment options the spec lists (imports_granularity = "Module",
+# group_imports = "StdExternalCrate", format_code_in_doc_comments,
+# normalize_comments) are nightly-only and are silently ignored by the pinned
+# stable toolchain (rust-toolchain.toml), so they are omitted to avoid the
+# misleading "unstable features are only available in nightly" warnings.
 edition = "2024"
 max_width = 100
 use_small_heuristics = "Default"
-imports_granularity = "Module"     # group `use` per module path
-group_imports = "StdExternalCrate" # std → external → crate (mirrors Go's gci order)
 reorder_imports = true
 reorder_modules = true
-newline_style = "Unix"             # LF (mirrors .editorconfig)
-format_code_in_doc_comments = true
-normalize_comments = true
+newline_style = "Unix" # LF (mirrors .editorconfig)

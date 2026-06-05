@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Core Avalanche primitive types: ids, fixed byte arrays, errors (M0 / specs 03 §1)."
 
 # Dependency direction (specs/03 §0): ava-types is the lowest primitive crate.

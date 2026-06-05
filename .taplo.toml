@@ -1,0 +1,20 @@
+# .taplo.toml — TOML formatter/linter config (specs/01 §7).
+# The Taskfile invokes `taplo fmt`/`taplo fmt --check` with no path arguments,
+# so without this `include`/`exclude` taplo would recurse into vendored
+# dependency manifests under target/ (e.g. a redirected CARGO_HOME) and Bazel's
+# convenience symlinks, failing CI on files we do not own.
+include = [ "**/*.toml" ]
+exclude = [
+  "target/**",
+  "bazel-*/**",
+  "**/.cargo-home/**",
+]
+
+[formatting]
+# Keep diffs small and predictable: don't reflow author-written layout.
+align_entries = false
+align_comments = false
+array_auto_expand = false
+array_auto_collapse = false
+compact_arrays = false
+reorder_keys = false

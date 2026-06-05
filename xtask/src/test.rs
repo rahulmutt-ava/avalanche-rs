@@ -21,7 +21,14 @@ fn cargo(args: &[&str]) -> anyhow::Result<()> {
 
 /// `test-unit`: nextest CI profile + doctests (mirrors the Taskfile task).
 pub fn test_unit() -> anyhow::Result<()> {
-    cargo(&["nextest", "run", "--workspace", "--all-features", "--profile", "ci"])?;
+    cargo(&[
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--profile",
+        "ci",
+    ])?;
     cargo(&["test", "--doc", "--workspace", "--all-features"])
 }
 
@@ -61,6 +68,8 @@ pub fn test_differential(seed: Option<u64>, recorded: bool) -> anyhow::Result<()
 ///
 /// SCAFFOLD: owned by tier-X task X.13 (and deepened by the VM milestones).
 pub fn test_reexecute() -> anyhow::Result<()> {
-    eprintln!("xtask test-reexecute: reexecute suite is owned by tier-X task X.13 (deepened M4–M7).");
+    eprintln!(
+        "xtask test-reexecute: reexecute suite is owned by tier-X task X.13 (deepened M4–M7)."
+    );
     Ok(())
 }

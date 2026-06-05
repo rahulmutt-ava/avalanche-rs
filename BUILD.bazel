@@ -14,7 +14,6 @@ load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
 # Do not walk the in-repo Cargo caches / build output — they hold vendored crate
 # sources whose deps must resolve to @crates//:, not to copies under these dirs
 # (scanning them floods gazelle with "multiple matches" errors and exits non-zero).
-# gazelle:exclude .cargo-home
 # gazelle:exclude target
 # cargo-fuzz crates are detached from the root workspace (own [workspace] table)
 # and built via `cargo +nightly fuzz build` (the test-fuzz task), not Bazel;

@@ -10,15 +10,20 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask", "tests/differential"]
+members = [ "crates/*", "xtask", "tests/differential" ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "BSD-3-Clause"
-authors = ["Ava Labs, Inc."]
+authors = [ "Ava Labs, Inc." ]
 repository = "https://github.com/ava-labs/avalanche-rs"
+# Internal workspace crates are not published to crates.io during the port.
+# This also lets cargo-deny accept intra-workspace `path` deps under the strict
+# `wildcards = "deny"` policy (allow-wildcard-paths applies to private crates).
+# A crate intended as a released SDK can override with `publish = true`.
+publish = false
 
 # Canonical external dependencies, pinned once here per specs/00 §4 and consumed
 # by member crates via `dep = { workspace = true }`. Entries are only resolved
@@ -30,7 +35,7 @@ thiserror = "2"
 anyhow = "1"
 
 # Serialization (JSON / API; the linear codec is hand-written in ava-codec)
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = [ "derive" ] }
 serde_json = "1"
 
 # Encodings
@@ -44,14 +49,18 @@ sha3 = "0.10"
 ripemd = "0.1"
 
 # Cryptography
-secp256k1 = { version = "0.31", features = ["recovery", "global-context"] }
+secp256k1 = { version = "0.31", features = [ "recovery", "global-context" ] }
 blst = "0.3"
 
 # Staking TLS / X.509 certs.
 # Use the `ring` crypto backend (cc + perl) rather than the default `aws_lc_rs`
 # (needs cmake/nasm) so the workspace builds with just a C toolchain. The Nix
 # dev shell still ships cmake for the rocksdb/firewood crates (M1).
-rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "ring"] }
+rcgen = { version = "0.13", default-features = false, features = [
+  "pem",
+  "crypto",
+  "ring",
+] }
 x509-parser = "0.16"
 rustls-pemfile = "2"
 
@@ -67,17 +76,17 @@ smallvec = "1"
 bytes = "1"
 
 # Time (formatting only; consensus time math stays integer/Duration-based)
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = [ "clock" ] }
 
 # Tracing / observability (ava-logging; specs/18). The subscriber/OTel layers
 # are wired in their owning milestones (X.18); the facade is pinned here.
 tracing = "0.1"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = [ "derive" ] }
 
 # Proc-macro support (ava-codec-derive)
-syn = { version = "2", features = ["full"] }
+syn = { version = "2", features = [ "full" ] }
 quote = "1"
 proc-macro2 = "1"
 
@@ -87,7 +96,7 @@ rstest = "0.23"
 assert_matches = "1.5"
 pretty_assertions = "1"
 libfuzzer-sys = "0.4"
-arbitrary = { version = "1", features = ["derive"] }
+arbitrary = { version = "1", features = [ "derive" ] }
 
 # Workspace-wide lints (specs/01 §7.3). Each crate opts in with `[lints]
 # workspace = true`. unsafe_code is forbidden except in the audited FFI wrapper
@@ -100,10 +109,10 @@ unused_crate_dependencies = "warn"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 # Project bans mirroring Go's forbidigo/depguard (specs/01 §7.5):
-unwrap_used = "deny"            # no unwrap() in non-test lib code (00 §8)
+unwrap_used = "deny" # no unwrap() in non-test lib code (00 §8)
 expect_used = "warn"
 indexing_slicing = "warn"
-arithmetic_side_effects = "warn"  # nudge toward checked arithmetic (00 §6.1)
+arithmetic_side_effects = "warn" # nudge toward checked arithmetic (00 §6.1)
 todo = "warn"
 dbg_macro = "deny"
 
@@ -111,7 +120,7 @@ dbg_macro = "deny"
 overflow-checks = true
 debug-assertions = true
 
-[profile.dev-checks]            # build-race analogue: max runtime checking
+[profile.dev-checks] # build-race analogue: max runtime checking
 inherits = "dev"
 overflow-checks = true
 debug-assertions = true

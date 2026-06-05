@@ -2,18 +2,18 @@
 # Bump deliberately (one PR); CI asserts Bazel + Nix + workflow matrix agree.
 # See specs/01-development-environment.md §2.
 [toolchain]
-channel = "1.96.0"        # exact stable patch; bump in lock-step with reth's MSRV
-profile = "minimal"        # we add components explicitly below
+channel = "1.96.0" # exact stable patch; bump in lock-step with reth's MSRV
+profile = "minimal" # we add components explicitly below
 components = [
-    "rustfmt",
-    "clippy",
-    "rust-src",            # needed by rust-analyzer and some build deps
-    "llvm-tools",          # for cargo-llvm-cov (coverage), mirrors -coverprofile
+  "rustfmt",
+  "clippy",
+  "rust-src", # needed by rust-analyzer and some build deps
+  "llvm-tools", # for cargo-llvm-cov (coverage), mirrors -coverprofile
 ]
 # Cross/extra targets compiled in CI release jobs (mirror Go's GOOS/GOARCH matrix).
 targets = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
-    "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
 ]

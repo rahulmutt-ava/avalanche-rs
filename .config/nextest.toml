@@ -9,12 +9,16 @@ failure-output = "immediate-final"
 fail-fast = false
 
 [profile.ci]
-retries = 1                     # tolerate flakes in CI only
+retries = 1 # tolerate flakes in CI only
 slow-timeout = { period = "120s", terminate-after = 3 }
 final-status-level = "fail"
 junit = { path = "target/nextest/ci/junit.xml" }
 
 # Long-running suites (reexec, differential) get a longer leash.
+# NOTE: the SAE crates (`package(ava-saevm)`) land in M7; nextest errors on a
+# filter that references a package not yet in the workspace, so this override
+# only names surfaces that exist today. Re-add `package(ava-saevm) or ` here
+# when M7 introduces the SAE sub-workspace (specs/01 §6, specs/02 §11.6).
 [[profile.ci.overrides]]
-filter = "package(ava-saevm) or test(/differential_/)"
+filter = "test(/differential_/)"
 slow-timeout = { period = "900s", terminate-after = 4 }
