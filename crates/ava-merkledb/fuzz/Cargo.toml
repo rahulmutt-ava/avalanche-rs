@@ -1,0 +1,50 @@
+# Standalone cargo-fuzz crate for ava-merkledb (M1.25, spec 02 §8).
+#
+# This is deliberately NOT a member of the root workspace: the root globs
+# `crates/*` which does not match `crates/ava-merkledb/fuzz`, and the empty
+# `[workspace]` table below makes that explicit so `cargo fuzz` treats this dir
+# as its own workspace root. Keeping it out of the root workspace also keeps
+# `libfuzzer-sys` (which needs a nightly compiler + LLVM sanitizers at
+# `cargo fuzz run`/`build` time) out of the normal stable `cargo build`/test
+# graph.
+#
+# Run it (requires nightly — see README.md):
+#   cargo +nightly fuzz run op_stream
+#   cargo +nightly fuzz run node_codec
+# On the pinned stable nix shell the equivalent coverage is the
+# `tests/prop_fuzz_smoke.rs` proptest, run by `cargo nextest`.
+
+[package]
+name = "ava-merkledb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+# The op-stream model + oracle check + decoder live in ava-merkledb behind the
+# `fuzzing` feature, so the fuzz targets and the stable smoke test share one
+# implementation.
+ava-merkledb = { path = "..", features = ["fuzzing"] }
+
+[[bin]]
+name = "op_stream"
+path = "fuzz_targets/op_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "node_codec"
+path = "fuzz_targets/node_codec.rs"
+test = false
+doc = false
+bench = false
+
+# Empty table: this crate is its own workspace root, not a member of the repo
+# root workspace.
+[workspace]

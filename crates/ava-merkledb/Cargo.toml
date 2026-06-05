@@ -20,6 +20,16 @@ arc-swap = { workspace = true }
 # Not yet in the root [workspace.dependencies]; pinned locally (see report).
 lru = "0.12"
 rayon = "1"
+# Structure-aware fuzz input model; optional, only pulled in by the `fuzzing`
+# feature (the standalone fuzz/ crate + the `--all-features` dev-test build).
+# Not yet in the root [workspace.dependencies]; pinned locally (see report).
+arbitrary = { version = "1", features = ["derive"], optional = true }
+
+[features]
+# Exposes `fuzz_support` (the canonical DbOp op-stream + oracle check shared by
+# the cargo-fuzz targets and the stable `prop_fuzz_smoke` proptest). Enabled by
+# `crates/ava-merkledb/fuzz` and by the `--all-features` verification gate.
+fuzzing = ["dep:arbitrary"]
 
 [dev-dependencies]
 ava-database = { path = "../ava-database", features = ["testutil"] }
