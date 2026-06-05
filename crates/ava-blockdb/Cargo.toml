@@ -1,0 +1,34 @@
+[package]
+name = "ava-blockdb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Append-optimized, height-indexed block store (byte-exact port of x/blockdb) (M1 / specs 04 §5.1, 27 §5.1)."
+
+# Self-contained on M0 crates only: this crate intentionally does NOT depend on
+# ava-database or any sibling M1 crate (they are built in parallel). It defines
+# its own error enum (specs/04 §5.1).
+[dependencies]
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+# NOTE (workspace promotion): the following are pinned locally because the root
+# Cargo.toml does not yet carry them. Promote to [workspace.dependencies] later.
+# - twox-hash: XXH64 (seed 0) == Go cespare/xxhash/v2 used for blockdb checksums.
+# - zstd: block compression (DataDog/zstd in Go produces standard zstd frames).
+# - lru: block cache.
+twox-hash = "1.6"
+zstd = "0.13"
+lru = "0.12"
+
+[dev-dependencies]
+proptest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+tempfile = "3"
