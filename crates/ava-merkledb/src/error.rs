@@ -68,6 +68,83 @@ pub enum Error {
     #[error("closed")]
     Closed,
 
+    // --- Proof errors (Go `x/merkledb/proof.go`) ---
+    /// The proof is empty. Go `ErrEmptyProof`.
+    #[error("proof is empty")]
+    EmptyProof,
+
+    /// The recomputed root didn't match the expected root. Go `ErrInvalidProof`.
+    #[error("proof obtained an invalid root ID")]
+    InvalidProof,
+
+    /// The proven key has a partial final byte. Go `ErrProofKeyPartialByte`.
+    #[error("the provided key has partial byte length")]
+    ProofKeyPartialByte,
+
+    /// A node with a partial-byte key carried a value. Go
+    /// `ErrPartialByteLengthWithValue`.
+    #[error("partial byte length key with value")]
+    PartialByteLengthWithValue,
+
+    /// The proven value didn't match the proof node's value digest. Go
+    /// `ErrProofValueDoesntMatch`.
+    #[error("the provided value does not match the proof node for the provided key's value")]
+    ProofValueDoesntMatch,
+
+    /// An exclusion proof carried a value. Go `ErrExclusionProofUnexpectedValue`.
+    #[error("exclusion proof's value should be empty")]
+    ExclusionProofUnexpectedValue,
+
+    /// A proof node's key isn't a prefix of the proven key. Go
+    /// `ErrProofNodeNotForKey`.
+    #[error("the provided path has a key that is not a prefix of the specified key")]
+    ProofNodeNotForKey,
+
+    /// Proof node keys weren't strictly increasing. Go
+    /// `ErrNonIncreasingProofNodes`.
+    #[error("each proof node key must be a strict prefix of the next")]
+    NonIncreasingProofNodes,
+
+    /// An exclusion proof was missing required end nodes. Go
+    /// `ErrExclusionProofMissingEndNodes`.
+    #[error("missing end nodes from path")]
+    ExclusionProofMissingEndNodes,
+
+    /// An exclusion proof's replacement node was at the wrong index. Go
+    /// `ErrExclusionProofInvalidNode`.
+    #[error("invalid node for exclusion proof")]
+    ExclusionProofInvalidNode,
+
+    /// `start > end` for a range/change proof. Go `ErrStartAfterEnd`.
+    #[error("start key is greater than end key")]
+    StartAfterEnd,
+
+    /// A range proof's `max_length` was not positive. Go `ErrInvalidMaxLength`.
+    #[error("expected max length to be > 0")]
+    InvalidMaxLength,
+
+    /// Range/change proof keys weren't strictly increasing. Go
+    /// `ErrNonIncreasingValues`.
+    #[error("keys sent are not in increasing order")]
+    NonIncreasingValues,
+
+    /// A key fell outside the requested `[start, end]` range. Go
+    /// `ErrStateFromOutsideOfRange`.
+    #[error("state key falls outside of the start->end range")]
+    StateFromOutsideOfRange,
+
+    /// A proof node's key length disagreed with its byte length. Go
+    /// `errInvalidKeyLength`.
+    #[error("key length doesn't match bytes length, check specified branchFactor")]
+    InvalidKeyLength,
+
+    /// A proof node carried a value for an in-range key absent from the proof's
+    /// key/values. Go `ErrProofNodeHasUnincludedValue`.
+    #[error(
+        "the provided proof has a value for a key within the range that is not present in the provided key/values"
+    )]
+    ProofNodeHasUnincludedValue,
+
     /// An error surfaced by the base `Database`.
     #[error("database error: {0}")]
     Database(String),

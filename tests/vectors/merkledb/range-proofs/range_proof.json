@@ -1,0 +1,52 @@
+{
+  "_provenance": "Extracted from Go x/merkledb (avalanchego rev fb174e8925, go1.25.9) via db.GetRangeProof(Some(0x01), Some(0x03), 10) over the basic batch fixture {i}->{i} for i in [0,4] at BranchFactor16. proto_hex is the deterministic (proto.MarshalOptions{Deterministic:true}) encoding of sync.RangeProof — Go's default proto.Marshal randomizes ProofNode.children map order, so the canonical/deterministic form is committed (see FINDING).",
+  "branch_factor": "BranchFactor16",
+  "root_hex": "f3b6b7d99184423b41b68f09d2c3ac0fe7d3325c5d67d31fdb8ca5a17d62d38a",
+  "kvs": [
+    { "key_hex": "00", "value_hex": "00" },
+    { "key_hex": "01", "value_hex": "01" },
+    { "key_hex": "02", "value_hex": "02" },
+    { "key_hex": "03", "value_hex": "03" },
+    { "key_hex": "04", "value_hex": "04" }
+  ],
+  "start_hex": "01",
+  "end_hex": "03",
+  "max_length": 10,
+  "start_proof": [
+    {
+      "key_length_bits": 8,
+      "key_value_hex": "01",
+      "has_value_or_hash": true,
+      "value_or_hash_hex": "01",
+      "children": {}
+    }
+  ],
+  "end_proof": [
+    {
+      "key_length_bits": 4,
+      "key_value_hex": "00",
+      "has_value_or_hash": false,
+      "value_or_hash_hex": "",
+      "children": {
+        "00": "073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b9",
+        "01": "f3ff56d1d653abfb464b689a09cd6109cca840e930d6f805d34a9403e47244ea",
+        "02": "f9b0e4c620c9a3ac1f4cce07b3aeb6ceaa2e9c65a6f3e0145d874b090dad3bce",
+        "03": "ef57b1dd004d23fe901c4f1aba3b8acac03f0f8140cf1f2a87e88757252ae260",
+        "04": "7e0218ec3de4c3ebdcf9d7525f1796ee7561ac5a3af26cffc740d319f5d295d2"
+      }
+    },
+    {
+      "key_length_bits": 8,
+      "key_value_hex": "03",
+      "has_value_or_hash": true,
+      "value_or_hash_hex": "03",
+      "children": {}
+    }
+  ],
+  "key_values": [
+    { "key_hex": "01", "value_hex": "01" },
+    { "key_hex": "02", "value_hex": "02" },
+    { "key_hex": "03", "value_hex": "03" }
+  ],
+  "proto_hex": "0a0c0a05080812010112030a010112c5010a0508041201001a2408001220073615413d814b23383fc2c8d8af13abfffcb371b654b98dbf47dd74b1e4d1b91a2408011220f3ff56d1d653abfb464b689a09cd6109cca840e930d6f805d34a9403e47244ea1a2408021220f9b0e4c620c9a3ac1f4cce07b3aeb6ceaa2e9c65a6f3e0145d874b090dad3bce1a2408031220ef57b1dd004d23fe901c4f1aba3b8acac03f0f8140cf1f2a87e88757252ae2601a24080412207e0218ec3de4c3ebdcf9d7525f1796ee7561ac5a3af26cffc740d319f5d295d2120c0a05080812010312030a01031a060a01011201011a060a01021201021a060a0103120103"
+}

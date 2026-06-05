@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 40b3553f281bb166b0c95de66a2a13cf260638e8e3deeb608f359dfb32ee7245 # shrinks to kvs = {[2, 0]: [], [2, 1]: [], [3]: []}, a = [3], b = [0]
+cc dd2f6babad6cb7d162586a336e7022a3df43c0f333f7d449935f2554ef5a6843 # shrinks to kvs = {[0]: [], [0, 4]: [], [1]: []}, a = [1], b = [0, 0]
+cc 8fd2d317bd587647af4de1271fa844c6ecc3c62d49593c005fe1134aa7c76c12 # shrinks to kvs = {[4, 2]: [], [4, 3]: [], [5]: []}, a = [5], b = [4, 0]
+cc 357084bee7d44ab1499613413b276f14ec6da86c8d05c6db0701f89f319a4a3e # shrinks to before = {[1]: []}, after = {[0]: []}, a = [1], b = [1]
