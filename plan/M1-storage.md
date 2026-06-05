@@ -112,10 +112,56 @@
 >   No shared `uvarint` helper exists yet — archivedb has a local LEB128 `put_uvarint`/`read_uvarint`
 >   (candidate for promotion to a shared helper).
 >
-> **Still open (M1):** `ava-database` M1.4 (rocksdb — FFI, needs system lib), M1.7 (meterdb,
-> prometheus), M1.9 (linkeddb), M1.10 (heightindexdb), M1.11 (rpcdb — needs the `proto/` build
-> infra, not yet present); `ava-merkledb` M1.17–M1.19 (single/range/change proofs + sync proto +
-> Syncer); Firewood M1.20–M1.21 (needs M1.19); R2 import tool M1.24; fuzz + exit gate (M1.25, M1.26).
+> **Status (2026-06-06, M1 Wave 3 landed):** third parallel wave merged to `main` via two
+> isolated worktree agents (distinct crates → conflict-free):
+> - **`ava-database` remaining backends (M1.7, M1.9, M1.10, M1.4):** `MeterDb` (Prometheus
+>   `calls`/`duration`/`size` keyed on the 21-value `method` label), `LinkedDb` (linearcodec nodes,
+>   LIFO iterator, LRU head/node caches), `HeightIndex` trait + `HeightIndexMemDb`/`HeightIndexMeterDb`
+>   + `run_heightindex_suite`, and **`RocksDb`** (the FFI on-disk default — `rust-rocksdb` 0.22 /
+>   librocksdb-sys 8.10.0 builds cleanly in the Nix toolchain; snapshot iterators, atomic
+>   `WriteBatch`, `AtomicBool` close-gate). Green: `golden::meterdb_metric_names`,
+>   `golden::linkeddb_node_codec`, `conformance::run_heightindex_suite`, and
+>   `conformance::run_database_suite` + `prop::db_oracle_btreemap` over meterdb/heightindex-meterdb/rocksdb.
+> - **`ava-merkledb` proofs (M1.17, M1.18):** `Proof` (inclusion/exclusion), `RangeProof`,
+>   `ChangeProof` with a hand-rolled minimal protobuf wire encoder (no proto build infra added),
+>   generation + verification ports of Go `getProof`/`verifyProofPath`/`addPathInfo`. Green:
+>   **`golden::merkledb_proof`**, **`golden::range_proof`** (REAL Go-extracted, deterministic
+>   marshaler), `prop::proof_verify_accepts_valid_rejects_tampered` (+ 2 more proptests).
+>
+> Workspace after Wave 3: **208 tests pass** (`--all-features`; 190 after Wave 2), `cargo build
+> --workspace --all-features` / `-p avalanchers`, `cargo clippy --workspace --all-targets
+> --all-features -- -D warnings`, `cargo fmt --all --check`, doctests — all clean.
+>
+> **Findings recorded during Wave 3 (specs updated where noted):**
+> - **meterdb method-label set (spec 04 §2.5 updated):** the full driven set is **21** values
+>   (adds `batch_size`, `iterator_key`, `iterator_value` beyond the §2.5 enumeration; iterator
+>   ctor label is `new_iterator`). Go-extracted vector committed.
+> - **linkeddb node codec (spec 04 §10.6 updated):** node bytes = `0x0000` (codec.Manager version)
+>   ‖ `u32-len Value` ‖ `bool HasNext` ‖ `u32-len Next` ‖ `bool HasPrevious` ‖ `u32-len Previous`;
+>   empty node = 16 zero bytes; `node_key(k)=0x00‖k`, head at `0x01`. `LinkedDb` is NOT a full
+>   `Database` (reader/writer/deleter + LIFO only), so it doesn't run the shared suite.
+> - **proof proto determinism (spec 15 §3.10 updated):** `ProofNode.children` is the one proto map
+>   on the wire; byte-parity requires Go's `Deterministic:true` marshaler (sorts map keys). There is
+>   no single-`Proof` message — a `Proof.path` is a bare `repeated ProofNode`. Used a hand-rolled
+>   protobuf encoder (BTreeMap ascending children) → byte-equal to Go.
+> - **proof port simplifications:** in-range value tampering isn't always detectable by range-proof
+>   verification (Go behaves identically — boundary nodes injected by ID mask sub-values);
+>   `ChangeProof` generation here takes before/after states directly (history-backed generation is
+>   M1.19). Verification semantics match Go.
+> - **rocksdb wrapper keeps `#![forbid(unsafe_code)]`** — all FFI is inside `librocksdb-sys`; snapshot
+>   iterators collect the range into an owned `Vec` at creation (avoids self-referential lifetime),
+>   point-in-time-correct, mirroring memdb.
+> - **New deps (owed to X-cross-cutting for workspace-dep promotion):** `ava-database` now pins
+>   `prometheus 0.13`, `lru 0.12` (matches ava-blockdb), `ava-codec` (path; first ava-database→ava-codec
+>   edge), and behind a new optional `rocksdb` feature: `rocksdb 0.22` + `tempfile 3`. `ava-merkledb`
+>   added **no** new deps.
+>
+> **Still open (M1):** `ava-database` M1.11 (rpcdb — **blocked on `proto/` build infra, still not
+> present**); `ava-merkledb` M1.19 (sync proto + `SyncDb` + Syncer — also needs the proto build);
+> Firewood M1.20–M1.21 (need M1.19); R2 import tool M1.24 (deps M1.4 ✅, M1.14 ✅ — now unblocked);
+> fuzz M1.25 (needs nightly + cargo-fuzz tooling); exit gate M1.26. **Next-wave blocker:** the
+> shared `proto/` + tonic/prost build pipeline (an X-cross-cutting foundational task) gates both
+> M1.11 and M1.19; stand it up before the next merkledb/rpcdb wave.
 
 ---
 
@@ -173,7 +219,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test conformance_memdb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: memdb backend passing dbtest + oracle (04 §2.2)"`
 
-### Task M1.4: `rocksdb` backend (on-disk default, replaces leveldb + pebble)
+### Task M1.4: `rocksdb` backend (on-disk default, replaces leveldb + pebble) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2  ·  **Spec:** 04 §2.1, 00 §4.4
 **Files:**
 - Create: `crates/ava-database/src/rocksdb.rs`, audited `unsafe` wrapper module note
@@ -209,7 +255,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test conformance_versiondb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: versiondb overlay + merge iterator + commit_batch (04 §2.4, 27 §2)"`
 
-### Task M1.7: `meterdb` backend (Prometheus wrapper) + metrics-name golden
+### Task M1.7: `meterdb` backend (Prometheus wrapper) + metrics-name golden ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.3  ·  **Spec:** 04 §2.5, 02 §6 (metrics-name golden), 00 §7.3
 **Files:**
 - Create: `crates/ava-database/src/meterdb.rs`
@@ -233,7 +279,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test conformance_corruptabledb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: corruptabledb poison-on-error (latch Other only) (04 §2.6, 27 §6.1)"`
 
-### Task M1.9: `linkeddb` backend (in-DB doubly-linked list, linearcodec nodes)
+### Task M1.9: `linkeddb` backend (in-DB doubly-linked list, linearcodec nodes) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.3, M0 (ava-codec linearcodec)  ·  **Spec:** 04 §2.7, 04 §10.6 (node codec byte-exact)
 **Files:**
 - Create: `crates/ava-database/src/linkeddb.rs`
@@ -245,7 +291,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test golden_linkeddb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: linkeddb (linearcodec nodes, LIFO iterator, LRU caches) (04 §2.7)"`
 
-### Task M1.10: `heightindexdb` (`HeightIndex` trait + memdb/meterdb backends)
+### Task M1.10: `heightindexdb` (`HeightIndex` trait + memdb/meterdb backends) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.7  ·  **Spec:** 04 §2.9, 04 §6.1 (own dbtest battery)
 **Files:**
 - Create: `crates/ava-database/src/heightindex.rs`
@@ -329,7 +375,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test prop_merkle` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: prop::merkle_order_independent_root + oracle invariants (02 §4.2)"`
 
-### Task M1.17: single proof (`golden::merkledb_proof`, inclusion/exclusion)
+### Task M1.17: single proof (`golden::merkledb_proof`, inclusion/exclusion) ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.14, M1.15  ·  **Spec:** 04 §3.6 (single proof), 15 §3.10 (proto envelope), 02 §6.3
 **Files:**
 - Create: `crates/ava-merkledb/src/proof.rs`
@@ -341,7 +387,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test golden_proof` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: single Proof (inclusion/exclusion) + sync proto envelope golden (04 §3.6, 15 §3.10)"`
 
-### Task M1.18: range proof + change proof (`golden::range_proof`)
+### Task M1.18: range proof + change proof (`golden::range_proof`) ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.17  ·  **Spec:** 04 §3.6 (RangeProof/ChangeProof), 15 §3.10, 02 §6.3
 **Files:**
 - Modify: `crates/ava-merkledb/src/proof.rs`

@@ -285,6 +285,14 @@ metric names (the `method` label set: `has`, `get`, `put`, `delete`, `new_batch`
 Uses `prometheus` histograms/counters. A metrics-name golden test guards parity
 (cross-ref 02, §7.3).
 
+> **Confirmed M1.7 (Go-extracted vector, `database/meterdb`).** The full driven
+> `method` label set is **21** values — the enumeration above is representative;
+> the complete set additionally includes `batch_size`, `iterator_key`, and
+> `iterator_value`, and the single iterator-construction label is `new_iterator`
+> (not `new_iterator_with_*`). The Rust port records `calls`/`duration`/`size`
+> as CounterVec/GaugeVec keyed on the `method` label. Vector committed at
+> `crates/ava-database/tests/vectors/meterdb/metric_names.json`.
+
 ### 2.6 `corruptabledb` — poison-on-error
 
 Wraps any `Database`. On any error **other than** `Closed`/`NotFound`, it latches
@@ -980,6 +988,20 @@ are **linkeddb** nodes, not bare values (cross-ref §2.7). For each logical entr
 store writes `key → linearcodec(node{ value, hasNext, next, hasPrevious, previous })`,
 plus a head pointer at the fixed key `0x01` (`headKey`). The Rust `LinkedDb` must
 reproduce this node codec byte-exact so a migrated list iterates identically.
+
+> **Confirmed M1.9 (Go-extracted vector, `database/linkeddb`).** The persisted
+> node bytes are `0x0000` (the codec.Manager 2-byte version prefix) ‖
+> `u32-len Value` ‖ `bool HasNext` ‖ `u32-len Next` ‖ `bool HasPrevious` ‖
+> `u32-len Previous`; an empty node is 16 zero bytes. Node keys are
+> `node_key(k) = 0x00 ‖ k` (1-byte zero prefix) so they never collide with the
+> `0x01` head pointer. The Rust `Node` (`#[derive(AvaCodec)]` over a
+> `Manager::new(i32::MAX)` + `LinearCodec`) reproduces these bytes exactly
+> (vector at `crates/ava-database/tests/vectors/linkeddb/node_codec.json`).
+> Note `LinkedDb` is **not** a full `Database` — it exposes
+> reader/writer/deleter + LIFO iteration only (no `Compacter`/`Iteratee`/
+> `Batcher`), so it does not run the shared `run_database_suite` (its iteration
+> is LIFO, not lexicographic); it is covered by LIFO/relink unit tests + the
+> codec golden, matching Go's `LinkedDB` interface.
 
 ### 10.7 Indexer (`indexer/`)
 

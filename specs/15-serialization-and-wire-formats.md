@@ -287,6 +287,16 @@ No service (carried as `AppRequest`/`AppResponse` app bytes, `04`/`05`). Message
 - `RangeProof{start_proof:1:repeated ProofNode, end_proof:2:repeated ProofNode, key_values:3:repeated KeyValue}`.
 - `ProofNode{key:1:Key, value_or_hash:2:MaybeBytes, children:3:map<uint32,bytes>}`.  ← **only proto map on the wire in the whole tree** (see §6 caveat).
 - `KeyChange{key:1, value:2:MaybeBytes}`; `Key{length:1:uint64, value:2:bytes}`; `MaybeBytes{value:1:bytes}` (presence = "something"); `KeyValue{key:1, value:2}`.
+> **Determinism caveat (confirmed M1.17, ava-merkledb proof port).** Because
+> `ProofNode.children` is the one proto map on the wire, Go's default
+> `proto.Marshal` randomizes its key order and produces non-reproducible bytes
+> run-to-run for any multi-child node. Byte-exact parity is only against Go's
+> **deterministic** marshaler (`proto.MarshalOptions{Deterministic:true}`, which
+> sorts map keys ascending). The committed golden vectors are that canonical
+> deterministic form; the Rust encoder emits children in ascending index order
+> (`BTreeMap`) and matches byte-for-byte. Also note there is **no single-`Proof`
+> message** in `proto/sync`: a single `Proof.path` goes on the wire as a bare
+> `repeated ProofNode` (the same shape as `RangeProof.start_proof`).
 > The leaf node serialization that feeds merkledb root hashing is the **merkledb
 > codec** (`04`), byte-exact; proto here is only the transport envelope.
 
