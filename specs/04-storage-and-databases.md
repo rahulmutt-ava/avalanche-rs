@@ -653,6 +653,14 @@ load-bearing part (reproduce byte-exact so a migrated dir reads):
   returns the height the value was set at.
 - **Writes:** `NewBatch(height)` buffers `Put`/`Delete` (delete = a tombstone
   value, see `value.go`) all stamped with `height`, committed atomically.
+- **Value/tombstone encoding (M1.23 finding — byte-exact):** a real value is stored
+  as `0x00 || value`; a *delete* stores an **empty (zero-length)** DB value.
+  `parseDBValue` treats `len == 0` as the tombstone (`exists = false`). Consequently
+  an explicitly-stored **empty user value** (`Put(key, &[])` → DB value `0x00`) still
+  "exists" and is distinct from a delete — do not collapse the two. `get_height` on a
+  tombstone returns `ErrNotFound` (consistent with `get`); a lower-level `get_entry`
+  may still expose `(value, delete_height, exists=false)` for callers needing strict
+  Go `GetEntry` parity.
 
 ```rust
 pub struct ArchiveDb<D: Database> { db: D }

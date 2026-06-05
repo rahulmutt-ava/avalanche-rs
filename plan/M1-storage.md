@@ -66,9 +66,56 @@
 > - **In-memory trie builder (M1.14)** is a faithful port of `view.insert` sufficient for fixed-K/V
 >   roots; full DB-backed View/history is M1.15 (not yet done).
 >
-> **Next waves (not yet started):** remaining `ava-database` backends (M1.4 rocksdb, M1.5–M1.11),
-> merkledb View/history/proofs/sync (M1.15–M1.19), Firewood (M1.20–M1.21), `ava-archivedb` (M1.23),
-> R2 import tool (M1.24), fuzz + exit gate (M1.25, M1.26).
+> **Status (2026-06-06, M1 Wave 2 landed):** second parallel wave merged to `main` via three
+> isolated worktree agents (distinct crates → conflict-free):
+> - **`ava-database` wrapper backends (M1.5, M1.6, M1.8):** `PrefixDb` (SHA-256 namespacing),
+>   `VersionDb` (overlay + merge iterator + `commit_batch`), `CorruptableDb` (latch on `Other`
+>   only). Each passes `conformance::run_database_suite` + `prop::db_oracle_btreemap`. Green:
+>   `golden::prefix_namespacing` (Go-extracted SHA-256 vector).
+> - **`ava-merkledb` View/history (M1.15, M1.16):** `View`/`TrieView` over a base `Database`
+>   (Arc-linked validity + arc_swap committed-root + sibling/descendant invalidation), bounded
+>   `history` ring, `intermediate_node_db`/`value_node_db` over §10.8 prefixes, cleanShutdown
+>   rebuild. Green: `unit::{commit_invalidates_siblings, view_layering_equals_direct,
+>   clean_shutdown_rebuild, commit_requires_db_parent}`, **`prop::merkle_order_independent_root`**
+>   (+ delete-all→EMPTY, layering==direct, BTreeMap oracle).
+> - **`ava-archivedb` (M1.23):** height-versioned KV with `^height` encoding. Green:
+>   `golden::archivedb_key_encoding` (Go-extracted), `unit::reads_newest_at_or_below`.
+>
+> Workspace after Wave 2: **190 tests pass** (`--all-features`; 152 after Wave 1), `cargo build
+> --workspace --all-features` / `-p avalanchers`, `cargo clippy --workspace --all-targets
+> --all-features -- -D warnings`, `cargo fmt --all --check` — all clean.
+>
+> **Findings recorded during Wave 2:**
+> - **Order-independent-root proptest earned its keep:** it caught a real commit bug — a node
+>   transitioning value→intermediate (a key losing its value as a sibling is added/removed) was
+>   left in the value-node store, so `get` returned `Some(b"")` instead of `None`. Fixed
+>   `commit_view` to compute add/delete of value vs intermediate nodes independently (mirrors Go
+>   `applyChanges`); triggering seed committed to `proptest-regressions/`.
+> - **merkledb View architecture (faithful, simplified):** builds the merged K/V set up the parent
+>   chain and diffs the full node set against the parent, rather than Go's incremental
+>   node-change tracking. Behavior-identical (verified vs `merkle_root` + oracle); single-pass
+>   deterministic walk (rayon pulled in but parallel subtrie hashing deferred as a pure
+>   optimization). `close()` writes the clean-shutdown marker; no `Drop` auto-close (a missing
+>   marker just triggers the idempotent rebuild on next open — matches Go §27 §4.1).
+> - **`VersionDb`:** merge iterator snapshots BOTH overlay and base at creation (avoids a
+>   self-referential lifetime over the lock guard; equivalent because the base yields snapshot
+>   iterators). `commit_batch()` returns an owned `VersionCommitBatch<D>` (Arc<D> + buffered ops);
+>   unwritten-until-`write()` semantics (§27 §2.2/§2.3) hold.
+> - **`PrefixDb`:** the prefix-JOIN path is an explicit `PrefixDb::join(&self, prefix)` method
+>   (Rust generics can't runtime-detect "base is a PrefixDb" like Go's `New`); namespacing bytes
+>   are byte-identical to Go regardless.
+> - **`ava-archivedb` tombstone precision (spec 04 §5.2 clarified):** a *delete* stores an
+>   **empty (zero-length)** DB value; a real value stores `0x00 ‖ value`; `parseDBValue` treats
+>   `len==0` as the tombstone. An explicitly-stored empty *user* value still "exists" and is
+>   distinct from a delete (regression-tested). `get_height` on a tombstone returns `NotFound`;
+>   the lower-level `get_entry` still exposes the delete height for strict Go `GetEntry` parity.
+>   No shared `uvarint` helper exists yet — archivedb has a local LEB128 `put_uvarint`/`read_uvarint`
+>   (candidate for promotion to a shared helper).
+>
+> **Still open (M1):** `ava-database` M1.4 (rocksdb — FFI, needs system lib), M1.7 (meterdb,
+> prometheus), M1.9 (linkeddb), M1.10 (heightindexdb), M1.11 (rpcdb — needs the `proto/` build
+> infra, not yet present); `ava-merkledb` M1.17–M1.19 (single/range/change proofs + sync proto +
+> Syncer); Firewood M1.20–M1.21 (needs M1.19); R2 import tool M1.24; fuzz + exit gate (M1.25, M1.26).
 
 ---
 
@@ -138,7 +185,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test conformance_rocksdb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: rocksdb backend (snapshot iterators, atomic batch) passing dbtest (04 §2.1)"`
 
-### Task M1.5: `prefixdb` backend (SHA-256 namespacing, byte-exact)
+### Task M1.5: `prefixdb` backend (SHA-256 namespacing, byte-exact) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.3, M0 (ava-crypto SHA-256)  ·  **Spec:** 04 §2.3, 04 §10.1, 04 §6.5 (encoding golden)
 **Files:**
 - Create: `crates/ava-database/src/prefixdb.rs`
@@ -150,7 +197,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test golden_prefix --test conformance_prefixdb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: prefixdb SHA-256 namespacing (MakePrefix/JoinPrefixes byte-exact) (04 §2.3)"`
 
-### Task M1.6: `versiondb` backend (in-memory overlay + merge iterator + commit batch)
+### Task M1.6: `versiondb` backend (in-memory overlay + merge iterator + commit batch) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.3  ·  **Spec:** 04 §2.4, 27 §2.2/§2.3 (CommitBatch returns unwritten batch)
 **Files:**
 - Create: `crates/ava-database/src/versiondb.rs`
@@ -174,7 +221,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test golden_meterdb_metrics --test conformance_meterdb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: meterdb prometheus wrapper + metric-name golden (04 §2.5)"`
 
-### Task M1.8: `corruptabledb` backend (poison-on-error)
+### Task M1.8: `corruptabledb` backend (poison-on-error) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.3  ·  **Spec:** 04 §2.6, 27 §6.1
 **Files:**
 - Create: `crates/ava-database/src/corruptabledb.rs`
@@ -258,7 +305,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test golden_root` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: HashNode SHA-256 byte-exact; golden::merkledb_root empty/single/multi (04 §3.4)"`
 
-### Task M1.15: View/TrieView, history, node stores
+### Task M1.15: View/TrieView, history, node stores ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.14, M1.3/M1.4 (a base `Database`)  ·  **Spec:** 04 §3.5, 27 §4.1 (cleanShutdown rebuild), 04 §10.8
 **Files:**
 - Create: `crates/ava-merkledb/src/view.rs`, `crates/ava-merkledb/src/history.rs`, `crates/ava-merkledb/src/db.rs`
@@ -270,7 +317,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test view` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: View/TrieView + history + node stores + cleanShutdown rebuild (04 §3.5, 27 §4.1)"`
 
-### Task M1.16: `prop::merkle_order_independent_root` (proptest invariants)
+### Task M1.16: `prop::merkle_order_independent_root` (proptest invariants) ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.14, M1.15  ·  **Spec:** 02 §4.2 (merkledb properties)
 **Files:**
 - Create: `crates/ava-merkledb/tests/prop_merkle.rs`, `crates/ava-merkledb/proptest-regressions/` (committed)
@@ -354,7 +401,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-blockdb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-blockdb: append-optimized block store + recovery scan + prop::blockdb_roundtrip (04 §5.1, 27 §5.1)"`
 
-### Task M1.23: `ava-archivedb` (height-versioned KV, `^height` encoding)
+### Task M1.23: `ava-archivedb` (height-versioned KV, `^height` encoding) ✅ COMPLETED
 **Crate:** `ava-archivedb`  ·  **Depends on:** M1.1, M1.3/M1.4  ·  **Spec:** 04 §5.2, 04 §6.5 (encoding golden), 04 §10.8/§10.3 (`^height` trick)
 **Files:**
 - Create: `crates/ava-archivedb/Cargo.toml`, `crates/ava-archivedb/src/lib.rs`, `crates/ava-archivedb/src/value.rs`
