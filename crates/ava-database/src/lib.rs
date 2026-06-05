@@ -26,6 +26,7 @@ pub mod dbtest;
 
 pub mod memdb;
 pub mod prefixdb;
+pub mod versiondb;
 
 pub use batch::{BatchOp, BatchOps};
 pub use error::{Error, Result};
@@ -35,3 +36,4 @@ pub use traits::{
     Batch, Batcher, BoxIter, Compacter, Database, DynDatabase, Iteratee, Iterator, IteratorError,
     KeyValueDeleter, KeyValueReader, KeyValueWriter, WriteDelete,
 };
+pub use versiondb::VersionDb;
