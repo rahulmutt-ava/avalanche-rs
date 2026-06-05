@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::error::Error;
+use crate::heightindex::HeightIndex;
 use crate::traits::{Batch, Database, Iterator, WriteDelete};
 
 // ---------------------------------------------------------------------------
@@ -845,4 +846,133 @@ fn next_random_bytes(seed: &mut u64, n: usize) -> Vec<u8> {
         out.push((x & 0xff) as u8);
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// HeightIndex conformance battery (04 §2.9, ports heightindexdb/dbtest)
+// ---------------------------------------------------------------------------
+
+/// Runs the full [`HeightIndex`] conformance battery against the backend built
+/// by `make`. Mirrors Go's `database/heightindexdb/dbtest.Tests` run against
+/// every height-index backend (memdb, meterdb). Each case gets a fresh DB.
+pub fn run_heightindex_suite<H, F>(make: F)
+where
+    H: HeightIndex,
+    F: Fn() -> H,
+{
+    hi_put_get(&make);
+    hi_has(&make);
+    hi_sync(&make);
+    hi_close_and_put(make());
+    hi_close_and_get(make());
+    hi_close_and_has(make());
+    hi_close_and_sync(make());
+    hi_close(make());
+}
+
+/// `TestPutGet`: normal get, not-found on a missing height, overwrite, and
+/// nil/empty/large values.
+fn hi_put_get<H: HeightIndex, F: Fn() -> H>(make: &F) {
+    // normal operation
+    let db = make();
+    db.put(1, b"test data 1").unwrap();
+    assert_eq!(db.get(1).unwrap(), b"test data 1");
+    db.close().unwrap();
+
+    // not found on a non-existing height
+    let db = make();
+    db.put(1, b"test data").unwrap();
+    assert!(matches!(db.get(2), Err(Error::NotFound)));
+    db.close().unwrap();
+
+    // overwrite on the same height
+    let db = make();
+    db.put(1, b"original data").unwrap();
+    db.put(1, b"overwritten data").unwrap();
+    assert_eq!(db.get(1).unwrap(), b"overwritten data");
+    db.close().unwrap();
+
+    // nil/empty value reads back as empty
+    let db = make();
+    db.put(1, &[]).unwrap();
+    assert!(db.get(1).unwrap().is_empty());
+    db.close().unwrap();
+
+    // large value round-trips
+    let db = make();
+    let big = vec![0u8; 1000];
+    db.put(1, &big).unwrap();
+    assert_eq!(db.get(1).unwrap(), big);
+    db.close().unwrap();
+}
+
+/// `TestHas`: presence across absent/present/nil/empty/overwritten heights.
+fn hi_has<H: HeightIndex, F: Fn() -> H>(make: &F) {
+    let db = make();
+    assert!(!db.has(1).unwrap());
+    db.close().unwrap();
+
+    let db = make();
+    db.put(1, b"test data").unwrap();
+    assert!(db.has(1).unwrap());
+    db.close().unwrap();
+
+    let db = make();
+    db.put(1, &[]).unwrap();
+    assert!(db.has(1).unwrap());
+    db.close().unwrap();
+
+    let db = make();
+    db.put(1, b"original data").unwrap();
+    db.put(1, b"overridden data").unwrap();
+    assert!(db.has(1).unwrap());
+    db.close().unwrap();
+}
+
+/// `TestSync`: `sync` over assorted ranges leaves all written heights present.
+fn hi_sync<H: HeightIndex, F: Fn() -> H>(make: &F) {
+    let cases: &[(&[u64], u64, u64)] = &[
+        (&[], 0, 10),
+        (&[5], 5, 5),
+        (&[1, 2, 3], 1, 3),
+        (&[0, 1, 2, 3, 4, 5], 2, 4),
+        (&[1, 3, 5], 1, 5),
+    ];
+    for (heights, start, end) in cases {
+        let db = make();
+        for &h in *heights {
+            db.put(h, b"data").unwrap();
+        }
+        db.sync(*start, *end).unwrap();
+        for &h in *heights {
+            assert!(db.has(h).unwrap());
+        }
+        db.close().unwrap();
+    }
+}
+
+fn hi_close_and_put<H: HeightIndex>(db: H) {
+    db.close().unwrap();
+    assert!(matches!(db.put(1, b"test"), Err(Error::Closed)));
+}
+
+fn hi_close_and_get<H: HeightIndex>(db: H) {
+    db.close().unwrap();
+    assert!(matches!(db.get(1), Err(Error::Closed)));
+}
+
+fn hi_close_and_has<H: HeightIndex>(db: H) {
+    db.close().unwrap();
+    assert!(matches!(db.has(1), Err(Error::Closed)));
+}
+
+fn hi_close_and_sync<H: HeightIndex>(db: H) {
+    db.close().unwrap();
+    assert!(matches!(db.sync(1, 10), Err(Error::Closed)));
+}
+
+fn hi_close<H: HeightIndex>(db: H) {
+    db.close().unwrap();
+    // A second close errors.
+    assert!(matches!(db.close(), Err(Error::Closed)));
 }
