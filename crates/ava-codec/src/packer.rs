@@ -109,10 +109,29 @@ impl<'a> Packer<'a> {
         self.err.is_some()
     }
 
-    /// The current read/write offset.
+    /// The current read offset.
     #[must_use]
     pub fn offset(&self) -> usize {
         self.offset
+    }
+
+    /// A direction-agnostic cursor: the bytes written so far (write mode) or the
+    /// read offset (read mode). Used by collection codecs to detect
+    /// zero-length elements regardless of direction.
+    #[must_use]
+    pub fn cursor(&self) -> usize {
+        match &self.bytes {
+            PackerBuf::Write(v) => v.len(),
+            PackerBuf::Read(_) => self.offset,
+        }
+    }
+
+    /// Records `err` as the sticky error if none is set yet. Public so the
+    /// codec layer (derive impls, `Vec`/map codecs) can surface higher-level
+    /// failures (slice-length overflow, zero-length elements) through the same
+    /// first-error-wins channel.
+    pub fn add_external_error(&mut self, err: PackerError) {
+        self.add_error(err);
     }
 
     /// Total bytes in the buffer.
