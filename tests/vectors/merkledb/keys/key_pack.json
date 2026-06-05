@@ -1,0 +1,1490 @@
+{
+  "_provenance": {
+    "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+    "extracted_by": "x/merkledb/avars_extract_test.go (TestAvarsExtract)",
+    "note": "Go merkledb golden vectors for avalanche-rs ava-merkledb (M1.12/13/14)."
+  },
+  "to_token": [
+    {
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "val": 0,
+      "value_hex": "00",
+      "length": 8
+    },
+    {
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "val": 1,
+      "value_hex": "01",
+      "length": 8
+    },
+    {
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "val": 15,
+      "value_hex": "0f",
+      "length": 8
+    },
+    {
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "val": 128,
+      "value_hex": "80",
+      "length": 8
+    },
+    {
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "val": 171,
+      "value_hex": "ab",
+      "length": 8
+    },
+    {
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "val": 255,
+      "value_hex": "ff",
+      "length": 8
+    },
+    {
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "val": 0,
+      "value_hex": "00",
+      "length": 4
+    },
+    {
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "val": 1,
+      "value_hex": "10",
+      "length": 4
+    },
+    {
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "val": 15,
+      "value_hex": "f0",
+      "length": 4
+    },
+    {
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "val": 128,
+      "value_hex": "00",
+      "length": 4
+    },
+    {
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "val": 171,
+      "value_hex": "b0",
+      "length": 4
+    },
+    {
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "val": 255,
+      "value_hex": "f0",
+      "length": 4
+    },
+    {
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "val": 0,
+      "value_hex": "00",
+      "length": 1
+    },
+    {
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "val": 1,
+      "value_hex": "80",
+      "length": 1
+    },
+    {
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "val": 15,
+      "value_hex": "80",
+      "length": 1
+    },
+    {
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "val": 128,
+      "value_hex": "00",
+      "length": 1
+    },
+    {
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "val": 171,
+      "value_hex": "80",
+      "length": 1
+    },
+    {
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "val": 255,
+      "value_hex": "80",
+      "length": 1
+    }
+  ],
+  "keys": [
+    {
+      "name": "BranchFactor256_inputA",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "input_hex": "",
+      "bit_length": 0,
+      "value_hex": "",
+      "tokens": null,
+      "skip_bits": 0,
+      "skip_value_hex": "",
+      "skip_length": 0,
+      "take_bits": 0,
+      "take_value_hex": "",
+      "take_length": 0
+    },
+    {
+      "name": "BranchFactor256_inputB",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "input_hex": "00",
+      "bit_length": 8,
+      "value_hex": "00",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 0
+        }
+      ],
+      "skip_bits": 8,
+      "skip_value_hex": "",
+      "skip_length": 0,
+      "take_bits": 0,
+      "take_value_hex": "",
+      "take_length": 0
+    },
+    {
+      "name": "BranchFactor256_inputC",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "input_hex": "ff",
+      "bit_length": 8,
+      "value_hex": "ff",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 255
+        }
+      ],
+      "skip_bits": 8,
+      "skip_value_hex": "",
+      "skip_length": 0,
+      "take_bits": 0,
+      "take_value_hex": "",
+      "take_length": 0
+    },
+    {
+      "name": "BranchFactor256_inputD",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "input_hex": "1234",
+      "bit_length": 16,
+      "value_hex": "1234",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 18
+        },
+        {
+          "bit_index": 8,
+          "token": 52
+        }
+      ],
+      "skip_bits": 8,
+      "skip_value_hex": "34",
+      "skip_length": 8,
+      "take_bits": 8,
+      "take_value_hex": "12",
+      "take_length": 8
+    },
+    {
+      "name": "BranchFactor256_inputE",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "input_hex": "deadbeef",
+      "bit_length": 32,
+      "value_hex": "deadbeef",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 222
+        },
+        {
+          "bit_index": 8,
+          "token": 173
+        },
+        {
+          "bit_index": 16,
+          "token": 190
+        },
+        {
+          "bit_index": 24,
+          "token": 239
+        }
+      ],
+      "skip_bits": 8,
+      "skip_value_hex": "adbeef",
+      "skip_length": 24,
+      "take_bits": 24,
+      "take_value_hex": "deadbe",
+      "take_length": 24
+    },
+    {
+      "name": "BranchFactor256_inputF",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "input_hex": "0123456789abcdef",
+      "bit_length": 64,
+      "value_hex": "0123456789abcdef",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 1
+        },
+        {
+          "bit_index": 8,
+          "token": 35
+        },
+        {
+          "bit_index": 16,
+          "token": 69
+        },
+        {
+          "bit_index": 24,
+          "token": 103
+        },
+        {
+          "bit_index": 32,
+          "token": 137
+        },
+        {
+          "bit_index": 40,
+          "token": 171
+        },
+        {
+          "bit_index": 48,
+          "token": 205
+        },
+        {
+          "bit_index": 56,
+          "token": 239
+        }
+      ],
+      "skip_bits": 8,
+      "skip_value_hex": "23456789abcdef",
+      "skip_length": 56,
+      "take_bits": 56,
+      "take_value_hex": "0123456789abcd",
+      "take_length": 56
+    },
+    {
+      "name": "BranchFactor16_inputA",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "input_hex": "",
+      "bit_length": 0,
+      "value_hex": "",
+      "tokens": null,
+      "skip_bits": 0,
+      "skip_value_hex": "",
+      "skip_length": 0,
+      "take_bits": 0,
+      "take_value_hex": "",
+      "take_length": 0
+    },
+    {
+      "name": "BranchFactor16_inputB",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "input_hex": "00",
+      "bit_length": 8,
+      "value_hex": "00",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 0
+        },
+        {
+          "bit_index": 4,
+          "token": 0
+        }
+      ],
+      "skip_bits": 4,
+      "skip_value_hex": "00",
+      "skip_length": 4,
+      "take_bits": 4,
+      "take_value_hex": "00",
+      "take_length": 4
+    },
+    {
+      "name": "BranchFactor16_inputC",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "input_hex": "ff",
+      "bit_length": 8,
+      "value_hex": "ff",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 15
+        },
+        {
+          "bit_index": 4,
+          "token": 15
+        }
+      ],
+      "skip_bits": 4,
+      "skip_value_hex": "f0",
+      "skip_length": 4,
+      "take_bits": 4,
+      "take_value_hex": "f0",
+      "take_length": 4
+    },
+    {
+      "name": "BranchFactor16_inputD",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "input_hex": "1234",
+      "bit_length": 16,
+      "value_hex": "1234",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 1
+        },
+        {
+          "bit_index": 4,
+          "token": 2
+        },
+        {
+          "bit_index": 8,
+          "token": 3
+        },
+        {
+          "bit_index": 12,
+          "token": 4
+        }
+      ],
+      "skip_bits": 4,
+      "skip_value_hex": "2340",
+      "skip_length": 12,
+      "take_bits": 12,
+      "take_value_hex": "1230",
+      "take_length": 12
+    },
+    {
+      "name": "BranchFactor16_inputE",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "input_hex": "deadbeef",
+      "bit_length": 32,
+      "value_hex": "deadbeef",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 13
+        },
+        {
+          "bit_index": 4,
+          "token": 14
+        },
+        {
+          "bit_index": 8,
+          "token": 10
+        },
+        {
+          "bit_index": 12,
+          "token": 13
+        },
+        {
+          "bit_index": 16,
+          "token": 11
+        },
+        {
+          "bit_index": 20,
+          "token": 14
+        },
+        {
+          "bit_index": 24,
+          "token": 14
+        },
+        {
+          "bit_index": 28,
+          "token": 15
+        }
+      ],
+      "skip_bits": 4,
+      "skip_value_hex": "eadbeef0",
+      "skip_length": 28,
+      "take_bits": 28,
+      "take_value_hex": "deadbee0",
+      "take_length": 28
+    },
+    {
+      "name": "BranchFactor16_inputF",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "input_hex": "0123456789abcdef",
+      "bit_length": 64,
+      "value_hex": "0123456789abcdef",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 0
+        },
+        {
+          "bit_index": 4,
+          "token": 1
+        },
+        {
+          "bit_index": 8,
+          "token": 2
+        },
+        {
+          "bit_index": 12,
+          "token": 3
+        },
+        {
+          "bit_index": 16,
+          "token": 4
+        },
+        {
+          "bit_index": 20,
+          "token": 5
+        },
+        {
+          "bit_index": 24,
+          "token": 6
+        },
+        {
+          "bit_index": 28,
+          "token": 7
+        },
+        {
+          "bit_index": 32,
+          "token": 8
+        },
+        {
+          "bit_index": 36,
+          "token": 9
+        },
+        {
+          "bit_index": 40,
+          "token": 10
+        },
+        {
+          "bit_index": 44,
+          "token": 11
+        },
+        {
+          "bit_index": 48,
+          "token": 12
+        },
+        {
+          "bit_index": 52,
+          "token": 13
+        },
+        {
+          "bit_index": 56,
+          "token": 14
+        },
+        {
+          "bit_index": 60,
+          "token": 15
+        }
+      ],
+      "skip_bits": 4,
+      "skip_value_hex": "123456789abcdef0",
+      "skip_length": 60,
+      "take_bits": 60,
+      "take_value_hex": "0123456789abcde0",
+      "take_length": 60
+    },
+    {
+      "name": "BranchFactor2_inputA",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "input_hex": "",
+      "bit_length": 0,
+      "value_hex": "",
+      "tokens": null,
+      "skip_bits": 0,
+      "skip_value_hex": "",
+      "skip_length": 0,
+      "take_bits": 0,
+      "take_value_hex": "",
+      "take_length": 0
+    },
+    {
+      "name": "BranchFactor2_inputB",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "input_hex": "00",
+      "bit_length": 8,
+      "value_hex": "00",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 0
+        },
+        {
+          "bit_index": 1,
+          "token": 0
+        },
+        {
+          "bit_index": 2,
+          "token": 0
+        },
+        {
+          "bit_index": 3,
+          "token": 0
+        },
+        {
+          "bit_index": 4,
+          "token": 0
+        },
+        {
+          "bit_index": 5,
+          "token": 0
+        },
+        {
+          "bit_index": 6,
+          "token": 0
+        },
+        {
+          "bit_index": 7,
+          "token": 0
+        }
+      ],
+      "skip_bits": 1,
+      "skip_value_hex": "00",
+      "skip_length": 7,
+      "take_bits": 7,
+      "take_value_hex": "00",
+      "take_length": 7
+    },
+    {
+      "name": "BranchFactor2_inputC",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "input_hex": "ff",
+      "bit_length": 8,
+      "value_hex": "ff",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 1
+        },
+        {
+          "bit_index": 1,
+          "token": 1
+        },
+        {
+          "bit_index": 2,
+          "token": 1
+        },
+        {
+          "bit_index": 3,
+          "token": 1
+        },
+        {
+          "bit_index": 4,
+          "token": 1
+        },
+        {
+          "bit_index": 5,
+          "token": 1
+        },
+        {
+          "bit_index": 6,
+          "token": 1
+        },
+        {
+          "bit_index": 7,
+          "token": 1
+        }
+      ],
+      "skip_bits": 1,
+      "skip_value_hex": "fe",
+      "skip_length": 7,
+      "take_bits": 7,
+      "take_value_hex": "fe",
+      "take_length": 7
+    },
+    {
+      "name": "BranchFactor2_inputD",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "input_hex": "1234",
+      "bit_length": 16,
+      "value_hex": "1234",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 0
+        },
+        {
+          "bit_index": 1,
+          "token": 0
+        },
+        {
+          "bit_index": 2,
+          "token": 0
+        },
+        {
+          "bit_index": 3,
+          "token": 1
+        },
+        {
+          "bit_index": 4,
+          "token": 0
+        },
+        {
+          "bit_index": 5,
+          "token": 0
+        },
+        {
+          "bit_index": 6,
+          "token": 1
+        },
+        {
+          "bit_index": 7,
+          "token": 0
+        },
+        {
+          "bit_index": 8,
+          "token": 0
+        },
+        {
+          "bit_index": 9,
+          "token": 0
+        },
+        {
+          "bit_index": 10,
+          "token": 1
+        },
+        {
+          "bit_index": 11,
+          "token": 1
+        },
+        {
+          "bit_index": 12,
+          "token": 0
+        },
+        {
+          "bit_index": 13,
+          "token": 1
+        },
+        {
+          "bit_index": 14,
+          "token": 0
+        },
+        {
+          "bit_index": 15,
+          "token": 0
+        }
+      ],
+      "skip_bits": 1,
+      "skip_value_hex": "2468",
+      "skip_length": 15,
+      "take_bits": 15,
+      "take_value_hex": "1234",
+      "take_length": 15
+    },
+    {
+      "name": "BranchFactor2_inputE",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "input_hex": "deadbeef",
+      "bit_length": 32,
+      "value_hex": "deadbeef",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 1
+        },
+        {
+          "bit_index": 1,
+          "token": 1
+        },
+        {
+          "bit_index": 2,
+          "token": 0
+        },
+        {
+          "bit_index": 3,
+          "token": 1
+        },
+        {
+          "bit_index": 4,
+          "token": 1
+        },
+        {
+          "bit_index": 5,
+          "token": 1
+        },
+        {
+          "bit_index": 6,
+          "token": 1
+        },
+        {
+          "bit_index": 7,
+          "token": 0
+        },
+        {
+          "bit_index": 8,
+          "token": 1
+        },
+        {
+          "bit_index": 9,
+          "token": 0
+        },
+        {
+          "bit_index": 10,
+          "token": 1
+        },
+        {
+          "bit_index": 11,
+          "token": 0
+        },
+        {
+          "bit_index": 12,
+          "token": 1
+        },
+        {
+          "bit_index": 13,
+          "token": 1
+        },
+        {
+          "bit_index": 14,
+          "token": 0
+        },
+        {
+          "bit_index": 15,
+          "token": 1
+        },
+        {
+          "bit_index": 16,
+          "token": 1
+        },
+        {
+          "bit_index": 17,
+          "token": 0
+        },
+        {
+          "bit_index": 18,
+          "token": 1
+        },
+        {
+          "bit_index": 19,
+          "token": 1
+        },
+        {
+          "bit_index": 20,
+          "token": 1
+        },
+        {
+          "bit_index": 21,
+          "token": 1
+        },
+        {
+          "bit_index": 22,
+          "token": 1
+        },
+        {
+          "bit_index": 23,
+          "token": 0
+        },
+        {
+          "bit_index": 24,
+          "token": 1
+        },
+        {
+          "bit_index": 25,
+          "token": 1
+        },
+        {
+          "bit_index": 26,
+          "token": 1
+        },
+        {
+          "bit_index": 27,
+          "token": 0
+        },
+        {
+          "bit_index": 28,
+          "token": 1
+        },
+        {
+          "bit_index": 29,
+          "token": 1
+        },
+        {
+          "bit_index": 30,
+          "token": 1
+        },
+        {
+          "bit_index": 31,
+          "token": 1
+        }
+      ],
+      "skip_bits": 1,
+      "skip_value_hex": "bd5b7dde",
+      "skip_length": 31,
+      "take_bits": 31,
+      "take_value_hex": "deadbeee",
+      "take_length": 31
+    },
+    {
+      "name": "BranchFactor2_inputF",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "input_hex": "0123456789abcdef",
+      "bit_length": 64,
+      "value_hex": "0123456789abcdef",
+      "tokens": [
+        {
+          "bit_index": 0,
+          "token": 0
+        },
+        {
+          "bit_index": 1,
+          "token": 0
+        },
+        {
+          "bit_index": 2,
+          "token": 0
+        },
+        {
+          "bit_index": 3,
+          "token": 0
+        },
+        {
+          "bit_index": 4,
+          "token": 0
+        },
+        {
+          "bit_index": 5,
+          "token": 0
+        },
+        {
+          "bit_index": 6,
+          "token": 0
+        },
+        {
+          "bit_index": 7,
+          "token": 1
+        },
+        {
+          "bit_index": 8,
+          "token": 0
+        },
+        {
+          "bit_index": 9,
+          "token": 0
+        },
+        {
+          "bit_index": 10,
+          "token": 1
+        },
+        {
+          "bit_index": 11,
+          "token": 0
+        },
+        {
+          "bit_index": 12,
+          "token": 0
+        },
+        {
+          "bit_index": 13,
+          "token": 0
+        },
+        {
+          "bit_index": 14,
+          "token": 1
+        },
+        {
+          "bit_index": 15,
+          "token": 1
+        },
+        {
+          "bit_index": 16,
+          "token": 0
+        },
+        {
+          "bit_index": 17,
+          "token": 1
+        },
+        {
+          "bit_index": 18,
+          "token": 0
+        },
+        {
+          "bit_index": 19,
+          "token": 0
+        },
+        {
+          "bit_index": 20,
+          "token": 0
+        },
+        {
+          "bit_index": 21,
+          "token": 1
+        },
+        {
+          "bit_index": 22,
+          "token": 0
+        },
+        {
+          "bit_index": 23,
+          "token": 1
+        },
+        {
+          "bit_index": 24,
+          "token": 0
+        },
+        {
+          "bit_index": 25,
+          "token": 1
+        },
+        {
+          "bit_index": 26,
+          "token": 1
+        },
+        {
+          "bit_index": 27,
+          "token": 0
+        },
+        {
+          "bit_index": 28,
+          "token": 0
+        },
+        {
+          "bit_index": 29,
+          "token": 1
+        },
+        {
+          "bit_index": 30,
+          "token": 1
+        },
+        {
+          "bit_index": 31,
+          "token": 1
+        },
+        {
+          "bit_index": 32,
+          "token": 1
+        },
+        {
+          "bit_index": 33,
+          "token": 0
+        },
+        {
+          "bit_index": 34,
+          "token": 0
+        },
+        {
+          "bit_index": 35,
+          "token": 0
+        },
+        {
+          "bit_index": 36,
+          "token": 1
+        },
+        {
+          "bit_index": 37,
+          "token": 0
+        },
+        {
+          "bit_index": 38,
+          "token": 0
+        },
+        {
+          "bit_index": 39,
+          "token": 1
+        },
+        {
+          "bit_index": 40,
+          "token": 1
+        },
+        {
+          "bit_index": 41,
+          "token": 0
+        },
+        {
+          "bit_index": 42,
+          "token": 1
+        },
+        {
+          "bit_index": 43,
+          "token": 0
+        },
+        {
+          "bit_index": 44,
+          "token": 1
+        },
+        {
+          "bit_index": 45,
+          "token": 0
+        },
+        {
+          "bit_index": 46,
+          "token": 1
+        },
+        {
+          "bit_index": 47,
+          "token": 1
+        },
+        {
+          "bit_index": 48,
+          "token": 1
+        },
+        {
+          "bit_index": 49,
+          "token": 1
+        },
+        {
+          "bit_index": 50,
+          "token": 0
+        },
+        {
+          "bit_index": 51,
+          "token": 0
+        },
+        {
+          "bit_index": 52,
+          "token": 1
+        },
+        {
+          "bit_index": 53,
+          "token": 1
+        },
+        {
+          "bit_index": 54,
+          "token": 0
+        },
+        {
+          "bit_index": 55,
+          "token": 1
+        },
+        {
+          "bit_index": 56,
+          "token": 1
+        },
+        {
+          "bit_index": 57,
+          "token": 1
+        },
+        {
+          "bit_index": 58,
+          "token": 1
+        },
+        {
+          "bit_index": 59,
+          "token": 0
+        },
+        {
+          "bit_index": 60,
+          "token": 1
+        },
+        {
+          "bit_index": 61,
+          "token": 1
+        },
+        {
+          "bit_index": 62,
+          "token": 1
+        },
+        {
+          "bit_index": 63,
+          "token": 1
+        }
+      ],
+      "skip_bits": 1,
+      "skip_value_hex": "02468acf13579bde",
+      "skip_length": 63,
+      "take_bits": 63,
+      "take_value_hex": "0123456789abcdee",
+      "take_length": 63
+    }
+  ],
+  "prefixes": [
+    {
+      "name": "BranchFactor256_empty_prefix",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "",
+      "prefix_len": 0,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor256_one_byte",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "12",
+      "prefix_len": 8,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor256_two_byte",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "1234",
+      "prefix_len": 16,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor256_full",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "123456",
+      "prefix_len": 24,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor256_wrong",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "13",
+      "prefix_len": 8,
+      "has_prefix": false,
+      "iter_offset": 0,
+      "iter_has_prefix": false
+    },
+    {
+      "name": "BranchFactor256_partial_take",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "12",
+      "prefix_len": 8,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor256_iter_offset",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "34",
+      "prefix_len": 8,
+      "has_prefix": false,
+      "iter_offset": 8,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor16_empty_prefix",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "",
+      "prefix_len": 0,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor16_one_byte",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "12",
+      "prefix_len": 8,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor16_two_byte",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "1234",
+      "prefix_len": 16,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor16_full",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "123456",
+      "prefix_len": 24,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor16_wrong",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "13",
+      "prefix_len": 8,
+      "has_prefix": false,
+      "iter_offset": 0,
+      "iter_has_prefix": false
+    },
+    {
+      "name": "BranchFactor16_partial_take",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "10",
+      "prefix_len": 4,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor16_iter_offset",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "34",
+      "prefix_len": 8,
+      "has_prefix": false,
+      "iter_offset": 8,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor2_empty_prefix",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "",
+      "prefix_len": 0,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor2_one_byte",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "12",
+      "prefix_len": 8,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor2_two_byte",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "1234",
+      "prefix_len": 16,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor2_full",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "123456",
+      "prefix_len": 24,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor2_wrong",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "13",
+      "prefix_len": 8,
+      "has_prefix": false,
+      "iter_offset": 0,
+      "iter_has_prefix": false
+    },
+    {
+      "name": "BranchFactor2_partial_take",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "00",
+      "prefix_len": 1,
+      "has_prefix": true,
+      "iter_offset": 0,
+      "iter_has_prefix": true
+    },
+    {
+      "name": "BranchFactor2_iter_offset",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "key_hex": "123456",
+      "key_len": 24,
+      "prefix_hex": "34",
+      "prefix_len": 8,
+      "has_prefix": false,
+      "iter_offset": 8,
+      "iter_has_prefix": true
+    }
+  ],
+  "longest_common_prefix": [
+    {
+      "name": "BranchFactor256_identical",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "first_hex": "1234",
+      "second_hex": "1234",
+      "second_offset": 0,
+      "common_len": 16
+    },
+    {
+      "name": "BranchFactor256_share_prefix",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "first_hex": "1234",
+      "second_hex": "1235",
+      "second_offset": 0,
+      "common_len": 8
+    },
+    {
+      "name": "BranchFactor256_no_common",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "first_hex": "ff",
+      "second_hex": "00",
+      "second_offset": 0,
+      "common_len": 0
+    },
+    {
+      "name": "BranchFactor256_offset",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "first_hex": "3456",
+      "second_hex": "123456",
+      "second_offset": 8,
+      "common_len": 16
+    },
+    {
+      "name": "BranchFactor16_identical",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "first_hex": "1234",
+      "second_hex": "1234",
+      "second_offset": 0,
+      "common_len": 16
+    },
+    {
+      "name": "BranchFactor16_share_prefix",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "first_hex": "1234",
+      "second_hex": "1235",
+      "second_offset": 0,
+      "common_len": 12
+    },
+    {
+      "name": "BranchFactor16_no_common",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "first_hex": "ff",
+      "second_hex": "00",
+      "second_offset": 0,
+      "common_len": 0
+    },
+    {
+      "name": "BranchFactor16_offset",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "first_hex": "3456",
+      "second_hex": "123456",
+      "second_offset": 8,
+      "common_len": 16
+    },
+    {
+      "name": "BranchFactor2_identical",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "first_hex": "1234",
+      "second_hex": "1234",
+      "second_offset": 0,
+      "common_len": 16
+    },
+    {
+      "name": "BranchFactor2_share_prefix",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "first_hex": "1234",
+      "second_hex": "1235",
+      "second_offset": 0,
+      "common_len": 15
+    },
+    {
+      "name": "BranchFactor2_no_common",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "first_hex": "ff",
+      "second_hex": "00",
+      "second_offset": 0,
+      "common_len": 0
+    },
+    {
+      "name": "BranchFactor2_offset",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "first_hex": "3456",
+      "second_hex": "123456",
+      "second_offset": 8,
+      "common_len": 16
+    }
+  ]
+}

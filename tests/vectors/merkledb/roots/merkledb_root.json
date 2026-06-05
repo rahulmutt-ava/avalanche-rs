@@ -1,0 +1,312 @@
+{
+  "_provenance": {
+    "avalanchego_revision": "fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11",
+    "extracted_by": "x/merkledb/avars_extract_test.go (TestAvarsExtract)",
+    "note": "Go merkledb golden vectors for avalanche-rs ava-merkledb (M1.12/13/14)."
+  },
+  "cases": [
+    {
+      "name": "BranchFactor256_empty",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "pairs": null,
+      "root_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "root_id": "11111111111111111111111111111111LpoYY"
+    },
+    {
+      "name": "BranchFactor256_single_key",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "pairs": [
+        {
+          "key_hex": "6b",
+          "value_hex": "76"
+        }
+      ],
+      "root_hex": "1e06a9a1d455f9698b60b63f9d11dbed46ae35a85b0d74fa5b05423b34217822",
+      "root_id": "EDyXKsrYmUAfkBLcxKcLhG9s4GJKEcN7iUHuEXKXRbxdrzKDp"
+    },
+    {
+      "name": "BranchFactor256_single_long_value",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "pairs": [
+        {
+          "key_hex": "6b6579",
+          "value_hex": "746869732076616c756520697320646566696e6974656c79206c6f6e676572207468616e207468697274792d74776f20627974657320666f722073757265"
+        }
+      ],
+      "root_hex": "0d88f2633a891b888c2525c79f8afaaa1d73577464d27adf4c8fa0e6be7e4457",
+      "root_id": "6xjTmTPkHNmaTPqnaeP4Nx8ChL5jCdrUqHkXbRT4hyYnDGHVt"
+    },
+    {
+      "name": "BranchFactor256_multi",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "pairs": [
+        {
+          "key_hex": "646f67",
+          "value_hex": "776f6f66"
+        },
+        {
+          "key_hex": "636174",
+          "value_hex": "6d656f77"
+        },
+        {
+          "key_hex": "646f6765",
+          "value_hex": "6d75636820776f77"
+        },
+        {
+          "key_hex": "646f",
+          "value_hex": "76657262"
+        }
+      ],
+      "root_hex": "5a5519bb84bfb32a33f89c39f9e228f6f421955267a57c527517d0d1b4ef2684",
+      "root_id": "gnRPfMUCAk3TGDooqtTr8Vd33QkGHjYosBq3nGHx7fKJNMZCL"
+    },
+    {
+      "name": "BranchFactor256_shared_prefixes",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "pairs": [
+        {
+          "key_hex": "00",
+          "value_hex": "61"
+        },
+        {
+          "key_hex": "0001",
+          "value_hex": "62"
+        },
+        {
+          "key_hex": "000102",
+          "value_hex": "63"
+        },
+        {
+          "key_hex": "ff",
+          "value_hex": "64"
+        }
+      ],
+      "root_hex": "f5b3a3c705de4b9b6fad9331ea9c0e062aaed4e9534130e609cd84e6339ff273",
+      "root_id": "2sD7zkLVKQaqGkZUsfrHzuUSfhyCyB31gjRXZ6HVvRugcfufvP"
+    },
+    {
+      "name": "BranchFactor256_empty_value",
+      "branch_factor": "BranchFactor256",
+      "token_size": 8,
+      "pairs": [
+        {
+          "key_hex": "6b31",
+          "value_hex": ""
+        },
+        {
+          "key_hex": "6b32",
+          "value_hex": "6e6f6e656d707479"
+        }
+      ],
+      "root_hex": "74d09fbf9e88502e7dae1797b93563bfa3764baab5450a60958f0810f9342726",
+      "root_id": "tSt61FgmPuAt55yZm8STmgu9huZBNqG7XxJrMaKjumhtwTgtF"
+    },
+    {
+      "name": "BranchFactor16_empty",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "pairs": null,
+      "root_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "root_id": "11111111111111111111111111111111LpoYY"
+    },
+    {
+      "name": "BranchFactor16_single_key",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "pairs": [
+        {
+          "key_hex": "6b",
+          "value_hex": "76"
+        }
+      ],
+      "root_hex": "1e06a9a1d455f9698b60b63f9d11dbed46ae35a85b0d74fa5b05423b34217822",
+      "root_id": "EDyXKsrYmUAfkBLcxKcLhG9s4GJKEcN7iUHuEXKXRbxdrzKDp"
+    },
+    {
+      "name": "BranchFactor16_single_long_value",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "pairs": [
+        {
+          "key_hex": "6b6579",
+          "value_hex": "746869732076616c756520697320646566696e6974656c79206c6f6e676572207468616e207468697274792d74776f20627974657320666f722073757265"
+        }
+      ],
+      "root_hex": "0d88f2633a891b888c2525c79f8afaaa1d73577464d27adf4c8fa0e6be7e4457",
+      "root_id": "6xjTmTPkHNmaTPqnaeP4Nx8ChL5jCdrUqHkXbRT4hyYnDGHVt"
+    },
+    {
+      "name": "BranchFactor16_multi",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "pairs": [
+        {
+          "key_hex": "646f67",
+          "value_hex": "776f6f66"
+        },
+        {
+          "key_hex": "636174",
+          "value_hex": "6d656f77"
+        },
+        {
+          "key_hex": "646f6765",
+          "value_hex": "6d75636820776f77"
+        },
+        {
+          "key_hex": "646f",
+          "value_hex": "76657262"
+        }
+      ],
+      "root_hex": "617bf4a5ad928a162e9d62f38b947074d5b4c6915181b27cbba8b0c4719c8720",
+      "root_id": "jw6ypNvqRzLtrPFw8qKhAF9TdnaSHVjmzS2HgQbK2PBo5UwPc"
+    },
+    {
+      "name": "BranchFactor16_shared_prefixes",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "pairs": [
+        {
+          "key_hex": "00",
+          "value_hex": "61"
+        },
+        {
+          "key_hex": "0001",
+          "value_hex": "62"
+        },
+        {
+          "key_hex": "000102",
+          "value_hex": "63"
+        },
+        {
+          "key_hex": "ff",
+          "value_hex": "64"
+        }
+      ],
+      "root_hex": "81c0bfe6085c511f40e0b45820ece0113f98eab246a47054b4b435b82f2ed6e0",
+      "root_id": "z9N8rJDqHY7EftgzRQ3aRDTNJxdvsXj1FeprhgwTpFuom15XQ"
+    },
+    {
+      "name": "BranchFactor16_empty_value",
+      "branch_factor": "BranchFactor16",
+      "token_size": 4,
+      "pairs": [
+        {
+          "key_hex": "6b31",
+          "value_hex": ""
+        },
+        {
+          "key_hex": "6b32",
+          "value_hex": "6e6f6e656d707479"
+        }
+      ],
+      "root_hex": "03e3e19423a1a57d5b62408baae9554a9c109f9cb91f3c5d5fb806931cf2359f",
+      "root_id": "2iNQ6yQdMWLx1bXj1oAtXWeiFXRjycy4qMLAHh6VY1Rj7s6fZ"
+    },
+    {
+      "name": "BranchFactor2_empty",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "pairs": null,
+      "root_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "root_id": "11111111111111111111111111111111LpoYY"
+    },
+    {
+      "name": "BranchFactor2_single_key",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "pairs": [
+        {
+          "key_hex": "6b",
+          "value_hex": "76"
+        }
+      ],
+      "root_hex": "1e06a9a1d455f9698b60b63f9d11dbed46ae35a85b0d74fa5b05423b34217822",
+      "root_id": "EDyXKsrYmUAfkBLcxKcLhG9s4GJKEcN7iUHuEXKXRbxdrzKDp"
+    },
+    {
+      "name": "BranchFactor2_single_long_value",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "pairs": [
+        {
+          "key_hex": "6b6579",
+          "value_hex": "746869732076616c756520697320646566696e6974656c79206c6f6e676572207468616e207468697274792d74776f20627974657320666f722073757265"
+        }
+      ],
+      "root_hex": "0d88f2633a891b888c2525c79f8afaaa1d73577464d27adf4c8fa0e6be7e4457",
+      "root_id": "6xjTmTPkHNmaTPqnaeP4Nx8ChL5jCdrUqHkXbRT4hyYnDGHVt"
+    },
+    {
+      "name": "BranchFactor2_multi",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "pairs": [
+        {
+          "key_hex": "646f67",
+          "value_hex": "776f6f66"
+        },
+        {
+          "key_hex": "636174",
+          "value_hex": "6d656f77"
+        },
+        {
+          "key_hex": "646f6765",
+          "value_hex": "6d75636820776f77"
+        },
+        {
+          "key_hex": "646f",
+          "value_hex": "76657262"
+        }
+      ],
+      "root_hex": "78e22de835cf4ecbbf76faa09ca600be4c874699d6fccf5b65a008dbc5a1ccb6",
+      "root_id": "vEop5CCYJoQWaaSh43YeQcFbmMDA26Q4k2ayCgGsWLS3pezSB"
+    },
+    {
+      "name": "BranchFactor2_shared_prefixes",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "pairs": [
+        {
+          "key_hex": "00",
+          "value_hex": "61"
+        },
+        {
+          "key_hex": "0001",
+          "value_hex": "62"
+        },
+        {
+          "key_hex": "000102",
+          "value_hex": "63"
+        },
+        {
+          "key_hex": "ff",
+          "value_hex": "64"
+        }
+      ],
+      "root_hex": "05134765bd06d6d470d6bacd131e0f86b0f8a50812d262e7546929b8fa82fc65",
+      "root_id": "3EeEUPqAnCMpncEDLWrmHAeRXudzhs1J3BXFStxHyQ6tv8x1F"
+    },
+    {
+      "name": "BranchFactor2_empty_value",
+      "branch_factor": "BranchFactor2",
+      "token_size": 1,
+      "pairs": [
+        {
+          "key_hex": "6b31",
+          "value_hex": ""
+        },
+        {
+          "key_hex": "6b32",
+          "value_hex": "6e6f6e656d707479"
+        }
+      ],
+      "root_hex": "92f1153e11f88957b66eadd6de03b3a03848d25af142febe7535c3aece137405",
+      "root_id": "27iRu7rMgZCuuRywVzw6L1QTEZMax7YaZ7vxLLnK861T8JsyXG"
+    }
+  ]
+}
