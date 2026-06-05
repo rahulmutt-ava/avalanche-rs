@@ -25,6 +25,7 @@ pub mod traits;
 pub mod dbtest;
 
 pub mod corruptabledb;
+pub mod linkeddb;
 pub mod memdb;
 pub mod meterdb;
 pub mod prefixdb;
@@ -33,6 +34,7 @@ pub mod versiondb;
 pub use batch::{BatchOp, BatchOps};
 pub use corruptabledb::CorruptableDb;
 pub use error::{Error, Result};
+pub use linkeddb::LinkedDb;
 pub use memdb::MemDb;
 pub use meterdb::MeterDb;
 pub use prefixdb::{PrefixDb, join_prefixes, make_prefix};

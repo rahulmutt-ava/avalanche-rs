@@ -244,8 +244,10 @@ name = "ava-database"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ava-codec",
  "ava-types",
  "hex",
+ "lru",
  "parking_lot",
  "prometheus",
  "proptest",

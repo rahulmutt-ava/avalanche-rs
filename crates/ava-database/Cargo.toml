@@ -18,10 +18,15 @@ serde_json = { workspace = true }
 parking_lot = { workspace = true }
 sha2 = { workspace = true }
 ava-types = { path = "../ava-types" }
+# linkeddb (§2.7) persists its doubly-linked-list nodes via the M0 linearcodec
+# (byte-exact, §10.6).
+ava-codec = { path = "../ava-codec" }
 
 # meterdb (§2.5) wraps any Database in Prometheus counters/gauges under the exact
-# Go metric names (calls/duration/size, method label).
+# Go metric names (calls/duration/size, method label). linkeddb (§2.7) caches
+# the head key + decoded nodes in bounded LRUs.
 prometheus = { version = "0.13", default-features = false }
+lru = "0.12"
 
 # The conformance battery (dbtest) + BTreeMap-oracle proptest ship behind the
 # `testutil` feature so backends in this and other crates can run the shared
