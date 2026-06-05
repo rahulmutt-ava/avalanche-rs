@@ -305,6 +305,12 @@ impl Key {
     }
 }
 
+/// Crate-internal access to [`extend_into_buffer`] for the intermediate-node
+/// store's sub-byte-token DB-key padding (Go `constructDBKey`).
+pub(crate) fn extend_into_buffer_pub(buffer: &mut [u8], val: &Key, bits_offset: usize) {
+    extend_into_buffer(buffer, val, bits_offset);
+}
+
 /// Writes `val` into `buffer` at bit offset `bits_offset`, ORing into the
 /// partial byte if necessary. Mirrors Go `extendIntoBuffer`.
 fn extend_into_buffer(buffer: &mut [u8], val: &Key, bits_offset: usize) {

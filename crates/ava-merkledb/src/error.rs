@@ -49,4 +49,38 @@ pub enum Error {
     /// Go `io.ErrUnexpectedEOF`.
     #[error("unexpected EOF")]
     UnexpectedEof,
+
+    /// The trie this view was based on has changed, rendering this view
+    /// invalid. Go `ErrInvalid`.
+    #[error("the trie this view was based on has changed, rendering this view invalid")]
+    Invalid,
+
+    /// A view has already been committed. Go `ErrCommitted`.
+    #[error("cannot commit a view that has already been committed")]
+    Committed,
+
+    /// A view's parent is not the database, so it cannot be committed directly.
+    /// Go `ErrParentNotDatabase`.
+    #[error("a view's parent must be the database being committed to")]
+    ParentNotDatabase,
+
+    /// The database has been closed. Mirrors `database.ErrClosed`.
+    #[error("closed")]
+    Closed,
+
+    /// An error surfaced by the base `Database`.
+    #[error("database error: {0}")]
+    Database(String),
+}
+
+impl From<ava_database::Error> for Error {
+    fn from(e: ava_database::Error) -> Self {
+        match e {
+            ava_database::Error::Closed => Error::Closed,
+            // NotFound is control flow at the merkledb layer; callers translate
+            // it to "absent". We keep a distinct message for any leak.
+            ava_database::Error::NotFound => Error::Database("not found".to_string()),
+            ava_database::Error::Other(e) => Error::Database(e.to_string()),
+        }
+    }
 }
