@@ -13,13 +13,16 @@ use clap::Parser;
 
 /// Local build identity reported by `--version`, in `client/maj.min.patch` form.
 ///
-/// This is the *local CLI* identity (`avalanchers/...`). The *wire/P2P* client
-/// string this node advertises during the handshake stays `avalanchego` for
-/// drop-in interop — that is a separate constant (`ava_version::CLIENT`, see
-/// specs/26-versioning-and-compatibility.md and specs/03-core-primitives.md §5.1).
-// TODO(M0.22): source the numeric version from `ava_version::CURRENT` once
-// `ava-version` exists, keeping the local `avalanchers/` prefix.
-const VERSION: &str = concat!("avalanchers/", env!("CARGO_PKG_VERSION"));
+/// This is the *local CLI* identity (`avalanchers/...`). The numeric version is
+/// sourced from `ava_version::CURRENT` (the avalanchego version this node is
+/// compatible with). The *wire/P2P* client string this node advertises during
+/// the handshake stays `avalanchego` for drop-in interop — that is a separate
+/// constant (`ava_version::CLIENT`, see specs/26-versioning-and-compatibility.md
+/// and specs/03-core-primitives.md §5.1).
+fn version_string() -> String {
+    let v = &*ava_version::CURRENT;
+    format!("avalanchers/{}.{}.{}", v.major, v.minor, v.patch)
+}
 
 /// Command-line arguments for the node.
 #[derive(Parser, Debug)]
@@ -37,6 +40,6 @@ struct Args {
 fn main() {
     let args = Args::parse();
     if args.version {
-        println!("{VERSION}");
+        println!("{}", version_string());
     }
 }

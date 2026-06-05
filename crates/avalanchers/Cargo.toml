@@ -10,4 +10,5 @@ publish.workspace = true
 description = "Avalanche node (Rust) — drop-in replacement for avalanchego."
 
 [dependencies]
+ava-version = { path = "../ava-version" }
 clap = { workspace = true }
