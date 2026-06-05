@@ -1,0 +1,23 @@
+{
+  "_provenance": "Extracted from avalanchego x/archivedb (newDBKeyFromUser, newDBKeyFromMetadata, newDBValue, heightKey) via an in-package scratch _test.go run with `go test ./x/archivedb/` (go 1.25.9). Scratch file removed afterward; the Go tree was left clean. See specs/04 §5.2, §6.5. User key = uvarint(len(key)) || key || BigEndian(^height); metadata key = uvarint(len(key)+1) || key; db value = 0x00 || value (tombstone/delete stores an empty value).",
+  "height_key": "01",
+  "metadata_keys": [
+    { "key_hex": "666f6f", "db_key_hex": "04666f6f" },
+    { "key_hex": "666f", "db_key_hex": "03666f" },
+    { "key_hex": "", "db_key_hex": "01" },
+    { "key_hex": "68656c6c6f", "db_key_hex": "0668656c6c6f" }
+  ],
+  "user_keys": [
+    { "key_hex": "666f6f", "height": 10, "db_key_hex": "03666f6ffffffffffffffff5", "db_prefix_hex": "03666f6f" },
+    { "key_hex": "666f6f", "height": 20, "db_key_hex": "03666f6fffffffffffffffeb", "db_prefix_hex": "03666f6f" },
+    { "key_hex": "000102030405", "height": 102310, "db_key_hex": "06000102030405fffffffffffe7059", "db_prefix_hex": "06000102030405" },
+    { "key_hex": "", "height": 0, "db_key_hex": "00ffffffffffffffff", "db_prefix_hex": "00" },
+    { "key_hex": "", "height": 1, "db_key_hex": "00fffffffffffffffe", "db_prefix_hex": "00" },
+    { "key_hex": "68656c6c6f", "height": 18446744073709551615, "db_key_hex": "0568656c6c6f0000000000000000", "db_prefix_hex": "0568656c6c6f" }
+  ],
+  "value": {
+    "value_hex": "626172",
+    "db_value_hex": "00626172",
+    "tombstone_db_value_hex": ""
+  }
+}
