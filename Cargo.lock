@@ -194,6 +194,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-database"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ava-types",
+ "hex",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-differential"
 version = "0.1.0"
 dependencies = [
