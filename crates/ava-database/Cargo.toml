@@ -1,0 +1,36 @@
+[package]
+name = "ava-database"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The synchronous key/value Database trait family, sentinel errors, byte-exact helpers, and KV backends (M1 / specs 04 §1-§2)."
+
+# Dependency direction (specs/04 §1): ava-database depends only on M0 primitive
+# crates. M1.1-M1.3 only need ava-types (Id) for the put_id/get_id helpers.
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+ava-types = { path = "../ava-types" }
+
+# The conformance battery (dbtest) + BTreeMap-oracle proptest ship behind the
+# `testutil` feature so backends in this and other crates can run the shared
+# suite (02 §3.3, §7.2). proptest is a hard (optional) dep here — not dev —
+# because the battery is a library of helpers, not a test binary.
+proptest = { workspace = true, optional = true }
+
+[features]
+# The reusable conformance + proptest battery (specs/02 §7.2). Off by default so
+# production builds don't pull proptest; backend conformance tests enable it.
+testutil = ["dep:proptest"]
+
+[dev-dependencies]
+hex = { workspace = true }
+
+[lints]
+workspace = true
