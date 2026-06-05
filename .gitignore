@@ -3,9 +3,6 @@
 debug
 target
 
-# Nix dev-shell CARGO_HOME (see flake.nix)
-.cargo-home
-
 # Bazel convenience symlinks + local overrides
 /bazel-*
 .bazelrc.local
