@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# This file is committed so the proptest-regressions corpus exists from the
+# start (spec 02 §4.1: the regressions corpus is non-negotiable). New failing
+# seeds for `prop::fuzz_op_stream_smoke` / `prop::node_codec_never_panics` are
+# appended here automatically and must be committed.

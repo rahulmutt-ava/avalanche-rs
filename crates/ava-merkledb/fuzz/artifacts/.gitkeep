@@ -1,0 +1,2 @@
+# Keeps the crash-artifacts dir tracked. cargo-fuzz writes crash reproducers
+# here; any that appear are committed as regression seeds (spec 02 §8).

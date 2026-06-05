@@ -29,6 +29,12 @@
 pub mod codec;
 pub mod db;
 pub mod error;
+/// Shared fuzz/property op-stream support (M1.25, spec 02 §8). Behind the
+/// `fuzzing` feature so it stays out of the normal public API; reused by the
+/// nightly `cargo-fuzz` targets and the stable `prop_fuzz_smoke` proptest.
+#[cfg(feature = "fuzzing")]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+pub mod fuzz_support;
 pub mod hashing;
 pub mod history;
 pub mod key;

@@ -276,6 +276,7 @@ dependencies = [
 name = "ava-merkledb"
 version = "0.1.0"
 dependencies = [
+ "arbitrary",
  "arc-swap",
  "assert_matches",
  "ava-database",
