@@ -45,6 +45,16 @@ tempfile = { version = "3", optional = true }
 # because the battery is a library of helpers, not a test binary.
 proptest = { workspace = true, optional = true }
 
+# rpcdb (§2.8) is a `Database` over gRPC (the rpcchainvm plugin protocol). The
+# tonic client/server + the types generated from `proto/rpcdb/rpcdb.proto` are
+# feature-gated so the crate stays buildable without the proto toolchain. The
+# sync `Database` trait blocks on the async tonic client via a per-client tokio
+# runtime (`block_on`), matching the call-site-blocking pattern (04 §1.2).
+prost = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+
 [features]
 # The reusable conformance + proptest battery (specs/02 §7.2). Off by default so
 # production builds don't pull proptest; backend conformance tests enable it.
@@ -52,9 +62,25 @@ testutil = ["dep:proptest"]
 # The on-disk RocksDB backend (§2.1). Off by default (needs the C++ FFI
 # toolchain); enabled by `--all-features` and the rocksdb conformance test.
 rocksdb = ["dep:rocksdb", "dep:tempfile"]
+# The rpcdb gRPC client/server backend (§2.8, 15 §3.4). Off by default (needs the
+# proto toolchain: `protoc`); enabled by `--all-features` and the rpcdb
+# conformance test. Pulls tonic/prost/tokio/bytes + the tonic-build build-dep.
+rpcdb = ["dep:prost", "dep:tonic", "dep:tokio", "dep:bytes"]
+
+[build-dependencies]
+# Generates the rpcdb tonic client/server + prost types from
+# `proto/rpcdb/rpcdb.proto` into OUT_DIR at build time (not committed; 01 §8.1).
+# build.rs only invokes it when the `rpcdb` feature is active (CARGO_FEATURE_RPCDB),
+# so non-rpcdb builds never need `protoc`; the crate itself is a cheap build-time dep.
+tonic-build = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
+# rpcdb conformance test transport: a multi-thread tokio runtime hosts an
+# in-process tonic server over a loopback TCP port; the client dials it. Only
+# used by `conformance_rpcdb.rs` (gated on the `rpcdb` feature).
+tokio = { workspace = true }
+tonic = { workspace = true }
 
 [lints]
 workspace = true

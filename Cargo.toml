@@ -75,6 +75,17 @@ indexmap = "2"
 smallvec = "1"
 bytes = "1"
 
+# Protobuf / gRPC (proto3 services under `proto/`; specs/15 §2, §5). Codegen is
+# done per-crate in `build.rs` via `tonic-build` into OUT_DIR and is NOT
+# committed (specs/01 §8.1 / 00 decision 8). `tonic`/`prost` majors must stay in
+# lockstep (tonic 0.12 depends on prost 0.13). `tokio` is the async runtime the
+# sync `Database` trait blocks on at the call site (specs/04 §1.2). Proto `bytes`
+# fields map to `bytes::Bytes` for zero-copy (specs/15 §5).
+prost = "0.13"
+tonic = "0.12"
+tonic-build = "0.12"
+tokio = { version = "1", features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
+
 # Time (formatting only; consensus time math stays integer/Duration-based)
 chrono = { version = "0.4", default-features = false, features = [ "clock" ] }
 
