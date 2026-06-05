@@ -332,6 +332,23 @@ is how a `rpcchainvm` plugin reaches the host's DB (cross-ref 07 `ava-vm-rpc`).
 Built on `tonic`; the `.proto` is the shared wire contract — **byte-exact** so a
 Rust plugin and a Go host interoperate (overview §1 gRPC-plugin requirement).
 
+> **Implemented M1.11 (first proto/tonic consumer — established the codegen
+> pipeline).** `proto/rpcdb/rpcdb.proto` is compiled by a `build.rs`
+> (`tonic-build`) into `OUT_DIR` (NOT committed, gated on `CARGO_FEATURE_RPCDB`);
+> types are reached via `tonic::include_proto!("rpcdb")`; proto `bytes` →
+> `bytes::Bytes` (`.bytes(["."])`, 15 §5). The whole backend sits behind an
+> `rpcdb` cargo feature (pulls `tonic`/`prost`/`tokio`). Because `Database` is
+> synchronous, `DatabaseClient` owns a per-client tokio `Runtime` and `block_on`s
+> each RPC (call-site blocking, §1.2). **The server iterator is a point-in-time
+> snapshot, not Go's live iterator:** a live server-side `BoxIter<'a>` is
+> self-referential over the wrapped `Arc<dyn DynDatabase>` and inexpressible under
+> `#![forbid(unsafe_code)]` (would need `ouroboros`); snapshotting at
+> `NewIterator` matches memdb's own `TestIteratorSnapshot` semantics and the
+> client-side `closed` `AtomicBool` (Go's `db_client.go` mechanism) covers the
+> `iterator_closed`/`iterator_error` cases — the full `dbtest` battery passes and
+> server laziness is unobservable through the `Database` contract. Note the proto
+> exposes only `NewIteratorWithStartAndPrefix` (no plain `NewIterator` RPC).
+
 ### 2.9 `heightindexdb` — `HeightIndex`
 
 A distinct, simpler interface (`database/heightindexdb`): `put/get/has(height:

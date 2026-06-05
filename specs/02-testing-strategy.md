@@ -429,6 +429,21 @@ types (e.g. a `Vec<DbOp>` for the merkledb target). Corpus lives in
 as regression seeds. (Requires nightly + LLVM sanitizers; runs in a dedicated CI
 job on x86-64/aarch64 Linux.)
 
+> **Confirmed M1.25 (first fuzz target, `ava-merkledb`).** The pinned dev shell is
+> **stable** (`rust-toolchain.toml`, no rustup/nightly), so `cargo fuzz build/run`
+> fails locally with `error: the option 'Z' is only accepted on the nightly
+> compiler` (cargo-fuzz injects `-Zsanitizer=address` + sancov). The standalone
+> `fuzz/` crate nonetheless **compiles on stable** (libfuzzer-sys builds; only the
+> instrumented run needs nightly). The adopted pattern, reused by every later fuzz
+> target: define the fuzzed logic ONCE in a `#[cfg(feature = "fuzzing")] pub mod
+> fuzz_support` in the crate, have both the `fuzz/` target and a **stable proptest
+> smoke harness** (`tests/prop_fuzz_smoke.rs`, names `prop::fuzz_*`) call it. The
+> stable proptest is the **local + per-PR gate** (runs under `cargo nextest`
+> today); the libfuzzer run is the **nightly CI job**. The `fuzz/` crate carries a
+> `rust-toolchain.toml` pinning `nightly` so `cargo fuzz` auto-selects it under
+> rustup (CI). Wiring a `rust-bin.nightly` `fuzzToolchain` into `flake.nix` + a
+> `test-fuzz`/`test-fuzz-long` Task target is the X.2/X.16 follow-up.
+
 ---
 
 ## 9. Benchmarks (`criterion`) & perf gating

@@ -156,12 +156,59 @@
 >   edge), and behind a new optional `rocksdb` feature: `rocksdb 0.22` + `tempfile 3`. `ava-merkledb`
 >   added **no** new deps.
 >
-> **Still open (M1):** `ava-database` M1.11 (rpcdb — **blocked on `proto/` build infra, still not
-> present**); `ava-merkledb` M1.19 (sync proto + `SyncDb` + Syncer — also needs the proto build);
-> Firewood M1.20–M1.21 (need M1.19); R2 import tool M1.24 (deps M1.4 ✅, M1.14 ✅ — now unblocked);
-> fuzz M1.25 (needs nightly + cargo-fuzz tooling); exit gate M1.26. **Next-wave blocker:** the
-> shared `proto/` + tonic/prost build pipeline (an X-cross-cutting foundational task) gates both
-> M1.11 and M1.19; stand it up before the next merkledb/rpcdb wave.
+> **Status (2026-06-06, M1 Wave 4 landed):** fourth parallel wave merged to `main` via two
+> isolated worktree agents (disjoint paths — only the proto agent touched root `Cargo.toml`):
+> - **proto/tonic/prost build pipeline + M1.11 rpcdb (`ava-database`, X-cross-cutting):** stood up
+>   the repo's first protobuf/gRPC codegen path — `proto/rpcdb/rpcdb.proto` (copied from avalanchego,
+>   `_provenance.md`), `prost 0.13`/`tonic 0.12`/`tonic-build 0.12`/`tokio 1` in
+>   `[workspace.dependencies]`, a `build.rs` in `ava-database` that generates into `OUT_DIR`
+>   (**not committed**, gated by `CARGO_FEATURE_RPCDB` so non-rpcdb builds never invoke `protoc`),
+>   types reached via `tonic::include_proto!("rpcdb")`. `DatabaseClient`/`DatabaseServer` behind a
+>   new `rpcdb` feature pass the full `conformance::run_database_suite` + `prop::db_oracle_btreemap`
+>   over an in-process loopback tonic channel. **This is the pattern every future proto crate
+>   reuses** (sync M1.19, p2p M2, vm M3, …).
+> - **M1.25 fuzz (`ava-merkledb`):** standalone `crates/ava-merkledb/fuzz/` cargo-fuzz crate
+>   (`op_stream` + `node_codec` targets, committed corpus, nightly `rust-toolchain.toml`), shared
+>   `#[cfg(feature="fuzzing")] fuzz_support` module (one source of truth for `DbOp`/op-apply/decoder),
+>   and a **stable** proptest smoke harness `tests/prop_fuzz_smoke.rs` (`prop::fuzz_op_stream_smoke`,
+>   `prop::node_codec_never_panics`) that runs in `cargo nextest` TODAY.
+>
+> Workspace after Wave 4: **212 tests pass** (`--all-features`; 208 after Wave 3), `cargo build
+> --workspace --all-features` / `-p avalanchers`, `cargo clippy --workspace --all-targets
+> --all-features -- -D warnings`, `cargo fmt --all --check`, doctests, and the standalone fuzz crate
+> (`cargo build --manifest-path crates/ava-merkledb/fuzz/Cargo.toml`) — all clean.
+>
+> **Findings recorded during Wave 4 (specs updated where noted):**
+> - **Proto codegen path established (spec 01 §8.1 / 15 §2 confirmed):** per-crate `build.rs` +
+>   `tonic-build`, generated into `OUT_DIR`, NOT committed; `protoc` 32.1 + `buf` 1.59 from the Nix
+>   shell (set `PROTOC` to the nix path if PATH lookup is unreliable). `.bytes(["."])` maps all proto
+>   `bytes` fields → `bytes::Bytes` (15 §5). build.rs codegen gated on `CARGO_FEATURE_RPCDB`.
+> - **rpcdb server iterator is a point-in-time snapshot (spec 04 §2.8 clarified), not Go's live
+>   iterator:** a live server-side `BoxIter<'a>` is self-referential over the `Arc<dyn DynDatabase>`
+>   and inexpressible under `#![forbid(unsafe_code)]` without a helper (`ouroboros`). Snapshotting at
+>   `NewIterator` matches memdb's own `TestIteratorSnapshot` semantics; the client-side `closed`
+>   `AtomicBool` (Go parity, `db_client.go`) covers `iterator_closed`/`iterator_error`. Passes the
+>   full battery; server laziness is unobservable through the `Database` contract.
+> - **Sync↔async bridge:** `DatabaseClient` owns a per-client tokio `Runtime` and `block_on`s every
+>   RPC (keeps the sync `Database`/`DynDatabase` surface; consistent with 04 §1.2 call-site blocking).
+> - **rpcdb proto has only `NewIteratorWithStartAndPrefix`** (no plain `NewIterator` RPC) — matches Go.
+> - **Fuzz needs nightly (spec 02 §8 confirmed):** `cargo fuzz build` fails on the pinned stable
+>   toolchain with `error: the option 'Z' is only accepted on the nightly compiler` (it injects
+>   `-Zsanitizer=address` + sancov). The fuzz crate itself COMPILES on stable (libfuzzer-sys builds;
+>   only the instrumented run needs nightly). **Local gate = the stable `prop_fuzz_smoke` proptest;
+>   nightly = a dedicated CI `test-fuzz` job.** Recommended X.2/X.16 follow-up: add a
+>   `rust-bin.nightly` `fuzzToolchain` to `flake.nix` (or rustup nightly in the CI fuzz job) + a
+>   `test-fuzz`/`test-fuzz-long` Task target running `cargo fuzz run <target> -- -max_total_time=<n>`.
+> - **New deps (owed to X-cross-cutting for promotion):** root `[workspace.dependencies]` now has
+>   `prost 0.13`, `tonic 0.12`, `tonic-build 0.12`, `tokio 1` (added by the proto agent — the
+>   sanctioned root edit this wave). `ava-merkledb` added crate-local `arbitrary 1` (optional, under a
+>   `fuzzing` feature) — candidate for workspace-dep promotion alongside the X.16 fuzz wiring.
+>
+> **Still open (M1):** `ava-merkledb` M1.19 (sync proto + `SyncDb` + Syncer — **now unblocked**: the
+> proto pipeline exists; reuse the `ava-database` build.rs pattern with `proto/sync/sync.proto`,
+> which has no external imports). Firewood M1.20–M1.21 (need M1.19); R2 import tool M1.24 (deps
+> M1.4 ✅, M1.14 ✅ — unblocked); exit gate M1.26. Fuzz nightly CI wiring is an X.2/X.16 follow-up
+> (the M1.25 target + stable smoke are in place).
 
 ---
 
@@ -303,7 +350,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features testutil --test conformance_heightindex` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: HeightIndex trait + memdb/meterdb backends + battery (04 §2.9)"`
 
-### Task M1.11: `rpcdb` client/server (Database over gRPC, tonic)
+### Task M1.11: `rpcdb` client/server (Database over gRPC, tonic) ✅ COMPLETED
 **Crate:** `ava-database`  ·  **Depends on:** M1.1, M1.2, M1.3, M0 (proto build)  ·  **Spec:** 04 §2.8, 15 §3.4 (rpcdb.proto), 02 §6.1
 **Files:**
 - Create: `crates/ava-database/src/rpcdb/mod.rs`, `crates/ava-database/src/rpcdb/client.rs`, `crates/ava-database/src/rpcdb/server.rs`, `crates/ava-database/build.rs` (or shared proto build per M0)
@@ -471,7 +518,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-database --features migrate --test migrate` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-database: R2 Go-data-dir import tool (leveldb/pebble readers, verify roots, resume) (04 §11)"`
 
-### Task M1.25: cargo-fuzz target — merkledb op-stream parser
+### Task M1.25: cargo-fuzz target — merkledb op-stream parser ✅ COMPLETED
 **Crate:** `ava-merkledb` (fuzz sub-crate)  ·  **Depends on:** M1.13, M1.16  ·  **Spec:** 02 §8, 02 §13.5
 **Files:**
 - Create: `crates/ava-merkledb/fuzz/Cargo.toml`, `crates/ava-merkledb/fuzz/fuzz_targets/op_stream.rs`, `crates/ava-merkledb/fuzz/corpus/op_stream/` (committed seeds)
