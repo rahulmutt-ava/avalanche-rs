@@ -20,4 +20,4 @@ M0.19 (BLS), M0.20 (staking certs), M0.21 (Signer / LocalSigner).
 | `staking/tls_test.go` | `tests/golden_nodeid.rs`, `src/staking/verify.rs` (unit) | ported |
 | `staking/parse_test.go` | `tests/golden_nodeid.rs` | ported |
 | `staking/verify_test.go` | `src/staking/verify.rs` (unit) | ported |
-| `utils/crypto/bls/signers/local/*_test.go` | `tests/local_signer.rs` | todo |
+| `utils/crypto/bls/signers/local/*_test.go` | `tests/local_signer.rs` | ported |

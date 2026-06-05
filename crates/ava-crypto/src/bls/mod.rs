@@ -22,7 +22,9 @@ pub mod signer;
 
 pub use ciphersuite::{CIPHERSUITE_POP, CIPHERSUITE_SIGNATURE};
 pub use keys::{
-    aggregate_public_keys, PublicKey, SecretKey, PUBLIC_KEY_LEN, SECRET_KEY_LEN,
-    UNCOMPRESSED_PUBLIC_KEY_LEN,
+    PUBLIC_KEY_LEN, PublicKey, SECRET_KEY_LEN, SecretKey, UNCOMPRESSED_PUBLIC_KEY_LEN,
+    aggregate_public_keys,
 };
-pub use sign::{aggregate_signatures, verify, verify_pop, Signature, SIGNATURE_LEN};
+pub use local_signer::LocalSigner;
+pub use sign::{SIGNATURE_LEN, Signature, aggregate_signatures, verify, verify_pop};
+pub use signer::Signer;
