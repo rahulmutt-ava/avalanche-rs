@@ -8,8 +8,9 @@
 //! depend on `ava-codec`/`ava-crypto` (avoids the dependency cycle; see
 //! `specs/03-core-primitives.md` §0 "Packer placement decision").
 //!
-//! TODO(M0.6): `Display`/`FromStr`/serde CB58 string forms (null = no-op),
-//! which depend on the CB58 codec being built in `ava-utils`.
+//! `Display`/`FromStr` use bare CB58 (no prefix); serde serializes as the
+//! quoted Display string; JSON `null` deserializes to `Default` (Go null no-op,
+//! spec §1.1). CB58 lives in `ava-utils::cb58` to break the types→crypto cycle.
 //! Owning spec: `specs/03-core-primitives.md` §1.1.
 
 use sha2::{Digest, Sha256};
@@ -111,10 +112,61 @@ impl Id {
     }
 }
 
+impl core::fmt::Display for Id {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // CB58 encode; cb58_encode only errors on oversized inputs (> i32::MAX - 4),
+        // which a 32-byte array can never trigger, so the unwrap is infallible here.
+        let s = ava_utils::cb58::cb58_encode(&self.0).map_err(|_| core::fmt::Error)?;
+        f.write_str(&s)
+    }
+}
+
+impl core::str::FromStr for Id {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let bytes = ava_utils::cb58::cb58_decode(s).map_err(Error::Cb58)?;
+        Self::from_slice(&bytes)
+    }
+}
+
+impl serde::Serialize for Id {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Id {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, D::Error> {
+        struct IdVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for IdVisitor {
+            type Value = Id;
+
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("a CB58-encoded Id string or null")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> core::result::Result<Id, E> {
+                v.parse::<Id>().map_err(E::custom)
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> core::result::Result<Id, E> {
+                Ok(Id::default())
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> core::result::Result<Id, E> {
+                Ok(Id::default())
+            }
+        }
+
+        deserializer.deserialize_any(IdVisitor)
+    }
+}
+
 impl core::fmt::Debug for Id {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // TODO(M0.6): use CB58 Display once available.
-        write!(f, "Id(0x{})", self.hex())
+        write!(f, "Id({})", self)
     }
 }
 

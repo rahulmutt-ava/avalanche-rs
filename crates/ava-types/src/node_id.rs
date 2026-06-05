@@ -7,8 +7,9 @@
 //! the `NodeID-` prefix and JSON form differ. The derived [`Ord`] is
 //! lexicographic over the byte array (== Go `bytes.Compare`).
 //!
-//! TODO(M0.6): `Display`/`FromStr` requiring the `NodeID-` prefix; serde forms,
-//! which depend on the CB58 codec being built in `ava-utils`.
+//! `Display` outputs `NodeID-<cb58>`; `FromStr` requires the `NodeID-` prefix
+//! (else returns [`Error::ShortNodeId`]). Serde serializes as the quoted Display
+//! string; JSON `null` deserializes to `Default` (Go null no-op, spec §1.1).
 //! TODO(M0.20): `From<[u8;20]>` is consumed by `ava-crypto::node_id_from_cert`.
 //! Owning spec: `specs/03-core-primitives.md` §1.1, §3.6.
 
@@ -63,10 +64,65 @@ impl NodeId {
     }
 }
 
+impl core::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let s = ava_utils::cb58::cb58_encode(&self.0).map_err(|_| core::fmt::Error)?;
+        write!(f, "{}{}", NODE_ID_PREFIX, s)
+    }
+}
+
+impl core::str::FromStr for NodeId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let cb58 = s.strip_prefix(NODE_ID_PREFIX).ok_or_else(|| {
+            Error::ShortNodeId(format!(
+                "expected prefix '{}', got '{}'",
+                NODE_ID_PREFIX, s
+            ))
+        })?;
+        let bytes = ava_utils::cb58::cb58_decode(cb58).map_err(Error::Cb58)?;
+        Self::from_slice(&bytes)
+    }
+}
+
+impl serde::Serialize for NodeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for NodeId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, D::Error> {
+        struct NodeIdVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for NodeIdVisitor {
+            type Value = NodeId;
+
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("a NodeID-prefixed CB58 string or null")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> core::result::Result<NodeId, E> {
+                v.parse::<NodeId>().map_err(E::custom)
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> core::result::Result<NodeId, E> {
+                Ok(NodeId::default())
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> core::result::Result<NodeId, E> {
+                Ok(NodeId::default())
+            }
+        }
+
+        deserializer.deserialize_any(NodeIdVisitor)
+    }
+}
+
 impl core::fmt::Debug for NodeId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // TODO(M0.6): use CB58 Display (with the `NodeID-` prefix) once available.
-        write!(f, "NodeId(0x{})", self.hex())
+        write!(f, "NodeId({})", self)
     }
 }
 

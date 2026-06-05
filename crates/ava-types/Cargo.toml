@@ -20,11 +20,12 @@ parking_lot = { workspace = true }
 hex = { workspace = true }
 
 # CB58 string forms (M0.6) are provided by ava-utils to break the
-# types -> crypto cycle (specs/03 §0, plan M0.6/M0.11). Wired in by that task:
-# ava-utils = { path = "../ava-utils" }
+# types -> crypto cycle (specs/03 §0, plan M0.6/M0.11).
+ava-utils = { path = "../ava-utils" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+hex = { workspace = true }
 proptest = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
