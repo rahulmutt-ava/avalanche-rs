@@ -33,14 +33,22 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) ];
-          # cargo-llvm-cov is flagged `broken` in nixos-25.11 (a stale marker —
-          # the prebuilt Rust binary still builds & runs). Allow it so the dev
-          # shell evaluates; revisit when the nixpkgs pin is bumped.
+          # cargo-llvm-cov is flagged `broken` in nixos-25.11; allowBroken lets
+          # the dev shell evaluate. The build itself is fixed up below
+          # (doCheck = false). Revisit when the nixpkgs pin is bumped.
           config.allowBroken = true;
         };
 
         # Single source of truth for the Rust version: rust-toolchain.toml.
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+
+        # cargo-llvm-cov integration tests require Rust profiler_builtins for
+        # coverage-instrumented target builds. On nixpkgs/darwin this can fail with:
+        #   can't find crate for `profiler_builtins`
+        # The binary is still usable with a Rust toolchain that has profiler runtime support.
+        cargo-llvm-cov = pkgs.cargo-llvm-cov.overrideAttrs (_: {
+          doCheck = false;
+        });
       in
       {
         devShells.default = pkgs.mkShell {
