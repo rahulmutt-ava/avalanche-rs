@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "ava_types",
+    srcs = [
+        "src/aliaser.rs",
+        "src/bits.rs",
+        "src/constants.rs",
+        "src/error.rs",
+        "src/id.rs",
+        "src/lib.rs",
+        "src/node_id.rs",
+        "src/request_id.rs",
+        "src/short_id.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)

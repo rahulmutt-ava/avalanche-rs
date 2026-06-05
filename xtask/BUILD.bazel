@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "xtask",
+    srcs = [
+        "src/lint_determinism.rs",
+        "src/main.rs",
+        "src/porting.rs",
+        "src/test.rs",
+        "src/vectors.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:clap",
+    ],
+)

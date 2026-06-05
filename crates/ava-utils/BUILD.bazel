@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "ava_utils",
+    srcs = [
+        "src/bag.rs",
+        "src/bits.rs",
+        "src/cb58.rs",
+        "src/clock.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/linked.rs",
+        "src/math.rs",
+        "src/rng.rs",
+        "src/sampler/mod.rs",
+        "src/sampler/rng.rs",
+        "src/sampler/uniform.rs",
+        "src/sampler/weighted.rs",
+        "src/sampler/weighted_without_replacement.rs",
+        "src/set.rs",
+        "src/units.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)

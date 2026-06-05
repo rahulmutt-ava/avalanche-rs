@@ -13,11 +13,13 @@ bazel_dep(name = "rules_rust", version = "0.70.0")
 bazel_dep(name = "rules_proto", version = "7.1.0")
 bazel_dep(name = "toolchains_protoc", version = "0.4.3")  # hermetic protoc
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
 # Gazelle + the Rust language plugin (analogue of rules_go's gazelle).
-bazel_dep(name = "gazelle", version = "0.45.0")
-bazel_dep(name = "gazelle_rust", version = "0.2.0")
+# gazelle_rust 0.1.0 is the only version published to the BCR; it requires
+# gazelle >=0.47.0 (MVS bumps the pin below to satisfy it).
+bazel_dep(name = "gazelle", version = "0.47.0")
+bazel_dep(name = "gazelle_rust", version = "0.1.0")
 
 # --- Rust toolchain: pinned to rust-toolchain.toml ------------------------
 # CI's check-rust-version asserts this stays in lock-step with rust-toolchain.toml.

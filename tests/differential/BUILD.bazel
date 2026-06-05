@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_differential",
+    srcs = [
+        "src/driver.rs",
+        "src/lib.rs",
+        "src/network.rs",
+        "src/observation.rs",
+        "src/program.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:arbitrary"],
+)
+
+rust_test(
+    name = "smoke",
+    srcs = ["tests/smoke.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:arbitrary",
+    ],
+)

@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "ava_crypto",
+    srcs = [
+        "src/address.rs",
+        "src/bls/ciphersuite.rs",
+        "src/bls/keys.rs",
+        "src/bls/local_signer.rs",
+        "src/bls/mod.rs",
+        "src/bls/sign.rs",
+        "src/bls/signer.rs",
+        "src/cb58.rs",
+        "src/error.rs",
+        "src/formatting.rs",
+        "src/hashing.rs",
+        "src/lib.rs",
+        "src/secp256k1.rs",
+        "src/staking/certificate.rs",
+        "src/staking/mod.rs",
+        "src/staking/parse.rs",
+        "src/staking/tls.rs",
+        "src/staking/verify.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)

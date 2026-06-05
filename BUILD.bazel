@@ -4,8 +4,23 @@
 # `bazel run //:gazelle_check` (mode=diff) fails CI if they are stale.
 load("@gazelle//:def.bzl", "gazelle", "gazelle_binary")
 
-# gazelle:rust_cargo_lockfile //:Cargo.lock
+# Generate one BUILD target per Cargo crate (next to each Cargo.toml), matching
+# the workspace's Cargo structure — not gazelle_rust's default per-source-file
+# targets (pure_bazel), which split a crate's modules into separate libraries.
+# gazelle:rust_mode generate_from_cargo
+# gazelle:rust_default_edition 2024
+# gazelle:rust_cargo_lockfile Cargo.lock
 # gazelle:rust_crates_prefix @crates//:
+# Do not walk the in-repo Cargo caches / build output — they hold vendored crate
+# sources whose deps must resolve to @crates//:, not to copies under these dirs
+# (scanning them floods gazelle with "multiple matches" errors and exits non-zero).
+# gazelle:exclude .cargo-home
+# gazelle:exclude target
+# cargo-fuzz crates are detached from the root workspace (own [workspace] table)
+# and built via `cargo +nightly fuzz build` (the test-fuzz task), not Bazel;
+# their libfuzzer-sys dep is not in the main Cargo.lock / @crates set.
+# gazelle:exclude crates/ava-codec/fuzz
+# gazelle:exclude crates/ava-utils/fuzz
 
 gazelle_binary(
     name = "gazelle_bin",

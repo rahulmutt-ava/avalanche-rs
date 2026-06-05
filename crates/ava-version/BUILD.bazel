@@ -1,0 +1,14 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "ava_version",
+    srcs = [
+        "src/application.rs",
+        "src/compatibility.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/upgrade.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)

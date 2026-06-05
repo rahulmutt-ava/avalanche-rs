@@ -27,9 +27,21 @@ build:opt --@rules_rust//:extra_rustc_flags=-Ccodegen-units=1
 
 # libclang / native build deps for rocksdb/firewood/secp256k1/blst.
 build --action_env=LIBCLANG_PATH
-build --repo_env=CARGO_BAZEL_REPIN=0   # set to 1 to force crate re-pin
+# Crate re-pinning: leave CARGO_BAZEL_REPIN UNSET by default (this is the
+# no-repin behavior — crate_universe uses the committed Cargo.lock as-is). Do
+# NOT set it to 0: cargo-bazel misinterprets the value "0" as a package name to
+# repin and runs `cargo update --package 0`, which fails the splice. To force a
+# re-pin, run with `CARGO_BAZEL_REPIN=1 bazelisk ...` (or pass the repo_env).
 
 # macOS: use the default CommandLineTools toolchain (matches Go + CI runners).
+# Force Bazel's C++ toolchain detection (local_config_cc) onto the system Apple
+# clang. Inside `nix develop`, CC defaults to the nix clang wrapper, whose Apple
+# SDK headers are pulled in via absolute paths that Bazel's detected toolchain
+# does not register as builtin include dirs — breaking every C/C++ compile with
+# "absolute path inclusion(s) found" (e.g. protobuf's utf8_range.c). The system
+# clang's SDK (set via SDKROOT/DEVELOPER_DIR below) is recognized correctly.
+build:macos --repo_env=CC=/usr/bin/clang
+build:macos --repo_env=CXX=/usr/bin/clang++
 build:macos --repo_env=DEVELOPER_DIR=/Library/Developer/CommandLineTools
 build:macos --action_env=DEVELOPER_DIR=/Library/Developer/CommandLineTools
 build:macos --action_env=SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
