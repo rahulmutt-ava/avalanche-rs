@@ -1,9 +1,125 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
-//! 32-byte `Id` newtype + ops (`prefix`/`append`/`xor`/`bit`) and CB58 forms.
+//! 32-byte `Id` newtype + ops (`prefix`/`append`/`xor`/`bit`).
 //!
-//! TODO(M0.5): implement `Id([u8;32])`, constants, `from_slice`, `prefix`/
-//! `append` (inline BE writer + `sha2::Sha256`), `xor`, `bit`, `hex`.
-//! TODO(M0.6): `Display`/`FromStr`/serde CB58 string forms (null = no-op).
+//! Mirrors Go `ids.ID` (`ids/id.go`). `prefix`/`append` use an inline
+//! big-endian writer feeding `sha2::Sha256` directly so this crate does not
+//! depend on `ava-codec`/`ava-crypto` (avoids the dependency cycle; see
+//! `specs/03-core-primitives.md` §0 "Packer placement decision").
+//!
+//! TODO(M0.6): `Display`/`FromStr`/serde CB58 string forms (null = no-op),
+//! which depend on the CB58 codec being built in `ava-utils`.
 //! Owning spec: `specs/03-core-primitives.md` §1.1.
+
+use sha2::{Digest, Sha256};
+
+use crate::error::{Error, Result};
+
+/// Length of an [`Id`] in bytes.
+pub const ID_LEN: usize = 32;
+
+/// 32-byte identifier (block IDs, tx IDs, chain IDs, subnet IDs, …).
+///
+/// Mirrors `ids.ID`. The derived [`Ord`] is lexicographic over the byte array,
+/// which is exactly Go's `bytes.Compare`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct Id([u8; ID_LEN]);
+
+impl Id {
+    /// The all-zero id. Mirrors `ids.Empty`.
+    pub const EMPTY: Id = Id([0u8; ID_LEN]);
+
+    /// Constructs an [`Id`] from a byte slice.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidHashLen`] if `bytes.len() != 32`
+    /// (mirrors Go `hashing.ToHash256`).
+    pub fn from_slice(bytes: &[u8]) -> Result<Id> {
+        if bytes.len() != ID_LEN {
+            return Err(Error::InvalidHashLen {
+                expected: ID_LEN,
+                actual: bytes.len(),
+            });
+        }
+        let mut out = [0u8; ID_LEN];
+        out.copy_from_slice(bytes);
+        Ok(Id(out))
+    }
+
+    /// Returns a reference to the raw 32 bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; ID_LEN] {
+        &self.0
+    }
+
+    /// Consumes the id, returning the raw 32 bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; ID_LEN] {
+        self.0
+    }
+
+    /// `prefix` (consensus-relevant — `ids/id.go:97`).
+    ///
+    /// Concatenates `be_u64(prefixes[i])` for each prefix, then the 32 id bytes,
+    /// and returns `sha256(...)` as a new [`Id`].
+    #[must_use]
+    pub fn prefix(&self, prefixes: &[u64]) -> Id {
+        let mut hasher = Sha256::new();
+        for p in prefixes {
+            hasher.update(p.to_be_bytes());
+        }
+        hasher.update(self.0);
+        Id(hasher.finalize().into())
+    }
+
+    /// ACP-77 validationID derivation (`ids/id.go:116`).
+    ///
+    /// Concatenates the 32 id bytes, then `be_u32(suffixes[i])` for each suffix,
+    /// and returns `sha256(...)` as a new [`Id`].
+    #[must_use]
+    pub fn append(&self, suffixes: &[u32]) -> Id {
+        let mut hasher = Sha256::new();
+        hasher.update(self.0);
+        for s in suffixes {
+            hasher.update(s.to_be_bytes());
+        }
+        Id(hasher.finalize().into())
+    }
+
+    /// Byte-wise XOR of two ids.
+    #[must_use]
+    pub fn xor(&self, other: &Id) -> Id {
+        let mut out = [0u8; ID_LEN];
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = self.0[i] ^ other.0[i];
+        }
+        Id(out)
+    }
+
+    /// Returns bit `i` (0 or 1). `byte = i/8`, `bit = (b >> (i%8)) & 1`
+    /// (`ids/id.go:140`).
+    #[must_use]
+    pub fn bit(&self, i: usize) -> u8 {
+        (self.0[i / 8] >> (i % 8)) & 1
+    }
+
+    /// Lowercase hex, no `0x` prefix. Mirrors Go `id.Hex`.
+    #[must_use]
+    pub fn hex(&self) -> String {
+        hex::encode(self.0)
+    }
+}
+
+impl core::fmt::Debug for Id {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // TODO(M0.6): use CB58 Display once available.
+        write!(f, "Id(0x{})", self.hex())
+    }
+}
+
+impl From<[u8; ID_LEN]> for Id {
+    fn from(bytes: [u8; ID_LEN]) -> Id {
+        Id(bytes)
+    }
+}
