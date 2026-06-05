@@ -179,6 +179,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "rcgen",
+ "ring",
  "ripemd",
  "rustls-pemfile",
  "secp256k1",
@@ -187,6 +188,7 @@ dependencies = [
  "sha2",
  "sha3",
  "thiserror 2.0.18",
+ "time",
  "x509-parser",
  "zeroize",
 ]

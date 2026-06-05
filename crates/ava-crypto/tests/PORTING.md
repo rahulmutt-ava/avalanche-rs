@@ -17,6 +17,7 @@ M0.19 (BLS), M0.20 (staking certs), M0.21 (Signer / LocalSigner).
 | `utils/crypto/secp256k1/secp256k1_test.go` | `tests/golden_secp.rs` | todo |
 | `utils/crypto/bls/signer_test.go` | `tests/golden_bls.rs` | todo |
 | `utils/crypto/bls/*_test.go` (agg/PoP) | `tests/golden_bls.rs` | todo |
-| `staking/tls_test.go` | `tests/golden_nodeid.rs` | todo |
-| `staking/parse_test.go` | `tests/golden_nodeid.rs` | todo |
+| `staking/tls_test.go` | `tests/golden_nodeid.rs`, `src/staking/verify.rs` (unit) | ported |
+| `staking/parse_test.go` | `tests/golden_nodeid.rs` | ported |
+| `staking/verify_test.go` | `src/staking/verify.rs` (unit) | ported |
 | `utils/crypto/bls/signers/local/*_test.go` | `tests/local_signer.rs` | todo |

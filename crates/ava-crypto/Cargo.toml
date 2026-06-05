@@ -31,6 +31,11 @@ x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 zeroize = { workspace = true }
 
+# Staking-cert signature verification (M0.20 `verify.rs`): ECDSA P-256 / RSA
+# PKCS1v15 over `sha256(msg)`. `ring` is already in the build graph (rcgen's
+# pinned crypto backend); this pin (== the locked 0.17.x) adds no new crate.
+ring = "0.17"
+
 # FFI-backed deps. These compile vendored C via the `cc` crate using the system
 # (or Nix-provided) clang; no cmake needed (rcgen uses the `ring` backend, set in
 # the workspace manifest). Used by the secp256k1 (M0.18), bls (M0.19/M0.21), and
@@ -38,6 +43,11 @@ zeroize = { workspace = true }
 secp256k1 = { workspace = true }
 blst = { workspace = true }
 rcgen = { workspace = true }
+
+# Validity-window timestamps for the staking cert template (M0.20 `tls.rs`).
+# `time` is already in the build graph (rcgen's `OffsetDateTime` fields); this
+# pin (== the locked 0.3.x) adds no new crate.
+time = "0.3"
 
 [dev-dependencies]
 serde = { workspace = true }

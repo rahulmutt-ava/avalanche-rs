@@ -17,3 +17,21 @@ pub mod certificate;
 pub mod parse;
 pub mod tls;
 pub mod verify;
+
+use ava_types::node_id::NodeId;
+
+pub use certificate::{CertPublicKey, Certificate};
+pub use parse::{MAX_CERTIFICATE_LEN, parse_certificate};
+pub use tls::{new_cert_and_key_bytes, write_cert_and_key};
+pub use verify::check_signature;
+
+/// `ids.NodeIDFromCert` — the NodeID is `ripemd160(sha256(cert.DER))` over the
+/// ENTIRE DER-encoded certificate (`cert.Raw`), NOT the public key.
+///
+/// `pubkey_bytes_to_address` is the same `ripemd160(sha256(·))` function; the
+/// input here is the whole cert. Byte-exact with Go (`specs/03` §3.6,
+/// `specs/25` §2.1).
+#[must_use]
+pub fn node_id_from_cert(cert_der: &[u8]) -> NodeId {
+    NodeId::from(crate::hashing::pubkey_bytes_to_address(cert_der))
+}
