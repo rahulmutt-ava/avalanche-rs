@@ -27,6 +27,7 @@ use crate::error::{Error, Result};
 use crate::history::{DEFAULT_HISTORY_SIZE, History};
 use crate::key::{BranchFactor, Key};
 use crate::maybe::Maybe;
+use crate::node::Node;
 use crate::node_store::{IntermediateNodeDb, ValueNodeDb};
 use crate::view::{Parent, View, ViewInner};
 
@@ -273,23 +274,36 @@ impl<D: Database> MerkleDb<D> {
         // Compute and apply the node changes (diff against the parent DB state).
         let summary = view.build_change_summary()?;
 
+        // Apply node changes to the two stores, deciding the value-ness of the
+        // before/after states independently. Mirrors Go `applyChanges`: a node
+        // that transitions value⇄intermediate is written to one store and
+        // deleted from the other.
         let mut value_ops: Vec<(Vec<u8>, Option<Bytes>)> = Vec::new();
         for (key, change) in &summary.node_changes {
-            match (&change.before, &change.after) {
-                (_, Some(node)) if node.has_value() => {
+            let after_has_value = change.after.as_ref().is_some_and(Node::has_value);
+            let before_has_value = change.before.as_ref().is_some_and(Node::has_value);
+
+            let should_add_intermediate = change.after.is_some() && !after_has_value;
+            let should_delete_intermediate =
+                !should_add_intermediate && change.before.is_some() && !before_has_value;
+            let should_add_value = after_has_value;
+            let should_delete_value = !should_add_value && before_has_value;
+
+            if should_add_intermediate {
+                if let Some(node) = &change.after {
+                    self.intermediate_node_db.put(key, &node.db_node)?;
+                }
+            } else if should_delete_intermediate {
+                self.intermediate_node_db.delete(key)?;
+            }
+
+            if should_add_value {
+                if let Some(node) = &change.after {
                     self.value_node_db
                         .stage_put(&mut value_ops, key, &node.db_node);
                 }
-                (_, Some(node)) => {
-                    self.intermediate_node_db.put(key, &node.db_node)?;
-                }
-                (Some(before), None) if before.has_value() => {
-                    self.value_node_db.stage_delete(&mut value_ops, key);
-                }
-                (Some(_), None) => {
-                    self.intermediate_node_db.delete(key)?;
-                }
-                (None, None) => {}
+            } else if should_delete_value {
+                self.value_node_db.stage_delete(&mut value_ops, key);
             }
         }
         self.write_value_ops(value_ops)?;
