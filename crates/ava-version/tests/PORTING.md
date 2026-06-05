@@ -9,6 +9,6 @@ activation schedule).
 
 | Go source (test) | Rust counterpart | Status |
 |---|---|---|
-| `version/application_test.go` | `tests/version.rs` | todo |
-| `version/compatibility_test.go` | `tests/version.rs` | todo |
-| `upgrade/upgrade_test.go` | `tests/golden_upgrade.rs` | todo |
+| `version/application_test.go` | `tests/version.rs` | ported |
+| `version/compatibility_test.go` | `tests/version.rs` | ported |
+| `upgrade/upgrade_test.go` | `tests/golden_upgrade.rs` | ported |

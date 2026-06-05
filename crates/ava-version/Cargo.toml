@@ -14,7 +14,10 @@ description = "Client version, compatibility, and the network-upgrade activation
 [dependencies]
 ava-types = { path = "../ava-types" }
 thiserror = { workspace = true }
-chrono = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+bs58 = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
