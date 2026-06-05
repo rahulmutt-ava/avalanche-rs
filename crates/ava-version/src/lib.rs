@@ -15,8 +15,6 @@
 //! NOTE: the wire/P2P client string is `avalanchego` (drop-in interop); the
 //! local CLI prints `avalanchers/<ver>` (see `crates/avalanchers`). M0.22 wires
 //! the binary's `--version` to `CURRENT`'s numeric version with the local prefix.
-//!
-//! Modules are scaffolded empty in M0.1 and filled in by their owning tasks.
 
 #![forbid(unsafe_code)]
 
@@ -24,3 +22,18 @@ pub mod application;
 pub mod compatibility;
 pub mod error;
 pub mod upgrade;
+
+// ── Flat re-exports for ergonomic use ────────────────────────────────────────
+
+pub use application::{
+    Application,
+    APPLICATION_NAME,
+    CLIENT,
+    CURRENT,
+    CURRENT_DATABASE,
+    MINIMUM_COMPATIBLE,
+    PREV_DATABASE,
+    PREV_MINIMUM_COMPATIBLE,
+    RPC_CHAIN_VM_PROTOCOL,
+};
+pub use error::{Error, Result};
