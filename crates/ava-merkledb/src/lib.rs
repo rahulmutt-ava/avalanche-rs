@@ -31,6 +31,9 @@ pub mod key;
 pub mod maybe;
 pub mod node;
 
+pub use codec::{decode_db_node, encode_db_node};
 pub use error::{Error, Result};
+pub use hashing::{DefaultHasher, HASH_LENGTH, Hasher, merkle_root};
 pub use key::{BranchFactor, Key};
 pub use maybe::Maybe;
+pub use node::{Child, DbNode, Node};
