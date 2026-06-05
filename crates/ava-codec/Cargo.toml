@@ -26,6 +26,3 @@ pretty_assertions = { workspace = true }
 [features]
 # `testutil` exposes the generic codec conformance suite (codectest analogue).
 testutil = [  ]
-
-[lints]
-workspace = true

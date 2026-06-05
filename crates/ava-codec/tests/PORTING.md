@@ -10,8 +10,28 @@ linearcodec + codectest).
 
 | Go source (test) | Rust counterpart | Status |
 |---|---|---|
-| `utils/wrappers/packing_test.go` | `tests/packer.rs` | todo |
-| `codec/reflectcodec/type_codec_test.go` | `tests/derive.rs` | todo |
-| `codec/codec_test.go` | `tests/golden_codec.rs` | todo |
-| `codec/linearcodec/codec_test.go` | `tests/golden_codec.rs` | todo |
-| `codec/test_codec.go` (RunAll) | `tests/conformance.rs` | todo |
+| `utils/wrappers/packing_test.go` | `tests/packer.rs` | ported |
+| `codec/reflectcodec/type_codec_test.go` | `tests/derive.rs` | ported |
+| `codec/codec_test.go` | `tests/golden_codec.rs` | ported |
+| `codec/linearcodec/codec_test.go` | `tests/golden_codec.rs` (`typeid::typeid_table_matches`) | ported |
+| `codec/test_codec.go` (RunAll) | `tests/conformance.rs` + `src/codectest.rs` | ported |
+
+## Notes / deviations
+
+- **Golden vectors are hand-derived, not Go-extracted.** `tests/vectors/codec/`
+  shipped only `MANIFEST.md`; the M0.2 extractor produced no `.json`. The
+  `codec.json` + `typeid_table.json` here were computed directly from the
+  wire-format rules (`specs/03` §2.4, `specs/15` §4.1/§6) and carry a
+  `_provenance` note. A differential cross-check against a Go `Manager.Marshal`
+  dump is deferred to the X-cross-cutting milestone. The
+  `conformance::run_codec_suite` test is the primary correctness anchor (no Go
+  vectors needed).
+- **`Vec<u8>`** flows through the generic `Vec<T>` codec (each `u8` writes one
+  raw byte) rather than a bulk-copy specialization; the produced bytes are
+  byte-identical to Go's `u32`-count + raw-bytes path. (Rust trait coherence
+  precludes a `Vec<u8>` override without `specialization`.)
+- **Maps** are supported for `BTreeMap<K, V>` via the serialize-then-sort path
+  with strictly-increasing decode enforcement (`type_codec.go:423`).
+- The `unused_crate_dependencies` workspace lint is **not** opted into by these
+  crates (matching the already-landed `ava-utils`/`ava-types`/etc., none of which
+  carry `[lints] workspace = true`). See the final report's discrepancy list.

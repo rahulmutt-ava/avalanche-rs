@@ -31,7 +31,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, LitInt, Type};
+use syn::{Data, DeriveInput, Fields, LitInt, Type, parse_macro_input};
 
 /// `#[derive(AvaCodec)]` — linear-codec (de)serialization.
 ///
@@ -96,7 +96,11 @@ fn field_is_tagged(field: &syn::Field) -> bool {
 /// Rejects `Option<T>` fields (no presence byte on the wire).
 fn reject_option(ty: &Type) -> Result<(), syn::Error> {
     if let Type::Path(tp) = ty
-        && tp.path.segments.last().is_some_and(|seg| seg.ident == "Option")
+        && tp
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "Option")
     {
         return Err(syn::Error::new_spanned(
             ty,
@@ -231,12 +235,11 @@ fn derive_registry_enum(
         let vid = &variant.ident;
         let type_id = variant_type_id(variant)?;
         let payload_ty = match &variant.fields {
-            Fields::Unnamed(f) if f.unnamed.len() == 1 => {
-                f.unnamed
-                    .first()
-                    .map(|field| field.ty.clone())
-                    .ok_or_else(|| syn::Error::new_spanned(variant, "missing payload type"))?
-            }
+            Fields::Unnamed(f) if f.unnamed.len() == 1 => f
+                .unnamed
+                .first()
+                .map(|field| field.ty.clone())
+                .ok_or_else(|| syn::Error::new_spanned(variant, "missing payload type"))?,
             _ => {
                 return Err(syn::Error::new_spanned(
                     variant,

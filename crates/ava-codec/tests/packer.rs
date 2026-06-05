@@ -9,7 +9,7 @@
 
 use assert_matches::assert_matches;
 use ava_codec::error::PackerError;
-use ava_codec::packer::{Packer, MAX_STRING_LEN};
+use ava_codec::packer::{MAX_STRING_LEN, Packer};
 use proptest::prelude::*;
 
 mod golden {

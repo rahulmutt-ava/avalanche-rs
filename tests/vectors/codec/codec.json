@@ -1,0 +1,39 @@
+[
+  {
+    "_provenance": "hand-derived from specs/03 §2.4 + specs/15 §4.1; Go extraction deferred to X-cross-cutting",
+    "name": "fixed_array",
+    "version": 0,
+    "value_desc": "struct { id: [u8;4] = [0xAA,0xBB,0xCC,0xDD] } -> version(0000) + 4 raw bytes (no length prefix)",
+    "expected_hex": "0000 AABBCCDD"
+  },
+  {
+    "name": "vec_u8",
+    "version": 0,
+    "value_desc": "struct { data: Vec<u8> = [01,02,03] } -> version(0000) + u32 count(00000003) + raw bytes(010203)",
+    "expected_hex": "0000 00000003 010203"
+  },
+  {
+    "name": "vec_struct",
+    "version": 0,
+    "value_desc": "struct { items: Vec<Pair> = [Pair{1,2}, Pair{3,4}] } -> version + u32 count(00000002) + Pair(0001 0002) + Pair(0003 0004)",
+    "expected_hex": "0000 00000002 00010002 00030004"
+  },
+  {
+    "name": "interface_typeid",
+    "version": 0,
+    "value_desc": "Iface::Pair(Pair{9,10}) typeID=7 -> version + u32 typeID(00000007) + Pair(0009 000A)",
+    "expected_hex": "0000 00000007 0009000A"
+  },
+  {
+    "name": "map",
+    "version": 0,
+    "value_desc": "struct { m: BTreeMap<u16,u16> = {1:100, 2:200} } -> version + u32 count(00000002) + sorted entries [key 0001 val 0064][key 0002 val 00C8]",
+    "expected_hex": "0000 00000002 0001 0064 0002 00C8"
+  },
+  {
+    "name": "nested",
+    "version": 0,
+    "value_desc": "struct { n: u32 = 0x01020304, inner: Pair{5,6} } -> version + u32(01020304) + Pair(0005 0006)",
+    "expected_hex": "0000 01020304 00050006"
+  }
+]

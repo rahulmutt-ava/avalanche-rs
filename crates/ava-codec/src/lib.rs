@@ -34,6 +34,16 @@
 
 #![forbid(unsafe_code)]
 
+// Lets the `#[derive(AvaCodec)]`-generated `::ava_codec::…` paths resolve when
+// the derive is used *within* this crate (e.g. the `codectest` module).
+extern crate self as ava_codec;
+
+// `ava-types` is a declared dependency for the documented layering (specs/03
+// §0: ava-codec sits directly above ava-types) but the codec engine itself
+// touches no `ava-types` item yet — downstream newtypes implement `Serializable`
+// on their own. Keep the dependency edge without an unused-crate warning.
+use ava_types as _;
+
 pub use ava_codec_derive::AvaCodec;
 
 #[cfg(any(test, feature = "testutil"))]
@@ -238,6 +248,95 @@ impl<T: Deserializable + Default> Deserializable for Vec<T> {
                 return;
             }
             out.push(elem);
+        }
+        *self = out;
+    }
+}
+
+// Maps (determinism-critical, `type_codec.go:423`): `u32` count, then entries
+// emitted **sorted by serialized-key bytes** (`bytes.Compare`); decode enforces
+// **strictly increasing** serialized-key bytes.
+
+impl<K, V> Serializable for std::collections::BTreeMap<K, V>
+where
+    K: Serializable,
+    V: Serializable,
+{
+    fn marshal_into(&self, p: &mut Packer) {
+        pack_count(p, self.len());
+        if p.errored() {
+            return;
+        }
+        // Serialize each key into a scratch buffer, then sort entries by those
+        // bytes (matches Go's serialize-then-sort; robust for multi-byte keys).
+        let mut entries: Vec<(Vec<u8>, &K, &V)> = Vec::with_capacity(self.len());
+        for (k, v) in self {
+            let mut kp = Packer::new_write(k.size().max(1));
+            k.marshal_into(&mut kp);
+            if let Some(err) = kp.error() {
+                p.add_external_error(err);
+                return;
+            }
+            entries.push((kp.into_bytes(), k, v));
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key_bytes, _k, v) in &entries {
+            p.pack_fixed_bytes(key_bytes);
+            v.marshal_into(p);
+            if p.errored() {
+                return;
+            }
+        }
+    }
+
+    fn size(&self) -> usize {
+        let mut total = packer::INT_LEN;
+        for (k, v) in self {
+            total = total.saturating_add(k.size()).saturating_add(v.size());
+        }
+        total
+    }
+}
+
+impl<K, V> Deserializable for std::collections::BTreeMap<K, V>
+where
+    K: Deserializable + Serializable + Default + Ord,
+    V: Deserializable + Default,
+{
+    fn unmarshal_from(&mut self, p: &mut Packer) {
+        let count = p.unpack_u32() as usize;
+        if p.errored() {
+            return;
+        }
+        let mut out = std::collections::BTreeMap::new();
+        let mut prev_key_bytes: Option<Vec<u8>> = None;
+        for _ in 0..count {
+            let mut k = K::default();
+            k.unmarshal_from(p);
+            if p.errored() {
+                return;
+            }
+            // Re-serialize the key to compare against the previous one (the
+            // wire ordering is by serialized-key bytes).
+            let mut kp = Packer::new_write(k.size().max(1));
+            k.marshal_into(&mut kp);
+            let key_bytes = kp.into_bytes();
+            if prev_key_bytes
+                .as_ref()
+                .is_some_and(|prev| key_bytes.as_slice() <= prev.as_slice())
+            {
+                // Equal or out-of-order keys: "keys aren't sorted".
+                p.add_external_error(PackerError::InvalidInput);
+                return;
+            }
+            prev_key_bytes = Some(key_bytes);
+
+            let mut v = V::default();
+            v.unmarshal_from(p);
+            if p.errored() {
+                return;
+            }
+            out.insert(k, v);
         }
         *self = out;
     }

@@ -1,0 +1,9 @@
+{
+  "_provenance": "hand-derived from specs/03 §2.3 (linearcodec registration-order typeID assignment + SkipRegistrations); Go extraction deferred to X-cross-cutting",
+  "description": "Golden typeID table for the test `Iface` interface enum. typeIDs are assigned in Go registration order from 0; SkipRegistrations(7) reserves ids 0..=6, so the first two concrete types land at 7 and 8.",
+  "skip_registrations": 7,
+  "entries": [
+    { "name": "Pair", "type_id": 7 },
+    { "name": "Fixed", "type_id": 8 }
+  ]
+}

@@ -181,10 +181,7 @@ mod typeid {
     fn type_id_helpers() {
         // The generated enum exposes its typeID for golden-table assertions.
         assert_eq!(Iface::Seven(Inner::default()).codec_type_id(), 7);
-        assert_eq!(
-            Iface::Eight(Mixed::default()).codec_type_id(),
-            8
-        );
+        assert_eq!(Iface::Eight(Mixed::default()).codec_type_id(), 8);
     }
 
     #[test]
