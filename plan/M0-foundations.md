@@ -11,6 +11,18 @@
 
 ---
 
+## Progress
+
+> **Status (2026-06-05):** W0 bootstrap (M0.1, M0.2) ✅, W1 RNG R1 gate (M0.3, M0.4) ✅,
+> and the independent-primitives wave is largely landed — `ava-utils` is **fully complete**
+> (M0.3, M0.4, M0.9, M0.10, M0.11, M0.12) and `ava-types` core is complete (M0.5, M0.7, M0.8).
+> **R1 retired:** `golden::sampler_mt19937_stream` is green (MT19937/-64 byte-exact vs gonum).
+> All landed crates pass `cargo test` + `cargo clippy -- -D warnings`.
+> **Remaining in M0:** M0.6 (ID CB58 string/JSON — unblocked now that `ava_utils::cb58` exists),
+> M0.13–M0.21 (`ava-crypto`: hashing, formatting/bech32, secp256k1, BLS, staking certs),
+> M0.14–M0.16 (`ava-codec`: Packer, derive macro, Manager), M0.22–M0.23 (`ava-version`),
+> M0.24 (per-crate contracts), M0.25 (exit gate).
+
 ## Dependency map & parallel waves
 
 Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-crypto` → `ava-types`; `ava-utils` standalone; `ava-version` → `ava-types`. `ava-codec` needs only `ava-types` primitive newtypes; `ava-types::Id::prefix/append` use an inline BE writer to avoid a cycle (spec 03 §0 "Packer placement decision").
@@ -32,7 +44,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ## Tasks
 
-### Task M0.1: Bootstrap the Cargo workspace + skeleton `avalanchers` binary
+### Task M0.1: Bootstrap the Cargo workspace + skeleton `avalanchers` binary ✅ COMPLETED
 **Crate:** workspace · **Depends on:** none · **Spec:** `00` §3 (layout), §4 (canonical deps), §8 (lints, license header); `02` §1 (nextest)
 **Files:**
 - Create: `/Users/rahul.muttineni/avalanche-rs/Cargo.toml` (`[workspace]` + `[workspace.dependencies]`)
@@ -70,7 +82,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.2: Stub `tools/extract-vectors` to produce M0 golden vectors
+### Task M0.2: Stub `tools/extract-vectors` to produce M0 golden vectors ✅ COMPLETED
 **Crate:** tooling (stub) · **Depends on:** M0.1 · **Spec:** `02` §6.2 (extraction procedure); `22` (corpus). X-cross-cutting owns maturation.
 **Files:**
 - Create: `/Users/rahul.muttineni/avalanche-rs/tools/extract-vectors/README.md`
@@ -88,7 +100,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.3: R1 GATE — `Source` trait + hand-ported gonum MT19937 / MT19937-64
+### Task M0.3: R1 GATE — `Source` trait + hand-ported gonum MT19937 / MT19937-64 ✅ COMPLETED
 **Crate:** `ava-utils` · **Depends on:** M0.1, M0.2 · **Spec:** `03` §10.1–§10.3 (R1 resolution); `00` §11.2 R1; `24` hazard #4
 **Files:**
 - Create: `/Users/rahul.muttineni/avalanche-rs/crates/ava-utils/Cargo.toml`
@@ -134,7 +146,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.4: `Uint64Inclusive` rejection-sampling wrapper (exact draw count)
+### Task M0.4: `Uint64Inclusive` rejection-sampling wrapper (exact draw count) ✅ COMPLETED
 **Crate:** `ava-utils` · **Depends on:** M0.3 · **Spec:** `03` §4.1 (`uint64_inclusive` three branches), §10.3 (draw-count parity)
 **Files:**
 - Create: `/Users/rahul.muttineni/avalanche-rs/crates/ava-utils/src/sampler/rng.rs`
@@ -148,7 +160,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.5: `ava-types` fixed IDs (`Id`/`ShortId`/`NodeId`) + CB58-free helpers
+### Task M0.5: `ava-types` fixed IDs (`Id`/`ShortId`/`NodeId`) + CB58-free helpers ✅ COMPLETED
 **Crate:** `ava-types` · **Depends on:** M0.1 · **Spec:** `03` §1.1 (IDs, `prefix`/`append`/`xor`/`bit`), §1.2 (bits), §7 (error model)
 **Files:**
 - Create: `/Users/rahul.muttineni/avalanche-rs/crates/ava-types/Cargo.toml`
@@ -190,7 +202,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.7: `RequestId` + `Aliaser`
+### Task M0.7: `RequestId` + `Aliaser` ✅ COMPLETED
 **Crate:** `ava-types` · **Depends on:** M0.5 · **Spec:** `03` §1.3
 **Files:**
 - Create: `crates/ava-types/src/request_id.rs`, `crates/ava-types/src/aliaser.rs`
@@ -204,7 +216,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.8: Network constants (`ava-types::constants`)
+### Task M0.8: Network constants (`ava-types::constants`) ✅ COMPLETED
 **Crate:** `ava-types` · **Depends on:** M0.5 · **Spec:** `03` §1.4 (`utils/constants/network_ids.go`)
 **Files:**
 - Create: `crates/ava-types/src/constants.rs`
@@ -218,7 +230,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.9: `ava-utils` set / bag / Bits / linked map / safemath / units
+### Task M0.9: `ava-utils` set / bag / Bits / linked map / safemath / units ✅ COMPLETED
 **Crate:** `ava-utils` · **Depends on:** M0.1 · **Spec:** `03` §4.2 (set/bag/Bits), §4.3 (linked, safemath, units); `24` hazard #3
 **Files:**
 - Create: `crates/ava-utils/src/{set.rs,bits.rs,bag.rs,linked.rs,math.rs,units.rs}`
@@ -238,7 +250,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.10: Samplers (uniform / weighted / weighted-without-replacement)
+### Task M0.10: Samplers (uniform / weighted / weighted-without-replacement) ✅ COMPLETED
 **Crate:** `ava-utils` · **Depends on:** M0.4, M0.9 · **Spec:** `03` §4.1 (uniform_replacer, weighted_heap, weighted-without-replacement)
 **Files:**
 - Create: `crates/ava-utils/src/sampler/{mod.rs,uniform.rs,weighted.rs,weighted_without_replacement.rs}`
@@ -256,7 +268,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.11: CB58 codec in `ava-utils` (shared by types & crypto)
+### Task M0.11: CB58 codec in `ava-utils` (shared by types & crypto) ✅ COMPLETED
 **Crate:** `ava-utils` · **Depends on:** M0.1, M0.13 (sha256) · **Spec:** `03` §3.2 (CB58); `15` §4.4
 **Files:**
 - Create: `crates/ava-utils/src/cb58.rs`
@@ -272,7 +284,7 @@ Crate dep direction (spec 03 §0): `ava-types` → `ava-codec` (+derive); `ava-c
 
 ---
 
-### Task M0.12: Injectable `Clock` (RealClock / MockClock)
+### Task M0.12: Injectable `Clock` (RealClock / MockClock) ✅ COMPLETED
 **Crate:** `ava-utils` · **Depends on:** M0.1 · **Spec:** `24` Part B (clock trait, MockClock, MAX_UNIX_SECS); `24` hazard #5
 **Files:**
 - Create: `crates/ava-utils/src/clock.rs`
