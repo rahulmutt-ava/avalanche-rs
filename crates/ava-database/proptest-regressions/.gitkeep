@@ -1,0 +1,3 @@
+# proptest regression seeds (committed per specs/02 §4.1).
+# Backend conformance proptests (run_database_proptests) write minimal failing
+# seeds here; deleting a regression file is a test regression.

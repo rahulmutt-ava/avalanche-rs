@@ -86,9 +86,25 @@ pub trait Iteratee {
     fn new_iterator_with_start_and_prefix(&self, start: &[u8], prefix: &[u8]) -> Self::Iter<'_>;
 }
 
+/// Object-safe Put/Delete target for [`Batch::replay`] and the
+/// [`BatchOps`](crate::BatchOps) recorder.
+///
+/// Mirrors Go's `KeyValueWriterDeleter` as used by `Batch.Replay`. It takes
+/// `&mut self` (a batch accumulates ops, so it mutates) — distinct from the
+/// `&self` [`KeyValueWriter`]/[`KeyValueDeleter`] that the backing DB exposes.
+pub trait WriteDelete {
+    /// Stores `value` under `key`. Both args are copied.
+    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
+    /// Removes `key`.
+    fn delete(&mut self, key: &[u8]) -> Result<()>;
+}
+
 /// A write-only, replayable, resettable batch (04 §1.1 batch contract).
 /// Atomic on [`Batch::write`].
-pub trait Batch: KeyValueWriter + KeyValueDeleter {
+///
+/// A batch *is* a [`WriteDelete`] (its `put`/`delete` buffer ops), which lets
+/// one batch be replayed onto another (`Batch::inner` + `replay`).
+pub trait Batch: WriteDelete {
     /// Bytes queued for writing (keys + values + deleted keys).
     fn size(&self) -> usize;
     /// Flushes accumulated ops to the host DB atomically.
@@ -99,14 +115,6 @@ pub trait Batch: KeyValueWriter + KeyValueDeleter {
     fn replay(&self, w: &mut dyn WriteDelete) -> Result<()>;
     /// Returns the batch writing to the inner DB (or `self` if at the base).
     fn inner(&mut self) -> &mut dyn Batch;
-}
-
-/// Object-safe target for [`Batch::replay`] / [`BatchOps`](crate::BatchOps).
-pub trait WriteDelete {
-    /// Stores `value` under `key`.
-    fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()>;
-    /// Removes `key`.
-    fn delete(&mut self, key: &[u8]) -> Result<()>;
 }
 
 /// Constructs batches for a store.

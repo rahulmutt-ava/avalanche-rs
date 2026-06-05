@@ -21,6 +21,9 @@ pub mod error;
 pub mod helpers;
 pub mod traits;
 
+#[cfg(feature = "testutil")]
+pub mod dbtest;
+
 pub use batch::{BatchOp, BatchOps};
 pub use error::{Error, Result};
 pub use traits::{

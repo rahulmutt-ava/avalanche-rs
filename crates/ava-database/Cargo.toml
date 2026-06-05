@@ -17,6 +17,17 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 ava-types = { path = "../ava-types" }
 
+# The conformance battery (dbtest) + BTreeMap-oracle proptest ship behind the
+# `testutil` feature so backends in this and other crates can run the shared
+# suite (02 §3.3, §7.2). proptest is a hard (optional) dep here — not dev —
+# because the battery is a library of helpers, not a test binary.
+proptest = { workspace = true, optional = true }
+
+[features]
+# The reusable conformance + proptest battery (specs/02 §7.2). Off by default so
+# production builds don't pull proptest; backend conformance tests enable it.
+testutil = ["dep:proptest"]
+
 [dev-dependencies]
 hex = { workspace = true }
 
