@@ -19,6 +19,10 @@ parking_lot = { workspace = true }
 sha2 = { workspace = true }
 ava-types = { path = "../ava-types" }
 
+# meterdb (§2.5) wraps any Database in Prometheus counters/gauges under the exact
+# Go metric names (calls/duration/size, method label).
+prometheus = { version = "0.13", default-features = false }
+
 # The conformance battery (dbtest) + BTreeMap-oracle proptest ship behind the
 # `testutil` feature so backends in this and other crates can run the shared
 # suite (02 §3.3, §7.2). proptest is a hard (optional) dep here — not dev —
