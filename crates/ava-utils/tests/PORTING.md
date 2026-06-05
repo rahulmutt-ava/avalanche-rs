@@ -20,3 +20,5 @@ safemath + units), M0.10 (samplers), M0.11 (CB58), M0.12 (clock).
 | `utils/linked/hashmap_test.go` | `tests/linked.rs` | todo |
 | `utils/formatting/cb58_test.go` | `tests/golden_cb58_codec.rs` | todo |
 | `utils/timer/mockable/clock_test.go` | `tests/clock_parity.rs` | todo |
+| `utils/math/safe_math_test.go` (FuzzAdd/Mul) + `utils/set/bits_test.go` + `utils/sampler/weighted_without_replacement_test.go` (property coverage) | `tests/proptests.rs` | ported |
+| `utils/formatting/cb58_test.go` (`FuzzEncodeDecode`) | `fuzz/fuzz_targets/cb58_roundtrip.rs` | ported |
