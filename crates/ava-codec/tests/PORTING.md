@@ -6,7 +6,7 @@ status `todo` / `wip` / `ported` / `na`. No `wip` rows at the M0.25 exit gate.
 See `specs/02-testing-strategy.md` §10.1.
 
 Owning tasks: M0.14 (Packer), M0.15 (derive + traits), M0.16 (Manager +
-linearcodec + codectest).
+linearcodec + codectest), M0.24 (proptests + fuzz).
 
 | Go source (test) | Rust counterpart | Status |
 |---|---|---|
@@ -15,6 +15,8 @@ linearcodec + codectest).
 | `codec/codec_test.go` | `tests/golden_codec.rs` | ported |
 | `codec/linearcodec/codec_test.go` | `tests/golden_codec.rs` (`typeid::typeid_table_matches`) | ported |
 | `codec/test_codec.go` (RunAll) | `tests/conformance.rs` + `src/codectest.rs` | ported |
+| `codec/codec_test.go` (`FuzzStructUnmarshal`/round-trip) | `tests/proptests.rs` (`prop::codec_roundtrip` @ 4096 cases, `prop::decode_never_panics`, `bounds::*`) | ported |
+| `codec` fuzz harness (decode-never-panics + round-trip) | `fuzz/fuzz_targets/codec_roundtrip.rs` | ported |
 
 ## Notes / deviations
 
