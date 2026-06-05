@@ -3,6 +3,9 @@
 debug
 target
 
+# Coverage output (task test-coverage -> cargo llvm-cov --output-path lcov.info)
+/lcov.info
+
 # Bazel convenience symlinks + local overrides
 /bazel-*
 .bazelrc.local

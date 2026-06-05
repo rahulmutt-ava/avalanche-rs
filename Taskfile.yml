@@ -112,7 +112,7 @@ tasks:
   deps-tidy:
     desc: Verify Cargo.lock is current and dependency policy passes
     cmds:
-      - '{{.NIX_RUN}} cargo update --workspace --locked'   # fails if Cargo.lock stale
+      - '{{.NIX_RUN}} cargo update --workspace --locked' # fails if Cargo.lock stale
       - '{{.NIX_RUN}} cargo deny check'
       - '{{.NIX_RUN}} bazelisk mod tidy'
 

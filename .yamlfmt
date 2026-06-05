@@ -1,0 +1,7 @@
+# yamlfmt configuration (https://github.com/google/yamlfmt).
+# Used by the `check-yaml-fmt` task to assert YAML is formatter-clean.
+# `retain_line_breaks_single` keeps the single blank lines we use to separate
+# blocks for readability (collapsing any runs of >1 blank line to one).
+formatter:
+  type: basic
+  retain_line_breaks_single: true
