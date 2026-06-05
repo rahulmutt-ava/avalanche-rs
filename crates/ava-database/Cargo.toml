@@ -18,6 +18,26 @@ serde_json = { workspace = true }
 parking_lot = { workspace = true }
 sha2 = { workspace = true }
 ava-types = { path = "../ava-types" }
+# linkeddb (§2.7) persists its doubly-linked-list nodes via the M0 linearcodec
+# (byte-exact, §10.6).
+ava-codec = { path = "../ava-codec" }
+
+# meterdb (§2.5) wraps any Database in Prometheus counters/gauges under the exact
+# Go metric names (calls/duration/size, method label). linkeddb (§2.7) caches
+# the head key + decoded nodes in bounded LRUs.
+prometheus = { version = "0.13", default-features = false }
+lru = "0.12"
+
+# rocksdb (§2.1) is the on-disk default backend and the one FFI/unsafe-permitted
+# backend. Optional + feature-gated so the crate stays buildable where the C++
+# FFI toolchain (clang/libclang/cmake) is unavailable. `rust-rocksdb` is the
+# `rocksdb` crate; LZ4/Snappy compression matches avalanchego's leveldb tuning.
+# tempfile backs `RocksDb::open_temp` (a real on-disk dir, owned by the DB).
+rocksdb = { version = "0.22", optional = true, default-features = false, features = [
+    "lz4",
+    "snappy",
+] }
+tempfile = { version = "3", optional = true }
 
 # The conformance battery (dbtest) + BTreeMap-oracle proptest ship behind the
 # `testutil` feature so backends in this and other crates can run the shared
@@ -29,6 +49,9 @@ proptest = { workspace = true, optional = true }
 # The reusable conformance + proptest battery (specs/02 §7.2). Off by default so
 # production builds don't pull proptest; backend conformance tests enable it.
 testutil = ["dep:proptest"]
+# The on-disk RocksDB backend (§2.1). Off by default (needs the C++ FFI
+# toolchain); enabled by `--all-features` and the rocksdb conformance test.
+rocksdb = ["dep:rocksdb", "dep:tempfile"]
 
 [dev-dependencies]
 hex = { workspace = true }

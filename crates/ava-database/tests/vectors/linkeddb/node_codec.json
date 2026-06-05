@@ -1,0 +1,67 @@
+{
+  "_provenance": "Go-extracted from avalanchego database/linkeddb (rev fb174e8925) via linkeddb.Codec.Marshal(CodecVersion=0, node). Bytes include the 2-byte codec.Manager version prefix 0x0000. node fields in declared order: Value []byte, HasNext bool, Next []byte, HasPrevious bool, Previous []byte. headKey=0x01; nodeKey(k)=0x00||k.",
+  "codec_version": 0,
+  "head_key": "01",
+  "nodes": [
+    {
+      "encoded": "00000000000000000000000000000000",
+      "has_next": false,
+      "has_previous": false,
+      "name": "empty",
+      "next": "",
+      "node_key_for_logical": "006c6f676963616c",
+      "previous": "",
+      "value": ""
+    },
+    {
+      "encoded": "00000000000568656c6c6f00000000000000000000",
+      "has_next": false,
+      "has_previous": false,
+      "name": "value_only",
+      "next": "",
+      "node_key_for_logical": "006c6f676963616c",
+      "previous": "",
+      "value": "68656c6c6f"
+    },
+    {
+      "encoded": "0000000000017600000000000000000000",
+      "has_next": false,
+      "has_previous": false,
+      "name": "single_head",
+      "next": "",
+      "node_key_for_logical": "006c6f676963616c",
+      "previous": "",
+      "value": "76"
+    },
+    {
+      "encoded": "0000000000017601000000076e6578746b65790000000000",
+      "has_next": true,
+      "has_previous": false,
+      "name": "with_next",
+      "next": "6e6578746b6579",
+      "node_key_for_logical": "006c6f676963616c",
+      "previous": "",
+      "value": "76"
+    },
+    {
+      "encoded": "000000000002763200000000000100000002706b",
+      "has_next": false,
+      "has_previous": true,
+      "name": "with_prev",
+      "next": "",
+      "node_key_for_logical": "006c6f676963616c",
+      "previous": "706b",
+      "value": "7632"
+    },
+    {
+      "encoded": "00000000000556414c55450100000002aabb0100000003010203",
+      "has_next": true,
+      "has_previous": true,
+      "name": "full",
+      "next": "aabb",
+      "node_key_for_logical": "006c6f676963616c",
+      "previous": "010203",
+      "value": "56414c5545"
+    }
+  ]
+}

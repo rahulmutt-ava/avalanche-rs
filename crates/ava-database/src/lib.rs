@@ -25,15 +25,26 @@ pub mod traits;
 pub mod dbtest;
 
 pub mod corruptabledb;
+pub mod heightindex;
+pub mod linkeddb;
 pub mod memdb;
+pub mod meterdb;
 pub mod prefixdb;
 pub mod versiondb;
+
+#[cfg(feature = "rocksdb")]
+pub mod rocksdb;
 
 pub use batch::{BatchOp, BatchOps};
 pub use corruptabledb::CorruptableDb;
 pub use error::{Error, Result};
+pub use heightindex::{HeightIndex, HeightIndexMemDb, HeightIndexMeterDb};
+pub use linkeddb::LinkedDb;
 pub use memdb::MemDb;
+pub use meterdb::MeterDb;
 pub use prefixdb::{PrefixDb, join_prefixes, make_prefix};
+#[cfg(feature = "rocksdb")]
+pub use rocksdb::{RocksDb, RocksDbConfig};
 pub use traits::{
     Batch, Batcher, BoxIter, Compacter, Database, DynDatabase, Iteratee, Iterator, IteratorError,
     KeyValueDeleter, KeyValueReader, KeyValueWriter, WriteDelete,

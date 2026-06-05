@@ -1,0 +1,32 @@
+{
+  "_provenance": "Go-extracted from avalanchego database/meterdb (rev fb174e8925) via prometheus.Registry.Gather. metric_names = registered CounterVec/GaugeVec names; method_labels = full method-label value set.",
+  "label_name": "method",
+  "method_labels": [
+    "batch_delete",
+    "batch_inner",
+    "batch_put",
+    "batch_replay",
+    "batch_reset",
+    "batch_size",
+    "batch_write",
+    "close",
+    "compact",
+    "delete",
+    "get",
+    "has",
+    "health_check",
+    "iterator_error",
+    "iterator_key",
+    "iterator_next",
+    "iterator_release",
+    "iterator_value",
+    "new_batch",
+    "new_iterator",
+    "put"
+  ],
+  "metric_names": [
+    "calls",
+    "duration",
+    "size"
+  ]
+}
