@@ -1,0 +1,6 @@
+{
+  "_provenance": "Go-extracted from avalanchego database/prefixdb (go 1.25.x) via prefixdb.MakePrefix/JoinPrefixes. make_prefix(p)=SHA256(p); join_prefixes(a,b)=SHA256(a||b). Scratch generator removed after extraction.",
+  "make_prefix_vm": "5bce98f73f3ed0c837f2729ed9509b38ea66a156db7f653356cb6fe37b366e85",
+  "make_prefix_a": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+  "join_prefix_make_a_b": "984f3f7d5798372d9f995b87369940292998ff35bd6bf414c1be64b2f9dfa7ca"
+}
