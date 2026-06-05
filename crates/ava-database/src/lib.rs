@@ -24,11 +24,13 @@ pub mod traits;
 #[cfg(feature = "testutil")]
 pub mod dbtest;
 
+pub mod corruptabledb;
 pub mod memdb;
 pub mod prefixdb;
 pub mod versiondb;
 
 pub use batch::{BatchOp, BatchOps};
+pub use corruptabledb::CorruptableDb;
 pub use error::{Error, Result};
 pub use memdb::MemDb;
 pub use prefixdb::{PrefixDb, join_prefixes, make_prefix};
