@@ -41,6 +41,11 @@ pub enum Error {
     /// Mirrors Go `ids.errMissingQuotes`.
     #[error("first and last characters should be quotes")]
     MissingQuotes,
+
+    /// A CB58 decode error from `ava-utils::cb58` (bad base58, bad checksum, etc.).
+    /// Wraps [`ava_utils::error::Error`].
+    #[error("cb58 decode error: {0}")]
+    Cb58(#[from] ava_utils::error::Error),
 }
 
 /// Crate-wide `Result` alias.

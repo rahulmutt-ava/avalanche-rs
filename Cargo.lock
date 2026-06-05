@@ -218,6 +218,7 @@ name = "ava-types"
 version = "0.1.0"
 dependencies = [
  "assert_matches",
+ "ava-utils",
  "hex",
  "parking_lot",
  "pretty_assertions",

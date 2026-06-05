@@ -6,8 +6,9 @@
 //! Mirrors Go `ids.ShortID`. The derived [`Ord`] is lexicographic over the
 //! byte array (== Go `bytes.Compare`).
 //!
-//! TODO(M0.6): `Display`/`FromStr`/serde CB58 string forms, which depend on the
-//! CB58 codec being built in `ava-utils`.
+//! `Display`/`FromStr` use bare CB58 (no prefix); serde serializes as the
+//! quoted Display string; JSON `null` deserializes to `Default` (Go null no-op,
+//! spec §1.1). CB58 lives in `ava-utils::cb58` to break the types→crypto cycle.
 //! Owning spec: `specs/03-core-primitives.md` §1.1.
 
 use crate::error::{Error, Result};
@@ -59,10 +60,59 @@ impl ShortId {
     }
 }
 
+impl core::fmt::Display for ShortId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let s = ava_utils::cb58::cb58_encode(&self.0).map_err(|_| core::fmt::Error)?;
+        f.write_str(&s)
+    }
+}
+
+impl core::str::FromStr for ShortId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let bytes = ava_utils::cb58::cb58_decode(s).map_err(Error::Cb58)?;
+        Self::from_slice(&bytes)
+    }
+}
+
+impl serde::Serialize for ShortId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ShortId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, D::Error> {
+        struct ShortIdVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ShortIdVisitor {
+            type Value = ShortId;
+
+            fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("a CB58-encoded ShortId string or null")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> core::result::Result<ShortId, E> {
+                v.parse::<ShortId>().map_err(E::custom)
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> core::result::Result<ShortId, E> {
+                Ok(ShortId::default())
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> core::result::Result<ShortId, E> {
+                Ok(ShortId::default())
+            }
+        }
+
+        deserializer.deserialize_any(ShortIdVisitor)
+    }
+}
+
 impl core::fmt::Debug for ShortId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // TODO(M0.6): use CB58 Display once available.
-        write!(f, "ShortId(0x{})", self.hex())
+        write!(f, "ShortId({})", self)
     }
 }
 
