@@ -15,3 +15,35 @@ pub mod rng;
 pub mod uniform;
 pub mod weighted;
 pub mod weighted_without_replacement;
+
+use crate::rng::Source;
+use crate::sampler::uniform::UniformReplacer;
+use crate::sampler::weighted::WeightedHeap;
+use crate::sampler::weighted_without_replacement::WeightedWithoutReplacementGeneric;
+
+/// Builds a deterministic uniform sampler over `src` (Go
+/// `NewDeterministicUniform`).
+#[must_use]
+pub fn new_deterministic_uniform(src: Box<dyn Source>) -> UniformReplacer {
+    UniformReplacer::new(src)
+}
+
+/// Builds a deterministic weighted sampler (Go `NewDeterministicWeighted`).
+///
+/// The heap-based weighted sampler is itself deterministic given the sampled
+/// value, so `src` is unused here; it is accepted for API symmetry with Go and
+/// to keep call sites uniform.
+#[must_use]
+pub fn new_deterministic_weighted(_src: Box<dyn Source>) -> WeightedHeap {
+    WeightedHeap::new()
+}
+
+/// Builds the deterministic weighted-without-replacement sampler used by the
+/// validator set / consensus polls (Go
+/// `NewDeterministicWeightedWithoutReplacement`).
+#[must_use]
+pub fn new_deterministic_weighted_without_replacement(
+    src: Box<dyn Source>,
+) -> WeightedWithoutReplacementGeneric {
+    WeightedWithoutReplacementGeneric::new(src)
+}
