@@ -6,7 +6,8 @@ Go test; status `todo` / `wip` / `ported` / `na`. No `wip` rows at the M0.25
 exit gate.
 
 Owning tasks: M0.13 (hashing), M0.17 (formatting + bech32), M0.18 (secp256k1),
-M0.19 (BLS), M0.20 (staking certs), M0.21 (Signer / LocalSigner).
+M0.19 (BLS), M0.20 (staking certs), M0.21 (Signer / LocalSigner),
+M0.24 (property tests).
 
 | Go source (test) | Rust counterpart | Status |
 |---|---|---|
@@ -21,3 +22,4 @@ M0.19 (BLS), M0.20 (staking certs), M0.21 (Signer / LocalSigner).
 | `staking/parse_test.go` | `tests/golden_nodeid.rs` | ported |
 | `staking/verify_test.go` | `src/staking/verify.rs` (unit) | ported |
 | `utils/crypto/bls/signers/local/*_test.go` | `tests/local_signer.rs` | ported |
+| property tests (sign/verify, low-S, BLS aggregate) — `specs/02` §4.2 | `tests/proptests.rs` | ported |
