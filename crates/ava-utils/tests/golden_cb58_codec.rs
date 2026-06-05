@@ -22,7 +22,12 @@ fn cb58_roundtrip() {
     assert!(!pairs.is_empty());
     for p in &pairs {
         let bytes = hex::decode(&p.bytes_hex).unwrap();
-        assert_eq!(cb58_encode(&bytes).unwrap(), p.cb58, "encode {}", p.bytes_hex);
+        assert_eq!(
+            cb58_encode(&bytes).unwrap(),
+            p.cb58,
+            "encode {}",
+            p.bytes_hex
+        );
         assert_eq!(cb58_decode(&p.cb58).unwrap(), bytes, "decode {}", p.cb58);
     }
 }
@@ -33,7 +38,10 @@ fn cb58_bad_checksum() {
     let mut s = cb58_encode(&hex::decode("deadbeef").unwrap()).unwrap();
     s.pop();
     s.push('Z');
-    assert_matches!(cb58_decode(&s), Err(Error::BadChecksum) | Err(Error::Base58Decoding(_)));
+    assert_matches!(
+        cb58_decode(&s),
+        Err(Error::BadChecksum) | Err(Error::Base58Decoding(_))
+    );
 }
 
 #[test]

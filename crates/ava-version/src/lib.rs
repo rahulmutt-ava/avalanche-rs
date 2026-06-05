@@ -26,14 +26,7 @@ pub mod upgrade;
 // ── Flat re-exports for ergonomic use ────────────────────────────────────────
 
 pub use application::{
-    Application,
-    APPLICATION_NAME,
-    CLIENT,
-    CURRENT,
-    CURRENT_DATABASE,
-    MINIMUM_COMPATIBLE,
-    PREV_DATABASE,
-    PREV_MINIMUM_COMPATIBLE,
-    RPC_CHAIN_VM_PROTOCOL,
+    APPLICATION_NAME, Application, CLIENT, CURRENT, CURRENT_DATABASE, MINIMUM_COMPATIBLE,
+    PREV_DATABASE, PREV_MINIMUM_COMPATIBLE, RPC_CHAIN_VM_PROTOCOL,
 };
 pub use error::{Error, Result};

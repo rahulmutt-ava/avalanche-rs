@@ -7,7 +7,7 @@
 //! `utils/formatting/address/address_test.go`. Vectors are Go-generated.
 
 use ava_crypto::address;
-use ava_crypto::formatting::{decode, encode, Encoding};
+use ava_crypto::formatting::{Encoding, decode, encode};
 
 #[derive(serde::Deserialize)]
 struct Bech32Case {

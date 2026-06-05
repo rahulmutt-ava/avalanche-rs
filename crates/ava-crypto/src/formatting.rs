@@ -68,9 +68,7 @@ pub fn decode(encoding: Encoding, s: &str) -> Result<Vec<u8>> {
     if s.is_empty() {
         return Ok(Vec::new());
     }
-    let body = s
-        .strip_prefix(HEX_PREFIX)
-        .ok_or(Error::MissingHexPrefix)?;
+    let body = s.strip_prefix(HEX_PREFIX).ok_or(Error::MissingHexPrefix)?;
     let decoded = hex::decode(body).map_err(|e| Error::HexDecoding(e.to_string()))?;
 
     match encoding {

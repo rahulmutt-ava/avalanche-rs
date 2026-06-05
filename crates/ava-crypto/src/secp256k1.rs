@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use ava_types::short_id::ShortId;
 use secp256k1::ecdsa::{RecoverableSignature, RecoveryId, Signature as EcdsaSignature};
-use secp256k1::{Message, PublicKey as SecpPublicKey, SecretKey, SECP256K1};
+use secp256k1::{Message, PublicKey as SecpPublicKey, SECP256K1, SecretKey};
 
 use crate::cb58::{cb58_decode, cb58_encode};
 use crate::error::{Error, Result};

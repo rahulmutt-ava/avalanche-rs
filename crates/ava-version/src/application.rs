@@ -98,7 +98,12 @@ pub struct Application {
 impl Application {
     /// Constructs a new `Application` with the given fields.
     pub fn new(name: impl Into<String>, major: u32, minor: u32, patch: u32) -> Self {
-        Self { name: name.into(), major, minor, patch }
+        Self {
+            name: name.into(),
+            major,
+            minor,
+            patch,
+        }
     }
 
     /// Returns the display string `"<name>/<major>.<minor>.<patch>"`.
@@ -133,7 +138,11 @@ impl Application {
 
 impl std::fmt::Display for Application {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}.{}.{}", self.name, self.major, self.minor, self.patch)
+        write!(
+            f,
+            "{}/{}.{}.{}",
+            self.name, self.major, self.minor, self.patch
+        )
     }
 }
 

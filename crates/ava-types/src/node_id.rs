@@ -76,10 +76,7 @@ impl core::str::FromStr for NodeId {
 
     fn from_str(s: &str) -> Result<Self> {
         let cb58 = s.strip_prefix(NODE_ID_PREFIX).ok_or_else(|| {
-            Error::ShortNodeId(format!(
-                "expected prefix '{}', got '{}'",
-                NODE_ID_PREFIX, s
-            ))
+            Error::ShortNodeId(format!("expected prefix '{}', got '{}'", NODE_ID_PREFIX, s))
         })?;
         let bytes = ava_utils::cb58::cb58_decode(cb58).map_err(Error::Cb58)?;
         Self::from_slice(&bytes)
@@ -87,13 +84,18 @@ impl core::str::FromStr for NodeId {
 }
 
 impl serde::Serialize for NodeId {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> core::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
 
 impl<'de> serde::Deserialize<'de> for NodeId {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> core::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> core::result::Result<Self, D::Error> {
         struct NodeIdVisitor;
 
         impl<'de> serde::de::Visitor<'de> for NodeIdVisitor {

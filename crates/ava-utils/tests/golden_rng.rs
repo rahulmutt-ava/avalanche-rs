@@ -23,7 +23,11 @@ fn sampler_mt19937_stream() {
         let mut g = Mt19937_64::new();
         g.seed(c.seed);
         let got: Vec<u64> = (0..c.stream.len()).map(|_| g.uint64()).collect();
-        assert_eq!(got, c.stream, "MT19937-64 stream diverged for seed {}", c.seed);
+        assert_eq!(
+            got, c.stream,
+            "MT19937-64 stream diverged for seed {}",
+            c.seed
+        );
     }
     // 32-bit variant: high-word-first Uint64 composition.
     let raw32 = std::fs::read_to_string(concat!(

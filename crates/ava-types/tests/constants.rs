@@ -4,7 +4,7 @@
 //! M0.8 — network ids, HRPs, and the bidirectional name/id maps.
 
 use ava_types::constants::{
-    get_hrp, network_id, network_name, FUJI_ID, LOCAL_ID, MAINNET_ID, PRIMARY_NETWORK_ID,
+    FUJI_ID, LOCAL_ID, MAINNET_ID, PRIMARY_NETWORK_ID, get_hrp, network_id, network_name,
 };
 use ava_types::id::Id;
 

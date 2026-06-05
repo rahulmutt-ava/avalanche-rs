@@ -88,7 +88,13 @@ impl<C: Clock> Compatibility<C> {
         upgrade_time: SystemTime,
         clock: C,
     ) -> Self {
-        Self { current, min_compatible_after_upgrade, min_compatible, upgrade_time, clock }
+        Self {
+            current,
+            min_compatible_after_upgrade,
+            min_compatible,
+            upgrade_time,
+            clock,
+        }
     }
 
     /// Returns `true` iff the peer is compatible with this node.

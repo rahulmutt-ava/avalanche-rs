@@ -7,9 +7,8 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ava_version::{
-    APPLICATION_NAME,
-    CLIENT, CURRENT, CURRENT_DATABASE, MINIMUM_COMPATIBLE, PREV_MINIMUM_COMPATIBLE,
-    RPC_CHAIN_VM_PROTOCOL,
+    APPLICATION_NAME, CLIENT, CURRENT, CURRENT_DATABASE, MINIMUM_COMPATIBLE,
+    PREV_MINIMUM_COMPATIBLE, RPC_CHAIN_VM_PROTOCOL,
     application::Application,
     compatibility::{Compatibility, MockClock},
 };
@@ -40,17 +39,42 @@ fn application_display_compare() {
     assert_eq!(CURRENT.semantic_with_commit("abc123"), "v1.14.2@abc123");
 
     // Ordering: major → minor → patch; name excluded.
-    let v1_13_0 = Application { name: "avalanchego".into(), major: 1, minor: 13, patch: 0 };
-    let v1_14_0 = Application { name: "avalanchego".into(), major: 1, minor: 14, patch: 0 };
-    let v1_14_2 = Application { name: "avalanchego".into(), major: 1, minor: 14, patch: 2 };
-    let v2_0_0 = Application { name: "avalanchego".into(), major: 2, minor: 0, patch: 0 };
+    let v1_13_0 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 13,
+        patch: 0,
+    };
+    let v1_14_0 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 14,
+        patch: 0,
+    };
+    let v1_14_2 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 14,
+        patch: 2,
+    };
+    let v2_0_0 = Application {
+        name: "avalanchego".into(),
+        major: 2,
+        minor: 0,
+        patch: 0,
+    };
     assert!(v1_13_0 < v1_14_0);
     assert!(v1_14_0 < v1_14_2);
     assert!(v1_14_2 < v2_0_0);
     assert_eq!(v1_14_2, v1_14_2.clone());
 
     // Name does NOT affect ordering
-    let other_name = Application { name: "avalanche-rs".into(), major: 1, minor: 14, patch: 2 };
+    let other_name = Application {
+        name: "avalanche-rs".into(),
+        major: 1,
+        minor: 14,
+        patch: 2,
+    };
     use std::cmp::Ordering;
     assert_eq!(v1_14_2.cmp(&other_name), Ordering::Equal);
 
@@ -86,7 +110,12 @@ fn compatibility_peer_newer_major_rejected() {
     let upgrade_time = UNIX_EPOCH;
     let now = UNIX_EPOCH + Duration::from_secs(1);
     let compat = make_compat_with_clock(upgrade_time, now);
-    let peer = Application { name: "avalanchego".into(), major: 2, minor: 0, patch: 0 };
+    let peer = Application {
+        name: "avalanchego".into(),
+        major: 2,
+        minor: 0,
+        patch: 0,
+    };
     assert!(!compat.compatible(&peer));
 }
 
@@ -99,15 +128,30 @@ fn compatibility_pre_upgrade_floor() {
     let compat = make_compat_with_clock(upgrade_time, now);
 
     // 1.14.0 >= 1.13.0 → accept
-    let peer_140 = Application { name: "avalanchego".into(), major: 1, minor: 14, patch: 0 };
+    let peer_140 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 14,
+        patch: 0,
+    };
     assert!(compat.compatible(&peer_140));
 
     // 1.13.0 >= 1.13.0 → accept
-    let peer_130 = Application { name: "avalanchego".into(), major: 1, minor: 13, patch: 0 };
+    let peer_130 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 13,
+        patch: 0,
+    };
     assert!(compat.compatible(&peer_130));
 
     // 1.12.9 < 1.13.0 → reject
-    let peer_129 = Application { name: "avalanchego".into(), major: 1, minor: 12, patch: 9 };
+    let peer_129 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 12,
+        patch: 9,
+    };
     assert!(!compat.compatible(&peer_129));
 }
 
@@ -120,15 +164,30 @@ fn compatibility_post_upgrade_floor() {
     let compat = make_compat_with_clock(upgrade_time, now);
 
     // 1.14.0 >= 1.14.0 → accept
-    let peer_140 = Application { name: "avalanchego".into(), major: 1, minor: 14, patch: 0 };
+    let peer_140 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 14,
+        patch: 0,
+    };
     assert!(compat.compatible(&peer_140));
 
     // 1.14.2 >= 1.14.0 → accept
-    let peer_142 = Application { name: "avalanchego".into(), major: 1, minor: 14, patch: 2 };
+    let peer_142 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 14,
+        patch: 2,
+    };
     assert!(compat.compatible(&peer_142));
 
     // 1.13.9 < 1.14.0 → reject
-    let peer_139 = Application { name: "avalanchego".into(), major: 1, minor: 13, patch: 9 };
+    let peer_139 = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 13,
+        patch: 9,
+    };
     assert!(!compat.compatible(&peer_139));
 }
 
@@ -146,7 +205,12 @@ fn compatibility_different_name_compatible_version_accepted() {
     let upgrade_time = UNIX_EPOCH;
     let now = UNIX_EPOCH + Duration::from_secs(1);
     let compat = make_compat_with_clock(upgrade_time, now);
-    let peer = Application { name: "some-other-client".into(), major: 1, minor: 14, patch: 2 };
+    let peer = Application {
+        name: "some-other-client".into(),
+        major: 1,
+        minor: 14,
+        patch: 2,
+    };
     assert!(compat.compatible(&peer));
 }
 
@@ -155,7 +219,12 @@ fn compatibility_mid_connection_transition() {
     // A peer that was acceptable pre-upgrade is rejected after the clock crosses upgrade_time.
     // peer = 1.13.5 (>= 1.13.0 pre-upgrade floor, < 1.14.0 post-upgrade floor)
     let upgrade_time = UNIX_EPOCH + Duration::from_secs(1000);
-    let peer = Application { name: "avalanchego".into(), major: 1, minor: 13, patch: 5 };
+    let peer = Application {
+        name: "avalanchego".into(),
+        major: 1,
+        minor: 13,
+        patch: 5,
+    };
 
     // Before upgrade: floor=1.13.0 → accept
     let pre = make_compat_with_clock(upgrade_time, UNIX_EPOCH + Duration::from_secs(500));

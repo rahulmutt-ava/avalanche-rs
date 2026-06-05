@@ -31,8 +31,7 @@ pub fn format_bech32(hrp: &str, payload: &[u8]) -> Result<String> {
 /// Returns [`Error::Bech32`] if the string is not a valid standard-bech32
 /// encoding (e.g. bad checksum, bech32m variant).
 pub fn parse_bech32(s: &str) -> Result<(String, Vec<u8>)> {
-    let checked =
-        CheckedHrpstring::new::<Bech32>(s).map_err(|e| Error::Bech32(e.to_string()))?;
+    let checked = CheckedHrpstring::new::<Bech32>(s).map_err(|e| Error::Bech32(e.to_string()))?;
     let hrp = checked.hrp().to_lowercase();
     let payload: Vec<u8> = checked.byte_iter().collect();
     Ok((hrp, payload))

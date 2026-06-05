@@ -8,8 +8,8 @@
 //! path passes `false` validation flags to `blst` (mirrors Go). Owning spec:
 //! `specs/03-core-primitives.md` §3.5.
 
-use blst::min_pk::{AggregateSignature, Signature as BlstSignature};
 use blst::BLST_ERROR;
+use blst::min_pk::{AggregateSignature, Signature as BlstSignature};
 
 use super::ciphersuite::{CIPHERSUITE_POP, CIPHERSUITE_SIGNATURE};
 use super::keys::PublicKey;
@@ -38,8 +38,8 @@ impl Signature {
     pub fn from_bytes(b: &[u8]) -> Result<Self> {
         // sig_validate(false) = uncompress + subgroup check (no infinity check),
         // matching Go's SignatureFromBytes.
-        let inner =
-            BlstSignature::sig_validate(b, false).map_err(|e| Error::InvalidBls(format!("{e:?}")))?;
+        let inner = BlstSignature::sig_validate(b, false)
+            .map_err(|e| Error::InvalidBls(format!("{e:?}")))?;
         Ok(Self { inner })
     }
 

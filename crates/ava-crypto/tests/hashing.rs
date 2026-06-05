@@ -6,7 +6,9 @@
 //! Mirrors avalanchego `utils/hashing/hashing_test.go`. The vectors are
 //! Go-generated `(pubkey, ripemd160(sha256(pubkey)), checksum4)` triples.
 
-use ava_crypto::hashing::{checksum, pubkey_bytes_to_address, ripemd160, sha256, ADDR_LEN, HASH_LEN};
+use ava_crypto::hashing::{
+    ADDR_LEN, HASH_LEN, checksum, pubkey_bytes_to_address, ripemd160, sha256,
+};
 
 #[derive(serde::Deserialize)]
 struct AddrCase {

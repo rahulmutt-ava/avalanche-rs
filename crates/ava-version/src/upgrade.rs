@@ -57,13 +57,9 @@ fn cb58_to_id(s: &str) -> Id {
     let decoded = bs58::decode(s)
         .into_vec()
         .expect("static CB58 IDs must be valid base58");
-    assert!(
-        decoded.len() > 4,
-        "CB58 payload too short: {s}"
-    );
+    assert!(decoded.len() > 4, "CB58 payload too short: {s}");
     let payload = &decoded[..decoded.len() - 4];
-    Id::from_slice(payload)
-        .unwrap_or_else(|e| panic!("CB58 ID {s} decoded to wrong length: {e}"))
+    Id::from_slice(payload).unwrap_or_else(|e| panic!("CB58 ID {s} decoded to wrong length: {e}"))
 }
 
 // ── Fork enum ─────────────────────────────────────────────────────────────────
@@ -229,7 +225,11 @@ impl UpgradeConfig {
     /// Mirrors Go `upgrade.go:ForkAt` (if such a function existed — derived from
     /// the `IsXActivated` structure). The scan is over `Fork::ALL` in reverse.
     pub fn fork_at(&self, t: DateTime<Utc>) -> Option<Fork> {
-        Fork::ALL.iter().rev().copied().find(|&f| self.is_active(f, t))
+        Fork::ALL
+            .iter()
+            .rev()
+            .copied()
+            .find(|&f| self.is_active(f, t))
     }
 
     /// Validates that the 15 time-gated fork times are monotonically non-decreasing

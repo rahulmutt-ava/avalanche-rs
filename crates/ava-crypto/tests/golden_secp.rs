@@ -7,7 +7,7 @@
 //! Vectors are Go-generated: deterministic RFC6979 signatures over a 32-byte
 //! hash, the recovered address, the eth address, and a hand-mutated high-S sig.
 
-use ava_crypto::secp256k1::{PrivateKey, PublicKey, Signature, PRIVATE_KEY_PREFIX, SIGNATURE_LEN};
+use ava_crypto::secp256k1::{PRIVATE_KEY_PREFIX, PrivateKey, PublicKey, SIGNATURE_LEN, Signature};
 
 #[derive(serde::Deserialize)]
 struct SecpCase {

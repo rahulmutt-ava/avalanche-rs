@@ -62,11 +62,7 @@ impl Weighted for WeightedHeap {
 
         // Stable-sort by (weight desc, original index asc) — Go
         // `weightedHeapElement.Less`.
-        heap.sort_by(|a, b| {
-            b.weight
-                .cmp(&a.weight)
-                .then_with(|| a.index.cmp(&b.index))
-        });
+        heap.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
 
         // Accumulate cumulative weights from leaves to root with checked add.
         let mut i = heap.len();

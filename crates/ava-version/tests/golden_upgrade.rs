@@ -132,7 +132,8 @@ fn validate_rejects_out_of_order_config() {
     cfg.apricot_phase_1_time = t2;
     cfg.apricot_phase_2_time = t1;
     // This makes phase1 > phase2, violating monotonicity.
-    cfg.validate().expect_err("out-of-order config should fail validate");
+    cfg.validate()
+        .expect_err("out-of-order config should fail validate");
 }
 
 #[test]
@@ -161,7 +162,8 @@ fn fork_ordering_is_chronological() {
         assert!(
             w[0] <= w[1],
             "Fork::ALL order violated: {:?} > {:?}",
-            w[0], w[1]
+            w[0],
+            w[1]
         );
     }
 }
@@ -171,5 +173,8 @@ fn is_active_thin_forwarders() {
     let config = get_config(ava_types::constants::MAINNET_ID);
     let t = config.fork_time(Fork::Durango);
     // The thin forwarder should agree with is_active.
-    assert_eq!(config.is_durango_activated(t), config.is_active(Fork::Durango, t));
+    assert_eq!(
+        config.is_durango_activated(t),
+        config.is_active(Fork::Durango, t)
+    );
 }

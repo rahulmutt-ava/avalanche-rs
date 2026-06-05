@@ -3,7 +3,7 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use ava_utils::clock::{Clock, MockClock, MAX_UNIX_SECS};
+use ava_utils::clock::{Clock, MAX_UNIX_SECS, MockClock};
 
 #[test]
 fn mock_clock_parity() {
@@ -27,7 +27,10 @@ fn mock_clock_parity() {
     let frac = UNIX_EPOCH + Duration::from_millis(1_700_000_000_500);
     clock.set(frac);
     assert_eq!(clock.unix(), 1_700_000_000);
-    assert_eq!(clock.unix_time(), UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+    assert_eq!(
+        clock.unix_time(),
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+    );
 
     // `advance` moves faked time forward by d.
     let base = UNIX_EPOCH + Duration::from_secs(1_000);

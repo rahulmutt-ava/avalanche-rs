@@ -8,9 +8,9 @@
 //! aggregate over three keys.
 
 use ava_crypto::bls::{
-    aggregate_public_keys, aggregate_signatures, verify, verify_pop, PublicKey, SecretKey,
-    Signature, CIPHERSUITE_POP, CIPHERSUITE_SIGNATURE, PUBLIC_KEY_LEN, SECRET_KEY_LEN,
-    SIGNATURE_LEN,
+    CIPHERSUITE_POP, CIPHERSUITE_SIGNATURE, PUBLIC_KEY_LEN, PublicKey, SECRET_KEY_LEN,
+    SIGNATURE_LEN, SecretKey, Signature, aggregate_public_keys, aggregate_signatures, verify,
+    verify_pop,
 };
 
 #[derive(serde::Deserialize)]

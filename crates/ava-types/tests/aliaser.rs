@@ -22,7 +22,10 @@ fn aliaser_bidirectional() {
 
     // One id -> many aliases; first is primary.
     aliaser.alias(id1, "second").unwrap();
-    assert_eq!(aliaser.aliases(id1), vec!["x".to_string(), "second".to_string()]);
+    assert_eq!(
+        aliaser.aliases(id1),
+        vec!["x".to_string(), "second".to_string()]
+    );
     assert_eq!(aliaser.primary_alias(id1).unwrap(), "x");
 }
 
