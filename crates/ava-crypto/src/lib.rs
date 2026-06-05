@@ -22,6 +22,8 @@
 //!
 //! Modules are scaffolded empty in M0.1 and filled in by their owning tasks.
 
+#![deny(unsafe_code)]
+
 pub mod address;
 pub mod bls;
 pub mod cb58;
@@ -30,3 +32,5 @@ pub mod formatting;
 pub mod hashing;
 pub mod secp256k1;
 pub mod staking;
+
+pub use error::{Error, Result};

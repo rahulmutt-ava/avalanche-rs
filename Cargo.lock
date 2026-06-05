@@ -182,6 +182,7 @@ dependencies = [
  "ripemd",
  "rustls-pemfile",
  "secp256k1",
+ "serde",
  "serde_json",
  "sha2",
  "sha3",
