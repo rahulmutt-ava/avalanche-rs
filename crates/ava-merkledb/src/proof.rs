@@ -170,7 +170,7 @@ impl Proof {
         // the left- and right-children insertion (Go passes `provenKey` for
         // both `insertChildrenLessThan` and `insertChildrenGreaterThan`).
         let proven_key = Maybe::Some(last.key.clone());
-        let mut builder = ProofTrieBuilder::new(token_size);
+        let mut builder = ProofTrieBuilder::new(branch_factor);
         builder.add_path_info(&self.path, &proven_key, &proven_key)?;
 
         let got_root = builder.root_id(hasher);
@@ -400,22 +400,43 @@ impl RangeProof {
             token_size,
         )?;
 
+        // Ensure the proof nodes' value digests agree with `key_values` (a
+        // tampered value in `key_values` is caught here). Mirrors Go
+        // `verifyChangeProofKeyValues` for both the start and end proofs.
+        let kv_map: BTreeMap<Key, Bytes> = self
+            .key_values
+            .iter()
+            .map(|kv| (Key::from_bytes(&kv.key), Bytes::copy_from_slice(&kv.value)))
+            .collect();
+        verify_proof_key_values(
+            hasher,
+            &self.start_proof,
+            &kv_map,
+            start_key.as_ref(),
+            end_proof_key.as_ref(),
+        )?;
+        verify_proof_key_values(
+            hasher,
+            &self.end_proof,
+            &kv_map,
+            start_key.as_ref(),
+            end_proof_key.as_ref(),
+        )?;
+
         // Build the verification trie from the key/value slice.
-        let mut builder = ProofTrieBuilder::new(token_size);
+        let mut builder = ProofTrieBuilder::new(branch_factor);
         for kv in &self.key_values {
-            builder.insert_value(hasher, &Key::from_bytes(&kv.key), &kv.value);
+            builder.insert_value(&Key::from_bytes(&kv.key), &kv.value);
         }
 
-        // Insert the boundary proof nodes:
-        //  - start proof: children < start (everything >= start is in the slice).
-        //  - end proof: children > largest key.
-        let smallest_key = self
-            .key_values
-            .first()
-            .map(|kv| Key::from_bytes(&kv.key))
-            .or_else(|| start.map(Key::from_bytes));
-        builder.add_path_info(&self.start_proof, &maybe_key(smallest_key), &Maybe::Nothing)?;
-        builder.add_path_info(&self.end_proof, &Maybe::Nothing, &maybe_key(end_proof_key))?;
+        // Insert the boundary proof nodes. Mirrors Go `addPathInfo(view, proof,
+        // startProofKey, endProofKey)` for BOTH proofs: each inserts children
+        // whose full key is < startProofKey OR > endProofKey. Everything within
+        // the range is supplied by `key_values`.
+        let lt_bound = maybe_key(start_key.clone());
+        let gt_bound = maybe_key(end_proof_key.clone());
+        builder.add_path_info(&self.start_proof, &lt_bound, &gt_bound)?;
+        builder.add_path_info(&self.end_proof, &lt_bound, &gt_bound)?;
 
         let got_root = builder.root_id(hasher);
         if got_root != expected_root {
@@ -637,72 +658,42 @@ fn maybe_key(k: Option<Key>) -> Maybe<Key> {
 // Verification trie builder (port of Go `addPathInfo` + standalone view root)
 // ---------------------------------------------------------------------------
 
-/// A child edge in the verification trie: the compressed key plus the child ID.
-#[derive(Clone)]
-struct VerifyChild {
-    compressed_key: Key,
-    id: Id,
-}
-
-/// A node in the verification trie. `value_digest` is set directly from a proof
-/// node's `value_or_hash` (we may not know the value's preimage). Children are
-/// keyed by branch-token byte.
-struct VerifyNode {
-    value_digest: Maybe<Bytes>,
-    children: BTreeMap<u8, VerifyChild>,
-}
-
-impl VerifyNode {
-    fn new() -> VerifyNode {
-        VerifyNode {
-            value_digest: Maybe::Nothing,
-            children: BTreeMap::new(),
-        }
-    }
-}
-
-/// A partial trie rebuilt from proof nodes / key-values, used only to recompute
-/// a root for verification. Nodes are keyed by their full key.
+/// Rebuilds a partial trie from key/values + proof nodes to recompute a root for
+/// verification. Backed by the real [`Trie`] (so intermediate branch nodes are
+/// materialised correctly), with two proof-verification overlays applied at
+/// hashing time: per-node value-digest overrides and out-of-range child
+/// injections (by ID). Mirrors Go `getStandaloneView` + `addPathInfo` + the
+/// view's root computation.
 struct ProofTrieBuilder {
-    nodes: BTreeMap<Key, VerifyNode>,
+    trie: Trie,
     token_size: usize,
+    /// Per-full-key value-digest overrides taken from proof nodes.
+    value_digests: BTreeMap<Key, Maybe<Bytes>>,
+    /// Per-full-key out-of-range child injections (index -> child ID).
+    child_injections: BTreeMap<Key, BTreeMap<u8, Id>>,
 }
 
 impl ProofTrieBuilder {
-    fn new(token_size: usize) -> ProofTrieBuilder {
+    fn new(branch_factor: BranchFactor) -> ProofTrieBuilder {
         ProofTrieBuilder {
-            nodes: BTreeMap::new(),
-            token_size,
+            trie: Trie::new(branch_factor),
+            token_size: branch_factor.token_size(),
+            value_digests: BTreeMap::new(),
+            child_injections: BTreeMap::new(),
         }
     }
 
-    /// Ensures a node exists for every prefix along `key` (the skeleton), then
-    /// returns the leaf node's key. Mirrors the trie skeleton that Go's
-    /// `view.insert` builds; here we only need the node-key set (compressed keys
-    /// are recomputed at hashing time from the child key minus the parent key).
-    fn ensure_node(&mut self, key: &Key) {
-        self.nodes
-            .entry(key.clone())
-            .or_insert_with(VerifyNode::new);
+    /// Inserts a key/value into the underlying trie. The value drives the
+    /// node's digest naturally (no override needed).
+    fn insert_value(&mut self, key: &Key, value: &[u8]) {
+        self.trie
+            .apply(key.clone(), Maybe::Some(Bytes::copy_from_slice(value)));
     }
 
-    /// Inserts a key/value, setting the value digest (value if `< HashLength`
-    /// else its hash).
-    fn insert_value<H: Hasher>(&mut self, hasher: &H, key: &Key, value: &[u8]) {
-        self.ensure_node(key);
-        let digest = if value.len() >= HASH_LENGTH {
-            Maybe::Some(Bytes::copy_from_slice(hasher.hash_value(value).as_bytes()))
-        } else {
-            Maybe::Some(Bytes::copy_from_slice(value))
-        };
-        if let Some(n) = self.nodes.get_mut(key) {
-            n.value_digest = digest;
-        }
-    }
-
-    /// Adds each proof node, overwriting its value digest and re-attaching the
-    /// children whose full key falls outside `[insert_children_less_than,
-    /// insert_children_greater_than]`. Mirrors Go `addPathInfo`.
+    /// Adds each proof node: materialises its skeleton node, records the
+    /// value-digest override, and records the out-of-range children to inject
+    /// (full key < `insert_children_less_than` OR > `insert_children_greater_than`).
+    /// Mirrors Go `addPathInfo`.
     fn add_path_info(
         &mut self,
         path: &[ProofNode],
@@ -717,28 +708,28 @@ impl ProofTrieBuilder {
             if key.has_partial_byte() && proof_node.value_or_hash.has_value() {
                 return Err(Error::PartialByteLengthWithValue);
             }
-            self.ensure_node(key);
-            if let Some(n) = self.nodes.get_mut(key) {
-                n.value_digest = proof_node.value_or_hash.clone();
-            }
+
+            // Materialise the node and override its value digest with the proof
+            // node's value_or_hash (we may not know the preimage).
+            self.trie.insert_skeleton(key.clone());
+            self.value_digests
+                .insert(key.clone(), proof_node.value_or_hash.clone());
 
             if !insert_any {
                 continue;
             }
 
             for (index, child_id) in &proof_node.children {
-                // Recover the existing compressed key, if the child edge is
-                // already known (built from key-values).
+                // childKey = key.Extend(ToToken(index), compressedKey). The
+                // compressed key is that of the existing child edge in the
+                // verification trie (Go `existingChild.compressedKey`), or empty
+                // if no such child exists yet (an out-of-range boundary child).
                 let existing_compressed = self
-                    .nodes
-                    .get(key)
-                    .and_then(|n| n.children.get(index))
-                    .map(|c| c.compressed_key.clone())
+                    .trie
+                    .child_compressed_key(key, *index)
                     .unwrap_or_else(Key::empty);
-
-                // childKey = key.Extend(ToToken(index), compressedKey)
                 let token = Key::to_token(*index, self.token_size);
-                let child_key = key.extend(&[token, existing_compressed.clone()]);
+                let child_key = key.extend(&[token, existing_compressed]);
 
                 let less = match insert_children_less_than.value() {
                     Some(bound) => child_key < *bound,
@@ -749,91 +740,22 @@ impl ProofTrieBuilder {
                     None => false,
                 };
 
-                if (less || greater)
-                    && let Some(n) = self.nodes.get_mut(key)
-                {
-                    n.children.insert(
-                        *index,
-                        VerifyChild {
-                            compressed_key: existing_compressed,
-                            id: *child_id,
-                        },
-                    );
+                if less || greater {
+                    self.child_injections
+                        .entry(key.clone())
+                        .or_default()
+                        .insert(*index, *child_id);
                 }
             }
         }
         Ok(())
     }
 
-    /// Rebuilds the parent/child edges from the node-key set (a node is a child
-    /// of the longest strict-prefix node), then hashes bottom-up to a root.
+    /// Recomputes the root with the recorded value-digest overrides and child
+    /// injections applied.
     fn root_id<H: Hasher>(&self, hasher: &H) -> Id {
-        if self.nodes.is_empty() {
-            return Id::EMPTY;
-        }
-
-        // Determine each node's parent: the node with the longest key that is a
-        // strict prefix of it. Edges added via add_path_info (by ID) are kept;
-        // structural edges (from key-values / skeleton) are recomputed.
-        let keys: Vec<Key> = self.nodes.keys().cloned().collect();
-        let root_key = keys.iter().min().cloned().unwrap_or_else(Key::empty);
-
-        // structural children: index -> child full key.
-        let mut struct_children: BTreeMap<Key, BTreeMap<u8, Key>> = BTreeMap::new();
-        for child in &keys {
-            if let Some(parent) = self.parent_of(child, &keys) {
-                let index = child.token(parent.length(), self.token_size);
-                struct_children
-                    .entry(parent)
-                    .or_default()
-                    .insert(index, child.clone());
-            }
-        }
-
-        self.hash_node(hasher, &root_key, &struct_children)
-    }
-
-    /// The longest strict-prefix node key of `key` among `keys`.
-    fn parent_of(&self, key: &Key, keys: &[Key]) -> Option<Key> {
-        let mut best: Option<Key> = None;
-        for cand in keys {
-            if cand == key {
-                continue;
-            }
-            if key.has_strict_prefix(cand) {
-                match &best {
-                    Some(b) if b.length() >= cand.length() => {}
-                    _ => best = Some(cand.clone()),
-                }
-            }
-        }
-        best
-    }
-
-    /// Hashes the node at `key` bottom-up, combining the structural children
-    /// (recomputed by key) with the by-ID children injected by `add_path_info`.
-    fn hash_node<H: Hasher>(
-        &self,
-        hasher: &H,
-        key: &Key,
-        struct_children: &BTreeMap<Key, BTreeMap<u8, Key>>,
-    ) -> Id {
-        let node = self.nodes.get(key).expect("node present");
-        let mut child_ids: BTreeMap<u8, Id> = BTreeMap::new();
-
-        // By-ID children injected during add_path_info.
-        for (index, child) in &node.children {
-            child_ids.insert(*index, child.id);
-        }
-        // Structural children (recomputed): override / add.
-        if let Some(children) = struct_children.get(key) {
-            for (index, child_key) in children {
-                let id = self.hash_node(hasher, child_key, struct_children);
-                child_ids.insert(*index, id);
-            }
-        }
-
-        hasher.hash_node(&child_ids, &node.value_digest, key)
+        self.trie
+            .root_with_overrides(hasher, &self.value_digests, &self.child_injections)
     }
 }
 
@@ -859,6 +781,44 @@ fn value_or_hash_matches<H: Hasher>(
             }
         }
     }
+}
+
+/// Checks that every proof node whose key falls within `[start, end]` (and has
+/// no partial byte) carries a value digest consistent with `key_values` (or
+/// `Nothing` if the key isn't among them). Mirrors Go
+/// `verifyChangeProofKeyValues` (the DB-lookup branch is `Nothing` here since
+/// verification has no other state). A tampered `key_values` entry is caught
+/// because its proof node still carries the original digest.
+fn verify_proof_key_values<H: Hasher>(
+    hasher: &H,
+    proof_nodes: &[ProofNode],
+    key_values: &BTreeMap<Key, Bytes>,
+    start: Option<&Key>,
+    end: Option<&Key>,
+) -> Result<()> {
+    for proof_node in proof_nodes {
+        if proof_node.key.has_partial_byte() {
+            continue;
+        }
+        let in_range =
+            start.is_none_or(|s| proof_node.key >= *s) && end.is_none_or(|e| proof_node.key <= *e);
+        if !in_range {
+            continue;
+        }
+        let value: Maybe<Bytes> = key_values
+            .get(&proof_node.key)
+            .cloned()
+            .map(Maybe::Some)
+            .unwrap_or(Maybe::Nothing);
+
+        if value.is_nothing() && proof_node.value_or_hash.has_value() {
+            return Err(Error::ProofNodeHasUnincludedValue);
+        }
+        if value.has_value() && !value_or_hash_matches(hasher, &value, &proof_node.value_or_hash) {
+            return Err(Error::ProofValueDoesntMatch);
+        }
+    }
+    Ok(())
 }
 
 /// Validates a proof path: prefix monotonicity, partial-byte rules, and the

@@ -138,6 +138,13 @@ pub enum Error {
     #[error("key length doesn't match bytes length, check specified branchFactor")]
     InvalidKeyLength,
 
+    /// A proof node carried a value for an in-range key absent from the proof's
+    /// key/values. Go `ErrProofNodeHasUnincludedValue`.
+    #[error(
+        "the provided proof has a value for a key within the range that is not present in the provided key/values"
+    )]
+    ProofNodeHasUnincludedValue,
+
     /// An error surfaced by the base `Database`.
     #[error("database error: {0}")]
     Database(String),

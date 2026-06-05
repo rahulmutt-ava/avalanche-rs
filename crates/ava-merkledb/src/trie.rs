@@ -78,6 +78,13 @@ impl Trie {
         }
     }
 
+    /// Inserts the skeleton node at `key` (no value), creating intermediate
+    /// branch nodes as needed. Used by proof verification to materialise nodes
+    /// referenced only by a proof path (Go `view.insert(key, Nothing)`).
+    pub(crate) fn insert_skeleton(&mut self, key: Key) {
+        self.insert(key, Maybe::Nothing);
+    }
+
     /// Inserts `key`/`value`. Byte-exact port of Go `view.insert`.
     fn insert(&mut self, key: Key, value: Maybe<Bytes>) {
         let token_size = self.token_size;
@@ -286,6 +293,61 @@ impl Trie {
         }
     }
 
+    /// Returns the compressed key of the child at branch `index` under the node
+    /// whose full key is `parent_key`, if such a node and child exist. The
+    /// compressed key is the child's full key minus the parent key and the
+    /// branch token. Used by proof verification (Go `addPathInfo` reads
+    /// `existingChild.compressedKey`).
+    pub(crate) fn child_compressed_key(&self, parent_key: &Key, index: u8) -> Option<Key> {
+        let parent = self.find_node(parent_key)?;
+        let child = parent.children.get(&index)?;
+        Some(child.key.skip(parent.key.length() + self.token_size))
+    }
+
+    /// Finds the node whose full key is exactly `target` by descending the trie.
+    fn find_node(&self, target: &Key) -> Option<&OwnedNode> {
+        let mut current = self.root.as_ref()?;
+        if !target.has_prefix(&current.key) {
+            return None;
+        }
+        loop {
+            if &current.key == target {
+                return Some(current);
+            }
+            let branch = target.token(current.key.length(), self.token_size);
+            let next = current.children.get(&branch)?;
+            let next_compressed = next.key.skip(current.key.length() + self.token_size);
+            if !target.iterated_has_prefix(
+                &next_compressed,
+                current.key.length() + self.token_size,
+                self.token_size,
+            ) {
+                return None;
+            }
+            current = next;
+        }
+    }
+
+    /// Computes the merkle root, but with proof-verification overrides:
+    /// - `value_digests`: replaces a node's value digest (by full key) with the
+    ///   digest carried in a proof node (we may not know the preimage).
+    /// - `child_injections`: extra children (index -> ID) added to a node (by
+    ///   full key) — the out-of-range boundary children re-attached by ID.
+    ///
+    /// Mirrors the root recomputation after Go's `addPathInfo`. Used only by
+    /// proof verification.
+    pub(crate) fn root_with_overrides<H: Hasher>(
+        &self,
+        hasher: &H,
+        value_digests: &BTreeMap<Key, Maybe<Bytes>>,
+        child_injections: &BTreeMap<Key, BTreeMap<u8, Id>>,
+    ) -> Id {
+        match self.root.as_ref() {
+            None => Id::EMPTY,
+            Some(root) => hash_owned_with_overrides(hasher, root, value_digests, child_injections),
+        }
+    }
+
     /// Returns the value at `key`, if present. Used by proof construction; the
     /// view's value lookups go through the merged map.
     pub(crate) fn get(&self, key: &Key) -> Option<Bytes> {
@@ -442,6 +504,36 @@ fn hash_owned<H: Hasher>(hasher: &H, n: &OwnedNode) -> Id {
         child_ids.insert(*index, hash_owned(hasher, child));
     }
     let value_digest = value_digest(hasher, &n.value);
+    hasher.hash_node(&child_ids, &value_digest, &n.key)
+}
+
+/// Recursively hashes an owned node bottom-up applying proof-verification
+/// overrides. Mirrors `hash_owned` + the effect of Go `addPathInfo`.
+fn hash_owned_with_overrides<H: Hasher>(
+    hasher: &H,
+    n: &OwnedNode,
+    value_digests: &BTreeMap<Key, Maybe<Bytes>>,
+    child_injections: &BTreeMap<Key, BTreeMap<u8, Id>>,
+) -> Id {
+    let mut child_ids: BTreeMap<u8, Id> = BTreeMap::new();
+    // Structural children, recomputed bottom-up.
+    for (index, child) in &n.children {
+        child_ids.insert(
+            *index,
+            hash_owned_with_overrides(hasher, child, value_digests, child_injections),
+        );
+    }
+    // Injected boundary children (by ID).
+    if let Some(injected) = child_injections.get(&n.key) {
+        for (index, id) in injected {
+            child_ids.insert(*index, *id);
+        }
+    }
+    // Value digest: overridden if a proof node supplied one, else computed.
+    let value_digest = match value_digests.get(&n.key) {
+        Some(d) => d.clone(),
+        None => value_digest(hasher, &n.value),
+    };
     hasher.hash_node(&child_ids, &value_digest, &n.key)
 }
 
