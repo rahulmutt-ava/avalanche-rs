@@ -66,6 +66,14 @@ rocksdb = ["dep:rocksdb", "dep:tempfile"]
 # proto toolchain: `protoc`); enabled by `--all-features` and the rpcdb
 # conformance test. Pulls tonic/prost/tokio/bytes + the tonic-build build-dep.
 rpcdb = ["dep:prost", "dep:tonic", "dep:tokio", "dep:bytes"]
+# The R2 offline Go-data-dir import tool (04 §11, 00 §11.2 R2). Off by default;
+# wired into the CLI in M12. The backend-agnostic `GoDbSource` trait + the
+# byte-exact `migrate` driver + the pluggable `verify` need NO new third-party
+# deps (they ride on the existing `Database` trait family + `anyhow`). The
+# concrete on-disk readers are best-effort: `RocksDbCompatSource` (leveldb fast
+# path) additionally needs the `rocksdb` feature; the Pebble path is a documented
+# Go-sidecar design with a stub spawn (see docs/migration.md).
+migrate = []
 
 [build-dependencies]
 # Generates the rpcdb tonic client/server + prost types from
