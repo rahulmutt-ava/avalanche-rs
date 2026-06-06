@@ -55,9 +55,25 @@ Wave D  (differential / exit)
 
 ---
 
+## Progress & findings (Waves A + B complete — 2026-06-06)
+
+**Wave A (`ava-message`, M2.1–M2.6) ✅ and Wave B (`ava-network` TLS/identity, M2.7–M2.10) ✅** landed via two parallel worktree agents; both crates green (36 tests total), clippy `-D warnings` clean, `avalanchers` binary still builds and reports `avalanchego/1.14.2`. Findings folded back into the specs:
+
+1. **GetPeerList/PeerList compression (spec §1.3 corrected).** Go hard-codes only `Handshake`/`Ping`/`Pong` to `TypeNone`; `GetPeerList`/`PeerList` use the Creator's **default** (zstd). M2.5's "sent uncompressed" wording for those two was wrong — golden vectors capture the uncompressed byte-exact form, the live builder uses the zstd default (R4 decode-equivalence). Bulk-op builders (Put/Ancestors/PushQuery/App*/consensus/state-sync/simplex) are **left out entirely** (not `todo!()`-stubbed, per the no-`todo!()` lint rule) and deferred to their consuming engine milestones; the per-op compression table is wired via the Creator's default-compression field.
+2. **`ip_addr` encoding.** Go's `Handshake.ip_addr` uses `Addr().AsSlice()` (4 bytes for IPv4, 16 for IPv6), while the *signed-IP* body uses `As16()`. `ava-types` has **no `Ip`/`as16()` type**; `ava-message::builder::ip_as16()` (IPv4→IPv4-mapped IPv6, always 16 B) is used for now and coincides with the Go fixtures. **TODO at M2.7+/M2.14:** add an `Ip`/`as16()` type to `ava-types` and have `ava-network` feed the real `MyIPPort` — a peer advertising a bare 4-byte IPv4 would otherwise diverge. (Recorded in `ava-message/tests/PORTING.md`.)
+3. **`ava-network` deps.** Wave B's worktree branched before the M2-prep root pin, so it pinned rustls/tokio-rustls/ring locally; reconciled to `{ workspace = true }` on merge.
+4. **`ava-crypto` API used (no crypto reinvented):** `staking::{new_cert_and_key_bytes, parse_certificate, node_id_from_cert, check_signature, Certificate, CertPublicKey}`, `bls::{LocalSigner, Signer, Signature, verify_pop}`. Notes: `NodeId` lives in `ava-types` (no `NodeId::from_cert` method — `ava-network::upgrader` wraps `ava_crypto::staking::node_id_from_cert`); there is **no standalone `validate_rsa_well_formed`** (folded into `parse_certificate`), so the verifier reimplements the RSA modulus/exponent policy to get the exact `CurveMismatch` vs `UnsupportedKeyType` error mapping. NodeID = `RIPEMD160(SHA256(leaf_DER))`, byte-identical to Go.
+5. **`unused_crate_dependencies` idiom.** Crates that opt into `[lints] workspace = true` get `unused_crate_dependencies`, which false-positives per integration-test binary. Convention (already used across `ava-database`/`ava-codec`, now `ava-message`/`ava-network`): a file-level `#![allow(unused_crate_dependencies, clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]` on each integration-test file, plus genuine `#[cfg(test)]` unit tests in the lib so lib-test dev-deps are used.
+6. **Golden-vector caveat:** `tests/vectors/message/signed_ip.json` was *constructed* from the documented `16 || port_be(2) || ts_be(8)` layout (no Go toolchain in-sandbox for that path), not Go-emitted; layout is unambiguous but a Go byte-for-byte cross-check is a follow-up. `tls/staker.json` and all `message/*.json` frame vectors ARE Go-derived/Go-emitted. Recorded in the crates' `PORTING.md`.
+7. **`deadline` = nanoseconds (u64)**; zstd decode bounded to `MAX_MESSAGE_SIZE` (2 MiB) as the decompression-bomb guard the fuzz target relies on.
+
+**Next:** Wave C (M2.11–M2.21, `ava-network` runtime: PeerConfig/traits, queues, throttlers, peer actor, handshake state machine, ping/pong, IP-tracker/gossip, dialer+dispatch, NAT, metrics, `prop::handshake_reaches_connected`) — depends on both crates, so it follows now. Wave D (M2.22 differential interop, M2.23 exit gate) closes the milestone.
+
+---
+
 ## Tasks
 
-### Task M2.1: proto build + generated `p2p` module
+### Task M2.1: proto build + generated `p2p` module ✅ COMPLETED
 **Crate:** ava-message  ·  **Depends on:** M0 (ava-types)  ·  **Spec:** `05` §2.1, `15` §3.1/§5
 **Files:** `crates/ava-message/Cargo.toml`, `crates/ava-message/build.rs`, `crates/ava-message/proto/p2p/p2p.proto` (vendored verbatim from the Go tree), `crates/ava-message/src/lib.rs`, `crates/ava-message/src/proto.rs` (re-export `pub mod p2p`).
 - [ ] **Step 1 — Red:** add `crates/ava-message/tests/proto_smoke.rs` with `#[test] fn proto_module_has_message_oneof()` that constructs `p2p::Message { message: Some(p2p::message::Message::Ping(p2p::Ping { uptime: 0 })) }` and asserts `prost::Message::encoded_len(&m) > 0`. Real signature; it references generated types that do not yet exist.
@@ -66,7 +82,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-message --test proto_smoke` passes; `cargo build -p ava-message` clean.
 - [ ] **Step 5 — Commit:** `ava-message: vendor p2p.proto + prost build (bytes::Bytes mapping)`.
 
-### Task M2.2: `Op` enum + classification sets
+### Task M2.2: `Op` enum + classification sets ✅ COMPLETED
 **Crate:** ava-message  ·  **Depends on:** M2.1  ·  **Spec:** `05` §1.2/§2.2
 **Files:** `crates/ava-message/src/ops.rs`, `crates/ava-message/src/lib.rs` (`pub mod ops`).
 - [ ] **Step 1 — Red:** `crates/ava-message/tests/ops_table.rs`: `#[test] fn op_values_and_strings_match_go()` asserts `Op::Ping as u8 == 0`, `Op::Simplex as u8 == 35`, `Op::Handshake.as_str() == "handshake"`, `Op::GetPeerList.as_str() == "get_peerlist"`, and that `Op::of(&p2p::message::Message::Handshake(_)) == Ok(Op::Handshake)`; plus `unrequested_ops()` and `failed_to_response_ops()` contain the exact members from `05` §1.2 (e.g. `FAILED_TO_RESPONSE_OPS[GetFailed] == Put`, `QueryFailed == Chits`, `AppError == AppResponse`).
@@ -75,7 +91,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-message --test ops_table` passes.
 - [ ] **Step 5 — Commit:** `ava-message: Op enum + UNREQUESTED_OPS/FAILED_TO_RESPONSE_OPS`.
 
-### Task M2.3: frame helpers (length prefix, 2 MiB cap)
+### Task M2.3: frame helpers (length prefix, 2 MiB cap) ✅ COMPLETED
 **Crate:** ava-message  ·  **Depends on:** M2.1  ·  **Spec:** `05` §1.1/§2.3, `15` §4.2
 **Files:** `crates/ava-message/src/frame.rs`, `crates/ava-message/src/error.rs`, `crates/ava-message/src/lib.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-message/tests/frame.rs`: `#[test] fn read_msg_len_be_and_cap()` asserts `read_msg_len([0,0,0,4], MAX_MESSAGE_SIZE) == Ok(4)`, `read_msg_len([0,0,0,0], MAX) == Ok(0)`, and `read_msg_len([0,0x20,0,1], MAX)` (= 2 MiB + 1) is `Err(Error::MaxMessageLengthExceeded { .. })`; `write_msg_len` of `MAX_MESSAGE_SIZE + 1` errors. Assert `MAX_MESSAGE_SIZE == 2 * 1024 * 1024`.
@@ -84,7 +100,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-message --test frame` passes.
 - [ ] **Step 5 — Commit:** `ava-message: 4-byte BE frame helpers + 2 MiB cap`.
 
-### Task M2.4: `MsgBuilder` marshal/unmarshal + recursive zstd packing (R4)
+### Task M2.4: `MsgBuilder` marshal/unmarshal + recursive zstd packing (R4) ✅ COMPLETED
 **Crate:** ava-message  ·  **Depends on:** M2.2, M2.3  ·  **Spec:** `05` §1.3/§2.3, `15` §3.1/§4.2 (R4)
 **Files:** `crates/ava-message/src/codec.rs`, `crates/ava-message/src/lib.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-message/tests/codec_roundtrip.rs`: `#[test] fn marshal_unmarshal_uncompressed()` builds a `p2p::Message::Ping`, `marshal(&m, Compression::None)` → bytes, `unmarshal(&bytes)` → `(msg, saved, op)` with `op == Op::Ping`, `saved == 0`, msg equal. `#[test] fn marshal_unmarshal_zstd_roundtrip()` builds a large `Put`-like message, `marshal(&m, Compression::Zstd)` → outer `Message` whose only set field is `compressed_zstd` (assert by re-decoding outer with prost and checking `bytes_saved_compression < 0` i.e. compressed), then `unmarshal` recovers the inner message (R4: decode-equivalence, not byte-equality).
@@ -93,16 +109,16 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-message --test codec_roundtrip` passes.
 - [ ] **Step 5 — Commit:** `ava-message: MsgBuilder marshal/unmarshal + recursive zstd packing`.
 
-### Task M2.5: Builder API (`OutboundMsgBuilder`) — handshake-class first
+### Task M2.5: Builder API (`OutboundMsgBuilder`) — handshake-class first ✅ COMPLETED
 **Crate:** ava-message  ·  **Depends on:** M2.4  ·  **Spec:** `05` §2.4
 **Files:** `crates/ava-message/src/builder.rs`, `crates/ava-message/src/lib.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-message/tests/builder.rs`: `#[test] fn build_handshake_sets_fields()` calls `Creator::handshake(...)` with concrete args (network_id, my_time, ip:SocketAddr, client name/major/minor/patch, upgrade_time, ip_signing_time, tls_sig, bls_sig, tracked_subnets, supported_acps, objected_acps, known_peers filter+salt, all_subnets) → `OutboundMessage`, then `unmarshal(&out.bytes)` recovers a `Handshake` whose `ip_addr` is the 16-byte `As16()` form, `ip_port` matches, `client` has the version triple, `op == Op::Handshake`, `bypass_throttling == false`. Add tests `build_ping_sets_uptime`, `build_pong`, `build_get_peer_list`, `build_peer_list_bypass_throttling_true`.
 - [ ] **Step 2 — Confirm red:** `cargo test -p ava-message --test builder` → fails (`Creator`/`builder` missing).
-- [ ] **Step 3 — Green:** implement `trait OutboundMsgBuilder` with the `05` §2.4 signatures and `Creator` holding an `Arc<MsgBuilder>`. Implement at minimum `handshake`, `ping(uptime)`, `pong`, `get_peer_list(filter,salt,all_subnets)`, `peer_list(peers,bypass)`. Copy the per-op compression decision from Go (`05` §1.3): handshake/ping/pong/get_peerlist/peerlist sent **uncompressed**; bulk ops (Put/Ancestors/PushQuery/App\*) zstd — stub the bulk ops as `todo!()`/`#[allow(dead_code)]` signatures deferred to later milestones, but wire the compression flag table now. Encode `ip_addr` via `Ip::as16()` (`ava-types`), `deadline` as ns u64.
+- [ ] **Step 3 — Green:** implement `trait OutboundMsgBuilder` with the `05` §2.4 signatures and `Creator` holding an `Arc<MsgBuilder>`. Implement at minimum `handshake`, `ping(uptime)`, `pong`, `get_peer_list(filter,salt,all_subnets)`, `peer_list(peers,bypass)`. Copy the per-op compression decision from Go (`05` §1.3, corrected): only handshake/ping/pong hard-coded **uncompressed** (`TypeNone`); get_peerlist/peerlist use the Creator's **default** compression (zstd); bulk ops (Put/Ancestors/PushQuery/App\*) zstd — stub the bulk ops as `todo!()`/`#[allow(dead_code)]` signatures deferred to later milestones, but wire the compression flag table now. Encode `ip_addr` via `Ip::as16()` (`ava-types`), `deadline` as ns u64.
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-message --test builder` passes.
 - [ ] **Step 5 — Commit:** `ava-message: OutboundMsgBuilder handshake/ping/pong/peerlist + per-op compression table`.
 
-### Task M2.6: `golden::message_frames` + `prop::frame_roundtrip` + fuzz `decode_never_overreads` (TDD ENTRY POINT)
+### Task M2.6: `golden::message_frames` + `prop::frame_roundtrip` + fuzz `decode_never_overreads` (TDD ENTRY POINT) ✅ COMPLETED
 **Crate:** ava-message  ·  **Depends on:** M2.5  ·  **Spec:** `05` §9 (1,2), `15` §7, `02` §4/§6/§8
 **Files:** `crates/ava-message/tests/golden.rs`, `crates/ava-message/tests/prop_frame.rs`, `crates/ava-message/proptest-regressions/` (committed), `crates/ava-message/fuzz/Cargo.toml`, `crates/ava-message/fuzz/fuzz_targets/decode_never_overreads.rs`, `tests/vectors/message/` (per-op `len_be || proto_bytes` fixtures captured from a Go node), `crates/ava-message/tests/PORTING.md`.
 - [ ] **Step 1 — Red:** start with the **Handshake op** vector. Capture `tests/vectors/message/handshake.json` (`{input_fields, hex_frame}`) from the Go `message/messages_test.go` path (`02` §10 extract program). Write `golden::message_frames`: `#[test] fn message_frames()` iterates `tests/vectors/message/*.json`, rebuilds each op via `Creator`, and asserts `frame(out.bytes) == hex::decode(vector.hex_frame)` **byte-identical** for uncompressed ops (Handshake, Ping, Pong, GetPeerList, PeerList, Get, Chits, AppRequest), and for zstd ops asserts only **cross-decodability** (`unmarshal(go_frame) == our inner message`) per R4. Write `prop::frame_roundtrip` (`proptest!`): for an arbitrary `Op`/field set, `build → marshal → frame → read_msg_len → unmarshal → unwrap` is identity, both compressions. Write the fuzz target `decode_never_overreads`: `fuzz_target!(|data: &[u8]| { let _ = MsgBuilder::default().unmarshal(data); })` — must never panic / never read past the buffer / never allocate `> MAX_MESSAGE_SIZE`.
@@ -111,7 +127,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-message` all green; `cargo +nightly fuzz run decode_never_overreads -- -runs=100000` no crash.
 - [ ] **Step 5 — Commit:** `ava-message: golden::message_frames + prop::frame_roundtrip + fuzz decode_never_overreads`.
 
-### Task M2.7: TLS configs (TLS 1.3-only, mutual, no SNI)
+### Task M2.7: TLS configs (TLS 1.3-only, mutual, no SNI) ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M0 (ava-crypto: staking cert/key), M2.2  ·  **Spec:** `05` §1.6/§4.1/§4.2
 **Files:** `crates/ava-network/Cargo.toml`, `crates/ava-network/src/lib.rs`, `crates/ava-network/src/peer/tls_config.rs`, `crates/ava-network/src/error.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/tls_config.rs`: `#[test] fn configs_are_tls13_only_and_mutual()` builds `server_config()` and `client_config()` from a generated staking identity and asserts both restrict to `&[&rustls::version::TLS13]`, the server config requires a client cert (mutual), and neither sets ALPN. (Inspect via the builder return type / a thin accessor.)
@@ -120,7 +136,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test tls_config` passes.
 - [ ] **Step 5 — Commit:** `ava-network: TLS1.3-only mutual rustls server/client configs`.
 
-### Task M2.8: custom cert verifiers (leaf-key policy)
+### Task M2.8: custom cert verifiers (leaf-key policy) ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.7, M0 (ava-crypto: RSA well-formed check)  ·  **Spec:** `05` §1.6/§4.4/§4.5
 **Files:** `crates/ava-network/src/peer/verifier.rs`, `crates/ava-network/src/peer/tls_config.rs` (wire verifiers in).
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/verifier.rs`: `#[test] fn accepts_p256_rejects_others()` — `validate_leaf_public_key(der)` returns `Ok` for a P-256 ECDSA staking cert, `Err(Error::CurveMismatch)` for a P-384 ECDSA cert, `Err(Error::UnsupportedKeyType)` for an Ed25519 cert, and applies `validate_rsa_well_formed` (reject modulus `< 2048`).
@@ -129,7 +145,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test verifier` passes.
 - [ ] **Step 5 — Commit:** `ava-network: leaf-key cert verifiers (P-256/RSA policy, no CA chain)`.
 
-### Task M2.9: `Upgrader` + node-id-from-cert + `tls/` golden transcript
+### Task M2.9: `Upgrader` + node-id-from-cert + `tls/` golden transcript ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.8, M0 (ava-crypto: `NodeId::from_cert`)  ·  **Spec:** `05` §1.6/§4.3, `05` §9 (TLS interop unit test)
 **Files:** `crates/ava-network/src/peer/upgrader.rs`, `crates/ava-network/tests/tls_handshake.rs`, `crates/ava-network/tests/golden_tls.rs`, `tests/vectors/tls/` (node-id-from-cert handshake transcript: known DER → known NodeID).
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/tls_handshake.rs`: `#[tokio::test] async fn loopback_mutual_tls_derives_node_id()` runs a rustls server config + client config over `tokio::io::duplex` (or a loopback `TcpListener`), completes the TLS 1.3 handshake, and on both sides `upgrade()` returns `(NodeId, TlsStream, Certificate)` where each side's derived peer `NodeId == NodeId::from_cert(peer_cert)`. Add `rejects_non_p256` (handshake fails). `golden_tls.rs`: `#[test] fn node_id_from_cert_golden()` loads `tests/vectors/tls/staker.json` (`{cert_der_hex, node_id}`) and asserts `NodeId::from_cert(parse(der)).to_string() == node_id` (RIPEMD160(SHA256(DER)), `05` §1.6).
@@ -138,7 +154,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** both tests pass.
 - [ ] **Step 5 — Commit:** `ava-network: TLS Upgrader + NodeID-from-cert + tls/ golden`.
 
-### Task M2.10: IP signing (`UnsignedIP`/`SignedIp`) + signed-IP golden
+### Task M2.10: IP signing (`UnsignedIP`/`SignedIp`) + signed-IP golden ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.9, M0 (ava-crypto: TLS-key sign, BLS PoP)  ·  **Spec:** `05` §1.6 (IP signing) / §3.5, `05` §9 (4), `15` §4.1 (signed-IP linear codec)
 **Files:** `crates/ava-network/src/peer/ip.rs`, `crates/ava-network/src/peer/ip_signer.rs`, `crates/ava-network/tests/signed_ip.rs`, `tests/vectors/message/signed_ip.json`.
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/signed_ip.rs`: `#[test] fn unsigned_ip_bytes_layout()` asserts `UnsignedIp{ip, port, timestamp}.bytes()` equals `ip.as16() (16) || port.to_be_bytes() (2) || timestamp.to_be_bytes() (8)` against a golden in `signed_ip.json`. `#[test] fn signed_ip_verify_roundtrip()` signs with a staking key, `SignedIp::verify(cert, max_timestamp)` is `Ok`; a `timestamp > now+60s` → `Err(Error::TimestampTooFarInFuture)`; a tampered sig → `Err(Error::InvalidTlsSignature)`.

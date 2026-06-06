@@ -145,9 +145,16 @@ Rules for byte-exactness:
   decode tolerance; it is never produced. (Citation: `messages.go` only branches on
   `TypeNone`/`TypeZstd`; `errUnknownCompressionType` for anything else.)
 - Which ops are compressed is decided by the **outbound builder** per message
-  (`outbound_msg_builder.go` passes `compressionType` per op). Handshake-class
-  messages and ping/pong are generally sent uncompressed; bulk messages
-  (Put/Ancestors/PushQuery/App*) are zstd. We copy the per-op decision exactly.
+  (`outbound_msg_builder.go` passes `compressionType` per op). **Verified against Go
+  (M2.5):** only `Handshake`, `Ping`, and `Pong` are hard-coded `TypeNone`
+  (uncompressed). `GetPeerList` and `PeerList` pass the Creator's **default**
+  compression (`DefaultNetworkCompressionType = zstd`) — i.e. they ARE zstd-compressed
+  on the wire when the builder has compression enabled, *not* uncompressed. Bulk
+  messages (Put/Ancestors/PushQuery/App*) are likewise zstd. We copy the per-op
+  decision exactly. (Earlier drafts of this spec and plan M2.5 listed
+  get_peerlist/peerlist as uncompressed — that was wrong; the golden vectors capture
+  the uncompressed byte-exact form but the live builder uses the zstd default for
+  those two, per R4 decode-equivalence.)
 - The zstd encoder must be configured so output is byte-compatible. Go uses
   `klauspost/compress/zstd` with a fixed window (max = 2 MiB). zstd output is not
   uniquely defined by the spec, **but compatibility does not require identical
