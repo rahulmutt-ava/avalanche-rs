@@ -86,6 +86,26 @@ Wave H
 
 ---
 
+## Progress & findings (Wave B/C — M3.4 + M3.5 + M3.8 + M3.14 complete — 2026-06-07)
+
+Three parallel worktree agents on distinct crates (`ava-snow`, `ava-validators`, `ava-vm`), merged clean (no source/`Cargo.lock` conflicts). Integrated verification on `main`: `cargo build --workspace` ✓; `cargo nextest run --workspace --all-features` = **358 passed / 1 skipped** (up from 302); per-crate clippy `-D warnings` ✓. A follow-up commit gated `prop_safety.rs` + `conformance_battery.rs` on `#![cfg(feature = "testutil")]` so a no-feature `cargo test` build also compiles (CI uses `--all-features`).
+
+**M3.4 + M3.5 (`ava-snow`) ✅** — Tree (M3.4) then Topological (M3.5), committed separately. `golden_tree.rs` = 12 vectors ported byte-exact from Go `tree_test.go` (asserting `Tree.String()` / `Display`); `conformance_battery.rs::snow_battery` drives a **19-case** generic `run_consensus_suite<C: SnowmanConsensus>` against `Topological`; **`prop::consensus_safety` un-ignored and GREEN** (64 proptest cases, no regression seed needed). ava-snow now **22 tests** (testutil). Findings:
+1. **`RecordPollTransitivelyResetConfidence` is id-bit-layout-dependent in Go** — its intermediate single-`votesFor3` preference assertion relies on Go's random `BuildChild` ids interacting with the patricia split; by pure strength accounting block2 (strength 2) stays preferred until the *second* `votesFor3` (confirmed by instrumenting the pinned Go tree). The Rust port asserts the structurally-invariant facts at that step + the fully-deterministic final state. Documented in `crates/ava-snow/tests/PORTING.md`.
+2. **Synchronous snowman `Block`/`BlockAcceptor`** (`snowman::block::Block`) is distinct from the crate's async engine-facing `decidable::Block` (Go's `Block.Accept` is effectively sync). The async adaptor bridging an engine VM to it is deferred to the engine wave (M3.9+). The **acceptor-before-`accept` ordering invariant** is preserved (`accept_preferred_child` calls `block_acceptor.accept(...)` before `child.accept()`).
+3. **`Topological::health_check` takes `longest_processing`/`avg_acceptance_time` as params** (metrics subsystem not ported yet); JSON shape + the three threshold errors (`TooManyProcessingBlocks`/`BlockProcessingTooLong`/`AcceptanceTimeTooHigh`, joined via `Error::Multiple`) match Go. `Tree::Node` uses a transient `Empty` variant for the `mem::replace` ownership dance (no nil node in Rust → no library `unwrap`). `gen` is a reserved keyword in Rust 2024 (battery id-gen renamed `idgen`). Local `filter_bag` over `Bag::list()`+`count()` since `ava-utils::Bag` lacks `filter`/`split`.
+
+**M3.8 (`ava-validators`) ✅** — uptime `Manager`/`Calculator` (`StartTracking`/`StopTracking`/`Connect`/`Disconnect`/`CalculateUptime`/`CalculateUptimePercent`) + `LockedCalculator`, **+8 tests** (18 total). Findings: Go's `snow/uptime` ships only the `State` *interface* + `TestState` (the concrete DB store lives in platformvm) — ported as trait `UptimeState` + in-memory `MemUptimeState` + new `DbUptimeState` (backed by `Arc<dyn ava_database::DynDatabase>`; key = 20-byte node id, value = 3×BE-`u64` seconds `up‖last_updated‖start`). Clock = `ava_utils::clock::Clock` via `Arc<dyn Clock>`, `clock.unix_time()` whole-second floored (Go parity). **`ava-database` is a `path` dep** (`path = "../ava-database"`) — repo pattern is that intra-workspace path deps are NOT in root `[workspace.dependencies]`, so the `{ workspace = true }` hint did not apply (and editing root Cargo.toml is forbidden). `LockedCalculator` = `tokio::sync::Mutex<()>` (query serialization) + `std::sync::Mutex<Option<Arc<dyn Calculator>>>` (swappable slot; `None` = still bootstrapping). `no_op_calculator.go` not ported (no consumer). Dedicated `uptime::Error` with `as_db_error()`/`is_still_bootstrapping()` matchers (Rust analog of `errors.Is`).
+
+**M3.14 (`ava-vm`, NEW crate) ✅** — error model + `#[async_trait] Vm` + `AppHandler`/`HealthCheck`/`Connector`/`AppSender` + `VmEvent`/`HttpHandler`, **3 tests**. Findings:
+1. **Go layout drift:** the current pinned `../avalanchego` tree no longer has `appsender.go`/`app_handler.go`/`http_handler.go` — sourced `AppSender`/`SendConfig` from `snow/engine/common/sender.go`, `AppHandler` from `engine.go`, `AppError`/`ErrUndefined`/`ErrTimeout` from `error.go`, `Connector` from `snow/validators/connector.go`, `Checker` from `api/health/checker.go`. **`common.HTTPHandler{LockOptions}` no longer exists in Go** — reconstructed `LockOptions` from spec 07 §2.1 with Go's canonical values `WriteLock=0`/`ReadLock=1`/`NoLock=2`.
+2. **No `tower`/`http`/`hyper` in workspace deps** → `HttpHandler` is a plain descriptor (`lock_options` + opaque `handler: Vec<u8>`), not a boxed `tower::Service` (follow-up noted in PORTING.md when the RPC/API wave needs the real service shape).
+3. **`AppError` is a separate `thiserror` struct** (`code: i32`, `message: String`) matched by code via `AppError::is` (mirrors Go `(*AppError).Is`), `UNDEFINED=0`/`TIMEOUT=-1`; deliberately NOT a variant of the crate `Error` enum. Placeholders for unported types: `Fx` carries only `id: Id` (full `FxInstance` deferred to M3.20); genesis/upgrade/config as `&[u8]`; `SendConfig` defined locally to avoid an `ava-network` dep; `CancellationToken` (tokio-util) replaces `context.Context`. Deps: `ava-snow`/`ava-database`/`ava-version`/`ava-types`/`tokio-util`/`async-trait`/`thiserror`/`serde_json`.
+
+> **Next wave (now unblocked):** M3.15 `ava-vm::block` ChainVm/Block (needs M3.14) → M3.16 MeterVm/TracedVm; M3.18 `ava-vm::components` avax/verify/chain/gas (needs M3.14) → M3.19 `ava-secp256k1fx` → M3.20 fx framework; M3.9 `ava-engine` op state-machine traits (needs M3.2/M3.6/M3.5 ✓ + M2 `ava-message`) which unblocks the whole engine wave (M3.10–M3.13) and M3.17 `ava-simplex` stub. M3.15/M3.18 are both `ava-vm` (same crate — sequential, not cross-worktree parallel); M3.9 (`ava-engine`, new crate) is parallel to them. M2.20b metric wiring (`ava-network`) still independently available.
+
+---
+
 ## Tasks
 
 ### Task M3.1: TDD entry — `prop::consensus_safety` harness + in-memory test-VM cluster (RED) ✅ COMPLETED
@@ -115,7 +135,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow --test golden_snowball` passes; clippy clean.
 - [ ] **Step 5 — Commit:** `ava-snow: snowball primitives (slush/snowflake/snowball) + Parameters::verify`
 
-### Task M3.4: `ava-snow` snowball `Tree` (`Consensus` + `Factory`)
+### Task M3.4: `ava-snow` snowball `Tree` (`Consensus` + `Factory`) ✅ COMPLETED
 **Crate:** `ava-snow`  ·  **Depends on:** M3.3  ·  **Spec:** 06 §2.3 (Tree, Consensus/Factory traits, Bag-driven record_poll)
 **Files:** `crates/ava-snow/src/snowball/consensus.rs` (`Consensus`/`Factory`/`NnaryInstance`/`UnaryInstance` traits), `crates/ava-snow/src/snowball/tree.rs`, `crates/ava-snow/tests/golden_tree.rs`
 - [ ] **Step 1 — Red:** `golden::snowball_tree_vectors` — port `tree_test.go`: build a `Tree`, `add` choices that diverge at known bit prefixes, feed `Bag<Id>` polls, assert `preference()`/`finalized()` transitions match Go (prefix split at `commonPrefix` bit, vote push-down).
@@ -124,7 +144,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow --test golden_tree` passes; clippy clean.
 - [ ] **Step 5 — Commit:** `ava-snow: snowball Tree (multi-choice Consensus instance) + Factory`
 
-### Task M3.5: `ava-snow` `Topological` (Snowman) + consensus battery + safety GREEN
+### Task M3.5: `ava-snow` `Topological` (Snowman) + consensus battery + safety GREEN ✅ COMPLETED
 **Crate:** `ava-snow`  ·  **Depends on:** M3.4, M3.1  ·  **Spec:** 06 §2.4 (the heart: add/record_poll/accept_preferred_child, Kahn sort, falter rules, HealthCheck, safety/liveness), 02 §13 (snow battery)
 **Files:** `crates/ava-snow/src/snowman/mod.rs`, `crates/ava-snow/src/snowman/consensus.rs` (`SnowmanConsensus` trait), `crates/ava-snow/src/snowman/topological.rs` (`Topological`, `SnowmanBlock`), `crates/ava-snow/src/snowman/block.rs`, `crates/ava-snow/src/snowtest.rs` (battery, feature `testutil`), `crates/ava-snow/tests/conformance_battery.rs`, `crates/ava-snow/tests/prop_safety.rs` (un-ignore)
 - [ ] **Step 1 — Red:** (a) un-ignore `prop::consensus_safety` from M3.1 (now compiles against `Topological`). (b) `conformance::snow_battery` — the `ava-snow` consensus-instance battery analog of dbtest/codectest: a generic `run_consensus_suite<C: SnowmanConsensus>(make)` ported from Go `topological/consensus_test.go` + `network_test.go` (add/record_poll/accept ordering, duplicate add → `DuplicateAdd`, unknown parent → `UnknownParentBlock`, linear acceptance, sibling rejection, preference walk). Wire it from `conformance_battery.rs` against `Topological`.
@@ -151,7 +171,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-validators` passes; clippy clean.
 - [ ] **Step 5 — Commit:** `ava-validators: ValidatorState + cached/locked adapters + ConnectedValidators tracker`
 
-### Task M3.8: `ava-validators` — uptime manager
+### Task M3.8: `ava-validators` — uptime manager ✅ COMPLETED
 **Crate:** `ava-validators`  ·  **Depends on:** M3.6, M0 (`ava-utils::clock`)  ·  **Spec:** 06 §6.3 (uptime Manager/Calculator + LockedCalculator)
 **Files:** `crates/ava-validators/src/uptime/mod.rs`, `crates/ava-validators/src/uptime/manager.rs`, `crates/ava-validators/src/uptime/state.rs`, `crates/ava-validators/tests/uptime.rs`
 - [ ] **Step 1 — Red:** Unit `uptime_accumulates_on_connect_disconnect` (virtual clock via injected `MockClock`): start/stop tracking on connect/disconnect; `calculate_uptime` returns connected duration per subnet matching a hand-computed expectation under `clock.advance`.
@@ -205,7 +225,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-engine --test prop_liveness --test prop_preference` passes; commit regression seeds; clippy clean.
 - [ ] **Step 5 — Commit:** `ava-engine: prop::consensus_liveness + prop::preference_monotone (engine-driven cluster)`
 
-### Task M3.14: `ava-vm` — error model + `Vm`/`AppHandler`/`HealthCheck`/`Connector`/`AppSender` base traits
+### Task M3.14: `ava-vm` — error model + `Vm`/`AppHandler`/`HealthCheck`/`Connector`/`AppSender` base traits ✅ COMPLETED
 **Crate:** `ava-vm`  ·  **Depends on:** M3.2 (ChainContext/EngineState re-export), M1 (`ava-database` DynDatabase)  ·  **Spec:** 07 §2.1 (`Vm`), §2.2 (AppHandler/HealthCheck/Connector/AppError), §2.6 (AppSender), §9 (error model)
 **Files:** `crates/ava-vm/src/lib.rs`, `crates/ava-vm/src/vm.rs` (`Vm`, `VmEvent`, `HttpHandler`), `crates/ava-vm/src/app.rs` (`AppHandler`, `AppError`), `crates/ava-vm/src/health.rs`, `crates/ava-vm/src/connector.rs`, `crates/ava-vm/src/app_sender.rs` (`AppSender`), `crates/ava-vm/src/error.rs`, `crates/ava-vm/tests/PORTING.md`, `crates/ava-vm/proptest-regressions/.gitkeep`
 - [ ] **Step 1 — Red:** Unit `vm_event_values` — `VmEvent::{PendingTxs==1, StateSyncDone==2}`; `error_sentinels` — `Error::NotFound` and the rpc/fx sentinels exist and are `matches!`-assertable; `vm_object_safe` static-assert `fn _o(_: &dyn Vm){}`.
