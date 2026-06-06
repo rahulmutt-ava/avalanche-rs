@@ -1,0 +1,40 @@
+[package]
+name = "ava-message"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "p2p wire framing & message codec (byte-exact port of avalanchego/message): generated p2p proto, Op enum, 4-byte BE framing, MsgBuilder + recursive zstd packing, OutboundMsgBuilder (specs 05 / 15 §3.1)."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+prost = { workspace = true }
+zstd = { workspace = true }
+flate2 = { workspace = true }
+
+[features]
+# Exposes `fuzz_support` (the canonical `decode_never_overreads` body shared by
+# the cargo-fuzz target and the stable `prop_fuzz_smoke` proptest). Enabled by
+# `crates/ava-message/fuzz` and by the `--all-features` verification gate.
+fuzzing = []
+
+[build-dependencies]
+# Compiles proto/p2p/p2p.proto into OUT_DIR (generated code is NOT committed).
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+flate2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+proptest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

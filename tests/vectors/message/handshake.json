@@ -1,0 +1,32 @@
+{
+  "input_fields": {
+    "all_subnets": true,
+    "client": {
+      "major": 1,
+      "minor": 14,
+      "name": "avalanchego",
+      "patch": 2
+    },
+    "ip_addr_hex": "00000000000000000000000000000000",
+    "ip_bls_sig": "626c732d736967",
+    "ip_node_id_sig": "746c732d736967",
+    "ip_port": 9651,
+    "ip_signing_time": 1700000000,
+    "known_peers_filter": "aaaaaaaa",
+    "known_peers_salt": "bbbbbbbbbbbbbbbb",
+    "my_time": 1700000000,
+    "network_id": 1337,
+    "objected_acps": [
+      30
+    ],
+    "supported_acps": [
+      10,
+      20
+    ],
+    "tracked_subnets": [
+      "0707070707070707070707070707070707070707070707070707070707070707"
+    ],
+    "upgrade_time": 1699000000
+  },
+  "hex_frame": "000000916a8e0108b90a1080e2cfaa061a100000000000000000000000000000000020b34b28c0dd92aa063080e2cfaa063a07746c732d736967422007070707070707070707070707070707070707070707070707070707070707074a130a0b6176616c616e636865676f1001180e200252020a145a011e62100a04aaaaaaaa1208bbbbbbbbbbbbbbbb6a07626c732d7369677001"
+}

@@ -1,0 +1,9 @@
+# cargo-fuzz requires a nightly compiler + LLVM sanitizers (spec 02 §8). When
+# this dir is built under rustup (CI's dedicated fuzz job), this pins nightly so
+# `cargo fuzz build/run` auto-selects it without an explicit `+nightly`.
+#
+# On the repo's pinned stable nix dev shell the provided cargo is NOT a rustup
+# shim, so this channel selector is harmless and simply ignored (cargo fuzz is
+# not runnable there — use `tests/prop_fuzz_smoke.rs` for stable coverage).
+[toolchain]
+channel = "nightly"

@@ -1,0 +1,39 @@
+# Standalone cargo-fuzz crate for ava-message (M2.6, spec 02 §8).
+#
+# Deliberately NOT a member of the root workspace: the root globs `crates/*`
+# which does not match `crates/ava-message/fuzz`, and the empty `[workspace]`
+# table below makes that explicit so `cargo fuzz` treats this dir as its own
+# workspace root. Keeping it out of the root workspace keeps `libfuzzer-sys`
+# (which needs a nightly compiler + LLVM sanitizers at `cargo fuzz run`/`build`
+# time) out of the normal stable `cargo build`/test graph.
+#
+# Run it (requires nightly — see README.md):
+#   cargo +nightly fuzz run decode_never_overreads
+# On the pinned stable nix shell the equivalent coverage is the
+# `tests/prop_fuzz_smoke.rs` proptest, run by `cargo nextest`.
+
+[package]
+name = "ava-message-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The decode body lives in ava-message behind the `fuzzing` feature, so the fuzz
+# target and the stable smoke test share one implementation.
+ava-message = { path = "..", features = ["fuzzing"] }
+
+[[bin]]
+name = "decode_never_overreads"
+path = "fuzz_targets/decode_never_overreads.rs"
+test = false
+doc = false
+bench = false
+
+# Empty table: this crate is its own workspace root, not a member of the repo
+# root workspace.
+[workspace]

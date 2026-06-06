@@ -1,0 +1,8 @@
+{
+  "input_fields": {
+    "all_subnets": true,
+    "known_peers_filter": "010203",
+    "known_peers_salt": "0405"
+  },
+  "hex_frame": "000000109a020d0a090a03010203120204051001"
+}
