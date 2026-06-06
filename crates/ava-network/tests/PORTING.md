@@ -15,6 +15,20 @@ are NOT covered here.
 | `network/peer/ip.go::SignedIP.Verify` (ts ≤ max, valid TLS sig) | `peer::ip::SignedIp::verify` | `signed_ip::signed_ip_verify_roundtrip` | done |
 | `network/peer/ip_signer.go::IPSigner` (cached signed IP, re-sign on IP change) | `peer::ip_signer::IpSigner` (`arc_swap::ArcSwapOption`) | covered indirectly (sign path); dedicated cache test deferred | done |
 
+## NAT (Wave C: M2.19)
+
+Ports the Go `nat/` package (UPnP / NAT-PMP port mapping; `specs/05` §6,
+runtime task #23 in `specs/17` §2).
+
+| Go source | Rust home | Test(s) | Status |
+|---|---|---|---|
+| `nat/nat.go::Router` (interface) | `nat::NatRouter` | `nat::{get_router_falls_back_to_no_router, port_mapper_unmaps_on_shutdown}` | done |
+| `nat/nat.go::GetRouter` (probe UPnP → PMP → NoRouter) | `nat::get_router` | `nat::get_router_falls_back_to_no_router` | done |
+| `nat/no_router.go::noRouter` + `getOutboundIP` | `nat::NoRouter` + `nat::get_outbound_ip` | `nat::get_router_falls_back_to_no_router` | done |
+| `nat/upnp.go::upnpRouter` (`MapPort`/`UnmapPort`/`ExternalIP`/`getUPnPRouter`) | `nat::UpnpRouter` + `nat::get_upnp_router` (`igd-next`) | covered via `get_router` probe (no gateway in CI) | done |
+| `nat/pmp.go::pmpRouter` / `getPMPRouter` | `nat::get_pmp_router` (stub → `None`) | n/a | **deferred** (see notes) |
+| `nat/nat.go::Mapper` (`Map`/`retryMapPort`/`keepPortMapping`/`UnmapAllPorts`) | `nat::port_mapper::PortMapper` (`new`/`with_update_time`/`start`) | `nat::port_mapper_unmaps_on_shutdown` | done |
+
 ## Notes / provenance
 
 - `tests/vectors/tls/staker.json` is reused from the M0.20 `tests/vectors/crypto/nodeid.json`
@@ -29,3 +43,19 @@ are NOT covered here.
 - The RSA-1024 reject vector in `verifier::accepts_p256_rejects_others` is an
   openssl-generated cert DER embedded inline (the `ring` provider cannot generate
   RSA keys); it exercises the `modulus < 2048` reject branch.
+- **NAT-PMP/PCP is deferred (M2.19).** `igd-next` covers only the UPnP IGD path;
+  the Go reference probes NAT-PMP only as a *secondary* fallback after UPnP
+  (`nat.getPMPRouter`), and CI has no PMP gateway either way, so `get_pmp_router`
+  is a `None` stub. `get_router` therefore falls through UPnP → `NoRouter` with
+  behaviour identical to Go on a PMP-less network. A real PMP probe (e.g. via
+  `crab-nat`) is a follow-up; the `crate::Error::Nat`/`NoRouter` variants and the
+  `PortMapper` keep-alive loop are PMP-router-agnostic, so wiring it later is
+  additive.
+- **`igd-next 0.17.1` is pinned directly in `crates/ava-network/Cargo.toml`**, not
+  in the workspace `[workspace.dependencies]` table (it had no prior entry). It
+  should be promoted to a workspace-level pin for consistency.
+- The `nat` tests use a recording `MockRouter` (a `parking_lot::Mutex<Vec<…>>`
+  call log) and `#[tokio::test(start_paused = true)]` (tokio `test-util`) so the
+  `PortMapper` refresh interval is driven by the paused virtual clock — no
+  wall-clock sleeps. `get_router_falls_back_to_no_router` waits the real 10s UPnP
+  SOAP search timeout (no gateway in CI), matching Go's `soapRequestTimeout`.

@@ -73,6 +73,16 @@ pub enum Error {
     /// A low-level I/O error during the TCP/TLS upgrade.
     #[error("io error: {0}")]
     Io(String),
+
+    /// No router was available to map ports (the no-op `NoRouter` was asked to
+    /// map a port). Mirrors Go `errNoRouterCantMapPorts`.
+    #[error("can't map ports without a known router")]
+    NoRouter,
+
+    /// A NAT traversal operation (UPnP / NAT-PMP map / unmap / external-IP)
+    /// failed. Carries the underlying gateway error string.
+    #[error("nat error: {0}")]
+    Nat(String),
 }
 
 impl From<std::io::Error> for Error {

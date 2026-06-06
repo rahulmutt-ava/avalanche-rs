@@ -28,6 +28,7 @@
 pub mod config;
 pub mod error;
 pub mod identity;
+pub mod nat;
 pub mod network;
 pub mod peer;
 pub mod router;

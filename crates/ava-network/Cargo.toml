@@ -39,11 +39,20 @@ parking_lot = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 ring = { workspace = true }
+# NAT port mapping (M2.19, specs/05 §6): UPnP IGD discovery + add/remove port via
+# the synchronous `igd-next` API. The NAT-PMP/PCP probe runs after UPnP; for now
+# only the UPnP path is wired (PMP falls through to NoRouter), matching
+# `nat.GetRouter`'s probe order. NOTE: `igd-next` is NOT yet in the workspace
+# [workspace.dependencies] table — pinned directly here at the current stable
+# (0.17.1); promote to a workspace pin when convenient.
+igd-next = "0.17.1"
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
-# TLS handshake tests (M2.9/M2.10); macros/time/rt for the throttler tests.
-tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+# TLS handshake tests (M2.9/M2.10); macros/time/rt for the throttler tests;
+# test-util adds the paused-clock (`tokio::time::advance`/`start_paused`) used by
+# the deterministic PortMapper refresh-interval test (M2.19).
+tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread", "test-util" ] }
 tokio-util = { workspace = true }
 # rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
 rcgen = { workspace = true }
