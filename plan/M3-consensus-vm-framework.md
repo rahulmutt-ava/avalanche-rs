@@ -67,6 +67,19 @@ Wave H
 
 ---
 
+## Progress & findings (Wave A start — `ava-validators` M3.6 + M3.7 complete — 2026-06-06)
+
+**M3.6 + M3.7 (`ava-validators`) ✅** landed as one worktree agent (the two are a sequential chain on the same new crate). New crate `crates/ava-validators` (T2b), **10 tests green**, `cargo clippy -p ava-validators --all-targets -- -D warnings` clean, workspace builds. M3.6: `Validator`/`GetValidatorOutput`, `Set` (`BTreeMap<NodeId, Validator>`, NodeId-sorted snapshot), `ValidatorManager` trait + `DefaultManager` + `ManagerCallbackListener`, `error.rs`. M3.7: `#[async_trait] ValidatorState` (returns `BTreeMap`), `CachedState`/`LockedState` adapters, `ConnectedValidators` + `Connector`. Findings:
+
+1. **Plan note correction (M3.6 header): `Id`/`NodeId` live in `ava-types`, NOT `ava-snow`.** The M3.6 dep line's "re-uses ava-snow Id" is wrong — `ava-validators` depends only on `ava-types`/`ava-crypto`/`ava-utils` (+ `async-trait`/`thiserror`/`tokio`) and has **no `ava-snow` dependency** (which let it build in a parallel worktree alongside `ava-snow`). Recorded in `crates/ava-validators/tests/PORTING.md`.
+2. **`prop::sample_determinism` reuses the M0 sampler verbatim.** `Set::sample` builds the weight array from the NodeId-sorted slice and feeds `ava_utils::sampler::WeightedWithoutReplacementGeneric` seeded by the gonum-exact `ava_utils::rng::Mt19937_64`; the test asserts the draw sequence equals an oracle built by driving that sampler directly — so validator sampling is bit-for-bit consistent with Go (the R1 binding the windower will confirm at M3.22).
+3. **`CachedState` LRU is self-contained (spec `06` §6.1 deviation).** Spec says "LRU via ava-utils", but `ava-utils` exposes no cache module yet; M3.7 carries a minimal insertion-order LRU to avoid a new dependency. Follow-up: add `ava-utils::lru` and swap. Noted in PORTING.md.
+4. **No new workspace deps.** All `{ workspace = true }`; root `Cargo.toml` untouched. Poll `sample` (off the consensus-decision path, `06` §6.2) seeds `Mt19937_64` from coarse OS entropy (no `rand`/`getrandom` crate in the workspace). `ava_crypto::bls::PublicKey` derives only `Clone` (no `Eq`), so `Validator`/`GetValidatorOutput` can't derive `Eq` — not a problem on any current path.
+
+> **Remaining Wave A/B:** M3.1+M3.2(+M3.3) `ava-snow` consensus core (in flight, separate worktree); M3.14 `ava-vm` base traits **depends on M3.2** (ava-snow `ChainContext` re-export) so it is sequenced **after** `ava-snow` lands — not parallelizable with the first wave.
+
+---
+
 ## Tasks
 
 ### Task M3.1: TDD entry — `prop::consensus_safety` harness + in-memory test-VM cluster (RED)
@@ -114,7 +127,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow --features testutil` passes including `prop::consensus_safety` and `conformance::snow_battery`; commit any new `proptest-regressions/` seed; clippy clean.
 - [ ] **Step 5 — Commit:** `ava-snow: Topological (Snowman) consensus + snow battery; consensus_safety GREEN`
 
-### Task M3.6: `ava-validators` — Validator/Manager/Set + deterministic sampling
+### Task M3.6: `ava-validators` — Validator/Manager/Set + deterministic sampling ✅ COMPLETED
 **Crate:** `ava-validators`  ·  **Depends on:** M0 (`ava-utils::sampler` WeightedWithoutReplacement + DeterministicWeightedWithoutReplacement, `ava-crypto` bls, `ava-types` NodeId), M3.2 (re-uses `ava-snow` Id)  ·  **Spec:** 06 §6.1 (Set/Manager), §6.2 (deterministic weighted sampling, NodeId-sorted weights, BTreeMap order)
 **Files:** `crates/ava-validators/src/lib.rs`, `crates/ava-validators/src/validator.rs` (`Validator`, `GetValidatorOutput`), `crates/ava-validators/src/set.rs`, `crates/ava-validators/src/manager.rs` (`ValidatorManager`), `crates/ava-validators/tests/prop_sampling.rs`, `crates/ava-validators/tests/PORTING.md`, `crates/ava-validators/proptest-regressions/.gitkeep`
 - [ ] **Step 1 — Red:** (a) Unit `set_weight_overflow` — `total_weight` errors on u64 overflow (`assert_matches!`). (b) `prop::sample_determinism` — for a fixed `(validators, seed)`, `sample` over the `NodeId`-sorted weight slice reproduces the M0 sampler index sequence (consumes 03's sampler; assert exact `NodeId` order out). (c) Unit `add_remove_weight_roundtrip` + `subset_weight` over a `HashSet`.
@@ -123,7 +136,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-validators` passes (commit regression seed); clippy clean.
 - [ ] **Step 5 — Commit:** `ava-validators: Validator/Set/Manager + deterministic weighted sampling (reuses ava-utils sampler)`
 
-### Task M3.7: `ava-validators` — `ValidatorState` trait + cached/locked adapters + `ConnectedValidators`
+### Task M3.7: `ava-validators` — `ValidatorState` trait + cached/locked adapters + `ConnectedValidators` ✅ COMPLETED
 **Crate:** `ava-validators`  ·  **Depends on:** M3.6  ·  **Spec:** 06 §6.1 (`ValidatorState`, BTreeMap determinism binding), §6.2 (`Connector`/`ConnectedValidators`, min_percent_connected)
 **Files:** `crates/ava-validators/src/state.rs` (`ValidatorState`, `GetCurrentValidatorOutput`, `WarpSet`), `crates/ava-validators/src/state_adapters.rs` (LRU cache adapter + lock adapter), `crates/ava-validators/src/connected.rs` (`ConnectedValidators`, `Connector`)
 - [ ] **Step 1 — Red:** Unit `validator_set_is_sorted` — `get_validator_set` returns a `BTreeMap<NodeId, _>` and iterating it is `NodeId`-ascending (the binding determinism contract the windower relies on); `connected_tracker_min_percent` — connectivity ratio computed over weighted connected stake.

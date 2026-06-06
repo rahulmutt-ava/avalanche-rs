@@ -93,6 +93,15 @@ Wave D  (differential / exit)
 
 **Next:** Wave D — **M2.22** (`differential::interop_handshake`, live Fuji + recorded fallback) depends on M2.21 (done) + the cross-cutting harness X; **M2.23** (milestone exit gate) depends on all prior M2 tasks. Note for M2.23: fold in the M2.20 live-increment wiring (finding 2) so the metrics are not merely registered but observed before the milestone closes.
 
+## Progress & findings (Wave D — M2.22 complete — 2026-06-06)
+
+**M2.22 (`differential::interop_handshake`) ✅** landed via a worktree agent in the `ava-differential` crate (`tests/differential/tests/interop_handshake.rs`). Two arms: the **recorded-fallback** `differential_interop_handshake` (runs every CI run, offline) replays a Go-derived handshake transcript through the **real** `ava-network` peer actor + `ava-message` codec and asserts the Rust side writes its Handshake, validates the Go peer's Handshake, replies `PeerList`, latches `finished_handshake` on the Go `PeerList`, and fires `ExternalHandler::connected` exactly once with the connection held; the **live** `differential_interop_handshake_live` (`#[cfg(feature = "interop")]` + `#[ignore]`, dials `$AVA_INTEROP_FUJI_ADDR`) compiles but never runs in CI/sandbox. After merge: **ava-differential + ava-network green at 67 tests**, both clippy-clean. Findings:
+
+1. **The recorded transcript is Go-*emitted*, not assembled-from-goldens (cleaner than the task's fallback allowed).** A scratch Go program against the pinned `../avalanchego` (commit `fb174e8…`, Go 1.25.9) used `staking.NewTLSCert` + `peer.UnsignedIP.Sign` (real ECDSA-P256/SHA-256 over `SHA256(ip.As16()||port||ts)` + BLS PoP) + `message.Creator` to emit a byte-exact `Handshake` (`network_id=1`, `avalanchego/1.14.2`, `TypeNone`) + empty `PeerList`, dumped as `u32 cert_der_len|cert_der|u32 hs_len|hs_frame|u32 pl_len|pl_frame`. Scratch deleted; Go tree clean. Fixture committed at `tests/differential/tests/fixtures/fuji_transcript.bin` (526 B). The proto bytes match the existing `tests/vectors/message/{handshake,peerlist}.json` goldens; the only delta is a **real** sig/cert pair (the JSON goldens use dummy sig bytes) so the Rust peer's signed-IP verification passes and reaches `connected`. Provenance in the test module doc + `ava-network/tests/PORTING.md`.
+2. **No new `ava-network` test helper needed.** The M2.14–M2.21 `peer::testutil` API (`TestPeerBuilder`, `read_one_frame`/`write_one_frame`) + `Peer::spawn` + `upgrader::node_id_from_cert_der` already expose everything; the replay drives the genuine state machine, not a reimplementation. The peer verifies the signed IP against the cert passed to `Peer::spawn`, so the transcript ships the Go leaf cert DER and the replay presents it.
+3. **A true *live-captured* Fuji session remains the gated/nightly follow-up** (this commit's live arm + cross-cutting X.15/X.22). The Go-emitted bloom cross-vector PORTING.md said would fold into M2.22 was **not** included (this handshake advertises an empty bloom) — a clean follow-up if still wanted.
+4. **Bazel:** the agent hand-added a `rust_test(name = "interop_handshake", …)` + the fixture as `compile_data` to `tests/differential/BUILD.bazel`; regenerate/verify via `bazel-gazelle-generate`/`bazel-check-metadata` centrally (outside the cargo gate).
+
 ---
 
 ## Tasks
@@ -289,7 +298,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-network -E 'test(handshake_reaches_connected)'` passes; regression corpus committed.
 - [ ] **Step 5 — Commit:** `ava-network: prop::handshake_reaches_connected`.
 
-### Task M2.22: `differential::interop_handshake` (live Go Fuji node)
+### Task M2.22: `differential::interop_handshake` (live Go Fuji node) ✅ COMPLETED
 **Crate:** ava-network (integration)  ·  **Depends on:** M2.21, cross-cutting harness X  ·  **Spec:** `05` §9 (9), `26` §9 (4), `02` §9
 **Files:** `tests/differential/interop_handshake.rs`, `tests/differential/fixtures/fuji_transcript.bin` (recorded fallback), `tests/differential/proptest-regressions/`, `crates/ava-network/tests/PORTING.md`.
 - [ ] **Step 1 — Red:** `differential::interop_handshake`: `#[tokio::test] async fn interop_handshake()` — a Rust node dials a **live Go node on Fuji** (address from env, e.g. `AVA_INTEROP_FUJI_ADDR`), completes the TLS 1.3 handshake, exchanges `Handshake` + receives a `PeerList`, and holds the connection `≥ N` seconds (N from env, default 30) with **no disconnect** and no protocol error. Behind `#[cfg(feature = "interop")]` / `#[ignore]` unless the env gate is set. The **per-PR fallback** path replays `fuji_transcript.bin` (a recorded Go-node transcript) through the codec + handshake state machine and asserts the same outcome offline. Initially the live arm fails (no network stack end-to-end) — the right reason.
