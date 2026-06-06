@@ -421,7 +421,12 @@ pub trait Network: Send + Sync {
 
 The concrete `NetworkImpl` holds (mirrors the Go `network` struct):
 - `peer_config: Arc<PeerConfig>` — shared per-peer config (message creator, throttlers,
-  router handle, validators, version-compat, IP signer, clock, metrics).
+  router handle, validators, version-compat, IP signer, clock, metrics). **As-built
+  (M2.14):** also carries the local node's handshake-advertisement inputs — `identity`,
+  `my_ip`, `my_version`, `my_tracked_subnets`, `my_supported_acps`/`objected_acps`, and
+  the `ip_tracker` handle (so the read task can validate+track `ClaimedIpPort`s inline).
+  The injected `clock` is read by `should_disconnect`'s compat re-check so the
+  clock-crossing path is deterministic in tests.
 - `listener`, `dialer`, `server_upgrader`, `client_upgrader` (TLS, §4.5).
 - `ip_tracker` (peer-list gossip state), `connecting_peers`, `connected_peers`
   (`PeerSet`s), `tracked_ips: DashMap<NodeId, TrackedIp>`.
@@ -747,10 +752,18 @@ pub fn get_router() -> Box<dyn NatRouter>; // try UPnP, then NAT-PMP, else NoRou
 
 - **UPnP** + **NAT-PMP/PCP** via the **`igd-next`** crate (UPnP IGD) and a PMP crate
   (`natpmp`/`crab-nat`). `get_router()` probes UPnP first, then PMP, else a no-op router
-  (matching `nat.GetRouter`).
+  (matching `nat.GetRouter`). **As-built (M2.19):** only the UPnP path is wired
+  (`igd-next 0.17.1`, a workspace dep); `get_pmp_router()` is a `None` stub, so
+  `get_router` falls through UPnP → `NoRouter` — behaviourally identical to a PMP-less
+  network (Go probes PMP only as a secondary fallback, and CI has no gateway). A real
+  PMP probe is additive: the `Error::{Nat, NoRouter}` variants and `PortMapper` are
+  PMP-router-agnostic.
 - `PortMapper`: a background tokio task that (re)maps the staking port every
   `mapTimeout/… ` (Go: `mapTimeout = 30m`, `maxRefreshRetries = 3`) and unmaps on
-  shutdown.
+  shutdown (driven by its `CancellationToken`). **As-built:** the optional
+  advertised-IP `updateIP` side of Go's `nat.Mapper.Map` is **deferred to `ava-node`/
+  `network` wiring** (`specs/17` task #23 owns it) — it couples to a network-owned
+  advertised-IP atomic not present in `ava-network` yet.
 
 ---
 
@@ -793,7 +806,7 @@ path per `00` §5). Notable groups:
 | `tls.Config{InsecureSkipVerify, VerifyConnection}` | rustls custom `ServerCertVerifier`/`ClientCertVerifier` (§4) |
 | `ids.NodeIDFromCert` (RIPEMD160∘SHA256) | `NodeId::from_cert` in `ava-crypto` (`03`) |
 | `golang.org/x/time/rate` | `governor` (GCRA) |
-| `utils/bloom` (peer-list filter) | `ava-types::bloom` (byte-compatible, see `03`) |
+| `utils/bloom` (peer-list filter) | `ava-types::bloom` (byte-compatible, see `03`); **as-built (M2.17) ported into `ava-network::network::bloom`** so the handshake milestone is self-contained — byte-exact (SHA256-prefix hash, rotate-left-17 + seed-XOR `Contains`); hoist to `ava-types`/`ava-utils` in a later refactor |
 | `proto/pb/p2p` (Go protobuf) | prost-generated `p2p` module (`ava-message`) |
 | `InboundHandler`/`ExternalHandler` | `InboundHandler`/`ExternalHandler` traits (§3.6) |
 

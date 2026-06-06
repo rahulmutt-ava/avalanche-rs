@@ -67,7 +67,19 @@ Wave D  (differential / exit)
 6. **Golden-vector caveat:** `tests/vectors/message/signed_ip.json` was *constructed* from the documented `16 || port_be(2) || ts_be(8)` layout (no Go toolchain in-sandbox for that path), not Go-emitted; layout is unambiguous but a Go byte-for-byte cross-check is a follow-up. `tls/staker.json` and all `message/*.json` frame vectors ARE Go-derived/Go-emitted. Recorded in the crates' `PORTING.md`.
 7. **`deadline` = nanoseconds (u64)**; zstd decode bounded to `MAX_MESSAGE_SIZE` (2 MiB) as the decompression-bomb guard the fuzz target relies on.
 
-**Next:** Wave C (M2.11–M2.21, `ava-network` runtime: PeerConfig/traits, queues, throttlers, peer actor, handshake state machine, ping/pong, IP-tracker/gossip, dialer+dispatch, NAT, metrics, `prop::handshake_reaches_connected`) — depends on both crates, so it follows now. Wave D (M2.22 differential interop, M2.23 exit gate) closes the milestone.
+## Progress & findings (Wave C runtime — M2.14–M2.19 complete — 2026-06-06)
+
+**M2.14–M2.18 (`ava-network` peer actor → dispatch runtime) ✅ and M2.19 (NAT port mapper) ✅** landed via two parallel worktree agents (the M2.14–M2.18 chain is strictly sequential — peer actor → handshake → ping/pong → gossip → dispatch, all on `peer/peer.rs` + `network/net_impl.rs` — so one agent did all five in order; M2.19 NAT is a self-contained `nat/` module, so it ran in parallel). After merge: **`ava-network` green at 51 tests**, `cargo clippy --all-targets -- -D warnings` clean, `avalanchers` binary still builds. Headline: `network_dispatch::two_networks_connect_locally` brings up two real `NetworkImpl` instances on loopback, dials over real TLS 1.3, completes the byte-exact Handshake+PeerList exchange, and reaches `connected` end-to-end. Findings:
+
+1. **`PeerConfig` field set grew (spec §3.1 / M2.11 note resolved).** M2.14 needed the full collaborator set, so `PeerConfig` now carries `identity`, `my_ip`, `my_version`, `my_tracked_subnets`, `my_supported_acps`/`objected_acps`, `creator`, `router`, `version_compatibility`, the three throttlers, `ip_signer`, `ip_tracker`, and an injected `clock` — i.e. the throttlers/ip_signer/clock the M2.11 note anticipated, plus identity/ip/version/subnet/ACP inputs. `PeerConfig::new` changed from the M2.11 5-arg stub; the only caller (`tests/traits.rs`) builds it via `peer::testutil::TestPeerBuilder`. Spec `05` §3.1's `PeerConfig` field list updated to match.
+2. **Bloom filter ported into `ava-network::network::bloom`, not `ava-utils`.** Byte-exact port of Go `utils/bloom` (SHA256-prefix hash, rotate-left-17 + seed-XOR `Contains`) so a Go-built filter reads identically. Go's natural home is `ava-utils`; a later refactor can hoist it. A Go-emitted bloom cross-vector is folded into M2.22. (Recorded in spec `05` §3.5.)
+3. **`should_disconnect` re-checks the version-compat floor only**, not the BLS-PoP re-check (needs the `validators.Manager` source — same `vdr_alloc=0` deferral as M2.12/M2.13). `txid_of_verified_bls_key` is reserved for it. The compat re-check reads `Compatibility`'s public fields against the injected `Clock::now_system()` so the clock-crossing test is deterministic (no wall-clock).
+4. **`finish_handshake` notifies the router on the primary network** (`Id::default()`); the tracked-subnet intersection (`05` §3.7) is refined when the subnet-set source lands.
+5. **Dialer rate limiter is a hand-rolled token bucket** (`parking_lot::Mutex`), not `governor` — the same dependency-minimizing choice the throttlers (M2.12/M2.13) made. `governor` stays out of the workspace.
+6. **`handshake.rs` + a peer test-support module are introduced at M2.14** (not M2.15) — the actor can't compile without the inbound-dispatch handlers; handlers were stubbed at M2.14 and filled at M2.15/M2.16/M2.17. (Plan file lists corrected below.)
+7. **NAT: `igd-next 0.17.1`** (UPnP-only) promoted to a **workspace dependency** on merge. NAT-PMP/PCP is a `get_pmp_router() -> None` stub: Go probes PMP only as a secondary fallback after UPnP, and CI has no gateway, so `get_router` falls through UPnP → `NoRouter` — behaviourally identical to a PMP-less network. The `Error::{Nat, NoRouter}` variants and the `PortMapper` keep-alive loop are PMP-agnostic, so a real PMP probe later is additive. `PortMapper` ports Go `nat.Mapper` (re-map every `MAP_TIMEOUT=30m`, `MAX_REFRESH_RETRIES=3`, unmap on `CancellationToken`); its tests use a recording mock router + paused tokio clock. The optional advertised-IP `updateIP` side of Go's `Mapper.Map` is **deferred to `ava-node`/`network` wiring** (`specs/17` task #23 attributes it there), since it couples to a network-owned advertised-IP atomic that doesn't exist in this crate yet.
+
+**Next:** the remaining Wave C tail can now run in parallel — **M2.20** (`avalanche_network_*` metrics + R5 Connect-service enumeration note) and **M2.21** (`prop::handshake_reaches_connected`), both depending only on M2.18 (now done). Then Wave D: **M2.22** (`differential::interop_handshake`, live Fuji + recorded fallback) and **M2.23** (milestone exit gate).
 
 ---
 
@@ -193,7 +205,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test inbound_throttler` passes.
 - [ ] **Step 5 — Commit:** `ava-network: inbound byte throttler (fair pools) + conn-upgrade throttler`.
 
-### Task M2.14: Peer actor — read/write/net-messages tasks + handshake state
+### Task M2.14: Peer actor — read/write/net-messages tasks + handshake state ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.12, M2.13, M2.9  ·  **Spec:** `05` §1.1/§1.4/§3.2, `17` §2 (#5/#6/#7), §3, §4, §7
 **Files:** `crates/ava-network/src/peer/peer.rs`, `crates/ava-network/src/peer/handle.rs`, `crates/ava-network/src/peer/mod.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/peer_actor.rs`: `#[tokio::test] async fn write_task_sends_handshake_first()` — start a `Peer` over `tokio::io::duplex`; the very first frame the peer writes decodes (via `MsgBuilder::unmarshal`) to `Op::Handshake` (forced first action, `05` §1.4). `#[tokio::test] async fn read_task_resets_deadline_and_drops_oversized()` — feed a length prefix `> 2 MiB` and assert the peer closes (`on_closed` fires). `#[tokio::test] async fn cancel_token_drains_tasks()` — cancelling the peer token joins all three tasks (`17` §4.2).
@@ -202,7 +214,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test peer_actor` passes.
 - [ ] **Step 5 — Commit:** `ava-network: Peer actor (read/write/net tasks) + handshake-first write + drain`.
 
-### Task M2.15: `handle_handshake` (all disconnect reasons) → PeerList reply → connected
+### Task M2.15: `handle_handshake` (all disconnect reasons) → PeerList reply → connected ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.14, M2.11  ·  **Spec:** `05` §1.4, `26` §3.1
 **Files:** `crates/ava-network/src/peer/peer.rs` (handshake handling), `crates/ava-network/src/peer/handshake.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/handshake.rs`: `#[tokio::test] async fn handshake_then_peerlist_completes()` — two in-process `Peer`s over `tokio::io::duplex` exchange `Handshake` then each replies `PeerList`; on receiving `PeerList` while `got_handshake`, `finished_handshake` is set and `ExternalHandler::connected` fires once. Table of disconnect cases (each asserts the connection closes before connected): wrong `network_id`; clock skew `> 60s`; incompatible version (`26` §3); `> 16` tracked subnets; `supported_acps ∩ objected_acps ≠ ∅`; zero port / invalid IP; invalid TLS-IP sig; duplicate Handshake; bloom salt `> 32`.
@@ -211,7 +223,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test handshake` passes.
 - [ ] **Step 5 — Commit:** `ava-network: handle_handshake (all disconnect reasons) + PeerList completion`.
 
-### Task M2.16: ping/pong + uptime tracking + `should_disconnect`
+### Task M2.16: ping/pong + uptime tracking + `should_disconnect` ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.15  ·  **Spec:** `05` §1.5/§3.2, `26` §3.1
 **Files:** `crates/ava-network/src/peer/peer.rs` (ping/pong handlers, net-messages tick).
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/ping_pong.rs`: `#[tokio::test] async fn ping_carries_uptime_and_pong_records_rtt()` — peer A's net-task ticks, sends `Ping{uptime}`; peer B replies `Pong`; A records RTT (`last_ping_sent` cleared). `#[tokio::test] async fn ping_uptime_over_100_closes()` — a `Ping{uptime=101}` closes the connection. `#[tokio::test] async fn unsolicited_pong_closes()`. `#[tokio::test] async fn should_disconnect_on_clock_crossing_upgrade()` — a peer compatible pre-upgrade is dropped on the next tick after the mock clock crosses `upgrade_time` (`26` §3.1).
@@ -220,7 +232,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test ping_pong` passes.
 - [ ] **Step 5 — Commit:** `ava-network: ping/pong + uptime + should_disconnect (compat re-check)`.
 
-### Task M2.17: IP-tracker + PeerList/GetPeerList gossip (bloom + salt)
+### Task M2.17: IP-tracker + PeerList/GetPeerList gossip (bloom + salt) ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.16, M0 (ava-types bloom)  ·  **Spec:** `05` §3.5/§3.7, `18` §2.1 (`num_useless_peerlist_bytes`)
 **Files:** `crates/ava-network/src/network/ip_tracker.rs`, `crates/ava-network/src/network/tracked_ip.rs`, `crates/ava-network/src/peer/peer.rs` (GetPeerList/PeerList handling).
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/ip_gossip.rs`: `#[test] fn peers_excludes_known_via_bloom()` — `ip_tracker.peers(node, tracked, all_subnets, filter, salt)` returns only IPs **not** matched by the bloom filter (so we don't resend known peers). `#[test] fn claimed_ip_port_verified_before_track()` — a `ClaimedIpPort` with a bad signed IP is rejected; a valid one is tracked. `#[test] fn bloom_salt_over_max_rejected()` — salt `> 32` bytes rejected (cross-checks §1.4).
@@ -229,7 +241,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test ip_gossip` passes.
 - [ ] **Step 5 — Commit:** `ava-network: IP-tracker + PeerList/GetPeerList gossip (bloom+salt, verified ClaimedIpPort)`.
 
-### Task M2.18: dialer + accept loop + `Network::dispatch` + runTimers
+### Task M2.18: dialer + accept loop + `Network::dispatch` + runTimers ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.17, M2.13  ·  **Spec:** `05` §3.1/§3.4, `17` §2 (#1/#2/#3/#4), §4.3
 **Files:** `crates/ava-network/src/dialer.rs`, `crates/ava-network/src/network/mod.rs` (dispatch, accept loop, runTimers), `crates/ava-network/src/network/peer_set.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/network_dispatch.rs`: `#[tokio::test] async fn two_networks_connect_locally()` — two `NetworkImpl` instances on loopback; A `manually_track`s B; after `dispatch`, A dials B, both upgrade + handshake + reach `connected` (B appears in A's `connected_peers`). `#[tokio::test] async fn start_close_drains_all_tasks()` — `start_close()` closes the listener, cancels `net_token`, every peer actor unwinds, `dispatch` returns (`17` §4.3 step 8).
@@ -238,7 +250,7 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-network --test network_dispatch` passes.
 - [ ] **Step 5 — Commit:** `ava-network: dialer + accept loop + Network::dispatch + runTimers + graceful close`.
 
-### Task M2.19: NAT port mapper (UPnP / NAT-PMP)
+### Task M2.19: NAT port mapper (UPnP / NAT-PMP) ✅ COMPLETED
 **Crate:** ava-network  ·  **Depends on:** M2.18  ·  **Spec:** `05` §6, `17` §2 (#23)
 **Files:** `crates/ava-network/src/nat/mod.rs`, `crates/ava-network/src/nat/port_mapper.rs`.
 - [ ] **Step 1 — Red:** `crates/ava-network/tests/nat.rs`: `#[test] fn get_router_falls_back_to_no_router()` — `get_router()` returns a router whose `supports_nat()` is consistent (in CI with no gateway it returns the no-op router). `#[tokio::test] async fn port_mapper_unmaps_on_shutdown()` — a `PortMapper` over a mock `NatRouter` maps the staking port on start and calls `unmap_port` on shutdown.
