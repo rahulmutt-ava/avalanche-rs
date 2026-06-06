@@ -1,0 +1,33 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Consensus engine framework: the inbound op state-machine traits (Handler/Engine/NoOpHandler), AppError, and the engine-facing Sender (port of snow/engine/common) (M3 / specs 06 §4.1, §5.3)."
+
+# Tier T2b. The engine sees pre-authenticated NodeIds (ava-types), reuses the
+# ChainContext/EngineState/Id types from ava-snow, the Connector trait from
+# ava-validators, and the VM->engine notification enum from ava-vm.
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-snow = { path = "../ava-snow" }
+ava-validators = { path = "../ava-validators" }
+ava-vm = { path = "../ava-vm" }
+
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+# Engine HealthCheck reports through the health API as a JSON value.
+serde_json = { workspace = true }
+# NoOpHandler logs+drops at debug level (mirrors common/no_ops_handlers.go).
+tracing = { workspace = true }
+
+[dev-dependencies]
+# Unit tests drive the async handler methods on the current-thread runtime.
+tokio = { workspace = true, features = [ "macros", "rt", "sync" ] }
