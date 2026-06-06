@@ -1,0 +1,28 @@
+[package]
+name = "ava-validators"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Validator subsystem: Set/Manager/State + deterministic weighted sampling (port of snow/validators) (M3 / specs 06 §6)."
+
+# Tier T2b. Depends ONLY on ava-types (Id/NodeId), ava-crypto (bls::PublicKey),
+# and ava-utils (the M0 deterministic sampler + checked safemath). It deliberately
+# does NOT depend on ava-snow (built in parallel) — `Id`/`NodeId` live in ava-types.
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-crypto = { path = "../ava-crypto" }
+ava-utils = { path = "../ava-utils" }
+
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+# tokio::sync::Mutex for the locked ValidatorState adapter (M3.7).
+tokio = { workspace = true, features = [ "sync" ] }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+proptest = { workspace = true }
+tokio = { workspace = true, features = [ "macros", "rt", "sync" ] }

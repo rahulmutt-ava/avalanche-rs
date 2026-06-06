@@ -498,6 +498,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-validators"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "ava-crypto",
+ "ava-types",
+ "ava-utils",
+ "proptest",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "ava-version"
 version = "0.1.0"
 dependencies = [
