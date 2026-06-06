@@ -408,9 +408,13 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "assert_matches",
+ "async-trait",
  "ava-crypto",
+ "ava-message",
  "ava-types",
+ "bytes",
  "hex",
+ "parking_lot",
  "rcgen",
  "ring",
  "rustls",

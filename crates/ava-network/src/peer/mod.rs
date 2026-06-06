@@ -9,6 +9,7 @@
 
 pub mod ip;
 pub mod ip_signer;
+pub mod message_queue;
 pub mod tls_config;
 pub mod upgrader;
 pub mod verifier;
