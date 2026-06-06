@@ -4,10 +4,17 @@
 //! M2.4 — `MsgBuilder` marshal/unmarshal + recursive zstd packing (specs/05
 //! §1.3/§2.3, 15 §4.2 R4: decode-equivalence, not byte-equality).
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    unused_crate_dependencies
+)]
+
 use bytes::Bytes;
 use prost::Message as _;
 
-use ava_message::codec::{decompress_gzip, Compression, MsgBuilder};
+use ava_message::codec::{Compression, MsgBuilder, decompress_gzip};
 use ava_message::ops::Op;
 use ava_message::proto::p2p;
 

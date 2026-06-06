@@ -229,3 +229,24 @@ pub fn failed_to_response_ops() -> &'static HashMap<Op, Op> {
     });
     &MAP
 }
+
+#[cfg(test)]
+mod tests {
+    use assert_matches::assert_matches;
+
+    use super::*;
+    use crate::error::Error;
+
+    #[test]
+    fn of_rejects_compressed_wrapper() {
+        let m = p2p::message::Message::CompressedZstd(bytes::Bytes::from_static(&[1, 2, 3]));
+        assert_matches!(Op::of(&m), Err(Error::UnknownOp));
+    }
+
+    #[test]
+    fn iota_is_contiguous() {
+        // The simplex op is the last and highest value (35).
+        assert_eq!(Op::Simplex as u8, 35);
+        assert_eq!(Op::Connected as u8, 31);
+    }
+}

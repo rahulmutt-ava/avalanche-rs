@@ -276,3 +276,55 @@ fn deadline_of(m: &p2p::message::Message) -> Option<Duration> {
 
 /// A shared, clonable handle to a [`MsgBuilder`] (the `Creator` holds one).
 pub type SharedMsgBuilder = Arc<MsgBuilder>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marshal_unmarshal_get_preserves_deadline() {
+        let mb = MsgBuilder::default();
+        let m = p2p::Message {
+            message: Some(p2p::message::Message::Get(p2p::Get {
+                chain_id: Bytes::from(vec![1u8; 32]),
+                request_id: 3,
+                deadline: 1_000_000_000,
+                container_id: Bytes::from(vec![2u8; 32]),
+            })),
+        };
+        let (bytes, _saved, op) = mb.marshal(&m, Compression::None).unwrap();
+        assert_eq!(op, Op::Get);
+        let parsed = mb.parse_inbound(&bytes).unwrap();
+        assert_eq!(parsed.op, Op::Get);
+        // Get carries a deadline, so expiration is Some.
+        assert!(parsed.expiration.is_some());
+    }
+
+    #[test]
+    fn deadline_units_are_nanoseconds() {
+        // 1s deadline -> Duration::from_nanos(1e9) == 1s.
+        let m = p2p::message::Message::Get(p2p::Get {
+            deadline: 1_000_000_000,
+            ..Default::default()
+        });
+        assert_eq!(deadline_of(&m), Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn vector_json_shape_parses() {
+        // Sanity: the golden-vector JSON shape (input_fields + hex_frame) parses.
+        let raw = r#"{"input_fields":{"uptime":7},"hex_frame":"000000045a020807"}"#;
+        let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            v.get("hex_frame").and_then(|x| x.as_str()),
+            Some("000000045a020807")
+        );
+        // serde derive smoke (uses the `serde` dev-dep).
+        #[derive(serde::Deserialize)]
+        struct Tiny {
+            hex_frame: String,
+        }
+        let t: Tiny = serde_json::from_str(raw).unwrap();
+        assert_eq!(t.hex_frame, "000000045a020807");
+    }
+}

@@ -3,6 +3,13 @@
 
 //! M2.5 — the `Creator` / `OutboundMsgBuilder` API (specs/05 §2.4).
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    unused_crate_dependencies
+)]
+
 use std::net::{Ipv6Addr, SocketAddr};
 
 use ava_types::id::Id;

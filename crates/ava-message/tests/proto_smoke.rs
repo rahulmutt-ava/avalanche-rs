@@ -4,6 +4,13 @@
 //! M2.1 — smoke test that the generated `p2p` proto module exists and that the
 //! `Message.message` oneof is wired correctly (specs/05 §2.1, 15 §3.1).
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    unused_crate_dependencies
+)]
+
 use ava_message::proto::p2p;
 
 #[test]

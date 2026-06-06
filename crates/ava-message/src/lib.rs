@@ -22,4 +22,7 @@ pub mod frame;
 pub mod ops;
 pub mod proto;
 
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_support;
+
 pub use error::{Error, Result};

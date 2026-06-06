@@ -18,7 +18,9 @@ pub enum Error {
 
     /// The declared frame length exceeds the maximum allowed message size
     /// (mirrors Go `errMaxMessageLengthExceeded`).
-    #[error("maximum message length exceeded; the message length {len} exceeds the specified limit {max}")]
+    #[error(
+        "maximum message length exceeded; the message length {len} exceeds the specified limit {max}"
+    )]
     MaxMessageLengthExceeded {
         /// The declared/attempted message length in bytes.
         len: u32,

@@ -4,11 +4,18 @@
 //! M2.3 — 4-byte big-endian length-prefix helpers + the 2 MiB cap, byte-exact
 //! with `network/peer/msg_length.go` (specs/05 §1.1/§2.3, 15 §4.2).
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    unused_crate_dependencies
+)]
+
 use assert_matches::assert_matches;
 use bytes::BytesMut;
 
-use ava_message::frame::{read_msg_len, write_msg_len, MAX_MESSAGE_SIZE};
 use ava_message::Error;
+use ava_message::frame::{MAX_MESSAGE_SIZE, read_msg_len, write_msg_len};
 
 #[test]
 fn max_message_size_is_2_mib() {

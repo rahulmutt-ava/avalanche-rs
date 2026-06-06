@@ -4,7 +4,14 @@
 //! M2.2 — the `Op` opcode enum + classification sets, byte-exact with Go
 //! `message/ops.go` (specs/05 §1.2/§2.2).
 
-use ava_message::ops::{failed_to_response_ops, unrequested_ops, Op};
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    unused_crate_dependencies
+)]
+
+use ava_message::ops::{Op, failed_to_response_ops, unrequested_ops};
 use ava_message::proto::p2p;
 
 #[test]
@@ -57,9 +64,18 @@ fn classification_sets_match_go() {
     assert_eq!(f.get(&Op::GetFailed), Some(&Op::Put));
     assert_eq!(f.get(&Op::QueryFailed), Some(&Op::Chits));
     assert_eq!(f.get(&Op::AppError), Some(&Op::AppResponse));
-    assert_eq!(f.get(&Op::GetStateSummaryFrontierFailed), Some(&Op::StateSummaryFrontier));
-    assert_eq!(f.get(&Op::GetAcceptedStateSummaryFailed), Some(&Op::AcceptedStateSummary));
-    assert_eq!(f.get(&Op::GetAcceptedFrontierFailed), Some(&Op::AcceptedFrontier));
+    assert_eq!(
+        f.get(&Op::GetStateSummaryFrontierFailed),
+        Some(&Op::StateSummaryFrontier)
+    );
+    assert_eq!(
+        f.get(&Op::GetAcceptedStateSummaryFailed),
+        Some(&Op::AcceptedStateSummary)
+    );
+    assert_eq!(
+        f.get(&Op::GetAcceptedFrontierFailed),
+        Some(&Op::AcceptedFrontier)
+    );
     assert_eq!(f.get(&Op::GetAcceptedFailed), Some(&Op::Accepted));
     assert_eq!(f.get(&Op::GetAncestorsFailed), Some(&Op::Ancestors));
     assert_eq!(f.len(), 8);

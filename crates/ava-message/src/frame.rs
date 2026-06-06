@@ -55,3 +55,30 @@ pub fn read_msg_len(b: [u8; 4], max: u32) -> Result<u32> {
     }
     Ok(len)
 }
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[test]
+    fn write_then_hex_roundtrips() {
+        let mut buf = BytesMut::new();
+        write_msg_len(&mut buf, 0x0001_0203).unwrap();
+        // hex of the big-endian prefix.
+        assert_eq!(hex::encode(buf.as_ref()), "00010203");
+    }
+
+    proptest! {
+        // write_msg_len then read_msg_len is the identity for any in-range length.
+        #[test]
+        fn write_read_identity(len in 0u32..=MAX_MESSAGE_SIZE) {
+            let mut buf = BytesMut::new();
+            write_msg_len(&mut buf, len).unwrap();
+            let prefix: [u8; 4] = buf.as_ref().try_into().unwrap();
+            prop_assert_eq!(read_msg_len(prefix, MAX_MESSAGE_SIZE).unwrap(), len);
+        }
+    }
+}
