@@ -704,7 +704,7 @@ All in `ava-network::throttling`, reproducing `network/throttling/*`. Constants 
 | Throttler | Go | Rust design |
 |---|---|---|
 | **Dial throttler** | `golang.org/x/time/rate` limiter, `OutboundConnectionThrottlingRps=50` | `governor` (GCRA) or a tokio token bucket; `acquire().await` before dial |
-| **Inbound conn-upgrade throttler** | per-IP cooldown `10s`, `MaxConnsPerSec=256` | `DashMap<IpAddr, Instant>` + a global rate limiter; reject (drop TCP) if too soon |
+| **Inbound conn-upgrade throttler** | per-IP cooldown `10s`, `MaxConnsPerSec=256` | a `parking_lot::Mutex<HashMap<IpAddr, Instant>>` + a hand-rolled global token bucket; reject (drop TCP) if too soon. *(M2.13: implemented with a single mutex + hand-rolled bucket rather than `DashMap`+`governor` — this matches Go's single-mutex + bounded-channel design exactly and stays dependency-free. Expiry is lazy via `retain(now < elapsed_at)`; the throttler is passive, no background task.)* |
 | **Inbound msg byte throttler** | per-node + at-large + validator byte pools; `Acquire(ctx,size,node).await -> ReleaseFunc` | fairness-preserving: a `Semaphore`-like custom allocator with three pools (vdr `32 MiB`, at-large `6 MiB`, node-max `2 MiB`); returns a `ReleasePermit` (RAII, replaces `ReleaseFunc`) |
 | **Bandwidth throttler** | per-node token bucket, refill `512 KiB/s`, burst `2 MiB` | `governor` per-node keyed limiter; `acquire(size,node).await` |
 | **Inbound msg buffer throttler** | max processing msgs/node `1024` | a per-node `Semaphore(1024)` |
