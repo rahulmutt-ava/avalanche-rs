@@ -445,6 +445,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-snow"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "assert_matches",
+ "async-trait",
+ "ava-crypto",
+ "ava-types",
+ "ava-utils",
+ "ava-version",
+ "pretty_assertions",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio-util",
+]
+
+[[package]]
 name = "ava-testvectors"
 version = "0.1.0"
 dependencies = [
