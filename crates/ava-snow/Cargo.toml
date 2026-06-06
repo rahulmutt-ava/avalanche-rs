@@ -1,0 +1,37 @@
+[package]
+name = "ava-snow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Snowball/Snowman consensus core: parameters, primitives, context, block/status/engine-state, acceptor (M3 / specs 06 §2-§3)."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-utils = { path = "../ava-utils" }
+ava-crypto = { path = "../ava-crypto" }
+ava-version = { path = "../ava-version" }
+
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+arc-swap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# CancellationToken on the Block verify/accept/reject + record_poll surface
+# (specs 06 §2.4, §9 Go mapping). `rt` feature matches the workspace pin.
+tokio-util = { workspace = true }
+
+[features]
+# In-memory test-VM cluster scaffolding (TestVm/TestBlock/Cluster) used by the
+# safety proptest harness (M3.1) and the consensus battery (M3.5). Off by
+# default so the production surface stays lean.
+testutil = []
+
+[dev-dependencies]
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }
+assert_matches = { workspace = true }
+serde_json = { workspace = true }
