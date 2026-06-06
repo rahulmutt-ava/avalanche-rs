@@ -20,9 +20,22 @@ use crate::error::Result;
 use crate::identity::Identity;
 
 /// A monotonic Unix-seconds clock. Abstracted so tests can inject time.
+///
+/// The peer actor (M2.14+) uses the same injected clock for `my_time`, the
+/// clock-skew check, and the version-compatibility floor selection (`specs/26`
+/// §3.1), so a test can drive the clock across `upgrade_time` deterministically.
 pub trait Clock: Send + Sync {
     /// The current Unix-seconds timestamp.
     fn unix(&self) -> u64;
+
+    /// The current time as a [`std::time::SystemTime`]. Defaults to
+    /// `UNIX_EPOCH + unix()s` so an impl that only knows seconds stays
+    /// consistent with [`Clock::unix`].
+    fn now_system(&self) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs(self.unix()))
+            .unwrap_or(std::time::UNIX_EPOCH)
+    }
 }
 
 /// The default wall-clock implementation.
@@ -36,6 +49,10 @@ impl Clock for SystemClock {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    fn now_system(&self) -> std::time::SystemTime {
+        std::time::SystemTime::now()
     }
 }
 

@@ -14,6 +14,15 @@
 //! it. No method bodies live here (it is a trait), so the
 //! no-`todo!()`/no-`unwrap()` library rules hold trivially.
 
+pub mod bloom;
+pub mod ip_tracker;
+pub mod net_impl;
+pub mod peer_set;
+pub mod testutil;
+pub mod tracked_ip;
+
+pub use net_impl::NetworkImpl;
+
 use std::collections::HashSet;
 use std::net::SocketAddr;
 

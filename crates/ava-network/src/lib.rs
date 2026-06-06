@@ -26,6 +26,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod dialer;
 pub mod error;
 pub mod identity;
 pub mod network;
