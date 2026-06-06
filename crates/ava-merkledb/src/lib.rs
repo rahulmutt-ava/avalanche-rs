@@ -29,6 +29,11 @@
 pub mod codec;
 pub mod db;
 pub mod error;
+/// Safe wrapper over the external `firewood` trie database (M1.20/M1.21, specs
+/// 04 §4, R3). Behind the `firewood` (SHA-256) / `firewood-ethhash` (Keccak/EVM
+/// state root) features so non-firewood builds never pull the firewood crate.
+#[cfg(feature = "firewood")]
+pub mod firewood;
 /// Shared fuzz/property op-stream support (M1.25, spec 02 §8). Behind the
 /// `fuzzing` feature so it stays out of the normal public API; reused by the
 /// nightly `cargo-fuzz` targets and the stable `prop_fuzz_smoke` proptest.
