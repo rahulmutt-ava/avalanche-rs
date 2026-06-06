@@ -25,9 +25,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
 pub mod error;
 pub mod identity;
+pub mod network;
 pub mod peer;
+pub mod router;
 
 pub use error::{Error, Result};
 pub use identity::Identity;

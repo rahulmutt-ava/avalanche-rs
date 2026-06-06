@@ -9,14 +9,19 @@ repository.workspace = true
 publish.workspace = true
 description = "P2P networking: TLS transport + node identity + IP signing (byte-exact port of network/peer) (M2 / specs 05 §1.6, §4)."
 
-# Wave B scope (M2.7–M2.10): TLS + identity layer only. Depends solely on M0
-# crates (ava-crypto/ava-types). Intentionally does NOT depend on ava-message
-# (built in parallel) — it defines its own error enum (specs/05 §8).
+# Wave B (M2.7–M2.10): TLS + identity. Wave C (M2.11+): the peer runtime, which
+# consumes the wire codec (Creator/InboundMessage) + the version-compat rule, so
+# ava-network now depends on ava-message + ava-version (it still keeps its own
+# error enum per specs/05 §8).
 [dependencies]
 ava-crypto = { path = "../ava-crypto" }
 ava-types = { path = "../ava-types" }
+ava-message = { path = "../ava-message" }
+ava-version = { path = "../ava-version" }
 
 thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
 x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 arc-swap = { workspace = true }

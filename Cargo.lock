@@ -408,8 +408,11 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "assert_matches",
+ "async-trait",
  "ava-crypto",
+ "ava-message",
  "ava-types",
+ "ava-version",
  "hex",
  "rcgen",
  "ring",
@@ -420,6 +423,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "x509-parser",
 ]
 
@@ -3080,6 +3084,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
