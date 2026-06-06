@@ -16,10 +16,11 @@ use std::sync::Arc;
 use ava_message::builder::Creator;
 use ava_message::codec::MsgBuilder;
 use ava_types::node_id::NodeId;
-use ava_version::compatibility::Compatibility;
 use ava_version::Application;
+use ava_version::compatibility::Compatibility;
 use tokio::net::TcpListener;
 
+use crate::Identity;
 use crate::config::PeerConfig;
 use crate::network::ip_tracker::IpTracker;
 use crate::network::net_impl::NetworkImpl;
@@ -27,7 +28,6 @@ use crate::peer::ip_signer::{Clock, IpSigner, SystemClock};
 use crate::peer::testutil::RecordingRouter;
 use crate::throttling::inbound_msg_byte::InboundMsgByteThrottler;
 use crate::throttling::outbound_msg::{OutboundMsgThrottler, OutboundMsgThrottlerConfig};
-use crate::Identity;
 
 /// A live `NetworkImpl` bound to a loopback TCP port, for integration tests.
 pub struct TestNetwork {
@@ -54,8 +54,7 @@ impl TestNetwork {
         let router = Arc::new(RecordingRouter::default());
 
         // Upgrade far in the future: the pre-upgrade floor applies.
-        let upgrade_time =
-            std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000);
+        let upgrade_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000);
         let compat = Arc::new(Compatibility::new(
             Application::new("avalanchego", 1, 14, 2),
             Application::new("avalanchego", 1, 14, 0),

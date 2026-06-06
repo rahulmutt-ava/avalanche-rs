@@ -17,19 +17,20 @@
 )]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ava_message::builder::Creator;
 use ava_message::codec::MsgBuilder;
-use ava_message::frame::{read_msg_len, MAX_MESSAGE_SIZE};
+use ava_message::frame::{MAX_MESSAGE_SIZE, read_msg_len};
 use ava_types::node_id::NodeId;
-use ava_version::compatibility::Compatibility;
 use ava_version::Application;
+use ava_version::compatibility::Compatibility;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, DuplexStream};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::Identity;
 use crate::config::PeerConfig;
 use crate::peer::handle::PeerHandle;
 use crate::peer::ip_signer::{Clock, IpSigner};
@@ -37,7 +38,6 @@ use crate::peer::peer::{Direction, Peer};
 use crate::router::{AppVersion, ExternalHandler, InboundHandler};
 use crate::throttling::inbound_msg_byte::InboundMsgByteThrottler;
 use crate::throttling::outbound_msg::{OutboundMsgThrottler, OutboundMsgThrottlerConfig};
-use crate::Identity;
 
 /// A controllable Unix-seconds clock for deterministic tests.
 #[derive(Debug, Default)]
@@ -131,8 +131,7 @@ impl TestPeerBuilder {
             clock: Arc::new(TestClock::new(1_700_000_000)),
             version: Application::new("avalanchego", 1, 14, 2),
             // Upgrade far in the future: the pre-upgrade floor applies.
-            upgrade_time: std::time::UNIX_EPOCH
-                + std::time::Duration::from_secs(4_000_000_000),
+            upgrade_time: std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000),
             min_after: Application::new("avalanchego", 1, 14, 0),
             min_compatible: Application::new("avalanchego", 1, 14, 0),
             router: Arc::new(RecordingRouter::default()),

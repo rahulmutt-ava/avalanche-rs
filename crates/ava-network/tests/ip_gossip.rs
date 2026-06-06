@@ -15,10 +15,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use ava_crypto::bls::LocalSigner;
 use ava_message::proto::p2p;
-use ava_network::network::bloom::{hash, ReadFilter};
+use ava_network::Identity;
+use ava_network::network::bloom::{ReadFilter, hash};
 use ava_network::network::ip_tracker::IpTracker;
 use ava_network::peer::ip::UnsignedIp;
-use ava_network::Identity;
 use ava_types::node_id::NodeId;
 
 /// Build a valid `ClaimedIpPort` signed by a fresh staking identity.

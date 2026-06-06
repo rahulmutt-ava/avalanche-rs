@@ -121,8 +121,8 @@ impl IpTracker {
         let max_ts = now_unix.saturating_add(crate::config::MAX_CLOCK_DIFFERENCE.as_secs());
         signed.verify(&cert, max_ts)?;
 
-        let tx_id =
-            ava_types::id::Id::from_slice(&claimed.tx_id).unwrap_or_else(|_| ava_types::id::Id::default());
+        let tx_id = ava_types::id::Id::from_slice(&claimed.tx_id)
+            .unwrap_or_else(|_| ava_types::id::Id::default());
 
         let claim = ClaimedIp {
             addr: SocketAddr::new(ip, port),
@@ -151,11 +151,7 @@ impl IpTracker {
     /// # Errors
     /// [`Error::BloomSaltTooLong`] if `salt` exceeds `maxBloomSaltLen` (32);
     /// any bloom-parse error is surfaced as [`Error::MalformedHandshake`].
-    pub fn peers(
-        &self,
-        filter_bytes: &[u8],
-        salt: &[u8],
-    ) -> Result<Vec<p2p::ClaimedIpPort>> {
+    pub fn peers(&self, filter_bytes: &[u8], salt: &[u8]) -> Result<Vec<p2p::ClaimedIpPort>> {
         if salt.len() > MAX_BLOOM_SALT_LEN {
             return Err(Error::BloomSaltTooLong(salt.len()));
         }

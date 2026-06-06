@@ -28,13 +28,13 @@
 //! atomics.
 
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 
 use ava_crypto::staking::Certificate;
 use ava_message::builder::OutboundMsgBuilder;
 use ava_message::codec::{MsgBuilder, OutboundMessage};
-use ava_message::frame::{read_msg_len, MAX_MESSAGE_SIZE};
+use ava_message::frame::{MAX_MESSAGE_SIZE, read_msg_len};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use bytes::Bytes;

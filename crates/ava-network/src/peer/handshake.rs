@@ -11,8 +11,8 @@
 //! gossip handling are layered in over M2.15–M2.17; this module starts with the
 //! M2.14 scaffolding (set `got_handshake`, reply `PeerList`, handle ping/pong).
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use ava_message::builder::OutboundMsgBuilder;
 use ava_message::proto::p2p;

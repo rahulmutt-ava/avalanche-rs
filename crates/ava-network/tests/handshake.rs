@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use ava_message::ops::Op;
 use ava_network::peer::testutil::{
-    read_one_frame, write_one_frame, HandshakeOverrides, PeerHarness,
+    HandshakeOverrides, PeerHarness, read_one_frame, write_one_frame,
 };
 use ava_version::Application;
 
@@ -37,7 +37,9 @@ async fn handshake_then_peerlist_completes() {
 
     // Send our (valid) Handshake to the peer.
     let hs = h.build_handshake(HandshakeOverrides::default());
-    write_one_frame(&mut remote, &hs).await.expect("send handshake");
+    write_one_frame(&mut remote, &hs)
+        .await
+        .expect("send handshake");
 
     // The peer must reply with a PeerList.
     let reply = read_one_frame(&mut remote).await.expect("peer reply");
@@ -48,7 +50,9 @@ async fn handshake_then_peerlist_completes() {
 
     // Now send our PeerList to finish the handshake.
     let pl = h.build_peer_list();
-    write_one_frame(&mut remote, &pl).await.expect("send peerlist");
+    write_one_frame(&mut remote, &pl)
+        .await
+        .expect("send peerlist");
 
     tokio::time::timeout(Duration::from_secs(5), peer.finished_handshake())
         .await

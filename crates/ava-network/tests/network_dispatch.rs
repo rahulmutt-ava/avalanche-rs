@@ -14,8 +14,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ava_network::network::testutil::TestNetwork;
 use ava_network::network::Network;
+use ava_network::network::testutil::TestNetwork;
 
 /// Two networks on loopback connect: A manually-tracks B, dials it, and both
 /// reach `connected` (B appears in A's connected set).

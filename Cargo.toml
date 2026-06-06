@@ -82,6 +82,9 @@ ring = "0.17"
 # tree + TaskTracker graceful drain; async traits for the handler surfaces.
 tokio-util = { version = "0.7", features = [ "rt" ] }
 async-trait = "0.1"
+# NAT traversal (specs/05 §6): UPnP IGD discovery + port mapping. UPnP-only;
+# NAT-PMP/PCP probe falls through to NoRouter (matches Go's GetRouter order).
+igd-next = "0.17.1"
 futures = "0.3"
 
 # Key hygiene

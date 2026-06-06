@@ -112,7 +112,10 @@ impl ReadFilter {
             .get(entries_offset..)
             .ok_or(BloomError::TooFewEntries)?
             .to_vec();
-        Ok(ReadFilter { hash_seeds, entries })
+        Ok(ReadFilter {
+            hash_seeds,
+            entries,
+        })
     }
 
     /// Returns whether `hash` is (possibly) present (Go `ReadFilter.Contains`).

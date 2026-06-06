@@ -28,14 +28,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::Result;
 use crate::config::PeerConfig;
 use crate::dialer::Dialer;
-use crate::network::ip_tracker::{IpTracker, PEER_LIST_BLOOM_RESET_FREQ, PEER_LIST_PULL_GOSSIP_FREQ};
+use crate::network::ip_tracker::{
+    IpTracker, PEER_LIST_BLOOM_RESET_FREQ, PEER_LIST_PULL_GOSSIP_FREQ,
+};
 use crate::network::peer_set::PeerSet;
-use crate::network::tracked_ip::{TrackedIp, INITIAL_RECONNECT_DELAY};
+use crate::network::tracked_ip::{INITIAL_RECONNECT_DELAY, TrackedIp};
 use crate::peer::peer::{Direction, Peer};
 use crate::peer::upgrader::Upgrader;
-use crate::Result;
 
 /// How often the dialer scans the tracked-IP table for peers to (re)connect.
 const DIAL_SCAN_INTERVAL: Duration = Duration::from_millis(250);
@@ -53,7 +55,8 @@ pub struct NetworkImpl {
     tracked_ips: Mutex<std::collections::HashMap<NodeId, TrackedIp>>,
     connecting: Arc<PeerSet>,
     connected: Arc<PeerSet>,
-    conn_upgrade_throttler: Arc<crate::throttling::inbound_conn_upgrade::InboundConnUpgradeThrottler>,
+    conn_upgrade_throttler:
+        Arc<crate::throttling::inbound_conn_upgrade::InboundConnUpgradeThrottler>,
     net_token: CancellationToken,
     tasks: TaskTracker,
 }
@@ -70,11 +73,12 @@ impl NetworkImpl {
         let server_upgrader = Upgrader::server(server_cfg);
         let client_upgrader = Upgrader::client(client_cfg);
 
-        let conn_upgrade_throttler =
-            Arc::new(crate::throttling::inbound_conn_upgrade::InboundConnUpgradeThrottler::new(
+        let conn_upgrade_throttler = Arc::new(
+            crate::throttling::inbound_conn_upgrade::InboundConnUpgradeThrottler::new(
                 Duration::from_secs(10),
                 256,
-            ));
+            ),
+        );
 
         Ok(Arc::new(NetworkImpl {
             ip_tracker: Arc::clone(&peer_config.ip_tracker),
@@ -347,7 +351,6 @@ impl super::Network for NetworkImpl {
         }
         sent
     }
-
 
     fn gossip(
         &self,

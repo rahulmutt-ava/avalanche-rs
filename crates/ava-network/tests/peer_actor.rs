@@ -17,7 +17,7 @@ use std::time::Duration;
 use ava_message::codec::MsgBuilder;
 use ava_message::frame::MAX_MESSAGE_SIZE;
 use ava_message::ops::Op;
-use ava_network::peer::testutil::{read_one_frame, TestPeerBuilder};
+use ava_network::peer::testutil::{TestPeerBuilder, read_one_frame};
 use tokio::io::AsyncWriteExt;
 
 /// The first frame a peer writes MUST decode to a `Handshake` op (`specs/05`
@@ -26,9 +26,7 @@ use tokio::io::AsyncWriteExt;
 async fn write_task_sends_handshake_first() {
     let (mut remote, peer) = TestPeerBuilder::new().spawn_over_duplex();
 
-    let frame = read_one_frame(&mut remote)
-        .await
-        .expect("read first frame");
+    let frame = read_one_frame(&mut remote).await.expect("read first frame");
 
     let mb = MsgBuilder::default();
     let (_msg, _saved, op) = mb.unmarshal(&frame).expect("decode first frame");

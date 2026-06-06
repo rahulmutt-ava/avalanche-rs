@@ -15,14 +15,17 @@ use std::time::Duration;
 
 use ava_message::ops::Op;
 use ava_network::peer::testutil::{
-    read_one_frame, write_one_frame, HandshakeOverrides, PeerHarness,
+    HandshakeOverrides, PeerHarness, read_one_frame, write_one_frame,
 };
 use ava_version::Application;
 
 /// Drive a peer through the full handshake, leaving it `finished_handshake`.
 async fn complete_handshake(
     h: &mut PeerHarness,
-) -> (tokio::io::DuplexStream, ava_network::peer::handle::PeerHandle) {
+) -> (
+    tokio::io::DuplexStream,
+    ava_network::peer::handle::PeerHandle,
+) {
     let (mut remote, peer) = h.spawn();
     // Peer's Handshake.
     let _ = read_one_frame(&mut remote).await.expect("peer handshake");
@@ -66,11 +69,16 @@ async fn ping_carries_uptime_and_pong_records_rtt() {
 
     // Reply with a Pong — must not close the connection (a Ping was outstanding).
     let pong = h.build_pong();
-    write_one_frame(&mut remote, &pong).await.expect("send pong");
+    write_one_frame(&mut remote, &pong)
+        .await
+        .expect("send pong");
 
     // Give the read task a moment; the peer stays open.
     tokio::task::yield_now().await;
-    assert!(!peer.closed_now(), "solicited pong keeps the connection open");
+    assert!(
+        !peer.closed_now(),
+        "solicited pong keeps the connection open"
+    );
 
     peer.close();
 }
@@ -111,8 +119,7 @@ async fn unsolicited_pong_closes() {
 async fn should_disconnect_on_clock_crossing_upgrade() {
     // upgrade_time = epoch + 1_700_000_100; the peer reports 1.13.5 which is
     // >= the pre-upgrade floor (1.13.0) but < the post-upgrade floor (1.14.0).
-    let upgrade_time =
-        std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_100);
+    let upgrade_time = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_100);
     let mut h = PeerHarness::new()
         .with_upgrade_time(upgrade_time)
         .with_floors(
