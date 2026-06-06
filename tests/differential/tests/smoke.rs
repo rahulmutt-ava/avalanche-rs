@@ -9,6 +9,12 @@
 //! `ava-differential` crate stays buildable-&-green and the CI `differential`
 //! job has a target. Named `differential_*` so the nextest CI override leashes it.
 
+// The networking dev-deps (ava-network/message/crypto/types/version, tokio*) are
+// used only by the `interop_handshake` integration target (M2.22); per the
+// established `unused_crate_dependencies` idiom, each integration-test file that
+// does not consume them opts out of the per-binary false positive.
+#![allow(unused_crate_dependencies)]
+
 use arbitrary::{Arbitrary, Unstructured};
 use ava_differential::observation::Observation;
 use ava_differential::{Action, Binary, LockstepDriver, NetworkConfig, Program};

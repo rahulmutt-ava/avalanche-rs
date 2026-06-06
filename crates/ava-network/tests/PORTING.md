@@ -85,9 +85,36 @@ runtime task #23 in `specs/17` §2).
   `SystemClock` (the loopback handshake needs `my_time` close to the signed-IP
   timestamp); the per-peer unit harness (`peer::testutil`) uses an injectable
   `TestClock` for the deterministic ping-interval / clock-crossing tests.
-- **Deferred to later M2 tasks:** `avalanche_network_*` metrics
-  (M2.20), `prop::handshake_reaches_connected` (M2.21), and the live-Fuji
-  `differential::interop_handshake` (M2.22).
+- **`differential::interop_handshake` (M2.22, `specs/05` §9.9 / `specs/26` §9.4 /
+  `specs/02` §9) lives in the `ava-differential` crate**
+  (`tests/differential/tests/interop_handshake.rs`), not here, so the recorded
+  fallback can drive the *real* `ava-network` peer actor + `ava-message` codec
+  end-to-end through the public `peer::testutil` surface (`TestPeerBuilder`,
+  `read_one_frame`/`write_one_frame`) + `Peer::spawn` + `upgrader::
+  node_id_from_cert_der`. **No new `ava-network` test helper was needed** — the
+  M2.14–M2.21 testutil API already exposes everything (the only subtlety is that
+  the peer-under-test verifies the signed IP against the cert passed to
+  `Peer::spawn`, so the transcript ships the Go peer's leaf cert DER and the
+  replay presents it).
+  - **Two arms.** (1) `differential_interop_handshake` — the per-PR/offline
+    **recorded fallback**: replays a Go-derived transcript and asserts the Rust
+    side latches `finished_handshake` + fires `connected` exactly once with no
+    protocol error. (2) `differential_interop_handshake_live` — the **live arm**
+    behind the `interop` Cargo feature + `#[ignore]` (env `AVA_INTEROP_FUJI_ADDR`/
+    `AVA_INTEROP_FUJI_NODE_ID`/`AVA_INTEROP_HOLD_SECS`); never runs in CI / this
+    sandbox, a scheduled/nightly job dials a real Fuji peer.
+  - **Transcript provenance (`tests/differential/tests/fixtures/fuji_transcript.bin`):**
+    Go-emitted by a scratch program run against avalanchego
+    `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (Go 1.25.9) using `staking.
+    NewTLSCert()` + `network/peer.UnsignedIP.Sign` + `message.Creator.Handshake/
+    PeerList`; the scratch program was deleted after capture. The committed proto
+    bytes are the same byte-exact Go form as the `tests/vectors/message/
+    {handshake,peerlist}.json` goldens, with a *real* signature/cert pair so the
+    signed-IP verification passes. A true **live-captured** Fuji transcript is the
+    gated/nightly follow-up (the live arm + cross-cutting X.15/X.22).
+- **Deferred to later M2 tasks:** none remaining in the test surface — M2.20
+  (`avalanche_network_*` metrics) and M2.21 (`prop::handshake_reaches_connected`)
+  are complete; the live-Fuji arm of M2.22 is the only env-gated/nightly item.
 - **NAT-PMP/PCP is deferred (M2.19).** `igd-next` covers only the UPnP IGD path;
   the Go reference probes NAT-PMP only as a *secondary* fallback after UPnP
   (`nat.getPMPRouter`), and CI has no PMP gateway either way, so `get_pmp_router`
