@@ -11,16 +11,21 @@
 //! §2 averager note). These are scraped by dashboards: a rename is a protocol
 //! break (`specs/18` §3).
 //!
-//! ## Wiring status (M2.20)
+//! ## Wiring status (M2.20 → M2.20b)
 //!
-//! Registration + exact names/labels is complete. Live increments belong in the
-//! peer read/write tasks (`peer::peer::run_read`/`run_write`): the read task
-//! calls [`PeerMetrics::observe_received`] / [`PeerMetrics::observe_failed_to_parse`],
-//! the write task calls [`PeerMetrics::observe_sent`] /
-//! [`PeerMetrics::observe_failed_to_send`]. Those tasks do not yet thread a
-//! `PeerMetrics` handle (threading it touches the peer-actor constructor wired
-//! in M2.14); until then the increment methods exist and are exercised by the
-//! parity test, and the call sites carry a `// metrics:` note. Registration is
+//! Registration + exact names/labels is complete. M2.20b threaded a
+//! `PeerMetrics` handle through [`PeerConfig`](crate::config::PeerConfig)
+//! (`with_peer_metrics`) into the peer read/write tasks:
+//!
+//! - the read task (`peer::peer::handle_inbound`) calls
+//!   [`PeerMetrics::observe_received`] on a parsed frame and
+//!   [`PeerMetrics::observe_failed_to_parse`] on a parse error;
+//! - the write task (`peer::peer::write_frame`) calls [`PeerMetrics::observe_sent`]
+//!   on a successful write and [`PeerMetrics::observe_failed_to_send`] on a
+//!   write error.
+//!
+//! The handle is `Option`-typed in `PeerConfig`, so a peer built without a
+//! metrics registry simply no-ops the observations. Registration is
 //! unconditional.
 
 use prometheus::{Counter, CounterVec, Opts, Registry};
@@ -183,16 +188,16 @@ impl PeerMetrics {
     /// Records a successfully-sent message of `op` carrying `wire_bytes` on the
     /// wire and `saved_bytes` saved by compression.
     ///
-    /// metrics: wired at `peer::peer::run_write` once the write task is threaded
-    /// a `PeerMetrics` handle (M2.14 actor constructor).
+    /// metrics (M2.20b): called from `peer::peer::write_frame` on a successful
+    /// frame write (the handshake and every queued message).
     pub fn observe_sent(&self, op: Op, compressed: bool, wire_bytes: f64, saved_bytes: f64) {
         self.observe(IO_SENT, op, compressed, wire_bytes, saved_bytes);
     }
 
     /// Records a successfully-received message of `op`.
     ///
-    /// metrics: wired at `peer::peer::run_read` once the read task is threaded a
-    /// `PeerMetrics` handle.
+    /// metrics (M2.20b): called from `peer::peer::handle_inbound` on a
+    /// successfully-parsed inbound frame.
     pub fn observe_received(&self, op: Op, compressed: bool, wire_bytes: f64, saved_bytes: f64) {
         self.observe(IO_RECEIVED, op, compressed, wire_bytes, saved_bytes);
     }

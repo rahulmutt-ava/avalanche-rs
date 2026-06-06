@@ -35,6 +35,7 @@ pub struct TestNetwork {
     node_id: NodeId,
     listen_addr: SocketAddr,
     router: Arc<RecordingRouter>,
+    registry: prometheus::Registry,
 }
 
 impl TestNetwork {
@@ -70,29 +71,43 @@ impl TestNetwork {
         ));
         let ip_tracker = Arc::new(IpTracker::new());
 
-        let peer_config = Arc::new(PeerConfig::new(
-            1,
-            node_id,
-            identity,
-            listen_addr,
-            Application::new("avalanchego", 1, 14, 2),
-            creator,
-            router.clone(),
-            compat,
-            ip_signer,
-            outbound,
-            inbound,
-            ip_tracker,
-            clock,
-        ));
+        // Wire the live `avalanche_network_*` metrics (M2.20b): register the
+        // connection-level + per-peer families into a fresh registry, attach the
+        // per-peer handle to the `PeerConfig`, push the byte-throttler "remaining"
+        // gauges, and hand the connection-level set to the network.
+        let registry = prometheus::Registry::new();
+        let metrics = crate::metrics::Metrics::new(&registry).expect("network metrics");
+        let peer_metrics = crate::peer::metrics::PeerMetrics::new(&registry).expect("peer metrics");
+        inbound.set_metrics(&metrics);
 
-        let network = NetworkImpl::new(peer_config, listener).expect("network");
+        let peer_config = Arc::new(
+            PeerConfig::new(
+                1,
+                node_id,
+                identity,
+                listen_addr,
+                Application::new("avalanchego", 1, 14, 2),
+                creator,
+                router.clone(),
+                compat,
+                ip_signer,
+                outbound,
+                inbound,
+                ip_tracker,
+                clock,
+            )
+            .with_peer_metrics(peer_metrics),
+        );
+
+        let network =
+            NetworkImpl::new_with_metrics(peer_config, listener, metrics).expect("network");
 
         TestNetwork {
             network,
             node_id,
             listen_addr,
             router,
+            registry,
         }
     }
 
@@ -118,5 +133,12 @@ impl TestNetwork {
     #[must_use]
     pub fn router(&self) -> Arc<RecordingRouter> {
         Arc::clone(&self.router)
+    }
+
+    /// The Prometheus registry the `avalanche_network_*` metrics are registered
+    /// into, so tests can `gather()` and assert live increments (M2.20b).
+    #[must_use]
+    pub fn registry(&self) -> &prometheus::Registry {
+        &self.registry
     }
 }
