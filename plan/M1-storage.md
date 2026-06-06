@@ -291,9 +291,37 @@
 >   dev-dep `tempfile`. `Cargo.lock` updated (pulls firewood + sha3/keccak under ethhash). These are
 >   git deps — `cargo deny`/Bazel `crate_universe` may need a git-source allowance (flag for X).
 >
-> **Still open (M1):** exit gate **M1.26** (last — refresh each crate's `tests/PORTING.md`, drive all
-> named exit tests green, run the 4-command buildable-&-green invariant). All implementation tasks
-> M1.1–M1.25 are ✅. Fuzz nightly CI wiring remains an X.2/X.16 follow-up.
+> **Status (2026-06-06, M1 Wave 7 — MILESTONE COMPLETE):** single agent did the **M1.26 exit gate**:
+> created all 4 `tests/PORTING.md` matrices (seeded from `go test -list` at avalanchego rev
+> `fb174e8925`) and re-confirmed the buildable-&-green invariant. Row counts (all `wip` = **0**):
+> ava-database 100 ported / 18 na; ava-merkledb 165 ported / 7 na; ava-blockdb 27 / 0; ava-archivedb
+> 10 / 0. `na` reasons: leveldb/pebbledb backends → rocksdb (00 §4.4); `Benchmark*` perf-only;
+> versiondb `SetDatabase` (typed base, not runtime-swappable); linkeddb not a full `Database` (04
+> §10.6); generated mock pkg → `mockall`; `onEvictCache` → `lru` crate; internal Prometheus wiring →
+> `ava-node`. **Exit gate GREEN: 235 tests pass, `avalanchers --version`=`avalanchers/1.14.2`,
+> clippy/fmt clean.** All named exit tests confirmed: `run_database_suite`+`db_oracle_btreemap` (every
+> backend), `run_heightindex_suite_{memdb,meterdb}`, `golden::{merkledb_root,merkledb_proof,range_proof,
+> firewood_ethhash_root}`, `prop::{merkle_order_independent_root,blockdb_roundtrip}`.
+>
+> **🎉 M1 STORAGE COMPLETE** — all tasks M1.1–M1.26 ✅. Storage tier (T1) done: `ava-database` (all 9
+> backend families + migrate), `ava-merkledb` (trie/proofs/sync/firewood SHA+ethhash), `ava-blockdb`,
+> `ava-archivedb`. **R2** (Go-dir import, scoped) and **R3** (firewood link/build) retired for the
+> storage tier. Next milestone: **M2 networking** (`ava-message`, `ava-network` — T2a wire; depends on
+> M0 + the proto pipeline, both done).
+>
+> **Findings recorded during Wave 7 (specs/plan corrections):**
+> - **`x/merkledb` path correction:** the classic path-based trie lives at Go `x/merkledb` (rev
+>   `fb174e8925`), NOT `database/merkle/` (which is the *firewood-backed* merkle home; merkle sync =
+>   `database/merkle/sync`, firewood-backed sync = `database/merkle/firewood/syncer`). The ava-merkledb
+>   PORTING matrix was seeded from `x/merkledb` + `database/merkle/sync` + `database/merkle/firewood/syncer`.
+>   (The M1 header and a few task lines say `x/merkledb` already; the M1.26 task body's `database/merkle`
+>   wording is the imprecise one.)
+> - **`cargo xtask porting-report` is still a stub** (defers matrix aggregation to tier-X task **X.20**);
+>   it does NOT parse the matrices or fail on `wip` rows yet, so the gate's wip-detection is currently a
+>   manual grep. Implement (or formally defer) under X.20.
+> - **Final-gate worktrees should branch from the tip of `main`**, not an intermediate wave commit (the
+>   M1.26 agent branched from Wave-5 `25ebd3e` and had to merge `main` in to pick up Wave-6 firewood;
+>   it was a clean fast-forward, but branch-from-tip avoids the foot-gun).
 
 ---
 
@@ -615,13 +643,13 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo xtask test-fuzz` (smoke, brief per 02 §8) → PASS (no crash).
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: cargo-fuzz op-stream + node-codec target + corpus (02 §8)"`
 
-### Task M1.26: Milestone exit gate
+### Task M1.26: Milestone exit gate ✅ COMPLETED
 **Crate:** all M1 crates  ·  **Depends on:** M1.1–M1.25  ·  **Spec:** 02 §13, 00 §1 (BUILDABLE-&-GREEN invariant)
 **Files:**
 - Modify: `crates/ava-database/tests/PORTING.md`, `crates/ava-merkledb/tests/PORTING.md`, `crates/ava-blockdb/tests/PORTING.md`, `crates/ava-archivedb/tests/PORTING.md`
 - Create: any missing `PORTING.md` matrix (Go test → Rust counterpart → status)
 
-- [ ] **Step 1 — Red:** Add/refresh each crate's `tests/PORTING.md` matrix (seed via `go test -list '.*'` over `database/`, `x/merkledb`, `x/blockdb`, `x/archivedb`, `database/merkle/sync`, 02 §10.1) and mark any remaining `wip` rows — these are the red items.
+- [ ] **Step 1 — Red:** Add/refresh each crate's `tests/PORTING.md` matrix (seed via `go test -list '.*'` over `database/`, `x/merkledb` (the classic path-based trie — NOT `database/merkle/`, which is firewood-backed), `database/merkle/sync` + `database/merkle/firewood/syncer`, `x/blockdb`, `x/archivedb`, 02 §10.1) and mark any remaining `wip` rows — these are the red items.
 - [ ] **Step 2 — Confirm red:** Run `cargo xtask porting-report` → expect remaining `wip` rows listed (or none if fully ported).
 - [ ] **Step 3 — Green:** Drive every named exit test green and resolve `wip` rows to `ported`/`na` (with reason). Confirm the full exit gate:
   - `cargo build --workspace`
