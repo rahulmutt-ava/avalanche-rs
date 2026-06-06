@@ -26,11 +26,20 @@ tokio = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 ring = { workspace = true }
+# CancellationToken for the inbound byte throttler acquire-cancel path (M2.13).
+tokio-util = { workspace = true }
+# Single-lock per-IP cooldown map + global token bucket for the conn-upgrade
+# throttler (M2.13). DashMap is intentionally avoided — the Go reference guards
+# all state under one mutex, so parking_lot::Mutex<HashMap> is a faithful,
+# dependency-free port (no governor either: a hand-rolled token bucket matches
+# Go's bounded-channel semantics exactly).
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
-# TLS handshake tests (M2.9/M2.10).
-tokio = { workspace = true, features = [ "io-util" ] }
+# TLS handshake tests (M2.9/M2.10); macros/time/rt for the throttler tests.
+tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+tokio-util = { workspace = true }
 # rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
 rcgen = { workspace = true }
 assert_matches = { workspace = true }

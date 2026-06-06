@@ -28,6 +28,7 @@
 pub mod error;
 pub mod identity;
 pub mod peer;
+pub mod throttling;
 
 pub use error::{Error, Result};
 pub use identity::Identity;
