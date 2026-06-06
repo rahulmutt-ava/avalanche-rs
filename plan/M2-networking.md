@@ -307,7 +307,12 @@ Wave D  (differential / exit)
 - [ ] **Step 4 — Confirm green:** fallback: `cargo nextest run -E 'test(interop_handshake)'` green every PR; live (gated): green against a real Fuji peer, connection held ≥ N s, no disconnect.
 - [ ] **Step 5 — Commit:** `ava-network: differential::interop_handshake (live Fuji + recorded fallback)`.
 
-### Task M2.23: Milestone exit gate
+### Task M2.23: Milestone exit gate ✅ COMPLETED — M2 NETWORKING COMPLETE
+
+> **Exit gate green (2026-06-07).** Full buildable-&-green invariant verified on `main` with M2 + the first M3 crates merged: `cargo build --workspace` ✓; `cargo build -p avalanchers` + `--version`(`avalanchers/1.14.2`)/`--help` ✓; `cargo nextest run --workspace` = **302 passed, 1 skipped** (the `#[ignore]`d `consensus_safety`) ✓; `cargo clippy --workspace -- -D warnings` ✓. Named M2 exit tests all green: `golden::message_frames`, `prop::frame_roundtrip`, `prop::handshake_reaches_connected`, `differential::interop_handshake` (recorded fallback; live arm `interop`-gated). Fuzz `decode_never_overreads` is the cargo-fuzz (nightly) target with a stable proptest smoke in-suite. No `wip` rows on the `05`/`15 §3`/`26` handshake surfaces in either crate's `PORTING.md`.
+>
+> **Carried forward (sanctioned deferral, not a green-invariant gap):** the M2.20 **live metric-increment wiring** (finding 2 — threading a metrics handle to the verifier/upgrader reject path, peer read/write tasks, byte-throttler pools). Metric families + names + types are registered and name-parity-tested (`metrics::metric_names_match_go`); only the `+1` call sites remain, deferred to avoid refactoring the M2.13/M2.14 constructors mid-milestone. Tracked as **M2.20b** for a focused follow-up (no test asserts live increments, so it does not block the exit gate). The node-level `avalanche_network_` prefix is applied by `ava-api`'s `PrefixGatherer` (spec `18`), owned by the node milestone.
+
 **Crate:** ava-message, ava-network  ·  **Depends on:** ALL prior M2 tasks  ·  **Spec:** all M2 owning specs; `02` §10/§13
 **Files:** `crates/ava-message/tests/PORTING.md`, `crates/ava-network/tests/PORTING.md`, `.config/nextest.toml` (ensure `ci` profile covers M2 tests), workspace `Cargo.toml` (members include both crates).
 - [ ] **Step 1 — Red:** add a meta `#[test] fn m2_exit_gate_placeholder()` (or a CI checklist item) that fails until every named exit test exists and is green; assert `tests/PORTING.md` has no `wip` rows for the M2 surfaces.

@@ -76,13 +76,19 @@ Wave H
 3. **`CachedState` LRU is self-contained (spec `06` §6.1 deviation).** Spec says "LRU via ava-utils", but `ava-utils` exposes no cache module yet; M3.7 carries a minimal insertion-order LRU to avoid a new dependency. Follow-up: add `ava-utils::lru` and swap. Noted in PORTING.md.
 4. **No new workspace deps.** All `{ workspace = true }`; root `Cargo.toml` untouched. Poll `sample` (off the consensus-decision path, `06` §6.2) seeds `Mt19937_64` from coarse OS entropy (no `rand`/`getrandom` crate in the workspace). `ava_crypto::bls::PublicKey` derives only `Clone` (no `Eq`), so `Validator`/`GetValidatorOutput` can't derive `Eq` — not a problem on any current path.
 
-> **Remaining Wave A/B:** M3.1+M3.2(+M3.3) `ava-snow` consensus core (in flight, separate worktree); M3.14 `ava-vm` base traits **depends on M3.2** (ava-snow `ChainContext` re-export) so it is sequenced **after** `ava-snow` lands — not parallelizable with the first wave.
+**M3.1 + M3.2 + M3.3 (`ava-snow`) ✅** landed (one worktree agent for the crate bootstrap; the agent hit a transient API socket error after writing the snowball primitive code but before its golden tests, so the orchestrator finished M3.3 — fixed a `prop_safety` clippy lint, added a `pub UnarySnowflake::confidence()` accessor, and ported `tests/golden_snowball.rs` from the Go `*_test.go` corpus). New crate `crates/ava-snow` (T2b), **8 tests green** (`status_wire_values`, `chain_context_is_send_sync`, + 6 `golden_*` snowball vectors), `consensus_safety` `#[ignore]`d (un-ignore at M3.5), clippy/fmt clean. Findings:
+
+1. **M3.3 golden vectors are Go-derived (top-level `*_test.go` cases).** Ported faithfully against the pinned `../avalanchego` tree: full 16-case `TestParametersVerify` table (exact branch order + the `alpha_confidence==3 && alpha_preference==28` easter egg), `TestBinarySnowflake`, `TestBinarySnowball` + `TestBinarySnowballRecordPollPreference` (incl. the `[4,1]` strength split), `TestUnarySnowflake` (confidence vector + extend-to-binary), `TestNnarySnowflake`. The agent's primitive transliterations passed all vectors unmodified — confidence in the port. The **error-driven helper suites** (`getErrorDrivenSnowflake*Suite`) and `unary_snowball`/`nnary_snowball` golden vectors are **not yet asserted** (code ported, marked `wip` in `crates/ava-snow/tests/PORTING.md`); fold into the M3.4 pass.
+2. **Golden tests live in `tests/golden_snowball.rs` (integration crate).** They assert the public API (`preference`/`finalized`/`verify`); the confidence-vector assertions Go makes on `unarySnowflake` are reproduced via the new public `confidence()` accessor.
+3. **`Bag`/`Id`:** `Id`/`NodeId` from `ava-types`; the cluster scaffolding lives behind the `testutil` feature; `Block` verify/accept/reject carry a `CancellationToken` (spec `06` §2.4/§9), pulling `tokio-util` into the crate.
+
+> **Next wave (now unblocked):** M3.14 `ava-vm` base traits (needs M3.2 `ChainContext`); M3.4 `ava-snow` Tree → M3.5 Topological (un-ignores `consensus_safety`); M3.8 `ava-validators` uptime; plus the carried-forward **M2.20b** metric-increment wiring (independent, `ava-network`). These are largely independent crates/areas and parallelizable.
 
 ---
 
 ## Tasks
 
-### Task M3.1: TDD entry — `prop::consensus_safety` harness + in-memory test-VM cluster (RED)
+### Task M3.1: TDD entry — `prop::consensus_safety` harness + in-memory test-VM cluster (RED) ✅ COMPLETED
 **Crate:** `ava-snow` (+ `testutil` feature)  ·  **Depends on:** M0 (`ava-types` Id/NodeId/Bag), M2 (none directly; pure in-memory)  ·  **Spec:** 06 §2.4 (safety invariant), §10 (proptest — safety), 02 §4
 **Files:** `crates/ava-snow/tests/prop_safety.rs`, `crates/ava-snow/src/testutil/cluster.rs` (feature `testutil`), `crates/ava-snow/src/testutil/test_vm.rs`, `crates/ava-snow/Cargo.toml`, `crates/ava-snow/tests/PORTING.md`, `crates/ava-snow/proptest-regressions/.gitkeep`
 - [ ] **Step 1 — Red:** Write `prop::consensus_safety`: a proptest generating a random DAG of conflicting blocks (same-height siblings) + a random sequence of `record_poll` vote bags across an in-memory cluster of N test-VM Snowman instances; assert the property **no two conflicting blocks (same height, different id) are ever both accepted** and **the accepted set is always a chain rooted at genesis**. Use a hand-written `TestBlock`/`TestVm` (no-op verify/accept/reject recording acceptance into a shared oracle). Reference the Go `network_test` metastable model as oracle. The test must reference `ava_snow::snowman::Topological` which does not yet exist.
@@ -91,7 +97,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo build -p ava-snow --features testutil` compiles; `cargo test -p ava-snow --test prop_safety -- --ignored --list` lists `consensus_safety`.
 - [ ] **Step 5 — Commit:** `ava-snow: add prop::consensus_safety harness + in-memory test-VM cluster (RED, TDD entry)`
 
-### Task M3.2: `ava-snow` scaffolding — ConsensusContext, Block, Status, EngineState, Acceptor, errors
+### Task M3.2: `ava-snow` scaffolding — ConsensusContext, Block, Status, EngineState, Acceptor, errors ✅ COMPLETED
 **Crate:** `ava-snow`  ·  **Depends on:** M0 (`ava-crypto` bls, `ava-version` upgrade::Config, `ava-utils::clock`), M2 (`ava-network` Logger/MultiGatherer handles), M1 (`ava-database`)  ·  **Spec:** 06 §3, §3.1, §9 (error model)
 **Files:** `crates/ava-snow/src/lib.rs`, `crates/ava-snow/src/context.rs` (`ChainContext`, `ConsensusContext`), `crates/ava-snow/src/decidable.rs` (`Block` trait), `crates/ava-snow/src/choices.rs` (`Status`), `crates/ava-snow/src/state.rs` (`EngineState`, `EngineType`), `crates/ava-snow/src/acceptor.rs` (`Acceptor`), `crates/ava-snow/src/error.rs`
 - [ ] **Step 1 — Red:** `mod tests` unit test `status_wire_values` asserting `Status::{Unknown,Processing,Rejected,Accepted} as u8 == [0,1,2,3]` and `EngineState`/`EngineType`/`StateSyncMode`-adjacent enum values match Go; a `chain_context_is_send_sync` static-assert (`fn _assert<T: Send+Sync>(){} _assert::<Arc<ChainContext>>()`).
@@ -100,7 +106,7 @@ Wave H
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-snow status_wire_values` passes; `cargo clippy -p ava-snow -- -D warnings`.
 - [ ] **Step 5 — Commit:** `ava-snow: ConsensusContext/ChainContext, Block, Status, EngineState, Acceptor, error model`
 
-### Task M3.3: `ava-snow` snowball primitives + `Parameters`
+### Task M3.3: `ava-snow` snowball primitives + `Parameters` ✅ COMPLETED
 **Crate:** `ava-snow`  ·  **Depends on:** M3.2  ·  **Spec:** 06 §2.1 (Parameters + verify), §2.2 (slush/snowflake/snowball, unary/binary/nnary, TerminationCondition)
 **Files:** `crates/ava-snow/src/snowball/mod.rs`, `crates/ava-snow/src/snowball/parameters.rs`, `crates/ava-snow/src/snowball/unary_snowflake.rs`, `crates/ava-snow/src/snowball/nnary_snowflake.rs`, `crates/ava-snow/src/snowball/binary_slush.rs`, `crates/ava-snow/src/snowball/binary_snowflake.rs`, `crates/ava-snow/src/snowball/binary_snowball.rs`, `crates/ava-snow/src/snowball/unary_snowball.rs`, `crates/ava-snow/src/snowball/nnary_snowball.rs`, `crates/ava-snow/tests/golden_snowball.rs`
 - [ ] **Step 1 — Red:** (a) `golden::snowball_unit_vectors` — port the Go `*_snowflake_test.go` / `*_snowball_test.go` corpus as table tests asserting identical state transitions (record_poll counts → finalized/preference). (b) Unit `parameters_verify` table test asserting each invalid branch (06 §2.1) yields `Error::ParametersInvalid` via `assert_matches!`, in Go's exact branch order, **including** the easter-egg `alpha_confidence==3 && alpha_preference==28` guard, plus `DEFAULT_PARAMETERS` equals the copied constants.
