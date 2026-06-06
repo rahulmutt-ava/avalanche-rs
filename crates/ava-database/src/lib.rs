@@ -32,6 +32,9 @@ pub mod meterdb;
 pub mod prefixdb;
 pub mod versiondb;
 
+#[cfg(feature = "migrate")]
+pub mod migrate;
+
 #[cfg(feature = "rocksdb")]
 pub mod rocksdb;
 
