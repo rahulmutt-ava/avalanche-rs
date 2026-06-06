@@ -15,4 +15,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod error;
+pub mod ops;
 pub mod proto;
+
+pub use error::{Error, Result};
