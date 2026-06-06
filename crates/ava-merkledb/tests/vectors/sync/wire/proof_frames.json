@@ -1,0 +1,38 @@
+[
+  {
+    "name": "range_proof_request_bounded",
+    "hex": "12380a20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf12060a046b6579301a060a046b657939208010288008"
+  },
+  {
+    "name": "range_proof_request_unbounded_start",
+    "hex": "122f0a20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf1a050a037a7a7a206428808004"
+  },
+  {
+    "name": "range_proof_request_empty_start_value",
+    "hex": "12280a20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf120020012801"
+  },
+  {
+    "name": "change_proof_request_bounded",
+    "hex": "0a580a200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f201220808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f1a050a0361616122050a03626262288004308020"
+  },
+  {
+    "name": "change_proof_request_unbounded",
+    "hex": "0a4b0a200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f201220808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f28801030808040"
+  },
+  {
+    "name": "proof_response_range",
+    "hex": "120401020304"
+  },
+  {
+    "name": "proof_response_change",
+    "hex": "0a04deadbeef"
+  },
+  {
+    "name": "maybe_bytes_present",
+    "hex": "0a0568656c6c6f"
+  },
+  {
+    "name": "maybe_bytes_present_empty",
+    "hex": ""
+  }
+]

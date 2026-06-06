@@ -42,6 +42,11 @@ pub mod maybe;
 pub mod node;
 mod node_store;
 pub mod proof;
+/// State-sync protocol — `SyncDb` trait, work-heap, Syncer + proof server, and
+/// the `proto/sync` wire types (M1.19, specs 04 §3.7 / 19 §4 / 15 §3.10). Behind
+/// the `sync` feature (pulls in `prost`/`tonic`/`tokio` + the `protoc` codegen).
+#[cfg(feature = "sync")]
+pub mod sync;
 mod trie;
 pub mod view;
 
