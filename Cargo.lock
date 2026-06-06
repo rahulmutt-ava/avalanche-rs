@@ -367,6 +367,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ava-snow",
+ "ava-types",
+ "ava-validators",
+ "ava-vm",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ava-logging"
 version = "0.1.0"
 dependencies = [
