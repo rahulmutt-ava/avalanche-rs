@@ -103,6 +103,8 @@ pub struct TestPeerBuilder {
     clock: Arc<TestClock>,
     version: Application,
     upgrade_time: std::time::SystemTime,
+    min_after: Application,
+    min_compatible: Application,
     router: Arc<RecordingRouter>,
 }
 
@@ -123,6 +125,8 @@ impl TestPeerBuilder {
             // Upgrade far in the future: the pre-upgrade floor applies.
             upgrade_time: std::time::UNIX_EPOCH
                 + std::time::Duration::from_secs(4_000_000_000),
+            min_after: Application::new("avalanchego", 1, 14, 0),
+            min_compatible: Application::new("avalanchego", 1, 14, 0),
             router: Arc::new(RecordingRouter::default()),
         }
     }
@@ -148,6 +152,14 @@ impl TestPeerBuilder {
         self
     }
 
+    /// Override the post-upgrade / pre-upgrade compatibility floors.
+    #[must_use]
+    pub fn floors(mut self, min_after: Application, min_compatible: Application) -> Self {
+        self.min_after = min_after;
+        self.min_compatible = min_compatible;
+        self
+    }
+
     /// The shared clock (so tests can advance time).
     #[must_use]
     pub fn clock(&self) -> Arc<TestClock> {
@@ -169,12 +181,10 @@ impl TestPeerBuilder {
         let ip_signer = Arc::new(IpSigner::new(identity.clone(), bls, clock.clone()));
         let creator = Arc::new(Creator::new(MsgBuilder::default()));
 
-        let min_compatible = Application::new("avalanchego", 1, 14, 0);
-        let min_after = Application::new("avalanchego", 1, 14, 0);
         let compat = Arc::new(Compatibility::new(
             self.version.clone(),
-            min_after,
-            min_compatible,
+            self.min_after.clone(),
+            self.min_compatible.clone(),
             self.upgrade_time,
         ));
 
@@ -297,6 +307,24 @@ impl PeerHarness {
         }
     }
 
+    /// Rebuild with a different compatibility upgrade time (preserves the shared
+    /// clock + router). Use before [`PeerHarness::spawn`].
+    #[must_use]
+    pub fn with_upgrade_time(mut self, t: std::time::SystemTime) -> Self {
+        self.builder = std::mem::take(&mut self.builder).upgrade_time(t);
+        self.cfg = self.builder.build_config();
+        self
+    }
+
+    /// Rebuild with explicit compatibility floors (preserves the shared clock +
+    /// router). Use before [`PeerHarness::spawn`].
+    #[must_use]
+    pub fn with_floors(mut self, min_after: Application, min_compatible: Application) -> Self {
+        self.builder = std::mem::take(&mut self.builder).floors(min_after, min_compatible);
+        self.cfg = self.builder.build_config();
+        self
+    }
+
     /// The recording router (so tests can assert `connected`/`disconnected`).
     #[must_use]
     pub fn router(&self) -> Arc<RecordingRouter> {
@@ -396,6 +424,22 @@ impl PeerHarness {
     pub fn build_peer_list(&self) -> Vec<u8> {
         use ava_message::builder::OutboundMsgBuilder;
         let msg = self.cfg.creator.peer_list(&[], true).expect("peerlist");
+        msg.bytes.to_vec()
+    }
+
+    /// Build a framed `Ping{uptime}` payload.
+    #[must_use]
+    pub fn build_ping(&self, uptime: u32) -> Vec<u8> {
+        use ava_message::builder::OutboundMsgBuilder;
+        let msg = self.cfg.creator.ping(uptime).expect("ping");
+        msg.bytes.to_vec()
+    }
+
+    /// Build a framed `Pong` payload.
+    #[must_use]
+    pub fn build_pong(&self) -> Vec<u8> {
+        use ava_message::builder::OutboundMsgBuilder;
+        let msg = self.cfg.creator.pong().expect("pong");
         msg.bytes.to_vec()
     }
 }

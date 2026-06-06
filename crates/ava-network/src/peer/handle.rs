@@ -85,4 +85,10 @@ impl PeerHandle {
     pub async fn closed(&self) {
         self.closed.cancelled().await;
     }
+
+    /// `true` if the peer has fully drained (non-blocking).
+    #[must_use]
+    pub fn closed_now(&self) -> bool {
+        self.closed.is_cancelled()
+    }
 }

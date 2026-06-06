@@ -481,9 +481,20 @@ impl Peer {
     }
 
     /// Re-check version compatibility (`specs/26` §3.1). Returns `Err` to drop
-    /// the peer. The full re-check (compat + BLS PoP) is implemented in M2.16;
-    /// M2.14 keeps the connection.
+    /// the peer. Re-running `is_compatible` with the injected clock on each tick
+    /// is the fork-boundary safety mechanism: a peer that was compatible under
+    /// the pre-upgrade floor becomes incompatible the instant the clock crosses
+    /// `upgrade_time`, and is dropped on the next tick.
     pub(crate) fn should_disconnect(self: &Arc<Self>) -> crate::Result<()> {
+        let version = self.hs.lock().version.clone();
+        if let Some(v) = version {
+            if !self.is_compatible(&v) {
+                return Err(crate::error::Error::IncompatibleVersion(v.display()));
+            }
+        }
+        // The BLS-PoP re-check (caching `txid_of_verified_bls_key`) is wired
+        // once the validator-set source lands; the signed-IP TLS check already
+        // ran at handshake.
         Ok(())
     }
 }

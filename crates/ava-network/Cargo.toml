@@ -48,8 +48,10 @@ bytes = { workspace = true }
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
-# TLS handshake tests (M2.9/M2.10); macros/time/rt for the throttler tests.
-tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+# TLS handshake tests (M2.9/M2.10); macros/time/rt for the throttler tests;
+# test-util enables tokio::time::pause/advance + start_paused for the
+# deterministic ping-interval tests (M2.16).
+tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread", "test-util" ] }
 tokio-util = { workspace = true }
 # rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
 rcgen = { workspace = true }
