@@ -24,3 +24,23 @@ rust_test(
         "@crates//:arbitrary",
     ],
 )
+
+rust_test(
+    name = "interop_handshake",
+    srcs = ["tests/interop_handshake.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/fixtures/fuji_transcript.bin",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-network:ava_network",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)

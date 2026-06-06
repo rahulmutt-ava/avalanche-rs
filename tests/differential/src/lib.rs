@@ -30,3 +30,19 @@ pub use driver::LockstepDriver;
 pub use network::{Binary, NetworkConfig};
 pub use observation::Observation;
 pub use program::{Action, Program};
+
+// The networking dev-deps are consumed only by the `interop_handshake`
+// integration target (M2.22), but the crate's lib-test build links every
+// dev-dependency, so `unused_crate_dependencies` would flag them here. Reference
+// them in a test-only block to satisfy the lint (the established idiom across the
+// workspace).
+#[cfg(test)]
+mod dev_dep_uses {
+    use ava_crypto as _;
+    use ava_message as _;
+    use ava_network as _;
+    use ava_types as _;
+    use ava_version as _;
+    use tokio as _;
+    use tokio_util as _;
+}

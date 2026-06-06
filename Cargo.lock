@@ -357,6 +357,13 @@ name = "ava-differential"
 version = "0.1.0"
 dependencies = [
  "arbitrary",
+ "ava-crypto",
+ "ava-message",
+ "ava-network",
+ "ava-types",
+ "ava-version",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

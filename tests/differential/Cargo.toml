@@ -9,11 +9,28 @@ repository.workspace = true
 description = "Differential test harness: LockstepDriver + Observation vs the Go node (tier X / X.13, specs/02 §11)."
 publish = false
 
+[features]
+# Gates the *live* arm of `differential_interop_handshake` (dials a real Go Fuji
+# node at `$AVA_INTEROP_FUJI_ADDR`). Never enabled in CI / per-PR runs — only a
+# scheduled/nightly job or an explicit `--features interop` turns it on (the test
+# is also `#[ignore]`d so it never runs unless the env gate is set). The recorded
+# fallback arm runs every CI run with no feature flag.
+interop = []
+
 [dependencies]
 arbitrary = { workspace = true }
 
-# [dev-dependencies]
-# proptest = { workspace = true }  # added by X.13 with the recorded-oracle proptest
+[dev-dependencies]
+# The recorded-fallback arm of `differential_interop_handshake` (M2.22) drives the
+# real `ava-network` peer actor + `ava-message` codec offline against a Go-derived
+# transcript, so it links the networking stack as dev-deps.
+ava-network = { path = "../../crates/ava-network" }
+ava-message = { path = "../../crates/ava-message" }
+ava-crypto = { path = "../../crates/ava-crypto" }
+ava-types = { path = "../../crates/ava-types" }
+ava-version = { path = "../../crates/ava-version" }
+tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+tokio-util = { workspace = true }
 
 [lints]
 workspace = true
