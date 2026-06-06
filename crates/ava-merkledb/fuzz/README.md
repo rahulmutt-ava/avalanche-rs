@@ -22,32 +22,41 @@ shared with the stable smoke test below.
 
 `cargo fuzz build`/`run` needs a **nightly** compiler + LLVM sanitizers
 (`-Zsanitizer=address`, libFuzzer instrumentation). The repo pins **stable**
-Rust via `rust-toolchain.toml`, so you must opt in to nightly:
+Rust via `rust-toolchain.toml`, so fuzzing runs on a separate nightly toolchain.
+
+The canonical entrypoint enters the Nix `fuzz` dev shell (nightly toolchain +
+`cargo-fuzz`; see `flake.nix` `devShells.fuzz` / `scripts/nix_run.sh`) and runs
+**every** `crates/*/fuzz` target for a bounded time:
 
 ```sh
-# rustup environment (this is how the dedicated CI fuzz job runs it):
-rustup toolchain install nightly
-cargo +nightly fuzz run op_stream
-cargo +nightly fuzz run node_codec
-
-# `fuzz/rust-toolchain.toml` pins `channel = "nightly"`, so under rustup you can
-# also just run from this dir without the explicit `+nightly`:
-cd crates/ava-merkledb/fuzz && cargo fuzz run op_stream
-
-# brief smoke pass (like Go's test-fuzz), e.g. 30s:
-cargo +nightly fuzz run op_stream -- -max_total_time=30
+./scripts/run_task.sh test-fuzz        # brief smoke (-max_total_time=10 per target)
+./scripts/run_task.sh test-fuzz-long   # extended (-max_total_time=300 per target)
 ```
 
-Corpus seeds live in `corpus/<target>/` (committed); crash artifacts land in
-`artifacts/<target>/` and, when found, are committed as regression seeds.
+To drive a single target directly, enter the fuzz shell yourself:
 
-## Stable / nix dev shell — no nightly available
+```sh
+NIX_DEV_SHELL=fuzz ./scripts/nix_run.sh \
+  cargo fuzz run op_stream --fuzz-dir crates/ava-merkledb/fuzz -- -max_total_time=30
+```
 
-On the pinned stable nix dev shell the provided `cargo` is **not** a rustup shim,
-so `cargo +nightly` fails and `cargo fuzz build/run` cannot run here. `cargo fuzz
-list` still works, and `cargo build --manifest-path crates/ava-merkledb/fuzz/Cargo.toml`
-compiles the crate on stable (libfuzzer-sys builds on stable; only the sanitizer
-instrumentation at fuzz-run time needs nightly).
+Outside Nix (e.g. the dedicated CI fuzz job) a rustup nightly works too;
+`fuzz/rust-toolchain.toml` pins `channel = "nightly"`, so from this dir
+`cargo fuzz run op_stream` auto-selects it without an explicit `+nightly`.
+
+Corpus seeds live in `corpus/<target>/` (committed; a small hand-authored set —
+do **not** `cargo fuzz cmin` them, it rewrites/deletes the named seeds); crash
+artifacts land in `artifacts/<target>/` and, when found, are committed as
+regression seeds.
+
+## Stable / default nix dev shell — no nightly
+
+The **default** Nix dev shell (and any plain stable `cargo`) is not a rustup
+shim, so `cargo +nightly` fails and `cargo fuzz build/run` cannot run there —
+use the `fuzz` shell above. `cargo fuzz list` still works, and `cargo build
+--manifest-path crates/ava-merkledb/fuzz/Cargo.toml` compiles the crate on stable
+(libfuzzer-sys builds on stable; only the sanitizer instrumentation at
+fuzz-run time needs nightly).
 
 The equivalent coverage that runs in the normal `cargo nextest` gate **today** is
 the proptest smoke harness `crates/ava-merkledb/tests/prop_fuzz_smoke.rs`
@@ -59,11 +68,11 @@ through `arbitrary`:
 cargo nextest run -p ava-merkledb --all-features
 ```
 
-## CI / recommended nightly path
+## CI / nightly path
 
 The fuzz targets belong in a dedicated nightly CI job (spec §8: "runs in a
-dedicated CI job on x86-64/aarch64 Linux"). Recommended: a `test-fuzz`
-Task target that installs/uses a nightly toolchain (rustup nightly in CI, or a
-pinned `rust-bin.nightly` in `flake.nix`) and runs each target briefly
-(`cargo fuzz run <t> -- -max_total_time=<n>`), with `test-fuzz-long` for the
-extended pass. `flake.nix` / Taskfile wiring is owned by X.2 / X.16.
+dedicated CI job on x86-64/aarch64 Linux"). The wiring is in place: `flake.nix`
+exposes a nightly `devShells.fuzz`, and the `test-fuzz` / `test-fuzz-long` Task
+targets enter it (`NIX_DEV_SHELL=fuzz`) and run every `crates/*/fuzz` target via
+`xtask test-fuzz` (`cargo fuzz run <t> -- -max_total_time=<n>`; 10s smoke / 300s
+long). In CI without Nix, a rustup nightly + the same task surface works.
