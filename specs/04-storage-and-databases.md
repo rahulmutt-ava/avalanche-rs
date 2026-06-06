@@ -522,11 +522,24 @@ pub trait SyncDb: Send + Sync {
 
 `ErrInsufficientHistory`/`ErrNoEndRoot` map to enum variants. The `workheap`
 priority queue and `SimultaneousWorkLimit` concurrency port to a tokio task
-set + `BinaryHeap`. **Both `ava-merkledb` and the Firewood path implement
+set (19 §4.2 details the single-canonical-`BTreeMap` work-heap chosen under
+`#![forbid(unsafe_code)]`). **Both `ava-merkledb` and the Firewood path implement
 `SyncDb`** — note that the Go tree already has a Firewood-backed `sync.DB`
 (`database/merkle/firewood/syncer`, generic over `*RangeProof`/`struct{}`,
 `EmptyRoot = types.EmptyRootHash`), proving the sync protocol is reused for EVM
 state sync (§4.3).
+
+> **M1.19 impl note.** The `ava-merkledb` `SyncDb` impl (`SyncableTrie`) serves
+> change/range proofs at a past root from a **bounded root-keyed snapshot ring**
+> (reusing the M1.18 "proof from before/after states directly" generator), not the
+> full merkledb change-history ring; verification semantics and the
+> `InsufficientHistory`/`NoEndRoot` errors are identical. Proof *encoding* stays the
+> byte-exact hand-rolled `encode_proto` (M1.17/M1.18); the generated `prost` types
+> are used only to **decode** peer responses and to frame request/response messages
+> (verified byte-equal to Go). The `Syncer`'s network access is abstracted behind a
+> `SyncClient` transport trait (in-process `LocalClient` for tests; the real
+> `network/p2p` client lands in M2), avoiding an `async-trait` dep by returning a
+> boxed `Send` future.
 
 ---
 
@@ -1109,7 +1122,13 @@ trait GoDbSource {
 // export sidecar and parses its length-prefixed stream), RocksDbCompatSource
 // (rust-rocksdb opened in leveldb-compat mode, for the leveldb fast path).
 
-fn migrate(src: &dyn GoDbSource, dst: &RocksDb, resume_after: Option<&[u8]>) -> anyhow::Result<u64> {
+// `dst` is `&dyn DynDatabase`, NOT `&RocksDb` (confirmed M1.24): the typed
+// `Database` trait carries a GAT iterator (`Iteratee::Iter<'a>`) and is therefore
+// NOT dyn-compatible; `DynDatabase` is the object-safe facade every backend
+// (RocksDb, MemDb, …) implements. This lets tests drive the migrate logic against
+// `MemDb` while production passes `RocksDb` — the byte-exact/resume behaviour is
+// identical (the RocksDB bulk-ingest path is a perf optimization, not semantics).
+fn migrate(src: &dyn GoDbSource, dst: &dyn DynDatabase, resume_after: Option<&[u8]>) -> anyhow::Result<u64> {
     let mut count = 0u64;
     let mut batch = dst.new_batch();
     let mut last_key: Vec<u8> = Vec::new();
@@ -1135,21 +1154,28 @@ fn migrate(src: &dyn GoDbSource, dst: &RocksDb, resume_after: Option<&[u8]>) -> 
 }
 
 /// Verify the migration without trusting the copy loop.
-fn verify(dst: &RocksDb, level: VerifyLevel) -> anyhow::Result<()> {
+///
+/// `root_verifiers` is injected by the caller (confirmed M1.24): root
+/// re-derivation is pluggable via a `RootVerifier` trait (`recompute_root` +
+/// `expected_root`) so the storage tier (`ava-database`) stays free of any
+/// `ava-merkledb`/Firewood dependency. The concrete merkledb/Firewood verifiers
+/// are wired in when the CLI is assembled (M12); tests inject a stub verifier.
+fn verify(dst: &dyn DynDatabase, level: VerifyLevel,
+          root_verifiers: &[Box<dyn RootVerifier>]) -> anyhow::Result<()> {
     // roots: cheap structural re-derivation of the high-value compatibility
     // surfaces — re-read the singletons and re-hash any merkleized state.
     if level >= VerifyLevel::Roots {
         // P-Chain / X-Chain: re-read "singleton"→"last accepted" and confirm the
         // referenced block parses, and that "blockID"→PackUInt64(height) chains
         // back from it (these are flat KV — no state root to recompute, §10.3/10.4).
+        // This walk is dependency-free (flat KV only).
         check_last_accepted_chain(dst)?;
-        // SAE / EVM chains: re-open the merkledb / Firewood over the migrated DB
-        // and assert merkle_root() equals the root stored in the last block header
-        // (the on-wire compatibility surface, §3 / §4).
-        for chain in merkleized_chains(dst)? {
-            let recomputed = chain.merkle_root()?;
-            anyhow::ensure!(recomputed == chain.expected_root_from_header()?,
-                "merkle root mismatch after migration for {chain:?}");
+        // SAE / EVM chains: each injected RootVerifier re-opens its merkledb /
+        // Firewood view over the migrated DB and asserts the recomputed root equals
+        // the root stored in the last block header (the on-wire surface, §3 / §4).
+        for v in root_verifiers {
+            anyhow::ensure!(v.recompute_root(dst)? == v.expected_root(dst)?,
+                "merkle root mismatch after migration for {}", v.name());
         }
     }
     // full: count + per-pair re-read of a random/sampled subset against the source.

@@ -431,15 +431,23 @@ pub struct WorkItem {
     queued_at: Instant,
 }
 
-/// Max-heap by priority + a BTree ordered by `start` for merge/split.
+/// Single canonical BTree ordered by `start`; priority pop derived by scan.
+///
+/// > **M1.19 impl note.** Go keeps two synced containers (a `BinaryHeap` for the
+/// > priority pop *and* a `BTreeMap` over shared pointers for merge/split). That
+/// > two-views-over-shared-pointers design is not expressible under
+/// > `#![forbid(unsafe_code)]` without `Rc<RefCell<…>>`, so the Rust impl keeps a
+/// > **single canonical `BTreeMap<RangeStart, WorkItem>`** (None sorts smallest)
+/// > and derives the highest-priority pop by a bounded linear scan. Behavior is
+/// > identical: no overlapping ranges, the same adjacent-same-root coalescing, and
+/// > a highest-priority pop with FIFO tie-break.
 pub struct WorkHeap {
-    inner: BinaryHeap<Reverse<HeapKey>>,        // pop highest priority
-    sorted: BTreeMap<RangeStart, WorkItem>,     // None sorts smallest
+    sorted: BTreeMap<RangeStart, WorkItem>,     // None sorts smallest; canonical store
     closed: bool,
 }
 impl WorkHeap {
     pub fn merge_insert(&mut self, item: WorkItem) { /* coalesce adjacent same-root */ }
-    pub fn get_work(&mut self) -> Option<WorkItem> { /* pop highest priority */ }
+    pub fn get_work(&mut self) -> Option<WorkItem> { /* scan for highest priority, FIFO tie-break */ }
     pub fn keyspace_percent(&self, root: Id) -> f64 { /* truncate keys to 8 bytes */ }
 }
 

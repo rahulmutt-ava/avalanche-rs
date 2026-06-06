@@ -204,11 +204,57 @@
 >   sanctioned root edit this wave). `ava-merkledb` added crate-local `arbitrary 1` (optional, under a
 >   `fuzzing` feature) — candidate for workspace-dep promotion alongside the X.16 fuzz wiring.
 >
-> **Still open (M1):** `ava-merkledb` M1.19 (sync proto + `SyncDb` + Syncer — **now unblocked**: the
-> proto pipeline exists; reuse the `ava-database` build.rs pattern with `proto/sync/sync.proto`,
-> which has no external imports). Firewood M1.20–M1.21 (need M1.19); R2 import tool M1.24 (deps
-> M1.4 ✅, M1.14 ✅ — unblocked); exit gate M1.26. Fuzz nightly CI wiring is an X.2/X.16 follow-up
-> (the M1.25 target + stable smoke are in place).
+> **Status (2026-06-06, M1 Wave 5 landed):** fifth parallel wave merged to `main` via two
+> isolated worktree agents (distinct crates → conflict-free):
+> - **`ava-merkledb` state-sync (M1.19):** copied `proto/sync/sync.proto` (no external imports;
+>   provenance recorded) + a second `build.rs` mirroring the Wave-4 rpcdb pipeline (gated on
+>   `CARGO_FEATURE_SYNC`); `SyncDb` trait (04 §3.7) + `SyncableTrie` impl; `WorkHeap`
+>   (`Priority{Low,Med,High,Retry}` + range-coalescing) faithfully ported from Go `workheap.go`;
+>   `Syncer` (`ArcSwap<Id>` target + tokio `Notify` for `sync.Cond` + bounded task set + rayon
+>   verify pool + `update_sync_target` re-queue) + `ProofServer` (port of `network_server.go` with
+>   key/bytes caps + change→range fallback on insufficient history) + a `SyncClient` transport trait
+>   (`LocalClient` in-process impl; real p2p client is M2). Green: **`golden::sync_proof_wire`**
+>   (REAL Go-extracted frames, rev `fb174e8925`), `prop::sync_proof_roundtrip` (+ mid-sync
+>   `update_sync_target` → final root == new target), `prop::workheap_invariants`.
+> - **`ava-database` R2 import tool (M1.24):** `migrate` feature — `GoDbSource` trait (lexicographic,
+>   no byte transformation), `migrate(src, dst: &dyn DynDatabase, resume_after)` driver (64 MiB flush
+>   window + `MIGRATION_CURSOR_KEY` resume), `RocksDbCompatSource` (real leveldb-dir reader, gated on
+>   `rocksdb` feature), `RustyLevelDbSource` + Pebble-sidecar **spawn** as documented stubs (the
+>   Pebble length-prefixed frame **parser** is real + tested), `verify(level)` with `VerifyLevel`
+>   and a **pluggable `RootVerifier`** trait (decoupled from `ava-merkledb`), `docs/migration.md`.
+>   Green: `unit::{migrate_preserves_bytes, migrate_resumable, verify_roots_detects_mismatch,
+>   verify_none_is_noop}`.
+>
+> Workspace after Wave 5: **231 tests pass** (`--all-features`; 212 after Wave 4), `cargo build
+> --workspace --all-features` / `-p avalanchers`, `cargo clippy --workspace --all-targets
+> --all-features -- -D warnings`, `cargo fmt --all --check`, doctests — all clean.
+>
+> **Findings recorded during Wave 5 (specs updated where noted):**
+> - **WorkHeap single-canonical-store (spec 19 §4.2 updated):** Go's two synced containers
+>   (`BinaryHeap` + `BTreeMap` over shared pointers) aren't expressible under `#![forbid(unsafe_code)]`
+>   without `Rc<RefCell>`; the Rust impl keeps one canonical `BTreeMap<RangeStart, WorkItem>` (None
+>   sorts smallest) and derives the highest-priority pop by a bounded scan — behavior-identical
+>   (non-overlap, same coalescing, FIFO tie-break).
+> - **`SyncDb` history (spec 04 §3.7 updated):** `SyncableTrie` serves change/range proofs at a past
+>   root from a bounded root-keyed snapshot ring (reusing M1.18's before/after-state proof gen), not
+>   the full merkledb change-history ring; verification semantics + `InsufficientHistory`/`NoEndRoot`
+>   are identical. Encode stays the byte-exact hand-rolled `encode_proto` (M1.17/M1.18); prost
+>   generated types are used only to decode peer responses + frame request/response.
+> - **`MaybeBytes` present-but-empty (spec 15 §3.10 updated):** marshals to empty `bytes` (proto3
+>   omits the empty scalar); presence is carried by the parent oneof/field, not the inner bytes.
+> - **migrate signature (spec 04 §11.4 updated):** the driver takes `dst: &dyn DynDatabase` (not
+>   `&RocksDb`) because the typed `Database` trait carries a GAT iterator and isn't dyn-compatible;
+>   `DynDatabase` is the object-safe facade every backend implements (lets tests use `MemDb`,
+>   production pass `RocksDb`). `verify` root re-derivation is injected via a caller-supplied
+>   `RootVerifier` so the storage tier stays free of merkledb/Firewood (concrete wiring → M12 CLI).
+> - **No new third-party deps:** M1.19 referenced only already-workspace deps (`prost`/`tonic`/`tokio`
+>   `workspace = true`; `arc-swap`/`rayon` already present). M1.24's `migrate` feature is `[]` (empty)
+>   — `Cargo.lock` unchanged, zero new `cargo deny` surface; `rusty-leveldb` deliberately deferred
+>   until it clears `deny.toml`.
+>
+> **Still open (M1):** Firewood M1.20 (SHA feature + `SyncDb` impl — **now unblocked** by M1.19) →
+> M1.21 (ethhash + `golden::firewood_ethhash_root`, depends M1.20); exit gate M1.26 (last). Fuzz
+> nightly CI wiring is an X.2/X.16 follow-up (the M1.25 target + stable smoke are in place).
 
 ---
 
@@ -446,7 +492,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test golden_range_proof --test prop_proof` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: RangeProof + ChangeProof verify + golden::range_proof + proptest (04 §3.6)"`
 
-### Task M1.19: state-sync protocol — `SyncDb` trait, proto, Syncer + work-heap
+### Task M1.19: state-sync protocol — `SyncDb` trait, proto, Syncer + work-heap ✅ COMPLETED
 **Crate:** `ava-merkledb`  ·  **Depends on:** M1.18, M0 (proto build for `proto/sync`)  ·  **Spec:** 04 §3.7, 19 §4, 15 §3.10
 **Files:**
 - Create: `crates/ava-merkledb/src/sync/mod.rs`, `crates/ava-merkledb/src/sync/db.rs` (`SyncDb` trait), `crates/ava-merkledb/src/sync/workheap.rs`, `crates/ava-merkledb/src/sync/syncer.rs`, `crates/ava-merkledb/src/sync/proto.rs`
@@ -506,7 +552,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-archivedb` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-archivedb: height-versioned KV (^height encoding byte-exact) (04 §5.2)"`
 
-### Task M1.24: R2 — Go-data-dir import tool (scope + leveldb/pebble readers + verify)
+### Task M1.24: R2 — Go-data-dir import tool (scope + leveldb/pebble readers + verify) ✅ COMPLETED
 **Crate:** `ava-database` (`migrate` module)  ·  **Depends on:** M1.4 (rocksdb), M1.14 (merkledb roots for verify)  ·  **Spec:** 04 §7, 04 §11 (full tool design), 00 §11.2 R2, 02 §10.4 (doubles as upgrade/migration test)
 **Files:**
 - Create: `crates/ava-database/src/migrate/mod.rs`, `crates/ava-database/src/migrate/leveldb.rs`, `crates/ava-database/src/migrate/pebble.rs` (sidecar driver), `crates/ava-database/src/migrate/verify.rs`, `crates/ava-database/docs/migration.md` (scope + document the import path; **in-place open NOT supported**)

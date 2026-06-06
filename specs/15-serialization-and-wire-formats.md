@@ -287,6 +287,13 @@ No service (carried as `AppRequest`/`AppResponse` app bytes, `04`/`05`). Message
 - `RangeProof{start_proof:1:repeated ProofNode, end_proof:2:repeated ProofNode, key_values:3:repeated KeyValue}`.
 - `ProofNode{key:1:Key, value_or_hash:2:MaybeBytes, children:3:map<uint32,bytes>}`.  ← **only proto map on the wire in the whole tree** (see §6 caveat).
 - `KeyChange{key:1, value:2:MaybeBytes}`; `Key{length:1:uint64, value:2:bytes}`; `MaybeBytes{value:1:bytes}` (presence = "something"); `KeyValue{key:1, value:2}`.
+> **`MaybeBytes` present-but-empty (confirmed M1.19).** A *present* `MaybeBytes`
+> carrying an empty value marshals to an **empty `MaybeBytes` message** — proto3
+> omits the empty `value` scalar, so the field is zero bytes on the wire. Presence
+> ("something" vs "nothing") is therefore carried by whether the **parent** field
+> (the `oneof`/optional `MaybeBytes`) is set at all, never by the inner `bytes`. The
+> Rust `Maybe<Bytes>` ↔ `MaybeBytes` conversion preserves this: `Some(empty)` →
+> present empty message, `None` → field absent.
 > **Determinism caveat (confirmed M1.17, ava-merkledb proof port).** Because
 > `ProofNode.children` is the one proto map on the wire, Go's default
 > `proto.Marshal` randomizes its key order and produces non-reproducible bytes
