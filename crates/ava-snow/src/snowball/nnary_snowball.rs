@@ -4,10 +4,12 @@
 //! N-nary snowball (specs 06 §2.2; Go `nnary_snowball.go`).
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use ava_types::id::Id;
 
 use super::TerminationCondition;
+use super::consensus::NnaryInstance;
 use super::nnary_snowflake::NnarySnowflake;
 
 /// An n-nary snowball instance: layers preference-by-popularity on an n-nary
@@ -96,5 +98,37 @@ impl NnarySnowball {
     #[must_use]
     pub fn max_preference_strength(&self) -> u32 {
         self.max_preference_strength
+    }
+}
+
+impl fmt::Display for NnarySnowball {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SB(Preference = {}, PreferenceStrength = {}, {})",
+            self.preference, self.max_preference_strength, self.snowflake
+        )
+    }
+}
+
+impl NnaryInstance for NnarySnowball {
+    fn add(&mut self, choice: Id) {
+        NnarySnowball::add(self, choice);
+    }
+
+    fn preference(&self) -> Id {
+        NnarySnowball::preference(self)
+    }
+
+    fn record_poll(&mut self, count: u32, choice: Id) {
+        NnarySnowball::record_poll(self, count, choice);
+    }
+
+    fn record_unsuccessful_poll(&mut self) {
+        NnarySnowball::record_unsuccessful_poll(self);
+    }
+
+    fn finalized(&self) -> bool {
+        NnarySnowball::finalized(self)
     }
 }

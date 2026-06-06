@@ -3,8 +3,11 @@
 
 //! Binary snowball (specs 06 §2.2; Go `binary_snowball.go`).
 
+use std::fmt;
+
 use super::TerminationCondition;
 use super::binary_snowflake::BinarySnowflake;
+use super::consensus::BinaryInstance;
 
 /// A binary snowball instance: layers preference-by-popularity on a binary
 /// snowflake.
@@ -91,5 +94,33 @@ impl BinarySnowball {
     #[must_use]
     pub fn preference_strength(&self) -> [u32; 2] {
         self.preference_strength
+    }
+}
+
+impl fmt::Display for BinarySnowball {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SB(Preference = {}, PreferenceStrength[0] = {}, PreferenceStrength[1] = {}, {})",
+            self.preference, self.preference_strength[0], self.preference_strength[1], self.snowflake
+        )
+    }
+}
+
+impl BinaryInstance for BinarySnowball {
+    fn preference(&self) -> u8 {
+        BinarySnowball::preference(self)
+    }
+
+    fn record_poll(&mut self, count: u32, choice: u8) {
+        BinarySnowball::record_poll(self, count, choice);
+    }
+
+    fn record_unsuccessful_poll(&mut self) {
+        BinarySnowball::record_unsuccessful_poll(self);
+    }
+
+    fn finalized(&self) -> bool {
+        BinarySnowball::finalized(self)
     }
 }

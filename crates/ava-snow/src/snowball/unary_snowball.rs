@@ -3,9 +3,12 @@
 
 //! Unary snowball (specs 06 §2.2; Go `unary_snowball.go`).
 
+use std::fmt;
+
 use super::TerminationCondition;
 use super::binary_snowball::BinarySnowball;
 use super::binary_snowflake::BinarySnowflake;
+use super::consensus::UnaryInstance;
 use super::unary_snowflake::UnarySnowflake;
 
 /// A unary snowball instance: a unary snowflake plus a poll-count preference
@@ -70,5 +73,39 @@ impl UnarySnowball {
             self.snowflake.finalized(),
         );
         BinarySnowball::from_extension(snowflake, choice, self.preference_strength)
+    }
+}
+
+impl fmt::Display for UnarySnowball {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SB(PreferenceStrength = {}, {})",
+            self.preference_strength, self.snowflake
+        )
+    }
+}
+
+impl UnaryInstance for UnarySnowball {
+    type Binary = BinarySnowball;
+
+    fn record_poll(&mut self, count: u32) {
+        UnarySnowball::record_poll(self, count);
+    }
+
+    fn record_unsuccessful_poll(&mut self) {
+        UnarySnowball::record_unsuccessful_poll(self);
+    }
+
+    fn finalized(&self) -> bool {
+        UnarySnowball::finalized(self)
+    }
+
+    fn extend(&self, original_preference: u8) -> BinarySnowball {
+        UnarySnowball::extend(self, original_preference)
+    }
+
+    fn clone_instance(&self) -> Self {
+        self.clone()
     }
 }

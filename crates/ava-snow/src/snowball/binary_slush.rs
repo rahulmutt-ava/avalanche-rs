@@ -3,6 +3,8 @@
 
 //! Binary slush (specs 06 §2.2; Go `binary_slush.go`).
 
+use std::fmt;
+
 /// A binary slush instance: tracks the last choice with a successful poll.
 #[derive(Clone, Copy, Debug)]
 pub struct BinarySlush {
@@ -27,5 +29,11 @@ impl BinarySlush {
     /// Adopts `choice` as the preference (a successful poll).
     pub fn record_successful_poll(&mut self, choice: u8) {
         self.preference = choice;
+    }
+}
+
+impl fmt::Display for BinarySlush {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SL(Preference = {})", self.preference)
     }
 }

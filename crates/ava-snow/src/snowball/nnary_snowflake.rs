@@ -4,9 +4,13 @@
 //! N-nary snowflake + slush (specs 06 §2.2; Go `nnary_snowflake.go`,
 //! `nnary_slush.go`).
 
+use std::fmt;
+
 use ava_types::id::Id;
 
 use super::TerminationCondition;
+use super::consensus::NnaryInstance;
+use super::fmt_confidence;
 
 /// An n-nary slush instance over an unbounded number of choices.
 #[derive(Clone, Copy, Debug)]
@@ -25,6 +29,12 @@ impl NnarySlush {
 
     fn record_successful_poll(&mut self, choice: Id) {
         self.preference = choice;
+    }
+}
+
+impl fmt::Display for NnarySlush {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SL(Preference = {})", self.preference)
     }
 }
 
@@ -111,5 +121,39 @@ impl NnarySnowflake {
     #[must_use]
     pub(crate) fn alpha_preference(&self) -> u32 {
         self.alpha_preference
+    }
+}
+
+impl fmt::Display for NnarySnowflake {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SF(Confidence = {}, Finalized = {}, {})",
+            fmt_confidence(&self.confidence),
+            self.finalized,
+            self.slush
+        )
+    }
+}
+
+impl NnaryInstance for NnarySnowflake {
+    fn add(&mut self, choice: Id) {
+        NnarySnowflake::add(self, choice);
+    }
+
+    fn preference(&self) -> Id {
+        NnarySnowflake::preference(self)
+    }
+
+    fn record_poll(&mut self, count: u32, choice: Id) {
+        NnarySnowflake::record_poll(self, count, choice);
+    }
+
+    fn record_unsuccessful_poll(&mut self) {
+        NnarySnowflake::record_unsuccessful_poll(self);
+    }
+
+    fn finalized(&self) -> bool {
+        NnarySnowflake::finalized(self)
     }
 }

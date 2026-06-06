@@ -3,8 +3,12 @@
 
 //! Unary snowflake (specs 06 §2.2; Go `unary_snowflake.go`).
 
+use std::fmt;
+
 use super::TerminationCondition;
 use super::binary_snowflake::BinarySnowflake;
+use super::consensus::UnaryInstance;
+use super::fmt_confidence;
 
 /// A unary snowflake instance: deciding on a single value (the no-conflict
 /// case).
@@ -84,5 +88,40 @@ impl UnarySnowflake {
             self.confidence.clone(),
             self.finalized,
         )
+    }
+}
+
+impl fmt::Display for UnarySnowflake {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SF(Confidence = {}, Finalized = {})",
+            fmt_confidence(&self.confidence),
+            self.finalized
+        )
+    }
+}
+
+impl UnaryInstance for UnarySnowflake {
+    type Binary = BinarySnowflake;
+
+    fn record_poll(&mut self, count: u32) {
+        UnarySnowflake::record_poll(self, count);
+    }
+
+    fn record_unsuccessful_poll(&mut self) {
+        UnarySnowflake::record_unsuccessful_poll(self);
+    }
+
+    fn finalized(&self) -> bool {
+        UnarySnowflake::finalized(self)
+    }
+
+    fn extend(&self, original_preference: u8) -> BinarySnowflake {
+        UnarySnowflake::extend(self, original_preference)
+    }
+
+    fn clone_instance(&self) -> Self {
+        self.clone()
     }
 }
