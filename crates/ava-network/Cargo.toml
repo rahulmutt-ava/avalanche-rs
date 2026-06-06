@@ -1,0 +1,47 @@
+[package]
+name = "ava-network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "P2P networking: TLS transport + node identity + IP signing (byte-exact port of network/peer) (M2 / specs 05 §1.6, §4)."
+
+# Wave B scope (M2.7–M2.10): TLS + identity layer only. Depends solely on M0
+# crates (ava-crypto/ava-types). Intentionally does NOT depend on ava-message
+# (built in parallel) — it defines its own error enum (specs/05 §8).
+[dependencies]
+ava-crypto = { path = "../ava-crypto" }
+ava-types = { path = "../ava-types" }
+
+thiserror = { workspace = true }
+rcgen = { workspace = true }
+x509-parser = { workspace = true }
+rustls-pemfile = { workspace = true }
+arc-swap = { workspace = true }
+tokio = { workspace = true }
+zeroize = { workspace = true }
+# NOTE (workspace promotion): rustls/tokio-rustls/ring are not yet in this
+# checkout's [workspace.dependencies] (the M2-prep root pin landed on a later
+# main commit than this worktree branched from). Pinned locally with the exact
+# versions/features specs/05 §4.1 mandates — TLS1.3-only, `ring` provider (no
+# aws-lc-rs cmake/nasm build dep), matching the rcgen `ring` backend above.
+# Promote to [workspace.dependencies] once the root pin is present.
+rustls = { version = "0.23", default-features = false, features = [ "ring", "std", "tls12" ] }
+tokio-rustls = { version = "0.26", default-features = false, features = [ "ring", "tls12" ] }
+ring = "0.17"
+
+[dev-dependencies]
+tokio = { workspace = true }
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }
+assert_matches = { workspace = true }
+rstest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true
