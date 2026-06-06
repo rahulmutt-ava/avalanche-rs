@@ -252,9 +252,48 @@
 >   — `Cargo.lock` unchanged, zero new `cargo deny` surface; `rusty-leveldb` deliberately deferred
 >   until it clears `deny.toml`.
 >
-> **Still open (M1):** Firewood M1.20 (SHA feature + `SyncDb` impl — **now unblocked** by M1.19) →
-> M1.21 (ethhash + `golden::firewood_ethhash_root`, depends M1.20); exit gate M1.26 (last). Fuzz
-> nightly CI wiring is an X.2/X.16 follow-up (the M1.25 target + stable smoke are in place).
+> **Status (2026-06-06, M1 Wave 6 landed):** sixth wave — a single agent did the M1.20→M1.21
+> Firewood chain (sequentially dependent, same crate) in `ava-merkledb`:
+> - **M1.20 Firewood SHA wiring + `SyncDb` impl:** wraps the `firewood` crate (git tag `v0.5.0`, rev
+>   `0695b91f` — the exact rev Go's `firewood-go-ethhash/ffi v0.5.0` wraps; crates.io's `firewood
+>   0.2.0` is too old) behind a safe sync module (`#![forbid(unsafe_code)]` held; call sites wrap in
+>   `spawn_blocking`). `SyncDb for FirewoodDb` delegates to firewood's native
+>   `FrozenRangeProof`/`FrozenChangeProof` (proves the §3.7 protocol is backend-agnostic). Green:
+>   `unit::firewood_propose_commit_roundtrip` (pre-commit root, commit advances tip, historical
+>   `revision(old_root)` read). **R3 firewood-build risk effectively RETIRED — built clean in ~18s,
+>   pure Rust, no slow cmake/native step in this env.**
+> - **M1.21 Firewood ethhash + `golden::firewood_ethhash_root`:** REAL Go-extracted vector — scratch
+>   Go program against `firewood-go-ethhash/ffi v0.5.0` (prebuilt static lib) on a fixed 3-account +
+>   2-storage-slot RLP batch → root `eb8b07d6…`; the Rust `firewood` crate in ethhash mode matches
+>   byte-for-byte. Empty-trie case == `types.EmptyRootHash` (`0x56e81f17…`). Vector + `_provenance`
+>   committed; scratch deleted.
+>
+> Workspace after Wave 6: **235 tests pass** (`--all-features`; 231 after Wave 5), `cargo build
+> --workspace --all-features` / `-p avalanchers`, `cargo clippy --workspace --all-targets
+> --all-features -- -D warnings`, `cargo fmt --all --check` — all clean.
+>
+> **Findings recorded during Wave 6 (specs updated where noted):**
+> - **Firewood API path (spec 04 §4.2 updated):** the real crate uses `firewood::api` (not the
+>   sketched `firewood::v2::api`); `propose`/`root_hash`/`revision` are on the `api::Db` *trait*,
+>   `commit(self)`/`root_hash`/`val` on `api::Proposal: DbView`. `DbConfig::builder()` requires a
+>   `node_hash_algorithm: firewood_storage::NodeHashAlgorithm` (NOT re-exported from `firewood`), so a
+>   second optional dep `firewood-storage` (same git tag) is pulled in solely for
+>   `NodeHashAlgorithm::compile_option()`.
+> - **Hashing mode is a GLOBAL compile-time switch (spec 04 §4.1 clarified):** `firewood/ethhash` →
+>   `firewood-storage/ethhash` → Keccak. So the crate's `firewood` (SHA, merkledb-compatible) and
+>   `firewood-ethhash` (Keccak, EVM) features map to the *same* dep with `ethhash` toggled — they are
+>   **mutually exclusive per build**, not per-instance runtime modes. `HashKey::default_root_hash()`
+>   returns `None` (SHA → `Id::EMPTY`) or `Some(0x56e81f17…)` (ethhash). Revision retention via
+>   `RevisionManagerConfig::builder().max_revisions(n)` (default 256).
+> - **New deps (owed to X-cross-cutting):** `crates/ava-merkledb/Cargo.toml` pins `firewood` +
+>   `firewood-storage` (git tag v0.5.0, optional, default-features off) behind `firewood`/
+>   `firewood-ethhash` features (`firewood = [..., "sync"]` since the firewood path impls `SyncDb`);
+>   dev-dep `tempfile`. `Cargo.lock` updated (pulls firewood + sha3/keccak under ethhash). These are
+>   git deps — `cargo deny`/Bazel `crate_universe` may need a git-source allowance (flag for X).
+>
+> **Still open (M1):** exit gate **M1.26** (last — refresh each crate's `tests/PORTING.md`, drive all
+> named exit tests green, run the 4-command buildable-&-green invariant). All implementation tasks
+> M1.1–M1.25 are ✅. Fuzz nightly CI wiring remains an X.2/X.16 follow-up.
 
 ---
 
@@ -504,7 +543,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --test sync_roundtrip --test prop_workheap` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: SyncDb trait + Syncer/work-heap + sync proto wire golden (04 §3.7, 19 §4, 15 §3.10)"`
 
-### Task M1.20: Firewood wiring (SHA feature, `SyncDb` impl, safe wrapper)
+### Task M1.20: Firewood wiring (SHA feature, `SyncDb` impl, safe wrapper) ✅ COMPLETED
 **Crate:** `ava-merkledb` (firewood binding)  ·  **Depends on:** M1.19, M0 (R3 firewood pin)  ·  **Spec:** 04 §4.1, §4.2, §4.4, 00 §11.1.4, 00 §11.2 R3
 **Files:**
 - Create: `crates/ava-merkledb/src/firewood/mod.rs`, `crates/ava-merkledb/src/firewood/sha.rs`, `crates/ava-merkledb/Cargo.toml` (firewood dep + `sha`/`ethhash` features)
@@ -516,7 +555,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 - [ ] **Step 4 — Confirm green:** Run `cargo test -p ava-merkledb --features firewood --test firewood_sha` → PASS.
 - [ ] **Step 5 — Commit:** `git commit -m "ava-merkledb: firewood wiring (SHA feature) + SyncDb impl + safe wrapper (04 §4, R3)"`
 
-### Task M1.21: Firewood `ethhash` feature + `golden::firewood_ethhash_root`
+### Task M1.21: Firewood `ethhash` feature + `golden::firewood_ethhash_root` ✅ COMPLETED
 **Crate:** `ava-merkledb` (firewood binding)  ·  **Depends on:** M1.20  ·  **Spec:** 04 §4.1 (ethhash = Keccak/Eth-MPT), 00 §11.1.4, 15 §6 (EVM state root YES), 02 §6
 **Files:**
 - Create: `crates/ava-merkledb/src/firewood/ethhash.rs`

@@ -563,6 +563,16 @@ So: **merkledb roots and Firewood-default roots are the *same scheme*; EVM
 (ethhash) roots are a *different* scheme.** Overview §38 ("`merkledb` root hashes;
 Firewood ethhash for EVM state") is exactly this split.
 
+> **Mode is a GLOBAL compile-time switch (confirmed M1.21).** The `ethhash` choice
+> is not a per-instance runtime flag: `firewood/ethhash` →
+> `firewood-storage/ethhash` → Keccak/Eth-MPT for the whole compiled artifact. So
+> `ava-merkledb`'s `firewood` (SHA, merkledb-compatible) and `firewood-ethhash`
+> (Keccak, EVM) features map to the *same* dep with `ethhash` toggled — **mutually
+> exclusive per build**. `HashKey::default_root_hash()` returns `None` (SHA →
+> `Id::EMPTY`) or `Some(0x56e81f17…)` (ethhash, == `types.EmptyRootHash`). The
+> populated ethhash root is REAL-golden-verified: a fixed 3-account + 2-storage-slot
+> RLP batch yields `eb8b07d6…` identically from the Go ffi and the Rust crate.
+
 **Per-chain mapping (BINDING):**
 
 | State | Hashing | Rust backing |
@@ -581,11 +591,28 @@ but the `SyncDb` trait keeps it swappable.
 ### 4.2 Firewood Rust API (as used by `ava-evm`/`ava-saevm`)
 
 Firewood's `Db` API is **synchronous** (no async); we call it under a dedicated
-commit thread / `spawn_blocking` (§1.2). Sketch:
+commit thread / `spawn_blocking` (§1.2).
+
+> **Confirmed against the real crate (M1.20, firewood git tag `v0.5.0` rev
+> `0695b91f` — the rev Go's `firewood-go-ethhash/ffi v0.5.0` wraps; crates.io's
+> `firewood 0.2.0` is too old).** The real module path is **`firewood::api`** (the
+> sketched `firewood::v2::api` is stale): `propose`/`root_hash`/`revision` are
+> methods on the **`api::Db` trait**, and `commit(self)`/`root_hash`/`val` on
+> **`api::Proposal: DbView`** — trait-based, exactly as the sketch intends.
+> `DbConfig::builder()` **requires** a `node_hash_algorithm`
+> (`firewood_storage::NodeHashAlgorithm`, *not* re-exported from `firewood`), so the
+> wrapper also depends on `firewood-storage` (same tag) for
+> `NodeHashAlgorithm::compile_option()`, which binds the runtime mode to the
+> compiled hashing feature. Revision retention is
+> `RevisionManagerConfig::builder().max_revisions(n)` (default 256 in our wrapper).
+> The crate built clean in ~18s (pure Rust, no slow native step) — **R3 firewood
+> build risk retired in this environment.**
+
+Sketch (updated to the real API):
 
 ```rust
 use firewood::db::{Db, DbConfig, BatchOp};
-use firewood::v2::api::{Db as _, DbView, Proposal as _}; // trait imports
+use firewood::api::{Db as _, DbView, Proposal as _}; // trait imports (real path)
 
 // Open (revision history bounded by config).
 let db = Db::new(path, DbConfig::builder().truncate(false).build())?;
