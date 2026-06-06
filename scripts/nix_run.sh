@@ -19,7 +19,13 @@ if [ "$#" -eq 0 ]; then
 fi
 
 if command -v nix >/dev/null 2>&1 && [ -f "${REPO_ROOT}/flake.nix" ]; then
-  exec nix develop "${REPO_ROOT}" --command "$@"
+  # NIX_DEV_SHELL selects a non-default dev shell (e.g. `fuzz` for the nightly
+  # toolchain used by cargo-fuzz). Empty/unset → the default stable shell.
+  flake_ref="${REPO_ROOT}"
+  if [ -n "${NIX_DEV_SHELL:-}" ]; then
+    flake_ref="${REPO_ROOT}#${NIX_DEV_SHELL}"
+  fi
+  exec nix develop "${flake_ref}" --command "$@"
 fi
 
 exec "$@"

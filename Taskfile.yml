@@ -46,7 +46,17 @@ tasks:
 
   test-fuzz:
     desc: Run cargo-fuzz targets briefly (smoke)
+    # Enter the nightly `fuzz` dev shell (flake `devShells.fuzz`); cargo-fuzz
+    # needs nightly for -Zsanitizer/-Zbuild-std. Everything else stays stable.
+    env:
+      NIX_DEV_SHELL: fuzz
     cmd: '{{.NIX_RUN}} cargo xtask test-fuzz'
+
+  test-fuzz-long:
+    desc: Run cargo-fuzz targets for an extended duration (nightly shell)
+    env:
+      NIX_DEV_SHELL: fuzz
+    cmd: '{{.NIX_RUN}} cargo xtask test-fuzz --long'
 
   # --- Lint / format -----------------------------------------------------
   lint:

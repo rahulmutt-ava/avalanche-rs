@@ -37,12 +37,15 @@ pub fn test_unit_fast() -> anyhow::Result<()> {
     cargo(&["nextest", "run", "--workspace"])
 }
 
-/// `test-fuzz`: brief smoke of every cargo-fuzz target.
+/// `test-fuzz`: brief smoke of every cargo-fuzz target (`--long` for extended
+/// runs). Must be invoked inside the nightly `fuzz` dev shell (the Taskfile sets
+/// `NIX_DEV_SHELL=fuzz`); cargo-fuzz needs nightly for `-Zsanitizer`/`-Zbuild-std`.
 ///
 /// SCAFFOLD: per-parser fuzz targets + the smoke loop are owned by tier-X task
 /// X.16 (`ava-codec` first). Until then this is a no-op success.
-pub fn test_fuzz() -> anyhow::Result<()> {
-    eprintln!("xtask test-fuzz: no fuzz smoke loop yet (owned by tier-X task X.16).");
+pub fn test_fuzz(long: bool) -> anyhow::Result<()> {
+    let mode = if long { "long" } else { "smoke" };
+    eprintln!("xtask test-fuzz ({mode}): no fuzz smoke loop yet (owned by tier-X task X.16).");
     Ok(())
 }
 

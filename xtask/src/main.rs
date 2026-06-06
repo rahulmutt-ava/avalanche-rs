@@ -36,7 +36,11 @@ enum Command {
     /// Fast local unit tests (no all-features, no checks profile).
     TestUnitFast,
     /// Run cargo-fuzz targets briefly (smoke).
-    TestFuzz,
+    TestFuzz {
+        /// Run each target for an extended duration instead of a brief smoke.
+        #[arg(long)]
+        long: bool,
+    },
     /// Run the differential harness against the recorded Go oracle / live nodes.
     TestDifferential {
         /// Replay a single program by seed.
@@ -64,7 +68,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::TestUnit => test::test_unit(),
         Command::TestUnitFast => test::test_unit_fast(),
-        Command::TestFuzz => test::test_fuzz(),
+        Command::TestFuzz { long } => test::test_fuzz(long),
         Command::TestDifferential { seed, recorded } => test::test_differential(seed, recorded),
         Command::TestReexecute => test::test_reexecute(),
         Command::Vectors { action } => vectors::run(action),

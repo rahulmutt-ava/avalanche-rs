@@ -42,6 +42,19 @@
         # Single source of truth for the Rust version: rust-toolchain.toml.
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
+        # Nightly toolchain — used ONLY by the fuzz dev shell (`devShells.fuzz`),
+        # never by `devShells.default`. cargo-fuzz/libfuzzer-sys need a nightly
+        # rustc for `-Zsanitizer`/sancov and `-Zbuild-std`; everything else in
+        # the repo stays on the pinned stable above. The nightly date is
+        # resolved against the rust-overlay input pinned in flake.lock, so it is
+        # reproducible until that input is bumped.
+        #   rust-src        — required by cargo-fuzz's default `-Zbuild-std`
+        #   llvm-tools-preview — sanitizer runtime / coverage tooling
+        fuzzRustToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain:
+          toolchain.default.override {
+            extensions = [ "rust-src" "llvm-tools-preview" ];
+          });
+
         # cargo-llvm-cov integration tests require Rust profiler_builtins for
         # coverage-instrumented target builds. On nixpkgs/darwin this can fail with:
         #   can't find crate for `profiler_builtins`
@@ -49,13 +62,15 @@
         cargo-llvm-cov = pkgs.cargo-llvm-cov.overrideAttrs (_: {
           doCheck = false;
         });
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            # Pinned Rust toolchain (rustc, cargo, clippy, rustfmt, rust-src, llvm-tools)
-            rustToolchain
 
+        # Dev shell parametrized by the Rust toolchain so the default (stable)
+        # and fuzz (nightly) shells share one package set and differ only in the
+        # compiler on PATH.
+        mkDevShell = toolchain: pkgs.mkShell {
+          packages = [
+            # Rust toolchain (rustc, cargo, clippy, rustfmt, rust-src, llvm-tools)
+            toolchain
+          ] ++ (with pkgs; [
             # Cargo tooling
             cargo-nextest        # canonical test runner (mirrors `go test`)
             cargo-deny           # dependency policy: licenses/bans/advisories/sources
@@ -108,7 +123,7 @@
             ripgrep
             solc                 # solidity compiler (EVM test contracts)
             s5cmd                # rapid S3 interactions for reexec datasets
-          ];
+          ]);
 
           # rocksdb/firewood/secp256k1 builds find libclang via this var.
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -117,5 +132,15 @@
             export PATH="$PWD/scripts:$PWD/bin:$PATH"
           '';
         };
+      in
+      {
+        # Default shell: pinned stable toolchain for build/test/lint/everything.
+        devShells.default = mkDevShell rustToolchain;
+
+        # Fuzz shell: identical package set but with the nightly toolchain on
+        # PATH so `cargo fuzz build/run` works. Entered explicitly by the fuzz
+        # Task targets (NIX_DEV_SHELL=fuzz; see scripts/nix_run.sh); the default
+        # shell never sees nightly.
+        devShells.fuzz = mkDevShell fuzzRustToolchain;
       });
 }
