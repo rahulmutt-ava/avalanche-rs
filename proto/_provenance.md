@@ -26,6 +26,9 @@ the Nix dev shell. Bazel uses `rust_prost_library` for the hermetic path.
   Consumed by `crates/ava-database` (M1.11). Imports only
   `google/protobuf/empty.proto` (a well-known type `protoc` resolves
   automatically).
+- `sync/sync.proto` — merkledb state-sync range/change-proof request/response
+  wire (`specs/04` §3.7, `19` §4, `15` §3.10). Consumed by `crates/ava-merkledb`
+  (M1.19). No external imports.
 
 More `.proto` files (`sync`, `p2p`, `vm`, `appsender`, `sharedmemory`, …) land
 here as their consuming crates do (one per backend/wave), each recorded against

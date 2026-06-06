@@ -24,12 +24,25 @@ rayon = "1"
 # feature (the standalone fuzz/ crate + the `--all-features` dev-test build).
 # Not yet in the root [workspace.dependencies]; pinned locally (see report).
 arbitrary = { version = "1", features = ["derive"], optional = true }
+# State-sync protocol (M1.19, specs 04 §3.7 / 19 §4 / 15 §3.10). The proto
+# request/response frames are generated from proto/sync/sync.proto by build.rs,
+# gated on the `sync` feature so non-sync builds never invoke `protoc`.
+prost = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [features]
 # Exposes `fuzz_support` (the canonical DbOp op-stream + oracle check shared by
 # the cargo-fuzz targets and the stable `prop_fuzz_smoke` proptest). Enabled by
 # `crates/ava-merkledb/fuzz` and by the `--all-features` verification gate.
 fuzzing = ["dep:arbitrary"]
+# State-sync protocol: `SyncDb` trait, work-heap, Syncer, and the generated
+# `proto/sync` wire types (specs 04 §3.7, 19 §4, 15 §3.10).
+sync = ["dep:prost", "dep:tonic", "dep:tokio"]
+
+[build-dependencies]
+# Compiles proto/sync/sync.proto into OUT_DIR when the `sync` feature is active.
+tonic-build = { workspace = true }
 
 [dev-dependencies]
 ava-database = { path = "../ava-database", features = ["testutil"] }
@@ -39,3 +52,4 @@ hex = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
