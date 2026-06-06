@@ -548,6 +548,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-vm"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "ava-database",
+ "ava-snow",
+ "ava-types",
+ "ava-version",
+ "proptest",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio-util",
+]
+
+[[package]]
 name = "avalanchers"
 version = "0.1.0"
 dependencies = [
