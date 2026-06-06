@@ -13,6 +13,14 @@
 /// The `p2p` package: `Message` (root oneof wrapper), the `message::Message`
 /// oneof enum, and every sub-message (`Ping`, `Handshake`, `PeerList`,
 /// `ClaimedIpPort`, `Get`, `Put`, `Chits`, `AppRequest`, `Simplex`, …).
+#[allow(
+    missing_docs,
+    dead_code,
+    clippy::all,
+    clippy::pedantic,
+    unreachable_pub,
+    clippy::doc_markdown
+)]
 pub mod p2p {
     include!(concat!(env!("OUT_DIR"), "/p2p.rs"));
 }
