@@ -98,34 +98,33 @@ impl Upgrader {
     where
         IO: AsyncRead + AsyncWrite + Unpin,
     {
-        let tls: TlsStream<IO> = match self.side {
-            UpgraderSide::Server => {
-                let acceptor = self
-                    .acceptor
-                    .as_ref()
-                    .ok_or_else(|| Error::TlsConfig("server upgrader missing acceptor".into()))?;
-                let accepted = acceptor
-                    .accept(stream)
-                    .await
-                    .map_err(|e| Error::Tls(e.to_string()))?;
-                TlsStream::Server(accepted)
-            }
-            UpgraderSide::Client => {
-                let connector = self
-                    .connector
-                    .as_ref()
-                    .ok_or_else(|| Error::TlsConfig("client upgrader missing connector".into()))?;
-                // No SNI / hostname verification (the custom verifier authenticates
-                // by leaf key, not hostname). A fixed placeholder name is used.
-                let server_name = ServerName::try_from("avalanche")
-                    .map_err(|e| Error::TlsConfig(format!("server name: {e}")))?;
-                let connected = connector
-                    .connect(server_name, stream)
-                    .await
-                    .map_err(|e| Error::Tls(e.to_string()))?;
-                TlsStream::Client(connected)
-            }
-        };
+        let tls: TlsStream<IO> =
+            match self.side {
+                UpgraderSide::Server => {
+                    let acceptor = self.acceptor.as_ref().ok_or_else(|| {
+                        Error::TlsConfig("server upgrader missing acceptor".into())
+                    })?;
+                    let accepted = acceptor
+                        .accept(stream)
+                        .await
+                        .map_err(|e| Error::Tls(e.to_string()))?;
+                    TlsStream::Server(accepted)
+                }
+                UpgraderSide::Client => {
+                    let connector = self.connector.as_ref().ok_or_else(|| {
+                        Error::TlsConfig("client upgrader missing connector".into())
+                    })?;
+                    // No SNI / hostname verification (the custom verifier authenticates
+                    // by leaf key, not hostname). A fixed placeholder name is used.
+                    let server_name = ServerName::try_from("avalanche")
+                        .map_err(|e| Error::TlsConfig(format!("server name: {e}")))?;
+                    let connected = connector
+                        .connect(server_name, stream)
+                        .await
+                        .map_err(|e| Error::Tls(e.to_string()))?;
+                    TlsStream::Client(connected)
+                }
+            };
 
         let (_io, conn) = tls.get_ref();
         let leaf = conn

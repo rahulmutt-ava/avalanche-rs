@@ -1,0 +1,8 @@
+{
+  "_note": "UnsignedIP::bytes() layout golden (specs/05 §1.6, specs/15 §4.1): ip.As16()(16) || port_be(2) || timestamp_be(8). The As16 of an IPv4 address is its IPv4-mapped IPv6 form (00*10 || ffff || 4 IPv4 octets), matching Go netip.Addr.As16() as used in network/peer/ip.go::UnsignedIP.bytes(). Cross-checked against the documented Packer layout (PackFixedBytes(16) || PackShort || PackLong).",
+  "ip": "1.2.3.4",
+  "port": 9651,
+  "timestamp": 1600000000,
+  "as16_hex": "00000000000000000000ffff01020304",
+  "bytes_hex": "00000000000000000000ffff0102030425b3000000005f5e1000"
+}

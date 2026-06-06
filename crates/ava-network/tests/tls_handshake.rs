@@ -1,6 +1,9 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
+#![allow(unused_crate_dependencies)] // integration tests don't use every workspace dep (specs/01 §7.3)
+#![allow(clippy::expect_used)] // tests assert via expect()
+
 //! M2.9 — loopback mutual TLS 1.3 over `tokio::io::duplex`: both sides derive
 //! the peer NodeID from its leaf cert (`specs/05` §1.6/§4.3).
 

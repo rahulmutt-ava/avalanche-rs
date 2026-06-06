@@ -1,6 +1,9 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
+#![allow(unused_crate_dependencies)] // integration tests don't use every workspace dep (specs/01 §7.3)
+#![allow(clippy::expect_used)] // tests assert via expect()
+
 //! M2.9 — NodeID-from-cert golden: `RIPEMD160(SHA256(DER))` parity with Go
 //! `ids.NodeIDFromCert` (`specs/05` §1.6).
 

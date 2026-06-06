@@ -1,13 +1,18 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
+#![allow(unused_crate_dependencies)] // integration tests don't use every workspace dep (specs/01 §7.3)
+#![allow(clippy::expect_used)] // tests assert via expect()
+
 //! M2.8 — leaf-key policy: P-256 only for ECDSA; well-formed RSA; reject the
 //! rest (`specs/05` §1.6/§4.5). Mirrors Go `ValidateCertificate`.
 
 use assert_matches::assert_matches;
 use ava_network::Error;
 use ava_network::peer::verifier::validate_leaf_public_key;
-use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, PKCS_ED25519};
+use rcgen::{
+    CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384, PKCS_ED25519,
+};
 use rustls::pki_types::CertificateDer;
 
 /// A small (1024-bit) RSA self-signed cert (DER), generated offline via openssl
@@ -45,8 +50,5 @@ fn accepts_p256_rejects_others() {
 
     // RSA with a 1024-bit modulus — rejected by the well-formed RSA policy.
     let rsa = hex::decode(RSA_1024_DER_HEX).expect("decode rsa der");
-    assert_matches!(
-        validate_leaf_public_key(&CertificateDer::from(rsa)),
-        Err(_)
-    );
+    assert_matches!(validate_leaf_public_key(&CertificateDer::from(rsa)), Err(_));
 }

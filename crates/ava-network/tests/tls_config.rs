@@ -1,6 +1,9 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
+#![allow(unused_crate_dependencies)] // integration tests don't use every workspace dep (specs/01 §7.3)
+#![allow(clippy::expect_used)] // tests assert via expect()
+
 //! M2.7 — TLS configs are TLS1.3-only, mutual, no ALPN (`specs/05` §4.1/§4.2).
 
 use ava_network::Identity;

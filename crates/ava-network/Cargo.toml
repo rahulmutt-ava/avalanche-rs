@@ -17,12 +17,10 @@ ava-crypto = { path = "../ava-crypto" }
 ava-types = { path = "../ava-types" }
 
 thiserror = { workspace = true }
-rcgen = { workspace = true }
 x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 arc-swap = { workspace = true }
 tokio = { workspace = true }
-zeroize = { workspace = true }
 # NOTE (workspace promotion): rustls/tokio-rustls/ring are not yet in this
 # checkout's [workspace.dependencies] (the M2-prep root pin landed on a later
 # main commit than this worktree branched from). Pinned locally with the exact
@@ -37,10 +35,9 @@ ring = "0.17"
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
 # TLS handshake tests (M2.9/M2.10).
 tokio = { workspace = true, features = [ "io-util" ] }
-proptest = { workspace = true }
-pretty_assertions = { workspace = true }
+# rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
+rcgen = { workspace = true }
 assert_matches = { workspace = true }
-rstest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
