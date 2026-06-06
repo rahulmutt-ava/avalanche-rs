@@ -25,13 +25,22 @@
 
 pub mod app;
 pub mod app_sender;
+pub mod block;
 pub mod connector;
 pub mod error;
 pub mod health;
 pub mod vm;
 
+#[cfg(any(test, feature = "testutil"))]
+pub mod testutil;
+
 pub use app::{AppError, AppHandler};
 pub use app_sender::{AppSender, SendConfig};
+pub use block::{
+    batched_parse_block, get_ancestors, BatchedChainVm, Block, BlockContext, BuildBlockWithContext,
+    ChainVm, SetPreferenceWithContext, StateSummary, StateSyncMode, StateSyncableVm,
+    WithVerifyContext, INT_LEN,
+};
 pub use connector::Connector;
 pub use error::{Error, Result};
 pub use health::HealthCheck;
@@ -40,6 +49,9 @@ pub use vm::{Fx, HttpHandler, LockOptions, Vm, VmEvent};
 // Re-export the consensus context + engine phase the VM consumes at the
 // boundary (specs 06 §3), so downstream VM crates depend only on `ava-vm`.
 pub use ava_snow::{ChainContext, ConsensusContext, EngineState};
+// Re-exported so the `vm_conformance!` macro can name `$crate::Id` /
+// `$crate::EngineState` hygienically from a downstream crate (07 §10).
+pub use ava_types::id::Id;
 
 #[cfg(test)]
 mod tests {

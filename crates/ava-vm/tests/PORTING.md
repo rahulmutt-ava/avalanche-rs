@@ -52,3 +52,44 @@ them rather than re-deriving the gaps.
 - `ava-version` supplies `Application` for `Connector::connected`.
 - `SendConfig` is defined locally (not re-exported from a `Sender` crate) to keep
   `ava-vm` free of a networking dependency; its fields mirror Go exactly.
+
+## M3.15 — Snowman VM trait family (`block/`)
+
+Go source → Rust:
+
+- `snow/engine/snowman/block/vm.go` (`ChainVM`/`Getter`/`Parser`) →
+  [`crate::block::chain_vm::ChainVm`]. `&mut self` only on the mutating ops
+  (`build_block`/`set_preference`); read ops take `&self` (Go relies on
+  `ctx.Lock`, which we drop — specs 07 §2.4 mutability note).
+- `block.BuildBlockWithContextChainVM` / `SetPreferenceWithContextChainVM` →
+  [`BuildBlockWithContext`]/[`SetPreferenceWithContext`], probed via the
+  `as_build_with_context`/`as_set_preference_with_context` accessors (default
+  `None`, mirroring Go's interface type-assertions).
+- `block.WithVerifyContext` + `block.Context` → `block/with_context.rs`.
+- `batched_vm.go` (`BatchedChainVM` + the `GetAncestors`/`BatchedParseBlock`
+  free-function fallbacks) → `block/batched.rs`. `wrappers.IntLen == 4` is
+  reproduced as [`crate::block::INT_LEN`]; the byte accounting (each element
+  costs `len + INT_LEN`), the `Err(NotFound)`-on-head ⇒ empty special-case, and
+  the break-on-parent-error are byte-for-byte faithful.
+- `state_syncable_vm.go` / `state_summary.go` →
+  `block/state_sync.rs` (`StateSyncableVm`/`StateSummary`/`StateSyncMode` with
+  Go's `1/2/3` discriminants).
+- `Block` is owned by `06` and **re-exported** from `ava_snow::Block` (specs 07
+  §2.3) — note `Block::{verify,accept,reject}` return `ava_snow::Result`, while
+  the `ChainVm` surface returns `ava_vm::Result`.
+
+### Findings / deltas
+
+1. **`get_ancestors` capacity.** Go does `make([][]byte, 1, maxBlocksNum)`; we
+   cap the *capacity hint* at `min(max_blocks_num, 1024)` so an unbounded
+   `max_blocks_num` cannot trigger an allocator capacity overflow. The result
+   *length* is identical to Go.
+2. **`vm_conformance!` closure takes an owned `CancellationToken`.** The async
+   make-VM closure receives the token **by value** (cheap clone), not by
+   reference, to sidestep the higher-ranked-lifetime borrow on the returned
+   future. Each generated `#[tokio::test]` owns its own token. Macro lives in
+   `testutil.rs` (gated on the `testutil` feature) so downstream VMs (`08`–`11`)
+   and the rpcchainvm host/guest can reuse the battery.
+3. **`testutil` feature.** `TestVm`/`TestBlock`/`NoopAppSender`/`init_test_vm` +
+   the macro are gated behind `feature = "testutil"` (pulls `tokio`+`sha2`); the
+   `conformance_vm` integration test is `#![cfg(feature = "testutil")]`.

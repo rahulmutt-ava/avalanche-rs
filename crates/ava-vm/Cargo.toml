@@ -21,9 +21,20 @@ serde_json = { workspace = true }
 # CancellationToken on every VM/handler method (replaces Go's context.Context).
 tokio-util = { workspace = true }
 
+# `testutil` deps (in-memory conformance VM + `vm_conformance!` macro, 07 §10).
+tokio = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+# Exposes the in-memory `TestVm` + `vm_conformance!` battery (07 §10) so the
+# integration test (and downstream VMs) can run the generic conformance suite.
+testutil = ["dep:tokio", "dep:sha2"]
+
 [dev-dependencies]
 proptest = { workspace = true }
 assert_matches = { workspace = true }
+tokio = { workspace = true }
+sha2 = { workspace = true }
 
 [lints]
 workspace = true
