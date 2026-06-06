@@ -32,6 +32,35 @@ pub enum Error {
     #[error("not found")]
     NotFound,
 
+    // ---- avax / gas arithmetic + balance sentinels (specs 07 §3.1, §3.4) ----
+    /// `safemath.ErrOverflow` — a checked addition/multiplication overflowed.
+    #[error("overflow")]
+    Overflow,
+    /// `safemath.ErrUnderflow` — a checked subtraction underflowed.
+    #[error("underflow")]
+    Underflow,
+    /// `avax.ErrInsufficientFunds` — a flow check found `produced > consumed` for
+    /// some asset.
+    #[error("insufficient funds")]
+    InsufficientFunds,
+    /// `gas.ErrInsufficientCapacity` — `ConsumeGas` requested more than the
+    /// available capacity.
+    #[error("insufficient capacity")]
+    InsufficientCapacity,
+    /// `avax.ErrOutputsNotSorted` — transferable outputs were not in canonical
+    /// sort order.
+    #[error("outputs not sorted")]
+    OutputsNotSorted,
+    /// `avax.ErrInputsNotSortedUnique` — transferable inputs were not sorted and
+    /// unique by UTXOID.
+    #[error("inputs not sorted and unique")]
+    InputsNotSortedUnique,
+    /// An avax component (UTXO/asset/input/output/tx) failed structural
+    /// validation (e.g. nil/empty field, wrong network/chain id, oversized
+    /// memo). Carries the Go sentinel message.
+    #[error("{0}")]
+    InvalidComponent(&'static str),
+
     // ---- rpcchainvm host/guest sentinels ----
     /// `ErrRemoteVMNotImplemented` — the remote VM does not implement the
     /// optional capability the caller probed (e.g. the batched fallback).

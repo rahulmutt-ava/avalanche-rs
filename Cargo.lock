@@ -571,10 +571,15 @@ dependencies = [
  "ava-database",
  "ava-snow",
  "ava-types",
+ "ava-utils",
  "ava-version",
+ "futures",
+ "num-bigint",
  "proptest",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
+ "tokio",
  "tokio-util",
 ]
 
