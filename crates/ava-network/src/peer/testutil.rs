@@ -234,6 +234,172 @@ impl TestPeerBuilder {
     }
 }
 
+/// Overridable handshake fields used to construct the §1.4 disconnect-reason
+/// cases. `Default` builds a fully-valid handshake (matched to the harness).
+#[derive(Default)]
+pub struct HandshakeOverrides {
+    /// Override the advertised `network_id`.
+    pub network_id: Option<u32>,
+    /// Override the advertised `my_time` (Unix seconds).
+    pub my_time: Option<u64>,
+    /// Override the advertised version triple.
+    pub version: Option<Application>,
+    /// Override the advertised port.
+    pub port: Option<u16>,
+    /// Advertise this many (dummy) tracked subnets.
+    pub num_tracked_subnets: Option<usize>,
+    /// Override the supported-ACP set.
+    pub supported_acps: Option<Vec<u32>>,
+    /// Override the objected-ACP set.
+    pub objected_acps: Option<Vec<u32>>,
+    /// Advertise a bloom salt of this many bytes.
+    pub bloom_salt_len: Option<usize>,
+    /// Corrupt the TLS IP signature so verification fails.
+    pub corrupt_ip_sig: bool,
+}
+
+/// A test harness that owns a peer's signing identity so it can build *valid*
+/// (or deliberately invalid) handshakes the peer-under-test will verify.
+pub struct PeerHarness {
+    builder: TestPeerBuilder,
+    cfg: Arc<PeerConfig>,
+    /// The peer's identity (its cert is presented to `Peer::spawn`, and its key
+    /// signs the handshake IP).
+    peer_identity: Identity,
+    peer_id: NodeId,
+    /// The peer's BLS signer (for the IP proof-of-possession).
+    peer_bls: Arc<ava_crypto::bls::LocalSigner>,
+}
+
+impl Default for PeerHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PeerHarness {
+    /// Build a harness with default interop fields.
+    #[must_use]
+    pub fn new() -> Self {
+        let builder = TestPeerBuilder::new();
+        let cfg = builder.build_config();
+        let peer_identity = Identity::generate().expect("peer identity");
+        let peer_cert = ava_crypto::staking::parse_certificate(peer_identity.cert_der())
+            .expect("parse peer cert");
+        let peer_id = crate::peer::upgrader::node_id_from_cert(&peer_cert);
+        let peer_bls = Arc::new(ava_crypto::bls::LocalSigner::generate().expect("peer bls"));
+        Self {
+            builder,
+            cfg,
+            peer_identity,
+            peer_id,
+            peer_bls,
+        }
+    }
+
+    /// The recording router (so tests can assert `connected`/`disconnected`).
+    #[must_use]
+    pub fn router(&self) -> Arc<RecordingRouter> {
+        self.builder.router()
+    }
+
+    /// The controllable clock.
+    #[must_use]
+    pub fn clock(&self) -> Arc<TestClock> {
+        self.builder.clock()
+    }
+
+    /// Spawn the peer-under-test over a duplex; returns the remote end (the test
+    /// acts as the peer) and the handle.
+    pub fn spawn(&mut self) -> (DuplexStream, PeerHandle) {
+        let (local, remote) = tokio::io::duplex(1 << 20);
+        let peer_cert = ava_crypto::staking::parse_certificate(self.peer_identity.cert_der())
+            .expect("parse peer cert");
+        let net_token = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let handle = Peer::spawn(
+            Arc::clone(&self.cfg),
+            self.peer_id,
+            peer_cert,
+            Direction::Inbound,
+            local,
+            &net_token,
+            &tracker,
+        );
+        tracker.close();
+        (remote, handle)
+    }
+
+    /// Build a framed `Handshake` payload from the harness peer identity, with
+    /// the given overrides applied.
+    #[must_use]
+    pub fn build_handshake(&self, o: HandshakeOverrides) -> Vec<u8> {
+        use ava_message::builder::OutboundMsgBuilder;
+
+        let network_id = o.network_id.unwrap_or(self.cfg.network_id);
+        let my_time = o.my_time.unwrap_or_else(|| self.clock().unix());
+        let port = o.port.unwrap_or(9651);
+        let version = o
+            .version
+            .unwrap_or_else(|| Application::new("avalanchego", 1, 14, 2));
+
+        // Sign the peer IP with the peer identity's TLS + BLS keys.
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        let unsigned = crate::peer::ip::UnsignedIp::new(ip, port, my_time);
+        let tls_key = self.peer_identity.tls_signing_key().expect("peer tls key");
+        let mut signed = unsigned
+            .sign(&tls_key, self.peer_bls.as_ref())
+            .expect("sign peer ip");
+        if o.corrupt_ip_sig {
+            signed.corrupt_tls_signature_for_test();
+        }
+
+        let subnets: Vec<ava_types::id::Id> = (0..o.num_tracked_subnets.unwrap_or(0))
+            .map(|i| {
+                let mut b = [0u8; 32];
+                b[0] = u8::try_from(i % 251).unwrap_or(0);
+                b[1] = u8::try_from(i / 251).unwrap_or(0);
+                ava_types::id::Id::from_slice(&b).expect("id")
+            })
+            .collect();
+
+        let salt = vec![0u8; o.bloom_salt_len.unwrap_or(0)];
+
+        let msg = self
+            .cfg
+            .creator
+            .handshake(
+                network_id,
+                my_time,
+                std::net::SocketAddr::new(ip, port),
+                &version.name,
+                version.major,
+                version.minor,
+                version.patch,
+                0,
+                signed.unsigned.timestamp,
+                signed.tls_signature(),
+                signed.bls_signature_bytes(),
+                &subnets,
+                &o.supported_acps.unwrap_or_default(),
+                &o.objected_acps.unwrap_or_default(),
+                &[],
+                &salt,
+                true,
+            )
+            .expect("build handshake");
+        msg.bytes.to_vec()
+    }
+
+    /// Build a framed (empty) `PeerList` payload.
+    #[must_use]
+    pub fn build_peer_list(&self) -> Vec<u8> {
+        use ava_message::builder::OutboundMsgBuilder;
+        let msg = self.cfg.creator.peer_list(&[], true).expect("peerlist");
+        msg.bytes.to_vec()
+    }
+}
+
 /// Read exactly one length-prefixed frame from `stream` and return its payload.
 ///
 /// # Errors
