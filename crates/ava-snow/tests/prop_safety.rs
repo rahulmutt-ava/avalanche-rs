@@ -89,11 +89,10 @@ fn run_safety_case(n_nodes: usize, heights: u64, siblings: u64, vote_rounds: usi
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// UN-IGNORE at M3.5: real safety assertions go GREEN once `Topological` is
-    /// wired into the cluster. Until then the cluster accepts nothing, so the
-    /// property is vacuously true; it is ignored to make that explicit.
+    /// M3.5: real safety assertions over `Topological` wired into the cluster.
+    /// The accepted chain must never hold two conflicting blocks at one height
+    /// and must be contiguous from genesis.
     #[test]
-    #[ignore = "UN-IGNORE at M3.5: requires Topological (Snowman) wired into Cluster"]
     fn consensus_safety(
         n_nodes in 1usize..8,
         heights in 1u64..6,

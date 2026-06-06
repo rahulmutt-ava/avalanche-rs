@@ -30,6 +30,8 @@ Legend: `done` = code ported **and** a Go-derived golden vector asserts it green
 
 | Go file | Rust location | Status | Notes |
 |---|---|---|---|
-| `consensus_test.go` | — | wip | safety battery target at M3.5 |
-| `network_test.go` | — | wip | metastable oracle for `prop::consensus_safety`; harness scaffolded at M3.1 (`tests/prop_safety.rs`, `#[ignore]`d) |
-| `topological.go` | — | todo | M3.5 |
+| `consensus.go` | `src/snowman/consensus.rs` | done | `SnowmanConsensus` trait (M3.5); metrics-only `Initialize`/health folded into `Topological::new` + `health_check` |
+| `block.go` / `snowman_block.go` | `src/snowman/block.rs`, `src/snowman/topological.rs` (`SnowmanBlock`) | done | synchronous consensus-internal `Block`/`BlockAcceptor`; `SnowmanBlock` (`blk`/`should_falter`/`sb`/`children`) |
+| `topological.go` | `src/snowman/topological.rs` | done | M3.5: `Topological` (exact field set) + `add`/`record_poll` (Kahn `calculate_in_degree`/`push_votes`/`vote`) + `accept_preferred_child` (acceptor-before-`accept` invariant) + `reject_transitively` + `health_check` |
+| `consensus_test.go` | `src/snowtest.rs` (`run_consensus_suite`), `tests/conformance_battery.rs` | done | M3.5: 19-case generic battery vs `Topological` (init/add/record_poll/accept-ordering/dup-add/unknown-parent/linear acceptance/sibling reject/transitive reject/preference walk/last-accepted). NOTE: `RecordPollTransitivelyResetConfidence`'s intermediate preference assertion is id-bit-layout-dependent in Go (random `BuildChild` ids); the Rust port asserts the structurally-invariant facts (num_processing + final acceptance) — see finding |
+| `network_test.go` | `tests/prop_safety.rs`, `src/testutil/cluster.rs` | done | M3.5: `Topological` wired into the cluster (one instance per node + oracle acceptor); `prop::consensus_safety` UN-IGNORED and GREEN (64 cases) |
