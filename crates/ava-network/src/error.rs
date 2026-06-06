@@ -143,6 +143,13 @@ pub enum Error {
     /// failed. Carries the underlying gateway error string.
     #[error("nat error: {0}")]
     Nat(String),
+
+    // --- Metrics (`specs/18` §2.1–§2.3; M2.20) ---
+    /// Registering an `avalanche_network_*` metric family into the Prometheus
+    /// registry failed (e.g. a duplicate name). Carries the `prometheus` error
+    /// string.
+    #[error("metrics error: {0}")]
+    Metrics(String),
 }
 
 impl From<ava_message::Error> for Error {

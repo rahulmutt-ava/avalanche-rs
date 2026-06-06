@@ -50,6 +50,10 @@ bytes = { workspace = true }
 # only the UPnP path is wired (PMP falls through to NoRouter), matching
 # `nat.GetRouter`'s probe order.
 igd-next = { workspace = true }
+# Prometheus metric families (M2.20, specs/18 §2.1–§2.3): the `avalanche_network_*`
+# counters/gauges. `default-features = false` matches `ava-database` (no push
+# gateway / protobuf-out features), keeping the dep surface minimal.
+prometheus = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
