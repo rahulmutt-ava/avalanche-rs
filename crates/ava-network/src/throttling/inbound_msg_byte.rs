@@ -48,8 +48,19 @@ use std::sync::Arc;
 
 use ava_types::node_id::NodeId;
 use parking_lot::Mutex;
+use prometheus::IntGauge;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+
+/// The two inbound-byte "remaining" gauges (`specs/18` §2.3), pushed by the
+/// throttler whenever a pool balance changes:
+/// `byte_throttler_inbound_remaining_at_large_bytes` and
+/// `byte_throttler_inbound_remaining_validator_bytes`.
+#[derive(Clone, Debug)]
+struct RemainingGauges {
+    at_large: IntGauge,
+    validator: IntGauge,
+}
 
 /// Fair, blocking inbound message byte throttler. Clone to share; clones refer
 /// to the same pools.
@@ -79,6 +90,24 @@ struct Inner {
     /// msg id -> waiter metadata. `BTreeMap` iterates in ascending key order,
     /// which is insertion order here (ids are monotonic) == oldest-first.
     waiting_to_acquire: BTreeMap<u64, MsgMetadata>,
+
+    /// Optional `specs/18` §2.3 "remaining bytes" gauges, refreshed after every
+    /// pool mutation. `None` when the throttler runs without a metrics registry.
+    metrics: Option<RemainingGauges>,
+}
+
+impl Inner {
+    /// Pushes the current pool balances to the §2.3 remaining-bytes gauges (if
+    /// a metrics handle is attached). Pool balances are ≤ the configured pool
+    /// sizes (tens of MiB), well within `i64`.
+    fn publish_remaining(&self) {
+        if let Some(g) = &self.metrics {
+            g.at_large
+                .set(i64::try_from(self.remaining_at_large_bytes).unwrap_or(i64::MAX));
+            g.validator
+                .set(i64::try_from(self.remaining_vdr_bytes).unwrap_or(i64::MAX));
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -115,8 +144,28 @@ impl InboundMsgByteThrottler {
                 next_msg_id: 0,
                 node_to_waiting_msg_id: BTreeMap::new(),
                 waiting_to_acquire: BTreeMap::new(),
+                metrics: None,
             })),
         }
+    }
+
+    /// Attaches the `specs/18` §2.3 inbound-byte "remaining" gauges
+    /// (`byte_throttler_inbound_remaining_{at_large,validator}_bytes`). After
+    /// this call every pool mutation refreshes the gauges, and the current
+    /// balances are published immediately so a fresh scrape sees the full pool
+    /// sizes. No-op semantics are preserved when never called (the gauges stay
+    /// at `0`, their registered default).
+    pub fn set_metrics(&self, metrics: &crate::metrics::Metrics) {
+        let mut inner = self.inner.lock();
+        inner.metrics = Some(RemainingGauges {
+            at_large: metrics
+                .byte_throttler_inbound_remaining_at_large_bytes
+                .clone(),
+            validator: metrics
+                .byte_throttler_inbound_remaining_validator_bytes
+                .clone(),
+        });
+        inner.publish_remaining();
     }
 
     /// Acquires `size` bytes for `node`, blocking until they are available.
@@ -183,6 +232,7 @@ impl InboundMsgByteThrottler {
             }
 
             if bytes_needed == 0 {
+                inner.publish_remaining();
                 return Some(self.permit(size, node));
             }
 
@@ -196,6 +246,8 @@ impl InboundMsgByteThrottler {
                 inner.remaining_vdr_bytes = inner.remaining_vdr_bytes.saturating_sub(vdr_used);
                 bytes_needed = bytes_needed.saturating_sub(vdr_used);
             }
+
+            inner.publish_remaining();
 
             if bytes_needed == 0 {
                 return Some(self.permit(size, node));
@@ -379,6 +431,9 @@ impl Inner {
             }
             self.remaining_vdr_bytes = self.remaining_vdr_bytes.saturating_add(vdr_to_return);
         }
+
+        // metrics: pool balances changed — refresh the §2.3 remaining gauges.
+        self.publish_remaining();
     }
 }
 

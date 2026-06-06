@@ -115,6 +115,43 @@ runtime task #23 in `specs/17` §2).
 - **Deferred to later M2 tasks:** none remaining in the test surface — M2.20
   (`avalanche_network_*` metrics) and M2.21 (`prop::handshake_reaches_connected`)
   are complete; the live-Fuji arm of M2.22 is the only env-gated/nightly item.
+- **M2.20b — live metric-increment wiring.** M2.20 registered the metric
+  families (names/types/labels, parity-tested by `metrics::metric_names_match_go`)
+  and left the `+1`/observe call sites as `// metrics:` notes. M2.20b wires them:
+  - **Threading.** `PeerConfig` gained an `Option<PeerMetrics>` (set via
+    `PeerConfig::with_peer_metrics`); `NetworkImpl` gained an `Option<Metrics>`
+    (set via the new `NetworkImpl::new_with_metrics` — `NetworkImpl::new` stays
+    signature-stable, defaulting metrics to `None`); `InboundMsgByteThrottler`
+    gained `set_metrics`. `network::testutil::TestNetwork` now builds a real
+    `prometheus::Registry`, registers both metric structs, attaches them, and
+    exposes `registry()` so tests can `gather()`.
+  - **Wired sites:** `times_connected`/`times_disconnected` (NetworkImpl
+    `watch_peer`), `tls_conn_rejected` (inbound accept-path TLS upgrade `Err`
+    arm — see finding below), per-peer `msgs`/`msgs_bytes`/`msgs_bytes_saved` +
+    `msgs_failed_to_{parse,send}` (peer `handle_inbound`/`write_frame`), and
+    `byte_throttler_inbound_remaining_{at_large,validator}_bytes` (pushed by the
+    inbound byte throttler on every pool mutation).
+  - **Test:** `tests/metrics_increments.rs` (2 tests) gathers the registry and
+    asserts live changes — `live_increments_after_two_networks_connect` (covers
+    `times_connected` + `msgs{io=sent}`/`msgs{io=received}` + the remaining-bytes
+    gauge over a real two-network TLS handshake) and
+    `tls_conn_rejected_increments_on_failed_upgrade` (raw-bytes client → failed
+    inbound TLS upgrade).
+  - **Finding — `tls_conn_rejected` placement.** Go increments this at the
+    listener's inbound TLS upgrade-failure path; the rustls custom verifier
+    callback (`peer::verifier`) has no `Metrics` handle, so the reject is metered
+    one level up, at `NetworkImpl::handle_accepted`'s upgrade-`Err` arm where the
+    rejection surfaces. This counts *all* inbound upgrade failures (a pure I/O
+    failure mid-handshake also lands here), matching Go's behaviour where a
+    failed `peer.upgrade` on the accept path bumps the counter.
+  - **Deferred past M2.20b (with reason):** `num_useless_peerlist_bytes` — the
+    `PeerList` ingest calls `IpTracker::add_claimed_ip_port`, which does not yet
+    return a per-claim useless-byte delta; surfacing that is a larger IP-tracker
+    change owned by the peer-list-gossip accounting milestone. Also still
+    deferred: the `peers`/`peers_subnet` gauges (peer-set bookkeeping), the
+    uptime gauges (uptime calculator / validator-set source), and the remaining
+    throttler `awaiting_*` / outbound gauges (their runtime surfaces are not yet
+    in this crate). All remain registered + name-parity-tested.
 - **NAT-PMP/PCP is deferred (M2.19).** `igd-next` covers only the UPnP IGD path;
   the Go reference probes NAT-PMP only as a *secondary* fallback after UPnP
   (`nat.getPMPRouter`), and CI has no PMP gateway either way, so `get_pmp_router`

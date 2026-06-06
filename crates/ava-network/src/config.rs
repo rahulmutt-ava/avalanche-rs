@@ -25,6 +25,7 @@ use ava_version::compatibility::Compatibility;
 use crate::identity::Identity;
 use crate::network::ip_tracker::IpTracker;
 use crate::peer::ip_signer::{Clock, IpSigner};
+use crate::peer::metrics::PeerMetrics;
 use crate::router::ExternalHandler;
 use crate::throttling::inbound_msg_byte::InboundMsgByteThrottler;
 use crate::throttling::outbound_msg::OutboundMsgThrottler;
@@ -117,6 +118,13 @@ pub struct PeerConfig {
 
     /// Read deadline per frame. Defaults to [`PONG_TIMEOUT`].
     pub pong_timeout: Duration,
+
+    /// Per-peer message I/O metrics (`specs/18` §2.2; M2.20/M2.20b). The peer
+    /// read/write tasks record `msgs`/`msgs_bytes`/`msgs_bytes_saved` +
+    /// `msgs_failed_to_{parse,send}` through this shared handle. `None` when the
+    /// peer runs without a metrics registry (e.g. some unit tests); the actor
+    /// no-ops the observations in that case.
+    pub peer_metrics: Option<PeerMetrics>,
 }
 
 impl PeerConfig {
@@ -157,6 +165,17 @@ impl PeerConfig {
             clock,
             ping_frequency: PING_FREQUENCY,
             pong_timeout: PONG_TIMEOUT,
+            peer_metrics: None,
         }
+    }
+
+    /// Attaches the shared per-peer message I/O metrics handle (`specs/18`
+    /// §2.2). Builder-style so `new` stays signature-stable: callers that have a
+    /// metrics registry (the `Network`) set it; tests without one leave it
+    /// `None`.
+    #[must_use]
+    pub fn with_peer_metrics(mut self, peer_metrics: PeerMetrics) -> Self {
+        self.peer_metrics = Some(peer_metrics);
+        self
     }
 }

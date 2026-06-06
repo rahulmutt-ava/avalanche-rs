@@ -18,13 +18,26 @@
 //! therefore asserts the bare names; the `avalanche_network_` prefix is verified
 //! end-to-end by the node-level metrics test in a later milestone.
 //!
-//! ## Wiring status (M2.20)
+//! ## Wiring status (M2.20 → M2.20b)
 //!
 //! Registration + exact names/labels is the hard requirement of M2.20 and is
-//! complete. Live increments are wired where they are low-risk; the remaining
-//! call sites carry a `// metrics:` note and are left for the milestone that
-//! owns the corresponding runtime surface (peer-set bookkeeping, the dial/accept
-//! loops, the uptime calculator). Every metric below is registered and
+//! complete. M2.20b wired the live `+1`/observe call sites for the families that
+//! had a runtime surface in M2 (see `network/net_impl.rs` and
+//! `throttling/inbound_msg_byte.rs`):
+//!
+//! - `times_connected` / `times_disconnected` — the `NetworkImpl::watch_peer`
+//!   handshake-completion / post-handshake-close bookkeeping.
+//! - `tls_conn_rejected` — the inbound accept-path TLS upgrade reject.
+//! - `byte_throttler_inbound_remaining_{at_large,validator}_bytes` — pushed by
+//!   the inbound byte throttler on every pool mutation (see
+//!   [`InboundMsgByteThrottler::set_metrics`](crate::throttling::inbound_msg_byte::InboundMsgByteThrottler::set_metrics)).
+//! - per-peer `msgs*` — see `peer/metrics.rs`.
+//!
+//! Still carrying a `// metrics:` note (deferred to the milestone that owns the
+//! surface): `num_useless_peerlist_bytes` (the IP tracker does not yet report a
+//! per-claim useless-byte delta), the uptime/`peers`/`peers_subnet` gauges (the
+//! uptime calculator + validator-set source), and the remaining throttler
+//! `awaiting_*` / outbound gauges. Every metric below is registered and
 //! constructible regardless.
 
 use prometheus::{Counter, Gauge, GaugeVec, IntGauge, Opts, Registry};
@@ -343,8 +356,9 @@ impl Metrics {
 
     /// Records a completed handshake (Go `network.Connected`).
     ///
-    /// metrics: wired here so the `Network` increments on every successful
-    /// handshake completion; the `peers` gauge is set by the peer set.
+    /// metrics (M2.20b): called from `NetworkImpl::watch_peer` on every
+    /// successful handshake completion; the `peers` gauge is set by the peer set
+    /// (still deferred to the peer-set bookkeeping milestone).
     pub fn observe_connected(&self) {
         self.times_connected.inc();
     }
@@ -356,24 +370,33 @@ impl Metrics {
 
     /// Records a connection rejected for an unsupported TLS certificate.
     ///
-    /// metrics: wired at the upgrader/verifier reject path when the rustls
-    /// verifier callback is threaded a `Metrics` handle (a later milestone);
-    /// callers that already detect the reject increment this directly.
+    /// metrics (M2.20b): called from `NetworkImpl::handle_accepted` when the
+    /// inbound TLS upgrade fails (the rustls verifier rejects the leaf key, or
+    /// the handshake otherwise fails) — Go's listener upgrade-failure counter.
+    /// The rustls verifier callback itself has no `Metrics` handle, so the
+    /// reject is metered at the accept-path `Err` arm where it surfaces.
     pub fn observe_tls_conn_rejected(&self) {
         self.tls_conn_rejected.inc();
     }
 
     /// Adds `bytes` useless `PeerList` bytes (Go `numUselessPeerListBytes.Add`).
     ///
-    /// metrics: wired at the `PeerList` gossip-ingest site when the IP tracker
-    /// reports newly-useless bytes; registration is unconditional.
+    /// metrics (deferred past M2.20b): the `PeerList` gossip-ingest site
+    /// (`peer::handshake::handle_peer_list`) calls `IpTracker::add_claimed_ip_port`,
+    /// which does not yet report a per-claim useless-byte delta. Wiring this
+    /// requires the IP tracker to surface "newly-useless bytes" — a larger
+    /// change owned by the peer-list-gossip accounting milestone. Registration
+    /// is unconditional.
     pub fn add_useless_peerlist_bytes(&self, bytes: f64) {
         self.num_useless_peerlist_bytes.inc_by(bytes);
     }
 
     /// Sets the inbound byte-throttler "remaining" gauges from the throttler's
-    /// current pool state. Low-risk: the caller already holds the counts, so no
-    /// throttler refactor is required to push them here.
+    /// current pool state. In production these gauges are pushed automatically
+    /// by the throttler itself (M2.20b, see
+    /// [`InboundMsgByteThrottler::set_metrics`](crate::throttling::inbound_msg_byte::InboundMsgByteThrottler::set_metrics));
+    /// this convenience setter remains for callers that hold the counts directly
+    /// (e.g. focused tests).
     pub fn set_inbound_byte_remaining(&self, at_large: i64, validator: i64) {
         self.byte_throttler_inbound_remaining_at_large_bytes
             .set(at_large);

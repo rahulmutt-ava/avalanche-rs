@@ -343,7 +343,29 @@ impl Peer {
         let mut framed = Vec::with_capacity(4usize.saturating_add(msg.bytes.len()));
         framed.extend_from_slice(&len.to_be_bytes());
         framed.extend_from_slice(&msg.bytes);
-        write.write_all(&framed).await
+        let result = write.write_all(&framed).await;
+
+        // metrics: a sent / failed-to-send message (`msgs`/`msgs_bytes`/
+        // `msgs_bytes_saved` by `io="sent"` on success, else
+        // `msgs_failed_to_send` by `op`, `specs/18` §2.2). Wire bytes = the
+        // proto payload length on the wire; `compressed` reflects whether the
+        // outbound wrapper carried zstd (`bytes_saved_compression > 0`).
+        if let Some(m) = &self.cfg.peer_metrics {
+            match &result {
+                Ok(()) => {
+                    let saved = msg.bytes_saved_compression;
+                    m.observe_sent(
+                        msg.op,
+                        saved > 0,
+                        bytes_to_f64(msg.bytes.len()),
+                        i64_to_f64(saved.max(0)),
+                    );
+                }
+                Err(_) => m.observe_failed_to_send(msg.op),
+            }
+        }
+
+        result
     }
 
     /// The net-messages task (Go `sendNetworkMessages`).
@@ -442,7 +464,33 @@ impl Peer {
     ) -> crate::Result<()> {
         use ava_message::proto::p2p::message::Message as M;
 
-        let inbound = mb.parse_inbound(payload)?;
+        let inbound = match mb.parse_inbound(payload) {
+            Ok(inbound) => inbound,
+            Err(e) => {
+                // metrics: a received message that failed to parse
+                // (`msgs_failed_to_parse`, `specs/18` §2.2).
+                if let Some(m) = &self.cfg.peer_metrics {
+                    m.observe_failed_to_parse();
+                }
+                return Err(e.into());
+            }
+        };
+
+        // metrics: a successfully-received message (`msgs`/`msgs_bytes`/
+        // `msgs_bytes_saved` by `io="received"`, `op`, `compressed`,
+        // `specs/18` §2.2). Wire bytes = the on-wire framed payload length;
+        // `compressed` reflects whether the outer wrapper carried zstd
+        // (`bytes_saved_compression > 0`).
+        if let Some(m) = &self.cfg.peer_metrics {
+            let saved = inbound.bytes_saved_compression;
+            m.observe_received(
+                inbound.op,
+                saved > 0,
+                bytes_to_f64(payload.len()),
+                i64_to_f64(saved.max(0)),
+            );
+        }
+
         match inbound.message {
             M::Handshake(h) => self.handle_handshake(h),
             M::PeerList(pl) => self.handle_peer_list(pl),
@@ -498,6 +546,22 @@ impl Peer {
         // ran at handshake.
         Ok(())
     }
+}
+
+/// A byte count (`usize`, ≤ `MAX_MESSAGE_SIZE = 2 MiB`) as the `f64` a
+/// Prometheus counter observes. The values are far below `2^53`, so the
+/// conversion is exact.
+fn bytes_to_f64(n: usize) -> f64 {
+    // u32::try_from is infallible for any realistic message length; the cast to
+    // f64 is then lossless. Fall back via the saturating u32 on overflow.
+    f64::from(u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+/// A non-negative `i64` "bytes saved by compression" value as the `f64` a
+/// Prometheus counter observes (saved ≤ `MAX_MESSAGE_SIZE`, well within `2^53`).
+fn i64_to_f64(n: i64) -> f64 {
+    let clamped = n.clamp(0, i64::from(u32::MAX));
+    f64::from(u32::try_from(clamped).unwrap_or(u32::MAX))
 }
 
 /// Current time in Unix nanoseconds from an injected clock (seconds resolution),

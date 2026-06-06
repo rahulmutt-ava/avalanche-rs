@@ -31,6 +31,7 @@ use tokio_util::task::TaskTracker;
 use crate::Result;
 use crate::config::PeerConfig;
 use crate::dialer::Dialer;
+use crate::metrics::Metrics;
 use crate::network::ip_tracker::{
     IpTracker, PEER_LIST_BLOOM_RESET_FREQ, PEER_LIST_PULL_GOSSIP_FREQ,
 };
@@ -57,6 +58,11 @@ pub struct NetworkImpl {
     connected: Arc<PeerSet>,
     conn_upgrade_throttler:
         Arc<crate::throttling::inbound_conn_upgrade::InboundConnUpgradeThrottler>,
+    /// Connection-level `avalanche_network_*` metrics (`specs/18` §2.1). Holds
+    /// the `tls_conn_rejected`, `times_connected`, and `times_disconnected`
+    /// counters incremented by the accept/dial/watch paths. `None` when the
+    /// network runs without a metrics registry.
+    metrics: Option<Metrics>,
     net_token: CancellationToken,
     tasks: TaskTracker,
 }
@@ -67,6 +73,31 @@ impl NetworkImpl {
     /// # Errors
     /// [`crate::Error::TlsConfig`] if building the TLS configs fails.
     pub fn new(peer_config: Arc<PeerConfig>, listener: TcpListener) -> Result<Arc<NetworkImpl>> {
+        Self::new_inner(peer_config, listener, None)
+    }
+
+    /// Build a network with the connection-level `avalanche_network_*` metrics
+    /// attached (`specs/18` §2.1). `metrics` supplies the `tls_conn_rejected`,
+    /// `times_connected`, and `times_disconnected` counters. The per-peer I/O
+    /// metrics and the byte-throttler "remaining" gauges are wired into the
+    /// `PeerConfig` / throttler by the caller before construction (see
+    /// `PeerConfig::with_peer_metrics` / `InboundMsgByteThrottler::set_metrics`).
+    ///
+    /// # Errors
+    /// [`crate::Error::TlsConfig`] if building the TLS configs fails.
+    pub fn new_with_metrics(
+        peer_config: Arc<PeerConfig>,
+        listener: TcpListener,
+        metrics: Metrics,
+    ) -> Result<Arc<NetworkImpl>> {
+        Self::new_inner(peer_config, listener, Some(metrics))
+    }
+
+    fn new_inner(
+        peer_config: Arc<PeerConfig>,
+        listener: TcpListener,
+        metrics: Option<Metrics>,
+    ) -> Result<Arc<NetworkImpl>> {
         let listen_addr = listener.local_addr()?;
         let server_cfg = crate::peer::tls_config::server_config(&peer_config.identity)?;
         let client_cfg = crate::peer::tls_config::client_config(&peer_config.identity)?;
@@ -92,6 +123,7 @@ impl NetworkImpl {
             connecting: Arc::new(PeerSet::new()),
             connected: Arc::new(PeerSet::new()),
             conn_upgrade_throttler,
+            metrics,
             net_token: CancellationToken::new(),
             tasks: TaskTracker::new(),
         }))
@@ -121,6 +153,11 @@ impl NetworkImpl {
                 () = handle.finished_handshake() => {
                     this.connecting.remove(&node);
                     this.connected.insert(handle.clone());
+                    // metrics: a completed handshake (`times_connected`,
+                    // `specs/18` §2.1).
+                    if let Some(m) = &this.metrics {
+                        m.observe_connected();
+                    }
                 }
                 () = handle.closed() => {
                     this.connecting.remove(&node);
@@ -132,6 +169,11 @@ impl NetworkImpl {
             handle.closed().await;
             this.connecting.remove(&node);
             this.connected.remove(&node);
+            // metrics: a post-handshake disconnect (`times_disconnected`,
+            // `specs/18` §2.1).
+            if let Some(m) = &this.metrics {
+                m.observe_disconnected();
+            }
             this.peer_config.router.disconnected(node);
         });
     }
@@ -141,17 +183,28 @@ impl NetworkImpl {
         let this = Arc::clone(self);
         self.tasks.spawn(async move {
             let upgraded = this.server_upgrader.upgrade(stream).await;
-            if let Ok((node_id, tls, cert)) = upgraded {
-                let handle = Peer::spawn(
-                    Arc::clone(&this.peer_config),
-                    node_id,
-                    cert,
-                    Direction::Inbound,
-                    tls,
-                    &this.net_token,
-                    &this.tasks,
-                );
-                this.watch_peer(handle);
+            match upgraded {
+                Ok((node_id, tls, cert)) => {
+                    let handle = Peer::spawn(
+                        Arc::clone(&this.peer_config),
+                        node_id,
+                        cert,
+                        Direction::Inbound,
+                        tls,
+                        &this.net_token,
+                        &this.tasks,
+                    );
+                    this.watch_peer(handle);
+                }
+                Err(_) => {
+                    // metrics: an inbound connection rejected at the TLS upgrade
+                    // (unsupported leaf cert / failed handshake), Go
+                    // `tls_conn_rejected` (`specs/18` §2.1). Mirrors Go's
+                    // listener upgrade-failure counter.
+                    if let Some(m) = &this.metrics {
+                        m.observe_tls_conn_rejected();
+                    }
+                }
             }
         });
     }
