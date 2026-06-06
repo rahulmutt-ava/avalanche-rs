@@ -43,6 +43,9 @@ use ava_types::id::Id;
 
 pub mod sha;
 
+#[cfg(feature = "firewood-ethhash")]
+pub mod ethhash;
+
 /// Default number of historical revisions firewood retains.
 ///
 /// This bounds the reorg/state-sync window: `db.revision(root)` can read any of

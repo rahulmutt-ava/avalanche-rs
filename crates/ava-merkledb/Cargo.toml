@@ -61,6 +61,11 @@ sync = ["dep:prost", "dep:tonic", "dep:tokio"]
 # Implies `sync`: M1.20 implements the `SyncDb` trait (M1.19) for the firewood
 # path, so the firewood backend always carries the state-sync protocol.
 firewood = ["dep:firewood", "dep:firewood-storage", "sync"]
+# Firewood backend in Ethereum (Keccak-256 + Eth-MPT/RLP) hashing mode, used for
+# the EVM state root (specs 04 §4.1 ethhash, 15 §6). Turns on `firewood/ethhash`
+# (+ `firewood-storage/ethhash`), which globally switches firewood to Keccak
+# hashing. Implies `firewood`.
+firewood-ethhash = ["firewood", "firewood/ethhash", "firewood-storage/ethhash"]
 
 [build-dependencies]
 # Compiles proto/sync/sync.proto into OUT_DIR when the `sync` feature is active.

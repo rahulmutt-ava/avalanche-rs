@@ -1110,6 +1110,7 @@ dependencies = [
  "nonzero_ext",
  "parking_lot",
  "sha2",
+ "sha3",
  "smallvec",
  "thiserror 2.0.18",
  "triomphe",

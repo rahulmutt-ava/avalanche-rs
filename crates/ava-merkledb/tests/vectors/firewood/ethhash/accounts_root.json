@@ -1,0 +1,28 @@
+{
+  "batch": [
+    {
+      "key": "58500877827bf0616be76350adb62c8c20256bd80856439b845c47c093a6c511",
+      "value": "f84701830f4240a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+    },
+    {
+      "key": "9944624a1373098985d49b08f0837f8605c0aa3578fcffa986ab9f2642dfc782",
+      "value": "f8448080a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+    },
+    {
+      "key": "85299ee07e5f6e71d6da83368d19cb2b45510cc358afd39eb3667a810b172815",
+      "value": "f8462a827a69a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+    },
+    {
+      "key": "a26cab3decbc9efcd047cc987b81878324caeda146300422f0bac04027985270",
+      "value": "82dead"
+    },
+    {
+      "key": "8518393bf8ae6ecc964cbf13efd496d56c53edb1fbf18dd2caeb9a705769a53c",
+      "value": "82beef"
+    }
+  ],
+  "description": "REAL firewood ethhash (Keccak/Eth-MPT) state root for a fixed RLP-account+storage batch, extracted from firewood-go-ethhash/ffi v0.5.0.",
+  "empty_root": "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
+  "node_hash_algorithm": "Ethereum",
+  "root": "eb8b07d672d5bdfbde9f8d3822ab0e121fea56790222e7a495195dc1fcb55df6"
+}
