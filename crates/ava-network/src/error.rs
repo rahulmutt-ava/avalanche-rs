@@ -73,6 +73,71 @@ pub enum Error {
     /// A low-level I/O error during the TCP/TLS upgrade.
     #[error("io error: {0}")]
     Io(String),
+
+    // --- Handshake disconnect reasons (`specs/05` §1.4; M2.15) ---
+    /// The peer reported a different `network_id` than ours.
+    #[error("network ID mismatch: peer {peer}, ours {ours}")]
+    NetworkIdMismatch {
+        /// The peer's reported network ID.
+        peer: u32,
+        /// Our network ID.
+        ours: u32,
+    },
+
+    /// The peer's `my_time` differs from ours by more than `maxClockDifference`.
+    #[error("clock difference too large: {peer}s vs {ours}s")]
+    ClockSkew {
+        /// The peer's reported Unix time (seconds).
+        peer: u64,
+        /// Our Unix time (seconds).
+        ours: u64,
+    },
+
+    /// The peer's reported version is incompatible with ours (`specs/26` §3).
+    #[error("incompatible version: {0}")]
+    IncompatibleVersion(String),
+
+    /// The peer advertised more than `maxNumTrackedSubnets` (16) subnets.
+    #[error("too many tracked subnets: {0}")]
+    TooManyTrackedSubnets(usize),
+
+    /// The peer's supported and objected ACP sets overlap.
+    #[error("supported and objected ACPs overlap")]
+    AcpConflict,
+
+    /// The peer advertised a zero port or otherwise invalid IP.
+    #[error("invalid peer IP/port")]
+    InvalidPeerIp,
+
+    /// The peer sent a second Handshake on the same connection.
+    #[error("duplicate handshake")]
+    DuplicateHandshake,
+
+    /// The bloom-filter salt exceeded `maxBloomSaltLen` (32 bytes).
+    #[error("bloom salt too long: {0} bytes")]
+    BloomSaltTooLong(usize),
+
+    /// A handshake field was missing or malformed (e.g. absent `Client`).
+    #[error("malformed handshake: {0}")]
+    MalformedHandshake(String),
+
+    /// A peer reported a `Ping` uptime greater than 100.
+    #[error("invalid uptime: {0}")]
+    InvalidUptime(u32),
+
+    /// A `Pong` arrived with no `Ping` outstanding.
+    #[error("unsolicited pong")]
+    UnsolicitedPong,
+
+    /// Building / encoding an outbound message failed.
+    #[error("message build error: {0}")]
+    Message(String),
+}
+
+impl From<ava_message::Error> for Error {
+    fn from(e: ava_message::Error) -> Self {
+        Error::Message(e.to_string())
+    }
 }
 
 impl From<std::io::Error> for Error {

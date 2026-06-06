@@ -14,14 +14,12 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use ava_message::builder::Creator;
-use ava_message::codec::{InboundMessage, MsgBuilder};
+use ava_message::codec::InboundMessage;
 use ava_network::config::PeerConfig;
 use ava_network::router::{AppVersion, ExternalHandler, InboundHandler};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_version::Application;
-use ava_version::compatibility::Compatibility;
 use tokio_util::sync::CancellationToken;
 
 /// A no-op router used to prove the traits are object-safe and have the exact
@@ -48,22 +46,16 @@ fn inbound_handler_object_safe() {
 }
 
 /// Builds a `PeerConfig` whose floor switch has not yet fired (upgrade far in
-/// the future), so the floor is `min_compatible`.
-fn test_peer_config() -> PeerConfig {
-    let creator = Arc::new(Creator::new(MsgBuilder::default()));
-    let current = Application::new("avalanchego", 1, 14, 2);
-    let min_compatible = Application::new("avalanchego", 1, 14, 0);
-    let min_after = Application::new("avalanchego", 1, 14, 0);
+/// the future), so the floor is `min_compatible`. Uses the crate's test builder
+/// so the full collaborator set (throttlers, IP signer, clock) is supplied.
+fn test_peer_config() -> Arc<PeerConfig> {
     let upgrade_time = SystemTime::now()
         .checked_add(Duration::from_secs(365 * 24 * 60 * 60))
         .expect("upgrade_time in range");
-    let compat = Arc::new(Compatibility::new(
-        current,
-        min_after,
-        min_compatible,
-        upgrade_time,
-    ));
-    PeerConfig::new(1, NodeId::default(), creator, Arc::new(TestHandler), compat)
+    ava_network::peer::testutil::TestPeerBuilder::new()
+        .version(Application::new("avalanchego", 1, 14, 2))
+        .upgrade_time(upgrade_time)
+        .build_config()
 }
 
 #[test]

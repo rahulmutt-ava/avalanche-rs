@@ -28,7 +28,6 @@ tokio-util = { workspace = true }
 x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 arc-swap = { workspace = true }
-tokio = { workspace = true }
 # Outbound queue byte-pool accounting + the conn-upgrade per-IP cooldown map +
 # global token bucket (M2.12/M2.13). DashMap/governor are intentionally avoided —
 # the Go reference guards all state under one mutex, so parking_lot::Mutex<HashMap>
@@ -39,6 +38,13 @@ parking_lot = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
 ring = { workspace = true }
+# Wave C peer actor (M2.14+): the read/write tasks need tokio::io (split, duplex,
+# AsyncReadExt/AsyncWriteExt) and the runtime/sync/time features for the three
+# per-peer tasks. `io-util` adds the duplex stream used by the in-process tests.
+tokio = { workspace = true, features = [ "io-util", "macros", "sync", "time", "rt" ] }
+# Zero-copy inbound payload buffers (`bytes::Bytes`) on the read path (`specs/17`
+# §10); the outbound queue reads `OutboundMessage.bytes: Bytes`.
+bytes = { workspace = true }
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
