@@ -14,6 +14,7 @@ pub mod handshake;
 pub mod ip;
 pub mod ip_signer;
 pub mod message_queue;
+pub mod metrics;
 #[allow(clippy::module_inception)]
 pub mod peer;
 pub mod testutil;
