@@ -114,21 +114,44 @@ impl Peer {
         Ok(())
     }
 
-    /// Handle an inbound `PeerList` (`specs/05` §1.4). If we have processed the
-    /// peer's `Handshake` and the handshake is not yet finished, complete it.
-    pub(crate) fn handle_peer_list(self: &Arc<Self>, _pl: p2p::PeerList) -> crate::Result<()> {
+    /// Handle an inbound `PeerList` (`specs/05` §1.4/§3.5). Authenticate and
+    /// track each `ClaimedIpPort` (a bad signed IP is dropped, not fatal — Go
+    /// logs and skips). If we have processed the peer's `Handshake` and the
+    /// handshake is not yet finished, complete it.
+    pub(crate) fn handle_peer_list(self: &Arc<Self>, pl: p2p::PeerList) -> crate::Result<()> {
+        let now = self.cfg.clock.unix();
+        for claimed in &pl.claimed_ip_ports {
+            // Track only verified claims; ignore (don't disconnect on) a bad one.
+            let _ = self.cfg.ip_tracker.add_claimed_ip_port(claimed, now);
+        }
+
         if self.got_handshake.load(Ordering::Acquire) && !self.finished_handshake.is_cancelled() {
             self.finish_handshake();
         }
         Ok(())
     }
 
-    /// Handle an inbound `GetPeerList` (`specs/05` §1.4). Not answered until the
-    /// handshake has finished. Full gossip response is M2.17.
+    /// Handle an inbound `GetPeerList` (`specs/05` §1.4/§3.5). Not answered
+    /// until the handshake has finished; then reply with the validator IPs the
+    /// requester does not yet know (per its bloom filter + salt).
     pub(crate) fn handle_get_peer_list(
         self: &Arc<Self>,
-        _gpl: p2p::GetPeerList,
+        gpl: p2p::GetPeerList,
     ) -> crate::Result<()> {
+        // GetPeerList is not answered until the handshake is finished.
+        if !self.finished_handshake.is_cancelled() {
+            return Ok(());
+        }
+        let (filter, salt) = match &gpl.known_peers {
+            Some(bf) => (bf.filter.clone(), bf.salt.clone()),
+            None => return Ok(()),
+        };
+        // A salt over the max is a protocol error (cross-check §1.4).
+        let peers = self.cfg.ip_tracker.peers(&filter, &salt)?;
+        if !peers.is_empty() {
+            let msg = self.cfg.creator.peer_list(&peers, false)?;
+            self.reply(msg);
+        }
         Ok(())
     }
 

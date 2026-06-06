@@ -23,6 +23,7 @@ use ava_types::node_id::NodeId;
 use ava_version::compatibility::Compatibility;
 
 use crate::identity::Identity;
+use crate::network::ip_tracker::IpTracker;
 use crate::peer::ip_signer::{Clock, IpSigner};
 use crate::router::ExternalHandler;
 use crate::throttling::inbound_msg_byte::InboundMsgByteThrottler;
@@ -104,6 +105,9 @@ pub struct PeerConfig {
     /// Inbound message byte throttler (`specs/05` §5; M2.13).
     pub inbound_msg_throttler: Arc<InboundMsgByteThrottler>,
 
+    /// Shared IP-tracker / peer-list-gossip state (`specs/05` §3.5; M2.17).
+    pub ip_tracker: Arc<IpTracker>,
+
     /// Injected clock: source of `my_time`, the clock-skew bound, and the
     /// compatibility floor selection. Tests inject a controllable clock.
     pub clock: Arc<dyn Clock>,
@@ -131,6 +135,7 @@ impl PeerConfig {
         ip_signer: Arc<IpSigner>,
         outbound_msg_throttler: OutboundMsgThrottler,
         inbound_msg_throttler: Arc<InboundMsgByteThrottler>,
+        ip_tracker: Arc<IpTracker>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -148,6 +153,7 @@ impl PeerConfig {
             ip_signer,
             outbound_msg_throttler,
             inbound_msg_throttler,
+            ip_tracker,
             clock,
             ping_frequency: PING_FREQUENCY,
             pong_timeout: PONG_TIMEOUT,

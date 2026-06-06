@@ -196,6 +196,7 @@ impl TestPeerBuilder {
         ));
 
         let my_ip = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9651);
+        let ip_tracker = Arc::new(crate::network::ip_tracker::IpTracker::new());
 
         Arc::new(PeerConfig::new(
             self.network_id,
@@ -209,6 +210,7 @@ impl TestPeerBuilder {
             ip_signer,
             outbound,
             inbound,
+            ip_tracker,
             clock,
         ))
     }
