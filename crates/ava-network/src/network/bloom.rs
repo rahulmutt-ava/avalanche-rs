@@ -55,12 +55,14 @@ pub fn hash(key: &[u8], salt: &[u8]) -> u64 {
     // SHA256(key || salt); avoids an extra hashing dependency by reusing
     // `ava-crypto`'s SHA-256 (identical to Go's `sha256.New().Write(key);
     // Write(salt)`).
-    let mut buf = Vec::with_capacity(key.len() + salt.len());
+    let mut buf = Vec::with_capacity(key.len().saturating_add(salt.len()));
     buf.extend_from_slice(key);
     buf.extend_from_slice(salt);
     let digest = ava_crypto::hashing::sha256(&buf);
     let mut first8 = [0u8; 8];
-    first8.copy_from_slice(&digest[..8]);
+    if let Some(prefix) = digest.get(..8) {
+        first8.copy_from_slice(prefix);
+    }
     u64::from_be_bytes(first8)
 }
 
@@ -78,34 +80,45 @@ impl ReadFilter {
     /// A [`BloomError`] if the blob is malformed or has out-of-range counts.
     pub fn parse(bytes: &[u8]) -> Result<ReadFilter, BloomError> {
         let num_hashes = *bytes.first().ok_or(BloomError::InvalidNumHashes)? as usize;
-        let entries_offset = 1 + num_hashes * BYTES_PER_U64;
         if num_hashes < MIN_HASHES {
             return Err(BloomError::TooFewHashes(num_hashes));
         }
         if num_hashes > MAX_HASHES {
             return Err(BloomError::TooManyHashes(num_hashes));
         }
-        if bytes.len() < entries_offset + MIN_ENTRIES {
+        // `num_hashes <= MAX_HASHES (16)`, so these products/sums never overflow
+        // a `usize`; use checked arithmetic to satisfy the lint regardless.
+        let entries_offset = num_hashes
+            .checked_mul(BYTES_PER_U64)
+            .and_then(|n| n.checked_add(1))
+            .ok_or(BloomError::TooFewEntries)?;
+        let min_len = entries_offset
+            .checked_add(MIN_ENTRIES)
+            .ok_or(BloomError::TooFewEntries)?;
+        if bytes.len() < min_len {
             return Err(BloomError::TooFewEntries);
         }
 
         let mut hash_seeds = Vec::with_capacity(num_hashes);
         for i in 0..num_hashes {
-            let start = 1 + i * BYTES_PER_U64;
+            let start = i.saturating_mul(BYTES_PER_U64).saturating_add(1);
+            let end = start.saturating_add(8);
+            let raw = bytes.get(start..end).ok_or(BloomError::TooFewEntries)?;
             let mut seed = [0u8; 8];
-            seed.copy_from_slice(&bytes[start..start + 8]);
+            seed.copy_from_slice(raw);
             hash_seeds.push(u64::from_be_bytes(seed));
         }
-        Ok(ReadFilter {
-            hash_seeds,
-            entries: bytes[entries_offset..].to_vec(),
-        })
+        let entries = bytes
+            .get(entries_offset..)
+            .ok_or(BloomError::TooFewEntries)?
+            .to_vec();
+        Ok(ReadFilter { hash_seeds, entries })
     }
 
     /// Returns whether `hash` is (possibly) present (Go `ReadFilter.Contains`).
     #[must_use]
     pub fn contains(&self, mut hash: u64) -> bool {
-        let num_bits = BITS_PER_BYTE * self.entries.len() as u64;
+        let num_bits = BITS_PER_BYTE.saturating_mul(self.entries.len() as u64);
         if num_bits == 0 {
             return false;
         }
@@ -115,11 +128,12 @@ impl ReadFilter {
                 break;
             }
             hash = hash.rotate_left(HASH_ROTATION) ^ seed;
-            let index = hash % num_bits;
-            let byte_index = (index / BITS_PER_BYTE) as usize;
-            let bit_index = (index % BITS_PER_BYTE) as u32;
+            // `num_bits != 0` (early-returned above); use checked ops anyway.
+            let index = hash.checked_rem(num_bits).unwrap_or(0);
+            let byte_index = (index.checked_div(BITS_PER_BYTE).unwrap_or(0)) as usize;
+            let bit_index = (index.checked_rem(BITS_PER_BYTE).unwrap_or(0)) as u32;
             let entry = self.entries.get(byte_index).copied().unwrap_or(0);
-            accumulator &= entry >> bit_index;
+            accumulator &= entry.checked_shr(bit_index).unwrap_or(0);
         }
         accumulator != 0
     }

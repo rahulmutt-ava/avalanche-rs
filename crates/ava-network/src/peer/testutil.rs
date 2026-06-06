@@ -6,7 +6,15 @@
 //! `ping_pong` integration tests. Not part of the production API surface.
 //!
 //! These helpers are deliberately public (the integration tests live in a
-//! separate crate) but carry no stability guarantees.
+//! separate crate) but carry no stability guarantees. As test-only support
+//! code, this module opts out of the lib-grade clippy bars (`expect`/indexing/
+//! arithmetic) the same way the integration-test files do.
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -41,7 +41,7 @@ ring = { workspace = true }
 # Wave C peer actor (M2.14+): the read/write tasks need tokio::io (split, duplex,
 # AsyncReadExt/AsyncWriteExt) and the runtime/sync/time features for the three
 # per-peer tasks. `io-util` adds the duplex stream used by the in-process tests.
-tokio = { workspace = true, features = [ "io-util", "macros", "sync", "time", "rt" ] }
+tokio = { workspace = true, features = [ "io-util", "macros", "sync", "time", "rt", "net" ] }
 # Zero-copy inbound payload buffers (`bytes::Bytes`) on the read path (`specs/17`
 # §10); the outbound queue reads `OutboundMessage.bytes: Bytes`.
 bytes = { workspace = true }

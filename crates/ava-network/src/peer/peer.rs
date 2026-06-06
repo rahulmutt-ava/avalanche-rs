@@ -74,7 +74,9 @@ pub(crate) struct HandshakeState {
     /// The subnets the peer tracks (set on `Handshake`).
     pub(crate) tracked_subnets: Vec<Id>,
     /// The transaction id of the peer's verified BLS key (cached so
-    /// `should_disconnect` need not re-verify each tick).
+    /// `should_disconnect` need not re-verify each tick). Populated once the
+    /// validator-set source lands (the BLS-PoP re-check); reserved now.
+    #[allow(dead_code)]
     pub(crate) txid_of_verified_bls_key: Option<Id>,
 }
 
@@ -86,7 +88,9 @@ pub struct Peer {
     pub(crate) id: NodeId,
     /// The peer's leaf certificate (for signed-IP verification).
     pub(crate) cert: Certificate,
-    /// Whether the peer dialed us.
+    /// Whether the peer dialed us. Surfaced as `PeerInfo.is_ingress` once the
+    /// info/metrics endpoints consume it (M2.20); reserved now.
+    #[allow(dead_code)]
     pub(crate) direction: Direction,
     /// The outbound message queue (`specs/05` §3.3).
     pub(crate) queue: Arc<crate::peer::message_queue::ThrottledMessageQueue>,
@@ -106,8 +110,6 @@ pub struct Peer {
 
     /// This peer's cancellation token (grandchild of the network token).
     pub(crate) close_token: CancellationToken,
-    /// Latched when all tasks have drained.
-    pub(crate) closed: CancellationToken,
 }
 
 impl Peer {
@@ -149,7 +151,6 @@ impl Peer {
             last_ping_sent_nanos: AtomicI64::new(0),
             hs: Mutex::new(HandshakeState::default()),
             close_token: close_token.clone(),
-            closed: closed.clone(),
         });
 
         let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_CAP);
@@ -339,7 +340,7 @@ impl Peer {
         // One contiguous buffer (len prefix + payload). tokio's split writer is
         // not directly vectored; a single `write_all` of the joined buffer
         // preserves the on-wire framing and avoids a partial-frame interleave.
-        let mut framed = Vec::with_capacity(4 + msg.bytes.len());
+        let mut framed = Vec::with_capacity(4usize.saturating_add(msg.bytes.len()));
         framed.extend_from_slice(&len.to_be_bytes());
         framed.extend_from_slice(&msg.bytes);
         write.write_all(&framed).await
@@ -487,10 +488,10 @@ impl Peer {
     /// `upgrade_time`, and is dropped on the next tick.
     pub(crate) fn should_disconnect(self: &Arc<Self>) -> crate::Result<()> {
         let version = self.hs.lock().version.clone();
-        if let Some(v) = version {
-            if !self.is_compatible(&v) {
-                return Err(crate::error::Error::IncompatibleVersion(v.display()));
-            }
+        if let Some(v) = version
+            && !self.is_compatible(&v)
+        {
+            return Err(crate::error::Error::IncompatibleVersion(v.display()));
         }
         // The BLS-PoP re-check (caching `txid_of_verified_bls_key`) is wired
         // once the validator-set source lands; the signed-IP TLS check already

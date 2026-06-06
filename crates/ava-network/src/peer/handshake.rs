@@ -85,10 +85,10 @@ impl Peer {
         let ip = ip_from_bytes(&h.ip_addr).ok_or(Error::InvalidPeerIp)?;
 
         // 9. bloom salt ≤ maxBloomSaltLen.
-        if let Some(bf) = &h.known_peers {
-            if bf.salt.len() > crate::config::MAX_BLOOM_SALT_LEN {
-                return Err(Error::BloomSaltTooLong(bf.salt.len()));
-            }
+        if let Some(bf) = &h.known_peers
+            && bf.salt.len() > crate::config::MAX_BLOOM_SALT_LEN
+        {
+            return Err(Error::BloomSaltTooLong(bf.salt.len()));
         }
 
         // 7. verify the signed IP (TLS sig over ip||port||ts) against the peer
