@@ -455,6 +455,13 @@ intercepts `verify`/`accept`/`reject` to move the block between cache tiers and
 keep `last_accepted` correct (Go `chain/block.go`). Caches use the `ava-utils`
 sized LRU (`03`); sizes come from config.
 
+> **M3.18 note:** `ava-utils` has **no LRU module yet** — M3.18 carries a small
+> internal **count-bounded** `CountLru`. Go uses a *byte-sized* LRU
+> (`lru.NewSizedCache`); observable behaviour is identical, only the eviction
+> metric (count vs bytes) differs. Follow-up: add a sized LRU to `ava-utils` and
+> swap (same follow-up M3.7's `CachedState` flagged). Not consensus-affecting
+> (caches are pure acceleration of decided/parsed lookups).
+
 ### 3.4 `gas` — dynamic fee accounting
 
 `vms/components/gas` is the ACP-103 dynamic-fee primitive (also used by SAE, `11`).
@@ -475,6 +482,12 @@ impl Gas {
 /// `fakeExponential`. Reproduce the exact fixed-point loop (no float).
 pub fn calculate_price(min_price: Price, excess: Gas, k: Gas) -> Price { /* ... */ }
 ```
+
+> **M3.18 note:** intermediate `fakeExponential` accumulator values reach ~`MaxUint192`
+> (Go uses `uint256.Int`); `u128` is insufficient and the workspace has **no `U256`**.
+> The implementation uses `num-bigint::BigUint` (already a workspace dep) for the loop
+> accumulator and is **bit-exact** with Go across all `gas_test.go` vectors. No float
+> anywhere. A fixed-width `U256` could replace `BigUint` in a later perf pass.
 
 `GasState::advance`/`consume` mirror `state.go` capacity refill + excess decay.
 This is consensus-affecting where SAE/EVM fee math depends on it — golden-vector

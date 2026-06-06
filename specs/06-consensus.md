@@ -509,7 +509,10 @@ pub trait PutHandler: Send {
 pub trait InternalHandler: Connector + Send {
     async fn gossip(&mut self) -> Result<()>;
     async fn shutdown(&mut self) -> Result<()>;
-    async fn notify(&mut self, msg: VmToEngineMessage) -> Result<()>; // VM woke the engine
+    async fn notify(&mut self, msg: ava_vm::VmEvent) -> Result<()>; // VM woke the engine
+    // ^ M3.9: the VM→engine wake message (Go `common.Message`) is ported as `ava_vm::VmEvent`
+    //   (PendingTxs/StateSyncDone), NOT a `VmToEngineMessage` in `ava-message`. `ava-engine`
+    //   depends on `ava-vm` for it.
 }
 
 #[async_trait::async_trait]
