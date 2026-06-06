@@ -16,10 +16,14 @@ description = "Validator subsystem: Set/Manager/State + deterministic weighted s
 ava-types = { path = "../ava-types" }
 ava-crypto = { path = "../ava-crypto" }
 ava-utils = { path = "../ava-utils" }
+# Uptime State persistence (M3.8): the uptime Manager reads/writes accrued
+# duration + last-updated through a `DynDatabase` (specs/06 §6.3).
+ava-database = { path = "../ava-database" }
 
 thiserror = { workspace = true }
 async-trait = { workspace = true }
-# tokio::sync::Mutex for the locked ValidatorState adapter (M3.7).
+# tokio::sync::Mutex for the locked ValidatorState adapter (M3.7) and the
+# uptime LockedCalculator adapter (M3.8).
 tokio = { workspace = true, features = [ "sync" ] }
 
 [dev-dependencies]

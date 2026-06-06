@@ -523,6 +523,7 @@ dependencies = [
  "assert_matches",
  "async-trait",
  "ava-crypto",
+ "ava-database",
  "ava-types",
  "ava-utils",
  "proptest",

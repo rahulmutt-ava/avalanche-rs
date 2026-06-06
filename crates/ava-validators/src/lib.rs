@@ -13,8 +13,12 @@
 //! in `NodeId` order — exactly where Go calls `utils.Sort`. The proposervm windower
 //! depends on this canonical order (`specs/06-consensus.md` §6.1, §6.2).
 //!
-//! This crate depends only on `ava-types`, `ava-crypto`, and `ava-utils`; it does
-//! **not** depend on `ava-snow` (`Id`/`NodeId` live in `ava-types`).
+//! It also provides the [`uptime`] manager/calculator (`snow/uptime`), which
+//! accrues per-node online duration into a persisted store.
+//!
+//! This crate depends on `ava-types`, `ava-crypto`, `ava-utils`, and (for uptime
+//! persistence) `ava-database`; it does **not** depend on `ava-snow` (`Id`/`NodeId`
+//! live in `ava-types`).
 
 #![forbid(unsafe_code)]
 
@@ -24,6 +28,7 @@ pub mod manager;
 pub mod set;
 pub mod state;
 pub mod state_adapters;
+pub mod uptime;
 pub mod validator;
 
 pub use connected::{ConnectedValidators, Connector};
