@@ -16,6 +16,13 @@
     clippy::arithmetic_side_effects
 )]
 
+// `proptest` is a dev-dependency used only by the `tests/prop_handshake.rs`
+// integration target (M2.21). The crate's `lib test` build links every
+// dev-dependency, and `unused_crate_dependencies` would otherwise flag it as
+// unused there; reference it here (test builds only) to satisfy the lint.
+#[cfg(test)]
+use proptest as _;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
