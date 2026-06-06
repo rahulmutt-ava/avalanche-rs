@@ -12,20 +12,43 @@
 pub mod binary_slush;
 pub mod binary_snowball;
 pub mod binary_snowflake;
+pub mod consensus;
 pub mod nnary_snowball;
 pub mod nnary_snowflake;
 pub mod parameters;
+pub mod tree;
 pub mod unary_snowball;
 pub mod unary_snowflake;
 
 pub use binary_slush::BinarySlush;
 pub use binary_snowball::BinarySnowball;
 pub use binary_snowflake::BinarySnowflake;
+pub use consensus::{
+    BinaryInstance, Consensus, Factory, NnaryInstance, SnowballFactory, SnowflakeFactory,
+    UnaryInstance,
+};
 pub use nnary_snowball::NnarySnowball;
 pub use nnary_snowflake::NnarySnowflake;
 pub use parameters::{DEFAULT_PARAMETERS, MIN_PERCENT_CONNECTED_BUFFER, Parameters};
+pub use tree::Tree;
 pub use unary_snowball::UnarySnowball;
 pub use unary_snowflake::UnarySnowflake;
+
+/// Formats a confidence-counter slice like Go's `fmt %v` of a `[]int`:
+/// space-separated, bracketed (e.g. `[0]`, `[1 2]`). Used by the `Display`
+/// impls that the tree's `String()` golden vectors assert against.
+#[must_use]
+pub(crate) fn fmt_confidence(confidence: &[u32]) -> String {
+    let mut s = String::from("[");
+    for (i, c) in confidence.iter().enumerate() {
+        if i > 0 {
+            s.push(' ');
+        }
+        s.push_str(&c.to_string());
+    }
+    s.push(']');
+    s
+}
 
 /// One `(alpha_confidence, beta)` termination condition.
 ///

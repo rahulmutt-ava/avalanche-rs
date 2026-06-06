@@ -3,8 +3,12 @@
 
 //! Binary snowflake (specs 06 §2.2; Go `binary_snowflake.go`).
 
+use std::fmt;
+
 use super::TerminationCondition;
 use super::binary_slush::BinarySlush;
+use super::consensus::BinaryInstance;
+use super::fmt_confidence;
 
 /// A binary snowflake instance deciding between two `int` choices (`0`/`1`).
 #[derive(Clone, Debug)]
@@ -104,5 +108,35 @@ impl BinarySnowflake {
     #[must_use]
     pub(crate) fn alpha_preference(&self) -> u32 {
         self.alpha_preference
+    }
+}
+
+impl fmt::Display for BinarySnowflake {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SF(Confidence = {}, Finalized = {}, {})",
+            fmt_confidence(&self.confidence),
+            self.finalized,
+            self.slush
+        )
+    }
+}
+
+impl BinaryInstance for BinarySnowflake {
+    fn preference(&self) -> u8 {
+        BinarySnowflake::preference(self)
+    }
+
+    fn record_poll(&mut self, count: u32, choice: u8) {
+        BinarySnowflake::record_poll(self, count, choice);
+    }
+
+    fn record_unsuccessful_poll(&mut self) {
+        BinarySnowflake::record_unsuccessful_poll(self);
+    }
+
+    fn finalized(&self) -> bool {
+        BinarySnowflake::finalized(self)
     }
 }

@@ -26,7 +26,11 @@ pub mod context;
 pub mod decidable;
 pub mod error;
 pub mod snowball;
+pub mod snowman;
 pub mod state;
+
+#[cfg(feature = "testutil")]
+pub mod snowtest;
 
 #[cfg(feature = "testutil")]
 pub mod testutil;
