@@ -13,7 +13,12 @@
 //! acceptances into the shared oracle.
 //!
 //! UN-IGNORE at M3.5.
+//!
+//! Gated on the `testutil` feature: the in-memory cluster scaffolding it drives
+//! lives there, so a no-feature `cargo test` build stays clean (CI runs
+//! `--all-features`).
 
+#![cfg(feature = "testutil")]
 #![allow(
     unused_crate_dependencies,
     clippy::unwrap_used,

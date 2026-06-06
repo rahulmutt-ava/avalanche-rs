@@ -7,8 +7,11 @@
 //! `network_test.go` (add / record_poll / accept ordering, duplicate add,
 //! unknown parent, linear acceptance, sibling rejection, preference walk).
 //!
-//! Requires the `testutil` feature (the battery + test blocks live there).
+//! Requires the `testutil` feature (the battery + test blocks live there), so
+//! it is gated on it to keep a no-feature `cargo test` build clean (CI runs
+//! `--all-features`).
 
+#![cfg(feature = "testutil")]
 #![allow(unused_crate_dependencies, clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
