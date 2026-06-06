@@ -61,6 +61,8 @@ tokio-util = { workspace = true }
 # rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
 rcgen = { workspace = true }
 assert_matches = { workspace = true }
+# M2.21 property test (specs/02 §4): handshake state machine over generated params.
+proptest = { workspace = true }
 # `bytes::Bytes` is only constructed in tests; the lib reads it through
 # `ava_message::codec::OutboundMessage`'s field, so it is a dev-only dep here.
 bytes = { workspace = true }

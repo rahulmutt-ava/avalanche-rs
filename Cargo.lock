@@ -429,6 +429,7 @@ dependencies = [
  "hex",
  "igd-next",
  "parking_lot",
+ "proptest",
  "rcgen",
  "ring",
  "rustls",
