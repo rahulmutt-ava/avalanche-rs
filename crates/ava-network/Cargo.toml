@@ -23,12 +23,16 @@ ava-version = { path = "../ava-version" }
 
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+# CancellationToken for the inbound byte throttler acquire-cancel path (M2.13).
 tokio-util = { workspace = true }
 x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 arc-swap = { workspace = true }
 tokio = { workspace = true }
-# Outbound message queue (FIFO VecDeque + Notify) and byte-pool accounting.
+# Outbound queue byte-pool accounting + the conn-upgrade per-IP cooldown map +
+# global token bucket (M2.12/M2.13). DashMap/governor are intentionally avoided —
+# the Go reference guards all state under one mutex, so parking_lot::Mutex<HashMap>
+# is a faithful, dependency-free port matching Go's bounded-channel semantics.
 parking_lot = { workspace = true }
 # TLS1.3-only transport, `ring` provider (no aws-lc-rs cmake/nasm build dep),
 # matching the rcgen `ring` backend. Pinned in [workspace.dependencies] (M2-prep).
@@ -38,8 +42,9 @@ ring = { workspace = true }
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
-# TLS handshake tests (M2.9/M2.10).
-tokio = { workspace = true, features = [ "io-util" ] }
+# TLS handshake tests (M2.9/M2.10); macros/time/rt for the throttler tests.
+tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+tokio-util = { workspace = true }
 # rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
 rcgen = { workspace = true }
 assert_matches = { workspace = true }
