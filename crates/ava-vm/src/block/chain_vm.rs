@@ -19,10 +19,10 @@ use tokio_util::sync::CancellationToken;
 
 use ava_types::id::Id;
 
+use crate::block::Block;
 use crate::block::batched::BatchedChainVm;
 use crate::block::state_sync::StateSyncableVm;
 use crate::block::with_context::BlockContext;
-use crate::block::Block;
 use crate::error::Result;
 use crate::vm::Vm;
 
@@ -39,8 +39,7 @@ pub trait ChainVm: Vm {
 
     /// `Parser.ParseBlock` — parse a block from its bytes. The bytes must
     /// round-trip to the same block on every node.
-    async fn parse_block(&self, token: &CancellationToken, bytes: &[u8])
-        -> Result<Arc<dyn Block>>;
+    async fn parse_block(&self, token: &CancellationToken, bytes: &[u8]) -> Result<Arc<dyn Block>>;
 
     /// `SetPreference` — set the engine's currently preferred (leaf) block.
     async fn set_preference(&mut self, token: &CancellationToken, id: Id) -> Result<()>;

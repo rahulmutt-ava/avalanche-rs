@@ -332,10 +332,7 @@ impl ChainVm for TestVm {
         let (parent, height) = {
             let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             let parent = inner.preference;
-            let parent_height = inner
-                .blocks
-                .get(&parent)
-                .map_or(0, |b| b.height());
+            let parent_height = inner.blocks.get(&parent).map_or(0, |b| b.height());
             (parent, parent_height.saturating_add(1))
         };
         let payload = self.next_payload.to_be_bytes();
@@ -384,11 +381,7 @@ impl ChainVm for TestVm {
         Ok(inner.last_accepted)
     }
 
-    async fn get_block_id_at_height(
-        &self,
-        _token: &CancellationToken,
-        height: u64,
-    ) -> Result<Id> {
+    async fn get_block_id_at_height(&self, _token: &CancellationToken, height: u64) -> Result<Id> {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner
             .accepted_at_height
@@ -645,7 +638,9 @@ macro_rules! vm_conformance {
                 let token = CancellationToken::new();
                 let mut vm = ($make_vm)(token.clone()).await;
                 vm.shutdown(&token).await.expect("first shutdown");
-                vm.shutdown(&token).await.expect("second shutdown is a no-op");
+                vm.shutdown(&token)
+                    .await
+                    .expect("second shutdown is a no-op");
             }
 
             // Keep the `Arc`/`Block` imports used in all VM specializations.

@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use ava_vm::block::{self, ChainVm};
 use ava_vm::error::Error;
-use ava_vm::testutil::{init_test_vm, TestVm};
+use ava_vm::testutil::{TestVm, init_test_vm};
 use ava_vm::vm_conformance;
 
 // The generic conformance battery, specialized to `TestVm`. `make_vm` returns an
@@ -75,16 +75,9 @@ async fn get_ancestors_fallback_limits() {
     assert_eq!(all[0], head_blk.bytes(), "first element is the head block");
 
     // max_blocks_num caps the count (the head is always element 0).
-    let capped = block::get_ancestors(
-        &vm,
-        &token,
-        head,
-        2,
-        usize::MAX,
-        Duration::from_secs(60),
-    )
-    .await
-    .expect("get_ancestors num cap");
+    let capped = block::get_ancestors(&vm, &token, head, 2, usize::MAX, Duration::from_secs(60))
+        .await
+        .expect("get_ancestors num cap");
     assert_eq!(capped.len(), 2, "max_blocks_num caps the result");
 
     // max_blocks_size: budget for exactly the head element only. The head is
@@ -121,7 +114,11 @@ async fn get_ancestors_fallback_limits() {
     )
     .await
     .expect("get_ancestors size cap 2");
-    assert_eq!(size_capped2.len(), 2, "size budget admits head + one parent");
+    assert_eq!(
+        size_capped2.len(),
+        2,
+        "size budget admits head + one parent"
+    );
 
     // Unknown head id ⇒ empty response (signals the peer to stop asking).
     let unknown = ava_vm::Id::from([0x11u8; 32]);
@@ -139,16 +136,9 @@ async fn get_ancestors_fallback_limits() {
 
     // Zero retrieval-time budget ⇒ only the head (the loop guard trips
     // immediately after the head is added).
-    let timed = block::get_ancestors(
-        &vm,
-        &token,
-        head,
-        usize::MAX,
-        usize::MAX,
-        Duration::ZERO,
-    )
-    .await
-    .expect("get_ancestors zero time");
+    let timed = block::get_ancestors(&vm, &token, head, usize::MAX, usize::MAX, Duration::ZERO)
+        .await
+        .expect("get_ancestors zero time");
     assert_eq!(timed.len(), 1, "zero retrieval time ⇒ head only");
 }
 

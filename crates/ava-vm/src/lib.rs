@@ -26,6 +26,7 @@
 pub mod app;
 pub mod app_sender;
 pub mod block;
+pub mod components;
 pub mod connector;
 pub mod error;
 pub mod health;
@@ -37,9 +38,9 @@ pub mod testutil;
 pub use app::{AppError, AppHandler};
 pub use app_sender::{AppSender, SendConfig};
 pub use block::{
-    batched_parse_block, get_ancestors, BatchedChainVm, Block, BlockContext, BuildBlockWithContext,
-    ChainVm, SetPreferenceWithContext, StateSummary, StateSyncMode, StateSyncableVm,
-    WithVerifyContext, INT_LEN,
+    BatchedChainVm, Block, BlockContext, BuildBlockWithContext, ChainVm, INT_LEN,
+    SetPreferenceWithContext, StateSummary, StateSyncMode, StateSyncableVm, WithVerifyContext,
+    batched_parse_block, get_ancestors,
 };
 pub use connector::Connector;
 pub use error::{Error, Result};
@@ -81,7 +82,10 @@ mod tests {
             Error::StateSyncableVmNotImplemented,
             Error::StateSyncableVmNotImplemented
         );
-        assert_matches!(Error::ProtocolVersionMismatch, Error::ProtocolVersionMismatch);
+        assert_matches!(
+            Error::ProtocolVersionMismatch,
+            Error::ProtocolVersionMismatch
+        );
         assert_matches!(Error::HandshakeFailed, Error::HandshakeFailed);
         assert_matches!(Error::ProcessNotFound, Error::ProcessNotFound);
         // fx wrong-type set (sample of the family ava-secp256k1fx re-exports)

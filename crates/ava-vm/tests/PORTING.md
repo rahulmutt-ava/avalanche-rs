@@ -93,3 +93,55 @@ Go source → Rust:
 3. **`testutil` feature.** `TestVm`/`TestBlock`/`NoopAppSender`/`init_test_vm` +
    the macro are gated behind `feature = "testutil"` (pulls `tokio`+`sha2`); the
    `conformance_vm` integration test is `#![cfg(feature = "testutil")]`.
+
+## M3.18 — shared components (`components/`)
+
+Go source → Rust:
+
+- `vms/components/avax/{utxo_id,asset,utxo,transferables,base_tx,flow_checker}.go`
+  → `components/avax/mod.rs`. `serialize:"true"` fields are encoded in
+  registration order; `fx_id` (`serialize:"false"`) is runtime-only. `UtxoId.id`
+  is a lazy `OnceLock` (`input_id() == tx_id.prefix(&[output_index as u64])`).
+  `sort_transferable_outputs` (assetID, then `out.codec_bytes()`),
+  `sort_transferable_inputs[_with_signers]` (UTXOID), and the `is_sorted*`
+  predicates reproduce Go's comparators exactly (consensus-affecting).
+  `FlowChecker` uses a `BTreeMap` + `safemath` checked add; `verify_tx` burns the
+  fee and requires `consumed >= produced` per asset + all-sorted.
+- `chains/atomic/shared_memory.go` (`SharedMemory`/`Requests`/`Element`) →
+  `components/avax/shared_memory.rs`. `apply` is keyed by `BTreeMap<Id, Requests>`
+  (no `HashMap` on a write path) and takes `&[BatchOps]`.
+- `vms/components/verify/verification.go` → `components/verify.rs`
+  (`Verifiable`/`State`/`all`). The `IsState`/`IsNotState` marker split is encoded
+  at the type level (a type is `State` iff it `impl`s `State`).
+- `vms/components/chain/{state,block}.go` → `components/chain/state.rs`
+  (`ChainState`/`ChainStateConfig`/`BlockWrapper`).
+- `vms/components/gas/{gas,state,dimensions}.go` → `components/gas.rs`. Integer
+  only — **no floats**. `calculate_price` reproduces Go's `fakeExponential`
+  fixed-point loop bit-for-bit (golden-tested against Go's vectors).
+
+### Findings / deltas
+
+1. **`calculate_price` uses `num_bigint::BigUint`** in place of Go's
+   `uint256.Int` (intermediate values reach ~`MaxUint192`, so `u128` is
+   insufficient and a `U256` type is not in the workspace). The result is
+   bit-identical to Go for every `gas_test.go` vector. No floats anywhere.
+2. **`chain::State` caches are count-bounded, not byte-sized.** Go uses
+   `lru.NewSizedCache` (eviction by cumulative byte size); this crate uses a
+   small internal count-bounded `CountLru` (`ava-utils` has no LRU yet). The
+   observable behaviour (tiering verified/decided/unverified/missing, idempotent
+   get/parse, `last_accepted` tracking via the `BlockWrapper` lifecycle) is
+   identical — only the eviction *metric* differs. Swap to a byte-sized LRU when
+   `ava-utils` grows one.
+3. **`TransferableOut::codec_bytes()`** is an explicit trait method standing in
+   for Go's `codec.Marshal(out)` as the secondary output sort key, because the
+   codec↔fx wiring (`ava-secp256k1fx`, later milestone) is not yet built. The
+   concrete fx output must return its canonical encoded bytes here.
+4. **New `Error` variants:** `Overflow`/`Underflow`/`InsufficientFunds`/
+   `InsufficientCapacity`/`OutputsNotSorted`/`InputsNotSortedUnique`/
+   `InvalidComponent(&'static str)` were added for the avax/gas paths. The
+   structural-validation messages (`BaseTx::verify`, `Asset::verify`) are carried
+   verbatim from Go via `InvalidComponent`.
+5. **`SharedMemory`/`Metadata`/`BaseTx` are scaffolding** for the P/X-Chain VMs
+   (`08`/`09`): the trait + serializable payloads + cached-bytes `OnceLock` shape
+   are in place; the concrete impls (atomic DB, codec-driven `initialize`) land
+   with those VMs.

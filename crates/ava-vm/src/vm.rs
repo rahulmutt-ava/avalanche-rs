@@ -132,8 +132,7 @@ pub trait Vm: AppHandler + HealthCheck + Connector + Send + Sync {
     ) -> Result<HashMap<String, HttpHandler>>;
 
     /// `NewHTTPHandler` — single handler routed via the chain-id header.
-    async fn new_http_handler(&mut self, token: &CancellationToken)
-        -> Result<Option<HttpHandler>>;
+    async fn new_http_handler(&mut self, token: &CancellationToken) -> Result<Option<HttpHandler>>;
 
     /// `WaitForEvent` — blocks until the VM has a [`VmEvent`] for the engine or
     /// the token is cancelled.

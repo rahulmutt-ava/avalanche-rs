@@ -19,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 use ava_types::id::Id;
 
-use crate::block::chain_vm::ChainVm;
 use crate::block::Block;
+use crate::block::chain_vm::ChainVm;
 use crate::error::{Error, Result};
 
 /// `wrappers.IntLen` — the length, in bytes, of the `int` length prefix that

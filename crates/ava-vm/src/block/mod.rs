@@ -21,7 +21,7 @@ pub mod with_context;
 // only on `ava-vm` for the Snowman VM surface (specs 07 §2.3).
 pub use ava_snow::Block;
 
-pub use batched::{batched_parse_block, get_ancestors, BatchedChainVm, INT_LEN};
+pub use batched::{BatchedChainVm, INT_LEN, batched_parse_block, get_ancestors};
 pub use chain_vm::{BuildBlockWithContext, ChainVm, SetPreferenceWithContext};
 pub use state_sync::{StateSummary, StateSyncMode, StateSyncableVm};
 pub use with_context::{BlockContext, WithVerifyContext};
