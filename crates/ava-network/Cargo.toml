@@ -21,15 +21,11 @@ x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 arc-swap = { workspace = true }
 tokio = { workspace = true }
-# NOTE (workspace promotion): rustls/tokio-rustls/ring are not yet in this
-# checkout's [workspace.dependencies] (the M2-prep root pin landed on a later
-# main commit than this worktree branched from). Pinned locally with the exact
-# versions/features specs/05 §4.1 mandates — TLS1.3-only, `ring` provider (no
-# aws-lc-rs cmake/nasm build dep), matching the rcgen `ring` backend above.
-# Promote to [workspace.dependencies] once the root pin is present.
-rustls = { version = "0.23", default-features = false, features = [ "ring", "std", "tls12" ] }
-tokio-rustls = { version = "0.26", default-features = false, features = [ "ring", "tls12" ] }
-ring = "0.17"
+# TLS1.3-only transport, `ring` provider (no aws-lc-rs cmake/nasm build dep),
+# matching the rcgen `ring` backend. Pinned in [workspace.dependencies] (M2-prep).
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+ring = { workspace = true }
 
 [dev-dependencies]
 # io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
