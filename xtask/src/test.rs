@@ -3,9 +3,14 @@
 
 //! Test orchestration subcommands (specs/02 §1, §11; tier X / X.4, X.13, X.16).
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, bail};
+
+/// Per-target libFuzzer wall-clock budget (seconds): brief smoke vs `--long`.
+const FUZZ_SMOKE_SECS: u64 = 10;
+const FUZZ_LONG_SECS: u64 = 300;
 
 /// Run a cargo subcommand, inheriting stdio, and fail on non-zero exit.
 fn cargo(args: &[&str]) -> anyhow::Result<()> {
@@ -37,15 +42,106 @@ pub fn test_unit_fast() -> anyhow::Result<()> {
     cargo(&["nextest", "run", "--workspace"])
 }
 
-/// `test-fuzz`: brief smoke of every cargo-fuzz target (`--long` for extended
-/// runs). Must be invoked inside the nightly `fuzz` dev shell (the Taskfile sets
-/// `NIX_DEV_SHELL=fuzz`); cargo-fuzz needs nightly for `-Zsanitizer`/`-Zbuild-std`.
+/// `test-fuzz`: run every `crates/*/fuzz` cargo-fuzz target for a bounded
+/// duration (`--long` extends the per-target budget). Each target is fuzzed for
+/// `-max_total_time` seconds; a libFuzzer crash makes the target — and the task
+/// — fail.
 ///
-/// SCAFFOLD: per-parser fuzz targets + the smoke loop are owned by tier-X task
-/// X.16 (`ava-codec` first). Until then this is a no-op success.
+/// Must be invoked inside the nightly `fuzz` dev shell (the Taskfile sets
+/// `NIX_DEV_SHELL=fuzz`); cargo-fuzz needs nightly for `-Zsanitizer`/`-Zbuild-std`.
+/// On the stable shell `cargo fuzz` errors out — use `tests/prop_fuzz_smoke.rs`
+/// (run by `cargo nextest`) for stable coverage there.
 pub fn test_fuzz(long: bool) -> anyhow::Result<()> {
+    let secs = if long {
+        FUZZ_LONG_SECS
+    } else {
+        FUZZ_SMOKE_SECS
+    };
     let mode = if long { "long" } else { "smoke" };
-    eprintln!("xtask test-fuzz ({mode}): no fuzz smoke loop yet (owned by tier-X task X.16).");
+    // Resolve the cargo invoking us at runtime (nightly inside the fuzz shell);
+    // env!("CARGO") would bake in whatever toolchain last compiled xtask.
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+
+    let crates = discover_fuzz_crates(&repo_root()?)?;
+    if crates.is_empty() {
+        eprintln!("xtask test-fuzz: no fuzz crates found under crates/*/fuzz.");
+        return Ok(());
+    }
+
+    for crate_dir in &crates {
+        let name = crate_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for target in list_fuzz_targets(&cargo, crate_dir)? {
+            eprintln!("==> fuzz {mode}: {name} :: {target} (-max_total_time={secs})");
+            run_fuzz_target(&cargo, crate_dir, &target, secs)?;
+        }
+    }
+    Ok(())
+}
+
+/// Repo root: xtask lives at `<root>/xtask`, so its manifest dir's parent is the
+/// workspace root regardless of the current working directory.
+fn repo_root() -> anyhow::Result<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+        .context("xtask manifest dir has no parent (cannot locate repo root)")
+}
+
+/// Every `crates/<crate>/fuzz` directory that holds a cargo-fuzz manifest,
+/// sorted for stable ordering.
+fn discover_fuzz_crates(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let crates_dir = root.join("crates");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&crates_dir)
+        .with_context(|| format!("reading {}", crates_dir.display()))?
+    {
+        let path = entry?.path();
+        if path.join("fuzz/Cargo.toml").is_file() {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// `cargo fuzz list` for one crate's `fuzz/` dir → its target names.
+fn list_fuzz_targets(cargo: &str, crate_dir: &Path) -> anyhow::Result<Vec<String>> {
+    let fuzz_dir = crate_dir.join("fuzz");
+    let output = Command::new(cargo)
+        .args(["fuzz", "list", "--fuzz-dir"])
+        .arg(&fuzz_dir)
+        .output()
+        .with_context(|| format!("spawning `cargo fuzz list` for {}", fuzz_dir.display()))?;
+    if !output.status.success() {
+        bail!(
+            "`cargo fuzz list --fuzz-dir {}` failed: {}",
+            fuzz_dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// `cargo fuzz run <target> -- -max_total_time=<secs>` (stdio inherited).
+fn run_fuzz_target(cargo: &str, crate_dir: &Path, target: &str, secs: u64) -> anyhow::Result<()> {
+    let fuzz_dir = crate_dir.join("fuzz");
+    let status = Command::new(cargo)
+        .args(["fuzz", "run", target, "--fuzz-dir"])
+        .arg(&fuzz_dir)
+        .arg("--")
+        .arg(format!("-max_total_time={secs}"))
+        .status()
+        .with_context(|| format!("spawning `cargo fuzz run {target}`"))?;
+    if !status.success() {
+        bail!("fuzz target `{target}` failed: {status}");
+    }
     Ok(())
 }
 
