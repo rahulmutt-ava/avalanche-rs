@@ -34,7 +34,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = [ "ring"
 ring = "0.17"
 
 [dev-dependencies]
-tokio = { workspace = true }
+# io-util adds tokio::io::duplex + AsyncReadExt/AsyncWriteExt for the loopback
+# TLS handshake tests (M2.9/M2.10).
+tokio = { workspace = true, features = [ "io-util" ] }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }
 assert_matches = { workspace = true }
