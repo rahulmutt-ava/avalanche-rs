@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod builder;
 pub mod codec;
 pub mod error;
 pub mod frame;
