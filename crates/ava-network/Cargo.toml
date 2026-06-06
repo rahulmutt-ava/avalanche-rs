@@ -16,6 +16,8 @@ description = "P2P networking: TLS transport + node identity + IP signing (byte-
 [dependencies]
 ava-crypto = { path = "../ava-crypto" }
 ava-types = { path = "../ava-types" }
+# Wave C runtime: the codec (Creator/InboundMessage, and OutboundMessage carried
+# by the outbound MessageQueue, specs/05 §3.3) + the version-compat rule.
 ava-message = { path = "../ava-message" }
 ava-version = { path = "../ava-version" }
 
@@ -26,6 +28,8 @@ x509-parser = { workspace = true }
 rustls-pemfile = { workspace = true }
 arc-swap = { workspace = true }
 tokio = { workspace = true }
+# Outbound message queue (FIFO VecDeque + Notify) and byte-pool accounting.
+parking_lot = { workspace = true }
 # TLS1.3-only transport, `ring` provider (no aws-lc-rs cmake/nasm build dep),
 # matching the rcgen `ring` backend. Pinned in [workspace.dependencies] (M2-prep).
 rustls = { workspace = true }
@@ -39,6 +43,9 @@ tokio = { workspace = true, features = [ "io-util" ] }
 # rcgen builds the P-384/Ed25519 test certs the verifier policy must reject.
 rcgen = { workspace = true }
 assert_matches = { workspace = true }
+# `bytes::Bytes` is only constructed in tests; the lib reads it through
+# `ava_message::codec::OutboundMessage`'s field, so it is a dev-only dep here.
+bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }

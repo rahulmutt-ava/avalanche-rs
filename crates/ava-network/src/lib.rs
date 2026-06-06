@@ -31,6 +31,7 @@ pub mod identity;
 pub mod network;
 pub mod peer;
 pub mod router;
+pub mod throttling;
 
 pub use error::{Error, Result};
 pub use identity::Identity;
