@@ -200,14 +200,13 @@ impl Mempool {
 #[cfg(test)]
 mod conformance {
     use ava_codec::manager::Manager;
+    use ava_secp256k1fx::{OutputOwners, TransferOutput};
+    use ava_types::short_id::ShortId;
 
     use super::*;
     use crate::txs::codec;
     use crate::txs::components::{AvaxBaseTx, Output};
     use crate::txs::{BaseTx, UnsignedTx};
-    use ava_secp256k1fx::OutputOwners;
-    use ava_secp256k1fx::TransferOutput;
-    use ava_types::short_id::ShortId;
 
     fn owners() -> OutputOwners {
         OutputOwners::new(0, 1, vec![ShortId::from([0xab; 20])])
@@ -310,15 +309,14 @@ mod conformance {
 
 #[cfg(test)]
 mod prop {
+    use ava_secp256k1fx::{OutputOwners, TransferOutput};
+    use ava_types::short_id::ShortId;
     use proptest::prelude::*;
 
     use super::*;
     use crate::txs::codec;
     use crate::txs::components::{AvaxBaseTx, Output};
     use crate::txs::{BaseTx, UnsignedTx};
-    use ava_secp256k1fx::OutputOwners;
-    use ava_secp256k1fx::TransferOutput;
-    use ava_types::short_id::ShortId;
 
     fn owners() -> OutputOwners {
         OutputOwners::new(0, 1, vec![ShortId::from([0xab; 20])])

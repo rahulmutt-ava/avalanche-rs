@@ -160,6 +160,8 @@ pub fn build_block(params: BuildBlockParams<'_>) -> Result<BuildBlockOutput> {
         }
 
         // 3. Execute — mutates the diff; state accumulates for the next tx.
+        // The atomic-memory requests from ExecutorOutputs are intentionally
+        // discarded here; they are recomputed at verify/accept time.
         let ExecutorOutputs { .. } = match Executor::execute(&tx.unsigned, tx_id, &mut diff) {
             Ok(out) => out,
             Err(e) => {

@@ -394,6 +394,14 @@ fn build_block_drops_conflicting_tx() {
         dropped[0].0, id_conflict,
         "the dropped tx id must be tx_conflict"
     );
+    // The drop reason must be a database not-found error: the semantic verifier
+    // calls `diff.get_utxo()` which returns `UtxoOp::Delete` (tombstone inserted
+    // by tx_ok's executor) → `Error::Database(NotFound)`.
+    assert!(
+        matches!(dropped[0].1, ava_avm::error::Error::Database(_)),
+        "expected Error::Database for double-spend on a spent UTXO, got: {:?}",
+        dropped[0].1
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -556,9 +564,30 @@ fn build_block_respects_byte_cap() {
         .collect();
 
     let tx_size = txs[0].size();
-    // How many txs would fit under TARGET_BLOCK_SIZE?
-    // The first is always packed; subsequent ones stop when cumulative > cap.
-    let max_packed = TARGET_BLOCK_SIZE.saturating_div(tx_size).max(1);
+    // Simulate the exact packing loop the builder uses:
+    //   - first tx is always packed regardless of size;
+    //   - subsequent txs are packed while cumulative + tx_size <= TARGET_BLOCK_SIZE
+    //     (break when next_bytes > TARGET_BLOCK_SIZE and packed is non-empty).
+    // Since all txs are the same size, this collapses to floor(TARGET/tx_size).
+    let exact_expected = {
+        let mut count = 0usize;
+        let mut cumulative = 0usize;
+        for _ in 0..n {
+            let next = cumulative + tx_size;
+            if count > 0 && next > TARGET_BLOCK_SIZE {
+                break;
+            }
+            cumulative = next;
+            count += 1;
+        }
+        count
+    };
+    // Sanity: the cap must have fired (we supplied enough txs).
+    assert!(
+        exact_expected < n,
+        "test setup: expected the byte cap to fire; \
+         increase n or memo_size (exact_expected={exact_expected}, n={n})"
+    );
 
     let c = ava_avm::txs::codec::codec().expect("codec");
     let parent_time = UNIX_EPOCH;
@@ -577,15 +606,16 @@ fn build_block_respects_byte_cap() {
     })
     .expect("build_block");
 
-    // Should have packed at most max_packed + 1 txs.
-    assert!(
-        blk.txs().len() <= max_packed + 1,
-        "byte cap should limit packing; got {} txs, max_packed={max_packed}, tx_size={tx_size}",
+    // Assert the exact expected count: both from above (cap enforced) and from
+    // below (builder packs every tx the cap allows — a "pack exactly 1" impl
+    // would fail the lower bound).
+    assert_eq!(
+        blk.txs().len(),
+        exact_expected,
+        "byte cap packing: expected exactly {exact_expected} txs \
+         (tx_size={tx_size}, TARGET_BLOCK_SIZE={TARGET_BLOCK_SIZE}); \
+         got {}",
         blk.txs().len()
-    );
-    assert!(
-        blk.txs().len() < n,
-        "should not have packed all {n} txs due to byte cap"
     );
 }
 
