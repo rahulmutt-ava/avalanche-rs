@@ -18,9 +18,10 @@
 //! - [`Id`] serializes through its own `Serialize` impl (CB58), matching `ids.ID`.
 //! - Addresses are bech32 chain-prefixed (`X-avax1…`), via
 //!   [`ava_crypto::address::format`] with chain prefix `"X"`.
-//! - Tx / block bytes are returned as hex `0x…` (the default `formatting.Hex`
-//!   encoding from Go's `formatting.Encode(args.Encoding, bytes)`). The CB58
-//!   encoding path is documented but not wired (requires the transport to select).
+//! - Tx / block bytes are returned as checksummed hex `0x<hex(bytes ++ sha256(bytes)[28..32])>`
+//!   (Go `formatting.Encode(formatting.Hex, bytes)` — `Hex` appends 4 checksum bytes before
+//!   hex-encoding; `HexNC` skips the checksum). The default encoding is `Hex` (zero value of
+//!   `formatting.Encoding`).
 //! - Timestamps are RFC3339 (`time.Time` JSON), seconds precision.
 //!
 //! ## Deferred functionality (spec 09 §10 deferral list)
@@ -30,7 +31,8 @@
 //!   The method stubs are implemented returning `ErrNotImplemented` with a
 //!   detailed comment. Wiring the address index is a follow-up task.
 //! - **`getBalance` / `getAllBalances`**: both require the address UTXO index and
-//!   the secp256k1fx UTXO iteration over the address set. Deferred (same reason).
+//!   the secp256k1fx UTXO iteration over the address set. Stub methods exist that
+//!   return `Error::Service("...not yet implemented...")`. Deferred (same reason).
 //! - **`issueTx` mempool submit**: the service carries only the state handle;
 //!   actual mempool add + p2p gossip needs the `AvmVm` handle. The method parses
 //!   the tx and returns its id (useful for client round-trip testing), but does
@@ -56,6 +58,7 @@
 use std::sync::Arc;
 
 use ava_crypto::address;
+use ava_crypto::hashing::checksum;
 use ava_database::Database;
 use ava_types::constants::get_hrp;
 use ava_types::id::Id;
@@ -139,14 +142,17 @@ pub mod avajson {
 // Encoding helpers
 // ---------------------------------------------------------------------------
 
-/// Formats a block/tx byte slice as `0x<hex>` (Go `formatting.HexEncoding`).
+/// Formats a block/tx byte slice as `0x<hex(bytes ++ checksum)>` — exactly
+/// matching Go's `formatting.Encode(formatting.Hex, bytes)`.
 ///
-/// Go's `formatting.Encode(formatting.Hex, bytes)` → `"0x<hex><4-byte checksum>"`
-/// but the service serializes raw bytes; callers that need the checksum variant
-/// should use CB58 or hex+checksum. For this service we mirror
-/// `formatting.Encode(args.Encoding, bytes)` with `Hex` as the default.
+/// Go: `Hex` encoding appends `hashing.Checksum(bytes, 4)` (the last 4 bytes of
+/// `sha256(bytes)`) then hex-encodes the combined slice with a `"0x"` prefix
+/// (see `utils/formatting/encoding.go`).
 fn hex_encode(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
+    let cs = checksum(bytes, 4);
+    let mut combined = bytes.to_vec();
+    combined.extend_from_slice(&cs);
+    format!("0x{}", hex::encode(&combined))
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +388,106 @@ pub struct GetUTXOsReply {
     pub encoding: String,
 }
 
+/// Args for `avm.getBalance` (matches Go `avm.GetBalanceArgs`).
+///
+/// Go:
+/// ```go
+/// type GetBalanceArgs struct {
+///     Address        string `json:"address"`
+///     AssetID        string `json:"assetID"`
+///     IncludePartial bool   `json:"includePartial"`
+/// }
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBalanceArgs {
+    /// The X-Chain bech32 address (`X-avax1…`).
+    pub address: String,
+    /// The asset id (CB58) or alias.
+    #[serde(rename = "assetID")]
+    pub asset_id: String,
+    /// Whether to include partially-owned / locked UTXOs.
+    #[serde(default, rename = "includePartial")]
+    pub include_partial: bool,
+}
+
+/// Reply for `avm.getBalance` (matches Go `avm.GetBalanceReply`).
+///
+/// Go:
+/// ```go
+/// type GetBalanceReply struct {
+///     Balance avajson.Uint64 `json:"balance"`
+///     UTXOIDs []avax.UTXOID  `json:"utxoIDs"`
+/// }
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetBalanceReply {
+    /// The total balance of the asset held by the address.
+    #[serde(
+        serialize_with = "avajson::serialize_u64",
+        deserialize_with = "avajson::deserialize_u64"
+    )]
+    pub balance: u64,
+    /// The UTXOs contributing to the balance.
+    #[serde(rename = "utxoIDs")]
+    pub utxo_ids: Vec<String>,
+}
+
+/// A single asset balance entry inside [`GetAllBalancesReply`]
+/// (matches Go `avm.Balance`).
+///
+/// Go:
+/// ```go
+/// type Balance struct {
+///     AssetID string         `json:"asset"`
+///     Balance avajson.Uint64 `json:"balance"`
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetBalance {
+    /// The asset id (CB58), serialized as `"asset"` (matching Go's `Balance.AssetID`
+    /// JSON tag `json:"asset"`).
+    #[serde(rename = "asset")]
+    pub asset_id: String,
+    /// The balance of the asset.
+    #[serde(
+        serialize_with = "avajson::serialize_u64",
+        deserialize_with = "avajson::deserialize_u64"
+    )]
+    pub balance: u64,
+}
+
+/// Args for `avm.getAllBalances` (matches Go `avm.GetAllBalancesArgs`).
+///
+/// Go:
+/// ```go
+/// type GetAllBalancesArgs struct {
+///     api.JSONAddress
+///     IncludePartial bool `json:"includePartial"`
+/// }
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetAllBalancesArgs {
+    /// The X-Chain bech32 address (`X-avax1…`).
+    pub address: String,
+    /// Whether to include partially-owned / locked UTXOs.
+    #[serde(default, rename = "includePartial")]
+    pub include_partial: bool,
+}
+
+/// Reply for `avm.getAllBalances` (matches Go `avm.GetAllBalancesReply`).
+///
+/// Go:
+/// ```go
+/// type GetAllBalancesReply struct {
+///     Balances []Balance `json:"balances"`
+/// }
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetAllBalancesReply {
+    /// The balances per asset.
+    pub balances: Vec<AssetBalance>,
+}
+
 // ---------------------------------------------------------------------------
 // The service
 // ---------------------------------------------------------------------------
@@ -542,7 +648,10 @@ impl<D: Database + 'static> Service<D> {
         }
         let status = match self.state.get_tx(args.tx_id) {
             Ok(_) => TxStatus::Accepted,
-            Err(_) => TxStatus::Unknown,
+            // Go: `case database.ErrNotFound: reply.Status = choices.Unknown`
+            // Any other error is propagated (mirrors Go's explicit not-found check).
+            Err(Error::Database(ava_database::error::Error::NotFound)) => TxStatus::Unknown,
+            Err(e) => return Err(e),
         };
         Ok(GetTxStatusReply { status })
     }
@@ -630,6 +739,45 @@ impl<D: Database + 'static> Service<D> {
                 .to_owned(),
         ))
     }
+
+    // -----------------------------------------------------------------------
+    // `avm.getBalance` — DEFERRED
+    // -----------------------------------------------------------------------
+
+    /// `avm.getBalance` — **DEFERRED**.
+    ///
+    /// Returns the balance of a single asset held by an address. Requires
+    /// `avax.GetAllUTXOs(s.vm.state, addrSet)` over an address→UTXO index
+    /// (Go `vms/avm/service.go GetBalance`). Neither the address index nor the
+    /// UTXO-set iterator over addresses is ported yet.
+    ///
+    /// Follow-up: port the address index + `avax.GetAllUTXOs` (specs 09 §10).
+    pub fn get_balance(&self, _args: &GetBalanceArgs) -> Result<GetBalanceReply> {
+        Err(Error::Service(
+            "getBalance: not yet implemented — address→UTXO index not ported \
+             (Go vms/avm uses an address index via avax.GetAllUTXOs); deferred"
+                .to_owned(),
+        ))
+    }
+
+    // -----------------------------------------------------------------------
+    // `avm.getAllBalances` — DEFERRED
+    // -----------------------------------------------------------------------
+
+    /// `avm.getAllBalances` — **DEFERRED**.
+    ///
+    /// Returns balances for ALL assets held by an address. Same dependency as
+    /// [`get_balance`](Self::get_balance) — requires the address→UTXO index
+    /// (Go `vms/avm/service.go GetAllBalances`). Deferred for the same reason.
+    ///
+    /// Follow-up: port the address index + `avax.GetAllUTXOs` (specs 09 §10).
+    pub fn get_all_balances(&self, _args: &GetAllBalancesArgs) -> Result<GetAllBalancesReply> {
+        Err(Error::Service(
+            "getAllBalances: not yet implemented — address→UTXO index not ported \
+             (Go vms/avm uses an address index via avax.GetAllUTXOs); deferred"
+                .to_owned(),
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -638,19 +786,50 @@ impl<D: Database + 'static> Service<D> {
 
 /// Decodes a formatted byte string for `issueTx`.
 ///
-/// Supports `"hex"` / `"0x…"` and `"cb58"` / empty (CB58 is the Go default).
-/// Go uses `formatting.Decode(args.Encoding, args.Tx)`.
+/// Mirrors Go's `formatting.Decode(args.Encoding, args.Tx)`. Valid encodings
+/// are `"hex"` (default / zero value; checksummed — strips and verifies the
+/// trailing 4-byte checksum), `"hexc"` (alias for checksummed hex), and
+/// `"hexnc"` (no-checksum hex). Empty/omitted `encoding` defaults to `"hex"`
+/// because `formatting.Encoding`'s zero value is `Hex` (NOT CB58; Go's AVM
+/// service does not accept CB58 in the encoding field).
 ///
 /// # Errors
-/// Returns [`Error::Service`] on decode failure.
+/// Returns [`Error::Service`] on decode failure, missing `0x` prefix, bad
+/// checksum, or unsupported encoding name.
 fn decode_formatted_bytes(s: &str, encoding: &str) -> Result<Vec<u8>> {
     let enc = encoding.to_lowercase();
-    if enc == "hex" || s.starts_with("0x") || s.starts_with("0X") {
-        let hex_str = s.trim_start_matches("0x").trim_start_matches("0X");
-        hex::decode(hex_str).map_err(|e| Error::Service(format!("hex decode: {e}")))
-    } else {
-        // Default: CB58 (Go's `formatting.CB58` / `formatting.Encoding("")`).
-        ava_utils::cb58::cb58_decode(s).map_err(|e| Error::Service(format!("cb58 decode: {e}")))
+    match enc.as_str() {
+        // `"hex"` and `"hexc"` — checksummed hex (Go `Hex` / `HexC`)
+        "hex" | "hexc" | "" => {
+            if !s.starts_with("0x") && !s.starts_with("0X") {
+                return Err(Error::Service("hex decode: missing 0x prefix".to_owned()));
+            }
+            let hex_str = s.trim_start_matches("0x").trim_start_matches("0X");
+            let decoded =
+                hex::decode(hex_str).map_err(|e| Error::Service(format!("hex decode: {e}")))?;
+            // Strip and verify the 4-byte checksum (Go `errMissingChecksum` /
+            // `errBadChecksum`; `utils/formatting/encoding.go`).
+            let split_at = decoded.len().checked_sub(4).ok_or_else(|| {
+                Error::Service("hex decode: input is too short to contain a checksum".to_owned())
+            })?;
+            let (raw, cs) = decoded.split_at(split_at);
+            let expected = checksum(raw, 4);
+            if cs != expected.as_slice() {
+                return Err(Error::Service("hex decode: invalid checksum".to_owned()));
+            }
+            Ok(raw.to_vec())
+        }
+        // `"hexnc"` — no checksum (Go `HexNC`)
+        "hexnc" => {
+            if !s.starts_with("0x") && !s.starts_with("0X") {
+                return Err(Error::Service("hexnc decode: missing 0x prefix".to_owned()));
+            }
+            let hex_str = s.trim_start_matches("0x").trim_start_matches("0X");
+            hex::decode(hex_str).map_err(|e| Error::Service(format!("hexnc decode: {e}")))
+        }
+        other => Err(Error::Service(format!(
+            "unsupported encoding: '{other}'; valid values are 'hex', 'hexc', 'hexnc'"
+        ))),
     }
 }
 
@@ -927,14 +1106,27 @@ mod conformance {
     fn service_issue_tx_roundtrip() {
         let (service, _, tx_id) = seeded_service();
 
-        // Recover the tx bytes from state and re-issue them (hex-encoded).
+        // Recover the tx bytes from state.  `get_tx` returns checksummed hex:
+        // `0x<hex(raw ++ sha256(raw)[28..32])>` — matching Go's `formatting.Hex`.
         let args = GetTxArgs {
             tx_id,
             encoding: String::new(),
         };
         let tx_reply = service.get_tx(&args).expect("get_tx");
 
-        // issueTx with the hex-encoded bytes → same tx_id back.
+        // The encoded string must start with "0x" and be at least 2 + (4 * 2) = 10
+        // chars (the 4-byte checksum alone would be "0x" + 8 hex digits).
+        assert!(tx_reply.tx.starts_with("0x"), "hex must start with 0x");
+        // Strip "0x" and verify the hex portion's byte count includes 4 checksum bytes.
+        let hex_body = tx_reply.tx.trim_start_matches("0x");
+        assert!(
+            hex_body.len() >= 8,
+            "hex body must have at least 4 checksum bytes (8 hex chars)"
+        );
+        // The hex body length must be even (valid hex).
+        assert_eq!(hex_body.len() % 2, 0, "hex body length must be even");
+
+        // issueTx with the checksummed hex → same tx_id back (closed loop).
         let issue_args = IssueTxArgs {
             tx: tx_reply.tx.clone(),
             encoding: "hex".to_owned(),
@@ -1038,6 +1230,103 @@ mod conformance {
         };
         // Expected: deferred stub returns an error.
         assert!(service.get_utxos(&args).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // `getBalance` / `getAllBalances` — deferred stubs return errors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn service_get_balance_deferred() {
+        let (service, _, _) = seeded_service();
+        let args = GetBalanceArgs {
+            address: "X-avax1test".to_owned(),
+            asset_id: "FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z".to_owned(),
+            include_partial: false,
+        };
+        assert!(service.get_balance(&args).is_err());
+    }
+
+    #[test]
+    fn service_get_all_balances_deferred() {
+        let (service, _, _) = seeded_service();
+        let args = GetAllBalancesArgs {
+            address: "X-avax1test".to_owned(),
+            include_partial: false,
+        };
+        assert!(service.get_all_balances(&args).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // `hex_encode` / `decode_formatted_bytes` — checksum correctness
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hex_encode_includes_checksum() {
+        // Verify that `hex_encode` appends exactly 4 bytes of checksum before
+        // hex-encoding, matching Go `formatting.Encode(formatting.Hex, bytes)`.
+        let raw = b"hello avalanche";
+        let encoded = hex_encode(raw);
+
+        // Must start with "0x".
+        assert!(encoded.starts_with("0x"), "must start with 0x");
+        let hex_body = encoded.trim_start_matches("0x");
+        // Body length must be even.
+        assert_eq!(hex_body.len() % 2, 0);
+        // Decoded length = raw.len() + 4.
+        let decoded_all = hex::decode(hex_body).expect("valid hex");
+        assert_eq!(decoded_all.len(), raw.len() + 4);
+        // Last 4 bytes = sha256(raw)[28..32].
+        let expected_cs = ava_crypto::hashing::checksum(raw, 4);
+        assert_eq!(&decoded_all[raw.len()..], expected_cs.as_slice());
+    }
+
+    #[test]
+    fn decode_hex_strips_checksum() {
+        // Round-trip: `hex_encode` then `decode_formatted_bytes("hex")` →
+        // original bytes.
+        let raw = b"round-trip test";
+        let encoded = hex_encode(raw);
+        let decoded = decode_formatted_bytes(&encoded, "hex").expect("decode");
+        assert_eq!(decoded, raw);
+    }
+
+    #[test]
+    fn decode_hex_bad_checksum_error() {
+        // A hex string with a corrupted checksum must fail.
+        let raw = b"checksum test";
+        let mut encoded = hex_encode(raw);
+        // Flip the last two hex characters (corrupt the last checksum byte).
+        let n = encoded.len();
+        let last_two = &encoded[n - 2..].to_owned();
+        let corrupted = if last_two == "ff" { "00" } else { "ff" };
+        encoded.truncate(n - 2);
+        encoded.push_str(corrupted);
+        assert!(
+            decode_formatted_bytes(&encoded, "hex").is_err(),
+            "bad checksum must error"
+        );
+    }
+
+    #[test]
+    fn decode_hexnc_no_checksum_required() {
+        // `hexnc` decodes raw hex without any checksum logic.
+        let raw = b"no checksum";
+        let encoded = format!("0x{}", hex::encode(raw));
+        let decoded = decode_formatted_bytes(&encoded, "hexnc").expect("decode hexnc");
+        assert_eq!(decoded, raw);
+    }
+
+    #[test]
+    fn decode_unsupported_encoding_error() {
+        assert!(decode_formatted_bytes("anything", "cb58").is_err());
+        assert!(decode_formatted_bytes("anything", "base64").is_err());
+    }
+
+    #[test]
+    fn decode_missing_0x_prefix_error() {
+        // `hex` encoding requires a `0x` prefix (Go `errMissingHexPrefix`).
+        assert!(decode_formatted_bytes("aabbccdd", "hex").is_err());
     }
 
     // -----------------------------------------------------------------------
