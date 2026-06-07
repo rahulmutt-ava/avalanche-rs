@@ -193,8 +193,8 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestEtnaDisabledTransactions` | ⬜ not ported |
 | `TestEtnaStandardTxExecutorAddSubnetValidator` | ⬜ not ported |
 | `TestFilterValidators` | ⬜ not ported |
-| `TestGenesis` | ⬜ not ported |
-| `TestGenesis` | ⬜ not ported |
+| `TestGenesis` (platformvm/genesis: parse round-trip) | 🟡 `golden::pchain_genesis_block_id` covers parse/marshal round-trip + genesis-block derivation on a synthetic `Genesis` (M4.24) |
+| `TestGenesis` (genesis: Fuji `expectedID = MSj6o9TpezwsQx4Tv7SHqpVvCbJ8of1ikjsqPZ1bKRjc9zBy3`) | ⬜ na — needs the full §3.1–§3.3 byte-exact construction pipeline (AVM + C-Chain genesis, bech32 allocation parsing, `txheap.ByEndTime` ordering) which lives in `ava-genesis` (M8); pin the exact-Fuji `p_chain_genesis_bytes`/`genesis_id` golden once M8 lands |
 | `TestGenesisBytes` | ⬜ not ported |
 | `TestGetBalance` | ⬜ not ported |
 | `TestGetBlock` | ⬜ not ported |
