@@ -131,6 +131,19 @@ where
         self.consensus.last_accepted()
     }
 
+    /// The strongly-preferred block id at `height`, if tracked (exposed for
+    /// tests).
+    #[must_use]
+    pub fn preference_at_height(&self, height: u64) -> Option<Id> {
+        self.consensus.preference_at_height(height)
+    }
+
+    /// Whether `id` is currently processing in consensus (exposed for tests).
+    #[must_use]
+    pub fn is_processing(&self, id: Id) -> bool {
+        self.consensus.processing(id)
+    }
+
     /// Whether `request_id` is still an outstanding poll (exposed for tests).
     #[must_use]
     pub fn poll_pending(&self, request_id: u32) -> bool {

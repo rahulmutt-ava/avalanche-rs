@@ -33,7 +33,7 @@ pub enum Sent {
     Put { node: NodeId, req: u32 },
     Ancestors { node: NodeId, req: u32, n: usize },
     PullQuery { nodes: Vec<NodeId>, req: u32, id: Id, height: u64 },
-    PushQuery { nodes: Vec<NodeId>, req: u32, height: u64 },
+    PushQuery { nodes: Vec<NodeId>, req: u32, id: Id, height: u64 },
     Chits {
         node: NodeId,
         req: u32,
@@ -149,12 +149,13 @@ impl Sender for RecordingSender {
         &self,
         nodes: &HashSet<NodeId>,
         req: u32,
-        _container: Vec<u8>,
+        container: Vec<u8>,
         requested_height: u64,
     ) {
         self.push(Sent::PushQuery {
             nodes: sorted(nodes),
             req,
+            id: block_id(&container),
             height: requested_height,
         });
     }
@@ -295,4 +296,165 @@ pub fn block_id(bytes: &[u8]) -> Id {
     hasher.update(bytes);
     let digest: [u8; 32] = hasher.finalize().into();
     Id::from(digest)
+}
+
+/// One engine node in the cluster: its engine, its [`RecordingSender`], and its
+/// node id (= the validator it represents).
+pub struct Node {
+    pub id: NodeId,
+    pub engine: SnowmanEngine<TestVm, RecordingSender, DefaultManager>,
+    pub sender: Arc<RecordingSender>,
+}
+
+/// An in-memory cluster of `SnowmanEngine`s sharing one validator set, wired so
+/// that each engine's recorded outbound queries are looped back as inbound
+/// `pull_query`/`chits` on the other engines (the mock Router). Time is virtual;
+/// the harness is purely message-driven (no wall-clock sleeps).
+pub struct Cluster {
+    pub nodes: Vec<Node>,
+    pub genesis: Id,
+    token: CancellationToken,
+}
+
+impl Cluster {
+    /// Builds a cluster of `n` engines over `params`, each with `n` equally-
+    /// weighted validators (one per node).
+    pub async fn new(n: usize, params: Parameters) -> Self {
+        let token = CancellationToken::new();
+        let (mgr, ids) = validators(n);
+        let mut nodes = Vec::with_capacity(n);
+        let mut genesis = Id::EMPTY;
+        for &id in &ids {
+            let (vm, g) = init_vm(&token).await;
+            genesis = g;
+            let sender = RecordingSender::new();
+            let engine = build_engine(
+                params,
+                vm,
+                sender.clone(),
+                Arc::clone(&mgr),
+                g,
+                token.clone(),
+            );
+            nodes.push(Node {
+                id,
+                engine,
+                sender,
+            });
+        }
+        Self {
+            nodes,
+            genesis,
+            token,
+        }
+    }
+
+    /// Issues `block_bytes` (a child of an issued/accepted block) into every
+    /// engine via a `Put` from the first node. The resulting outbound queries
+    /// are **retained** so the first [`run_round`] can route them.
+    pub async fn issue_block_all(&mut self, block_bytes: &[u8]) {
+        let provider = self.nodes[0].id;
+        for node in &mut self.nodes {
+            node.engine
+                .put(provider, u32::MAX, block_bytes)
+                .await
+                .expect("put block");
+        }
+    }
+
+    /// Drives one synchronized poll wave: every pull-query currently outstanding
+    /// (emitted by the prior `put`/repoll) is delivered to every recipient (which
+    /// answers with chits), and those chits are fed back to the querier (driving
+    /// `record_poll` → `set_preference` → the engine's own repoll, which emits the
+    /// *next* round's pull-query). Returns the number of queries routed.
+    ///
+    /// The query set is snapshotted before any routing so the queries a node
+    /// emits *during* this wave belong to the next wave. The chit-answer Chits are
+    /// consumed from each recipient's log without disturbing its pending queries.
+    pub async fn run_round(&mut self) -> usize {
+        // Snapshot the currently-outstanding pull-queries, then clear all logs so
+        // the queries emitted during this wave (the next wave) are captured fresh.
+        let node_ids: Vec<NodeId> = self.nodes.iter().map(|n| n.id).collect();
+        let mut queries: Vec<(usize, u32, Id, u64)> = Vec::new();
+        for (i, node) in self.nodes.iter().enumerate() {
+            for s in node.sender.drain() {
+                match s {
+                    Sent::PullQuery {
+                        req, id, height, ..
+                    }
+                    | Sent::PushQuery {
+                        req, id, height, ..
+                    } => queries.push((i, req, id, height)),
+                    _ => {}
+                }
+            }
+        }
+
+        for (querier_idx, req, container_id, height) in &queries {
+            let querier_node = node_ids[*querier_idx];
+            // Index loop is required: the body mutably borrows
+            // `self.nodes[recipient_idx]` while also reading `node_ids`.
+            #[allow(clippy::needless_range_loop)]
+            for recipient_idx in 0..self.nodes.len() {
+                // The recipient answers the query (records a Chits to the querier).
+                self.nodes[recipient_idx]
+                    .engine
+                    .pull_query(querier_node, *req, *container_id, *height)
+                    .await
+                    .expect("pull_query");
+                // Consume only the Chits answering this request from the log,
+                // leaving the recipient's own pending queries in place.
+                let chit = {
+                    let mut log = self.nodes[recipient_idx]
+                        .sender
+                        .log
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let pos = log.iter().rposition(|s| {
+                        matches!(s, Sent::Chits { req: r, .. } if r == req)
+                    });
+                    pos.map(|p| match log.remove(p) {
+                        Sent::Chits {
+                            preferred,
+                            preferred_at_height,
+                            accepted,
+                            accepted_height,
+                            ..
+                        } => (preferred, preferred_at_height, accepted, accepted_height),
+                        _ => unreachable!(),
+                    })
+                };
+
+                if let Some((pref, pref_at_h, accepted, accepted_h)) = chit {
+                    let recipient_node = node_ids[recipient_idx];
+                    self.nodes[*querier_idx]
+                        .engine
+                        .chits(recipient_node, *req, pref, pref_at_h, accepted, accepted_h)
+                        .await
+                        .expect("chits");
+                }
+            }
+        }
+        queries.len()
+    }
+
+    /// Whether every node has accepted `block_id` (its consensus last-accepted).
+    #[must_use]
+    pub fn all_accepted(&self, id: Id) -> bool {
+        self.nodes
+            .iter()
+            .all(|n| n.engine.consensus_last_accepted().0 == id)
+    }
+
+    /// Whether every node reports `id` as its current preference.
+    #[must_use]
+    pub fn all_prefer(&self, id: Id) -> bool {
+        self.nodes.iter().all(|n| n.engine.preference() == id)
+    }
+
+    /// The halt token (for shutdown tests).
+    #[must_use]
+    pub fn token(&self) -> &CancellationToken {
+        &self.token
+    }
 }

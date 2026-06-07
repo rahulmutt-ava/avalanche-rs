@@ -364,3 +364,51 @@ Go reference (pinned `../avalanchego`):
   agreement → fetch → height-ordered execute with acceptor-before-accept +
   executing flag → Bootstrapping→NormalOp handoff), `halt_aborts_bootstrap`
   (token cancel aborts the execute pass; no accepts, no handoff).
+
+---
+
+# ava-engine — engine-driven cluster properties (Task M3.13)
+
+`prop::consensus_liveness` + `prop::preference_monotone` over an engine-driven
+cluster (specs 06 §2.4 / §10).
+
+## The cluster harness (`tests/support/mod.rs`)
+
+A `Cluster` of `n` real `SnowmanEngine`s, each over an in-memory `TestVm`, the
+real `Topological` consensus, and a shared `DefaultManager` validator set (one
+weight-1 validator per node). A `RecordingSender` per node captures outbound
+messages; the cluster is the **mock Router**: it loops each engine's recorded
+pull/push queries back as inbound `pull_query` on every recipient (which answers
+with `send_chits`), then feeds those chits back to the querier as inbound
+`chits`. This exercises the real poll/vote loop end-to-end. Time is virtual — the
+harness is purely message-driven with **no wall-clock sleeps** (the property
+tests build a `current_thread` runtime and `block_on` the trial).
+
+`run_round` snapshots the outstanding queries, routes them, and lets each
+engine's own `record_poll → repoll` emit the next round's query — so the loop is
+self-sustaining (one global poll wave per round).
+
+## Properties
+
+1. **`consensus_liveness`** (`n ∈ 3..=7`, `beta ∈ 1..=4`): with every honest
+   node voting one branch each round (≥ strict-majority alpha), the branch
+   finalizes on every node within `(beta+4)*4` rounds. Smoke test
+   `liveness_smoke_finalizes_branch` guards against a vacuous pass.
+
+2. **`preference_monotone`** (`n ∈ 3..=7`, `beta ∈ 1..=3`, sibling-issue order
+   randomized): two conflicting siblings at height 1; the honest cluster votes
+   its preference each round. Asserts every round, on every node: (a) the
+   accepted block at height 1 never changes once set; (b) a node never prefers a
+   sibling that has been rejected; (c) `preference_at_height(1)` never regresses
+   from an already-accepted block. Finally asserts all nodes agree on the same
+   accepted block (agreement). Smoke test `preference_smoke_no_regression`.
+
+Stress-checked at `PROPTEST_CASES=128`; no `proptest-regressions/` seeds were
+generated (all cases pass), so none are committed.
+
+## Engine accessors added (test-only surface)
+
+`SnowmanEngine::{consensus_last_accepted, preference_at_height, is_processing,
+poll_pending, num_polls, request_id}` expose consensus/poll state for the
+assertions. These are `#[must_use]` read-only views over the consensus core / poll
+set; they do not change behaviour.
