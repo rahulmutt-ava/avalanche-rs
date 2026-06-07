@@ -40,6 +40,7 @@ use proptest as _;
 #[cfg(test)]
 use rstest as _;
 
+pub mod block;
 pub mod error;
 pub mod fx;
 pub mod fx_index;
