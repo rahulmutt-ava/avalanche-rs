@@ -278,6 +278,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-chains"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "ava-codec",
+ "ava-crypto",
+ "ava-database",
+ "ava-engine",
+ "ava-proposervm",
+ "ava-snow",
+ "ava-types",
+ "ava-utils",
+ "ava-validators",
+ "ava-version",
+ "ava-vm",
+ "prometheus",
+ "proptest",
+ "rcgen",
+ "ring",
+ "rustls-pemfile",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "ava-codec"
 version = "0.1.0"
 dependencies = [

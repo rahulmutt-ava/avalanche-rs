@@ -159,6 +159,14 @@ impl<V: ChainVm, S: ValidatorState> ProposerVm<V, S> {
         }
     }
 
+    /// Borrows the inner (wrapped) VM. Introspection helper used by the
+    /// `ava-chains` pipeline test to walk the wrapping stack (specs 07 §8.2),
+    /// mirroring `MeterVm::inner`/`TracedVm::inner`.
+    #[must_use]
+    pub fn inner(&self) -> &V {
+        &self.inner
+    }
+
     /// Wires up the wrapper after the inner VM is initialized: seeds the
     /// preferred id from the inner VM's last accepted block (Go
     /// `Initialize`/`setLastAcceptedMetadata`). The inner VM MUST already be
