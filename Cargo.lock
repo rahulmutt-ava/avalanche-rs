@@ -659,6 +659,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-vm-rpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ava-crypto",
+ "ava-database",
+ "ava-snow",
+ "ava-types",
+ "ava-validators",
+ "ava-version",
+ "ava-vm",
+ "bytes",
+ "libc",
+ "parking_lot",
+ "prost",
+ "prost-types",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "avalanchers"
 version = "0.1.0"
 dependencies = [
