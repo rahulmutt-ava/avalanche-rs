@@ -1,0 +1,42 @@
+[package]
+name = "ava-avm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "X-Chain (AVM): asset-exchange UTXO chain — txs, fx dispatch (secp256k1fx/nftfx/propertyfx), state, linearized blocks, atomic X↔P/X↔C (port of vms/avm) (M5 / specs 09)."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-codec-derive = { path = "../ava-codec-derive" }
+# sha256 of the signed bytes → tx_id / gossip id (specs 09 §3.1); first consumed
+# by the M5.5 `Tx::initialize` byte derivation.
+ava-crypto = { path = "../ava-crypto" }
+# avax UTXO components (BaseTx, TransferableInput/Output, Asset, UtxoId, sort
+# helpers) + `verify::State`/`Verifiable`, shared with the P-Chain (specs 09 §3,
+# 07 §3.1); first consumed by the M5.2 tx model.
+ava-vm = { path = "../ava-vm" }
+# secp256k1fx Input/OutputOwners/Credential/TransferInput/TransferOutput embedded
+# as the base fx (specs 09 §4.1); nft/property credentials embed secp's Credential.
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# Zero-copy cached signed/unsigned tx bytes (specs 09 §3.1 Tx.bytes); first
+# consumed by the M5.5 Tx envelope.
+bytes = { workspace = true }
+thiserror = { workspace = true }
+# NOTE (as-built): `ava-database` (Wave 2 state, M5.10) and `ava-network`
+# (Wave 5 gossip, M5.18) are pulled in by their owning tasks to keep the Wave-0
+# build lean; `ava-api` does not exist yet (served via M8/M12). See plan/M5.
+
+[dev-dependencies]
+proptest = { workspace = true }
+rstest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true
