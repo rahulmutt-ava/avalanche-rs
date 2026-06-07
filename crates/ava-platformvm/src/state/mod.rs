@@ -7,6 +7,7 @@
 //! validator-metadata codec (§3.4): [`metadata_validator::ValidatorMetadata`]
 //! and its three-version [`metadata_codec`].
 
+pub mod l1_validator;
 pub mod metadata_codec;
 pub mod metadata_validator;
 pub mod staker;
