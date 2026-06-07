@@ -44,6 +44,7 @@ use rstest as _;
 pub mod block;
 pub mod error;
 pub mod fx;
+pub mod genesis;
 pub mod reward;
 pub mod signer;
 pub mod stakeable;
