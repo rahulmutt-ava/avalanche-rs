@@ -22,13 +22,16 @@
 //! these `pub(crate)` verification helpers without editing the standard
 //! executor's files.
 
+pub mod advance_time;
 pub mod backend;
+pub mod proposal_tx_executor;
 pub mod staker_tx_verification;
 pub mod standard_tx_executor;
 pub mod state_changes;
 pub mod subnet_tx_verification;
 
 pub use backend::{Backend, StakingConfig, UpgradeSchedule};
+pub use proposal_tx_executor::{ProposalTxExecutor, RewardedStakerTx};
 pub use standard_tx_executor::{AtomicRequests, StandardTxExecutor, StandardTxOutputs};
 
 // The shared verification helpers are `pub(crate)` in their submodules; the

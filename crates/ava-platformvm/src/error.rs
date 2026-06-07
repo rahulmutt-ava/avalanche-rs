@@ -33,6 +33,11 @@ pub enum Error {
     #[error("attempted to remove staker before its end time")]
     RemoveStakerTooEarly,
 
+    /// `ErrRemoveWrongStaker` — a `RewardValidatorTx` named a staker that is not
+    /// the next one due to leave the current set (M4.17, `txs/executor`).
+    #[error("attempting to remove wrong staker")]
+    RemoveWrongStaker,
+
     /// `ErrMutatedL1Validator` — an L1 validator's immutable fields were changed.
     #[error("L1 validator immutable fields were mutated")]
     MutatedL1Validator,
