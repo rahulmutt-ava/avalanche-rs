@@ -29,6 +29,29 @@
 //! immediately resolvable as a parent state view. A subsequent
 //! `verify`/`accept` from the engine simply re-runs / consumes that cache.
 //!
+//! ## `build_block` cache lifetime and remove-on-build
+//!
+//! `build_block` does two things beyond Go's `BuildBlock` signature:
+//!
+//! 1. **Auto-verify into the diff cache.** The built block is immediately
+//!    inserted into the [`BlockManager`]'s processing-block cache
+//!    (`blk_id_to_state`) so it is resolvable as a parent state view before the
+//!    engine explicitly calls `verify` on it (the generic VM-conformance battery
+//!    sets preference to an unaccepted built block, then builds a child — Go
+//!    parity via `builder.go`).  A subsequent engine-driven `verify`/`accept`
+//!    re-runs / consumes the same cache entry.  This contrasts with the P-Chain
+//!    VM, which does NOT verify-on-build and does NOT remove packed txs on build.
+//!
+//! 2. **Remove-on-build.** The txs the builder actually packed are removed from
+//!    the mempool immediately after `build_block` returns, so a subsequent build
+//!    over the same (unaccepted) parent produces a fresh block rather than
+//!    re-packing the same txs.  Packed txs do **not** re-enter the mempool until
+//!    the block is **rejected** (see [`AvmBlock::reject`]); an engine that neither
+//!    accepts nor rejects strands them — benign at shutdown because the pool is
+//!    discarded.  Because AVM relies on the engine deciding every built block
+//!    (the Snowman `ava_snow` processing-set contract), an unbounded-build stress
+//!    test should land with real engine wiring (M5.20+).
+//!
 //! ## X-Chain-specific seams (each documented inline)
 //!
 //! * **`shared_memory`** is **not** on [`ChainContext`] yet (like the P-Chain's
@@ -300,9 +323,14 @@ impl SharedMemory for NoopSharedMemory {
 
     fn apply(
         &self,
-        _requests: std::collections::BTreeMap<Id, Requests>,
+        requests: std::collections::BTreeMap<Id, Requests>,
         _batches: &[BatchOps],
     ) -> ava_vm::error::Result<()> {
+        debug_assert!(
+            requests.is_empty(),
+            "NoopSharedMemory cannot apply atomic requests; \
+             real cross-chain SharedMemory wiring is M5.20"
+        );
         // No-op until M5.20 (see the type doc): the conformance battery never
         // reaches here (BaseTx blocks have empty atomic requests).
         Ok(())
@@ -590,6 +618,7 @@ impl Vm for AvmVm {
     }
 
     async fn version(&self, _token: &CancellationToken) -> VmResult<String> {
+        // TODO(M8): source from ava-version instead of the hard-coded string
         Ok("avm/0.0.0".to_string())
     }
 
@@ -611,6 +640,13 @@ impl Vm for AvmVm {
     async fn wait_for_event(&self, token: &CancellationToken) -> VmResult<VmEvent> {
         // Report PendingTxs when the mempool is non-empty; otherwise block until
         // cancellation (the engine cancels the token on shutdown).
+        //
+        // On cancellation we return `Ok(VmEvent::PendingTxs)` because `VmEvent`
+        // has no cancellation/shutdown variant (`PendingTxs = 1`,
+        // `StateSyncDone = 2` — verified against the `ava-vm` enum definition).
+        // The engine loop re-checks mempool emptiness after each wake and re-parks
+        // when nothing is pending, so the spurious `PendingTxs` on shutdown is
+        // harmless (the engine is already tearing down when it cancels the token).
         let pending = self
             .shared
             .as_ref()

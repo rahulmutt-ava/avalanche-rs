@@ -155,13 +155,13 @@ impl<D: Database + 'static> BlockManager<D> {
     /// The executor [`Backend`] (chain ids, fee schedule, fx count, bootstrapped
     /// flag) — exposed to the VM's builder (M5.19).
     #[must_use]
-    pub fn backend(&self) -> &Backend {
+    pub(crate) fn backend(&self) -> &Backend {
         &self.backend
     }
 
     /// The fx [`Dispatch`] table — exposed to the VM's builder (M5.19).
     #[must_use]
-    pub fn dispatch(&self) -> &Dispatch {
+    pub(crate) fn dispatch(&self) -> &Dispatch {
         &self.dispatch
     }
 
@@ -171,7 +171,7 @@ impl<D: Database + 'static> BlockManager<D> {
     /// # Errors
     /// Returns [`Error::MissingParentState`] if `blk_id` is neither a cached
     /// processing block nor the last-accepted block.
-    pub fn height_of(&self, blk_id: Id) -> Result<u64> {
+    pub(crate) fn height_of(&self, blk_id: Id) -> Result<u64> {
         if let Some(s) = self.blk_id_to_state.get(&blk_id) {
             return Ok(s.height);
         }
@@ -185,14 +185,14 @@ impl<D: Database + 'static> BlockManager<D> {
     /// is in the diff cache (M5.19). Accepted blocks are read from the persisted
     /// block store instead.
     #[must_use]
-    pub fn processing_block_bytes(&self, blk_id: Id) -> Option<Vec<u8>> {
+    pub(crate) fn processing_block_bytes(&self, blk_id: Id) -> Option<Vec<u8>> {
         self.blk_id_to_state.get(&blk_id).map(|s| s.bytes.clone())
     }
 
     /// Replaces the executor backend + fx dispatch with their bootstrapped
     /// variants (Go `vm.onBootstrapped`; M5.19). Called by the VM on the
     /// `set_state(NormalOp)` transition.
-    pub fn set_bootstrapped(&mut self, backend: Backend, dispatch: Dispatch) {
+    pub(crate) fn set_bootstrapped(&mut self, backend: Backend, dispatch: Dispatch) {
         self.backend = backend;
         self.dispatch = dispatch;
     }
@@ -203,6 +203,7 @@ impl<D: Database + 'static> BlockManager<D> {
     ///
     /// # Errors
     /// Returns an [`Error::Database`] if the commit fails.
+    #[doc(hidden)]
     pub fn seed_state(&mut self, seed: impl FnOnce(&mut State<D>)) -> Result<()> {
         seed(&mut self.state);
         self.state.commit()?;
