@@ -136,6 +136,7 @@ impl Signer {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use ava_codec::packer::Packer;
     use ava_codec::{Deserializable, Serializable};

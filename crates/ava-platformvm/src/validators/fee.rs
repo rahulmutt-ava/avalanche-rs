@@ -498,7 +498,7 @@ mod prop {
 
             // With zero excess the price is exactly min_price, so the cost is
             // min_price · seconds (saturating to u64::MAX).
-            let expected = config.min_price.checked_mul(seconds).unwrap_or(u64::MAX);
+            let expected = config.min_price.saturating_mul(seconds);
             prop_assert_eq!(zero.cost_of(&config, seconds), expected);
 
             // And a state whose excess underflows to 0 immediately collapses to
