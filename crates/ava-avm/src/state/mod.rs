@@ -20,13 +20,13 @@
 //! cached signed bytes; the genesis codec (`txs::codec::GenesisCodec`, §5.3)
 //! parses them back. UTXO ids are `UtxoId::input_id` (§5.1).
 //!
-//! `initialize_chain_state` / genesis block seeding (M5.11) and block
-//! accept/reject (M5.16) are **not** implemented here — this is the storage
-//! layer + Diff only. The block store stays byte/id-level (no `StandardBlock`
-//! type, which is M5.15).
+//! [`State::initialize_chain_state`] (M5.11, in [`init`]) seeds the genesis
+//! Snowman block (`StandardBlock`, M5.15). Block accept/reject (M5.16) is **not**
+//! implemented here.
 
 pub mod chain;
 pub mod diff;
+pub mod init;
 // The persisted base lives in `state.rs` (the plan-mandated filename), which
 // trips `clippy::module_inception` against the parent `state` module.
 #[allow(clippy::module_inception)]
