@@ -559,11 +559,54 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.19: VM assembly — ChainVm impl
 **Crate:** ava-avm  ·  **Depends on:** M5.16, M5.17, M5.18, M5.11; M3 (`ava_vm::{Vm, ChainVm, block::Block}`), M4 (chain manager wiring)  ·  **Spec:** 09 §0, §5 (initialize_chain_state hook); 07 §2.1, §2.4
 **Files:** `crates/ava-avm/src/vm.rs`, `crates/ava-avm/src/factory.rs`, `crates/ava-avm/src/config.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/vm_conformance.rs`: run the generic `vm_conformance!(make_avm_vm)` battery (07 §10): `initialize` → genesis `last_accepted`; `build_block`→`verify`→`accept` advances last-accepted + height index; `parse_block` round-trips bytes; `get_block` of accepted/processing; `Err(NotFound)` for unknown id/height; `set_preference`; `set_state` phase transitions; `shutdown` idempotent.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm vm_conformance` → fails.
-- [ ] **Step 3 — Green:** `vm.rs`: `struct Vm` holding state, fxs, mempool, builder, gossip, codec registries. Impl `ava_vm::Vm::initialize` (build registries + fxs in registration order, open state, `initialize_chain_state(stop_vertex_id, genesis_ts)`, wire `AppSender`/gossip) and `ChainVm` (`build_block`/`get_block`/`parse_block`/`set_preference`/`last_accepted`/`get_block_id_at_height`) per 07 §2.4. `factory.rs`: `Factory` returning the VM. `config.rs`: avm config (fees, gossip params).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm vm_conformance`.
-- [ ] **Step 5 — Commit:** `avm: VM assembly + ChainVm impl + conformance (M5.19)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/vm_conformance.rs`: run the generic `vm_conformance!(make_avm_vm)` battery (07 §10): `initialize` → genesis `last_accepted`; `build_block`→`verify`→`accept` advances last-accepted + height index; `parse_block` round-trips bytes; `get_block` of accepted/processing; `Err(NotFound)` for unknown id/height; `set_preference`; `set_state` phase transitions; `shutdown` idempotent.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm vm_conformance` → fails.
+- [x] **Step 3 — Green:** `vm.rs`: `struct Vm` holding state, fxs, mempool, builder, gossip, codec registries. Impl `ava_vm::Vm::initialize` (build registries + fxs in registration order, open state, `initialize_chain_state(stop_vertex_id, genesis_ts)`, wire `AppSender`/gossip) and `ChainVm` (`build_block`/`get_block`/`parse_block`/`set_preference`/`last_accepted`/`get_block_id_at_height`) per 07 §2.4. `factory.rs`: `Factory` returning the VM. `config.rs`: avm config (fees, gossip params).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm vm_conformance`.
+- [x] **Step 5 — Commit:** `avm: VM assembly + ChainVm impl + conformance (M5.19)`
+
+> **As-built (M5.19, 2026-06-07, commits `799c3cb`+`7911bd8`+`03226d3`, ff-merged to main):**
+> **148 ava-avm tests green** (9-case `vm_conformance` battery + 5 vm unit tests + the rest);
+> `avalanchers` binary builds; clippy `-D warnings` + fmt clean. Implementer (opus, worktree
+> from verified HEAD) → spec review (opus) → multi-tx-packing rework → code-quality review
+> (opus) → polish, per subagent-driven-development.
+> - **New files:** `src/vm.rs` (`AvmVm` + `Vm`/`ChainVm`/`AppHandler`/`HealthCheck`/`Connector`
+>   impls + `AvmBlock` Snowman wrapper + `NoopSharedMemory` + `AvmGossipHandler` + `parse_genesis`),
+>   `src/vm/dyndb.rs` (`Arc<dyn DynDatabase>`→typed `Database` adapter, lifted from P-Chain),
+>   `src/config.rs` (`Config` JSON parse of `config_bytes` + mainnet fee defaults
+>   1e6/1e7 nAVAX), `src/factory.rs` (zero-sized `AvmFactory::new_vm`), `tests/vm_conformance.rs`.
+>   `block/executor.rs` gained additive accessors (`backend`/`dispatch`/`height_of`/
+>   `processing_block_bytes`/`set_bootstrapped` — now `pub(crate)`; `seed_state` `#[doc(hidden)]`)
+>   + cached `height`/`bytes` on `BlockState` + `last_accepted_height` (in lockstep with
+>   `last_accepted`); no M5.16 regression (block_lifecycle still green). New err variants
+>   `NotInitialized`/`Config`/`InvalidGenesis` + `From<Error>` for `ava_vm::Error`/`ava_snow::Error`
+>   (the load-bearing map is `Database(NotFound)→ava_vm::NotFound`).
+> - **`AvmVm` shape** mirrors `PlatformVm`: `Option<Arc<Shared>>` (manager `parking_lot::Mutex` +
+>   `Dispatch`) + `EngineState` + `preferred`/`genesis_id` + `Arc<parking_lot::Mutex<Mempool>>`
+>   (Arc so the gossip handler shares it) + `Arc<AtomicAppHandler>`. **No lock guard is held across
+>   any `.await`** (proven: the `#[async_trait]` futures are `Send`, which a held `parking_lot`
+>   guard would break); manager-before-mempool lock order throughout.
+> - **`set_state(NormalOp)`** calls `dispatch.bootstrapped()` + `mgr.set_bootstrapped(true)` (flips
+>   the fxs + backend to enable sig verification). **`app_gossip`** wired end-to-end through
+>   `AtomicAppHandler`→`AvmGossipHandler`→`TxMarshaller::unmarshal`→`TxGossipHandler` (SyntacticTxVerifier
+>   admission path, P-Chain-parity) → shared mempool (this lands the M5.18 atomic-switch wiring).
+>   **`AvmBlock`** verify/accept/reject delegate to `BlockManager` (this lands the M5.16-deferred
+>   Snowman `Block` shim).
+> - **Go-parity block packing:** `build_block` feeds the builder the FULL FIFO `mempool.snapshot()`
+>   (multi-tx packing to `TARGET_BLOCK_SIZE`, Go `builder.go`) and **removes the PACKED txs on build**
+>   / re-adds on reject (correct Go mempool semantics — `Peek`+`Remove` at build, `Add` at reject;
+>   drop at accept). It also verifies the built block into the manager diff cache so an unaccepted
+>   built block resolves as a parent-state view (differs from P-Chain which does neither — relies on
+>   the engine deciding every processing block; cache-lifetime + tx-stranding disclosed in the vm.rs
+>   module doc). The conformance `set_preference_ok` (build h1, set-pref unaccepted, build child) is
+>   satisfied with a **chained-spend seed** (genesis UTXO U0; mempool tx2-spends-U1 enqueued before
+>   tx1-spends-U0-produces-U1, so FIFO packs only tx1 into h1, then tx2 over h1's diff) — preserves
+>   multi-tx packing while forcing the two-block shape.
+> - **Deferrals (documented in code + here):** real cross-chain `SharedMemory` (M5.20 — `NoopSharedMemory`
+>   `debug_assert!`s requests are empty); `verify.SameSubnet` validator-state (no `validator_state` on
+>   `ChainContext` yet, M5.20+); full Go X-Chain genesis-asset format (`parse_genesis` uses a minimal
+>   40-byte synthetic stop-vertex-id+Unix-ts seed; M8/ava-genesis); JSON-RPC `create_handlers` empty
+>   (M5.21); `version()` hard-coded `"avm/0.0.0"` (`// TODO(M8)` source from ava-version).
 
 ### Task M5.20: X↔P atomic import/export end-to-end (ATOMIC-1) — `differential::atomic_xp`
 **Crate:** ava-avm (+ test harness X)  ·  **Depends on:** M5.14, M5.16, M5.19; M4 (P-Chain + shared `SharedMemory`)  ·  **Spec:** 09 §9 (ATOMIC-1, byte format), 07 §3.1 (SharedMemory, canonical UTXO encoding); 00 §11.1.7
