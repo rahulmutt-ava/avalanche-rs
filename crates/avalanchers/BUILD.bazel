@@ -1,11 +1,52 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# NOTE: the M3 consensus/VM crates (ava-snow, ava-engine, ava-vm, ava-chains,
+# ava-proposervm, ava-validators, …) do not yet ship BUILD.bazel files, so the
+# in-process chain-manager lib + integration test below cannot be built under
+# Bazel until those are generated (gazelle_rust). Tracked as M3.29 / Bazel
+# metadata follow-up; Cargo is the source of truth in the interim.
+
+rust_library(
+    name = "avalanchers_lib",
+    srcs = [
+        "src/lib.rs",
+        "src/wiring/chains.rs",
+        "src/wiring/mod.rs",
+    ],
+    crate_name = "avalanchers",
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:async-trait",
+        "@crates//:prometheus",
+        "@crates//:rcgen",
+        "@crates//:ring",
+        "@crates//:rustls-pemfile",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "//crates/ava-chains:ava-chains",
+        "//crates/ava-crypto:ava-crypto",
+        "//crates/ava-database:ava-database",
+        "//crates/ava-engine:ava-engine",
+        "//crates/ava-proposervm:ava-proposervm",
+        "//crates/ava-snow:ava-snow",
+        "//crates/ava-types:ava-types",
+        "//crates/ava-utils:ava-utils",
+        "//crates/ava-validators:ava-validators",
+        "//crates/ava-vm:ava-vm",
+    ],
+)
 
 rust_binary(
     name = "avalanchers",
     srcs = ["src/main.rs"],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:clap"],
+    deps = [
+        "@crates//:clap",
+        "//crates/ava-version:ava-version",
+    ],
 )
 
 rust_test(
@@ -19,4 +60,18 @@ rust_test(
     data = [":avalanchers"],
     rustc_env = {"CARGO_BIN_EXE_avalanchers": "$(rootpath :avalanchers)"},
     visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "in_process_chain",
+    srcs = ["tests/in_process_chain.rs"],
+    compile_data = ["Cargo.toml"],
+    data = [":avalanchers"],
+    rustc_env = {"CARGO_BIN_EXE_avalanchers": "$(rootpath :avalanchers)"},
+    visibility = ["//visibility:public"],
+    deps = [
+        ":avalanchers_lib",
+        "@crates//:tokio",
+        "//crates/ava-version:ava-version",
+    ],
 )
