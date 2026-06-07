@@ -23,16 +23,42 @@ workspace = true
 ava-types = { path = "../ava-types" }
 ava-codec = { path = "../ava-codec" }
 ava-crypto = { path = "../ava-crypto" }
+ava-utils = { path = "../ava-utils" }
 ava-database = { path = "../ava-database" }
+ava-validators = { path = "../ava-validators" }
 ava-snow = { path = "../ava-snow" }
 ava-vm = { path = "../ava-vm" }
+ava-proposervm = { path = "../ava-proposervm" }
+ava-engine = { path = "../ava-engine" }
+ava-version = { path = "../ava-version" }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-# `register_factory` probes the VM `Version`/`Shutdown` over a CancellationToken.
+# `register_factory` probes the VM `Version`/`Shutdown`; the pipeline awaits VM
+# `initialize` over a CancellationToken.
 tokio-util = { workspace = true }
+# MeterDb / MeterVm registries are prometheus registries (the DB + VM stacks).
+prometheus = { workspace = true }
+# The per-chain ChainHandler runs as a tokio task; the pipeline awaits VM init.
+tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
+# `serde_json::Value` is the ChangeNotifier health-check return type.
+serde_json = { workspace = true }
+
+[features]
+# Exposes the in-memory test VM helpers so the pipeline + differential tests can
+# build the full wrapping stack around `ava_vm::testutil::TestVm`.
+testutil = ["ava-vm/testutil", "ava-proposervm/testutil"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
+tokio = { workspace = true, features = [ "rt", "sync", "macros", "time", "test-util" ] }
+tokio-util = { workspace = true, features = [ "time", "rt" ] }
 assert_matches = { workspace = true }
 proptest = { workspace = true }
+sha2 = { workspace = true }
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
+ava-proposervm = { path = "../ava-proposervm", features = [ "testutil" ] }
+# Staking-cert generation + ECDSA P-256 signing for the proposervm identity in
+# the pipeline tests.
+rcgen = { workspace = true }
+ring = { workspace = true }
+rustls-pemfile = { workspace = true }

@@ -29,6 +29,9 @@ pub mod registry;
 pub mod subnet;
 
 pub use aliaser::{Aliaser, AliaserReader};
+pub use create_chain::{
+    ChangeNotifier, SnowmanChain, WrappedVm, build_db_stack, create_snowman_chain, wrap_snowman_vm,
+};
 pub use error::{Error, Result};
 pub use manager::{ChainParameters, DynProbe, Factory, ProbeableVm, VmManager};
 pub use registry::{VmGetter, VmRegistry};
@@ -41,5 +44,9 @@ mod dev_deps {
     // unused dev-deps.
     use assert_matches as _;
     use proptest as _;
+    use rcgen as _;
+    use ring as _;
+    use rustls_pemfile as _;
+    use sha2 as _;
     use tokio as _;
 }

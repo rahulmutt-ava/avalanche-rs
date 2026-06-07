@@ -17,8 +17,19 @@ use tokio_util::sync::CancellationToken;
 // directly (silences `unused_crate_dependencies` for the test binary).
 use ava_codec as _;
 use ava_crypto as _;
+use ava_engine as _;
+use ava_proposervm as _;
 use ava_snow as _;
+use ava_utils as _;
+use ava_validators as _;
+use ava_version as _;
+use prometheus as _;
 use proptest as _;
+use rcgen as _;
+use ring as _;
+use rustls_pemfile as _;
+use serde_json as _;
+use sha2 as _;
 use thiserror as _;
 
 use ava_chains::atomic::Memory;
