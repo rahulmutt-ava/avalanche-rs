@@ -27,9 +27,9 @@ use tonic::{Request, Response, Status};
 use ava_crypto::bls::PublicKey;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_validators::ValidatorState;
 use ava_validators::state::{GetCurrentValidatorOutput, WarpSet};
 use ava_validators::validator::GetValidatorOutput;
-use ava_validators::ValidatorState;
 use ava_vm::error::{Error, Result};
 
 use crate::pb::validatorstate::validator_state_client::ValidatorStateClient;
@@ -198,8 +198,8 @@ impl ValidatorState for RpcValidatorState {
             .into_inner();
         let mut out = HashMap::new();
         for ws in resp.validator_sets {
-            let subnet =
-                Id::from_slice(&ws.subnet_id).map_err(|_| ava_validators::Error::MissingValidators)?;
+            let subnet = Id::from_slice(&ws.subnet_id)
+                .map_err(|_| ava_validators::Error::MissingValidators)?;
             let mut validators = Vec::with_capacity(ws.validators.len());
             for wv in ws.validators {
                 // A WarpValidator may carry multiple node ids sharing one key;
@@ -322,7 +322,9 @@ impl ValidatorStateService for ValidatorStateServer {
                     .collect(),
             })
             .collect();
-        Ok(Response::new(GetWarpValidatorSetsResponse { validator_sets }))
+        Ok(Response::new(GetWarpValidatorSetsResponse {
+            validator_sets,
+        }))
     }
 
     async fn get_validator_set(
@@ -330,8 +332,8 @@ impl ValidatorStateService for ValidatorStateServer {
         request: Request<GetValidatorSetRequest>,
     ) -> std::result::Result<Response<GetValidatorSetResponse>, Status> {
         let req = request.into_inner();
-        let subnet = Id::from_slice(&req.subnet_id)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let subnet =
+            Id::from_slice(&req.subnet_id).map_err(|e| Status::invalid_argument(e.to_string()))?;
         let set = self
             .state
             .get_validator_set(req.height, subnet)

@@ -19,12 +19,12 @@ Legend: `done` = code ported **and** a Go-derived golden vector asserts it green
 | `nnary_slush.go` | `src/snowball/nnary_snowflake.rs` | done | embedded in n-nary snowflake; exercised by `golden_nnary_snowflake` |
 | `nnary_snowflake.go` / `nnary_snowflake_test.go` | `src/snowball/nnary_snowflake.rs`, `tests/golden_snowball.rs::golden_nnary_snowflake` | done | top-level `TestNnarySnowflake` ported. Error-driven suite NOT yet ported |
 | `unary_snowball.go` / `unary_snowball_test.go` | `src/snowball/unary_snowball.rs`, `tests/golden_tree.rs` | done | primitive + `Display`/`UnaryInstance` ported; exercised end-to-end (preference-strength + extend-to-binary + `String()`) by the M3.4 tree golden vectors (`record_preference_poll_unary`, `fine_grained`, …) |
-| `nnary_snowball.go` / `nnary_snowball_test.go` | `src/snowball/nnary_snowball.rs` | wip | primitive + `Display`/`NnaryInstance` ported; the snowball `Tree` uses unary/binary instances, so the n-nary `String()`/`record_poll` golden vector (`TestNnarySnowball`) is still not asserted. Carry to a later snowball pass |
+| `nnary_snowball.go` / `nnary_snowball_test.go` | `src/snowball/nnary_snowball.rs`, `tests/golden_snowball.rs::golden_nnary_snowball*` | done | M3.29: `TestNnarySnowball` + `TestVirtuousNnarySnowball` + `TestNarySnowballRecordUnsuccessfulPoll` (incl. byte-exact `String()` golden) + `TestNarySnowballDifferentSnowflakeColor` ported against the canonical `ids.Empty.Prefix(i)` color ids |
 | `*_test.go` error-driven suites (`getErrorDrivenSnowflake*Suite`) | — | todo | confidence-vector helper suites (terminate/reset/switch); follow-up after M3.3 |
 | `flat.go` / `flat_test.go` | — | todo | flat consensus instance (not on M3.1–M3.3 path) |
 | `consensus.go` / `factory.go` | `src/snowball/consensus.rs` | done | `Consensus`/`Factory`/`NnaryInstance`/`BinaryInstance`/`UnaryInstance` traits + `SnowballFactory`/`SnowflakeFactory` (M3.4) |
 | `tree.go` / `tree_test.go` | `src/snowball/tree.rs`, `tests/golden_tree.rs` | done | M3.4: full Patricia `Tree` (`Consensus`) + 5 `Add` split cases + `should_reset` falter + byte-exact `Display`. 12 tree golden vectors ported (singleton/binary/first/last/fine-grained/trinary/transitive-reset/etc.) |
-| `consensus_test.go` (Red/Blue/Green + Byzantine) | `tests/conformance_battery.rs` (Snowman) | wip | shared color ids reused in `tests/golden_tree.rs`; the Snowman consensus battery lands at M3.5 |
+| `consensus_test.go` (Red/Blue/Green + Byzantine) | `tests/conformance_battery.rs` (Snowman) | done | M3.5: the Snowman consensus battery (`snow_battery` → `run_consensus_suite`, 19 cases) runs against the production `Topological`; shared color ids reused in `tests/golden_tree.rs` |
 
 ## Snowman / topological (`snow/consensus/snowman/`)
 

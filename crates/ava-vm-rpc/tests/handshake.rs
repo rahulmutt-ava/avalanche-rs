@@ -102,14 +102,22 @@ async fn rust_host_rust_guest_roundtrip() {
     blk.accept(&token).await.expect("accept");
 
     let last = host.last_accepted(&token).await.expect("last_accepted");
-    assert_eq!(last, blk.id(), "accept advances last_accepted across the wire");
+    assert_eq!(
+        last,
+        blk.id(),
+        "accept advances last_accepted across the wire"
+    );
 
     // parse_block round-trips the bytes.
     let parsed = host
         .parse_block(&token, blk.bytes())
         .await
         .expect("parse_block");
-    assert_eq!(parsed.id(), blk.id(), "parse round-trips the id over the wire");
+    assert_eq!(
+        parsed.id(),
+        blk.id(),
+        "parse round-trips the id over the wire"
+    );
 }
 
 #[allow(non_snake_case)]

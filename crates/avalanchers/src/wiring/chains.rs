@@ -309,14 +309,16 @@ fn staking_identity() -> Result<(StakingIdentity, NodeId)> {
         .to_vec();
     let node_id = staking::node_id_from_cert(&cert_der);
 
-    let key_pair =
-        rcgen::KeyPair::from_pem(&key_pem).map_err(|e| Error::Identity(format!("parse key: {e}")))?;
+    let key_pair = rcgen::KeyPair::from_pem(&key_pem)
+        .map_err(|e| Error::Identity(format!("parse key: {e}")))?;
     let pkcs8 = key_pair.serialize_der();
     let signer: BlockSigner = Arc::new(move |msg: &[u8]| {
         let rng = SystemRandom::new();
         let signing = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8, &rng)
             .map_err(|e| format!("import pkcs8: {e:?}"))?;
-        let sig = signing.sign(&rng, msg).map_err(|e| format!("sign: {e:?}"))?;
+        let sig = signing
+            .sign(&rng, msg)
+            .map_err(|e| format!("sign: {e:?}"))?;
         Ok(sig.as_ref().to_vec())
     });
     Ok((
@@ -390,7 +392,10 @@ pub async fn build_in_process_chain() -> Result<u64> {
 
     // The real router over a real adaptive-timeout manager (clock-injected).
     let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
-    let timeouts = Arc::new(AdaptiveTimeoutManager::new(&timeout_config(), Arc::clone(&clock))?);
+    let timeouts = Arc::new(AdaptiveTimeoutManager::new(
+        &timeout_config(),
+        Arc::clone(&clock),
+    )?);
     let router = ChainRouter::new(timeouts);
 
     let chain_id = Id::EMPTY;

@@ -41,11 +41,12 @@ use ava_types::node_id::NodeId;
 use ava_utils::clock::Clock;
 use ava_validators::ValidatorManager;
 use ava_validators::state::ValidatorState;
+use ava_version::application::Application;
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
 use ava_vm::block::{
-    BatchedChainVm, Block, BlockContext, BuildBlockWithContext, ChainVm,
-    SetPreferenceWithContext, StateSummary, StateSyncableVm,
+    BatchedChainVm, Block, BlockContext, BuildBlockWithContext, ChainVm, SetPreferenceWithContext,
+    StateSummary, StateSyncableVm,
 };
 use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
@@ -53,7 +54,6 @@ use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
 use ava_vm::middleware::{MeterVm, TracedVm};
 use ava_vm::vm::{HttpHandler, Vm, VmEvent};
-use ava_version::application::Application;
 use prometheus::Registry;
 
 use crate::error::Result;
@@ -278,11 +278,7 @@ impl<V: ChainVm> ChainVm for ChangeNotifier<V> {
         self.inner.last_accepted(token).await
     }
 
-    async fn get_block_id_at_height(
-        &self,
-        token: &CancellationToken,
-        height: u64,
-    ) -> VmResult<Id> {
+    async fn get_block_id_at_height(&self, token: &CancellationToken, height: u64) -> VmResult<Id> {
         self.inner.get_block_id_at_height(token, height).await
     }
 
@@ -490,8 +486,7 @@ pub fn build_db_stack<D: Database + 'static>(
 ///
 /// reading outermost→innermost: change-notifier, tracedvm("proposervm"),
 /// metervm, proposervm, tracedvm(primaryAlias), inner VM.
-pub type WrappedVm<V, S> =
-    ChangeNotifier<TracedVm<MeterVm<ProposerVm<TracedVm<V>, S>>>>;
+pub type WrappedVm<V, S> = ChangeNotifier<TracedVm<MeterVm<ProposerVm<TracedVm<V>, S>>>>;
 
 /// Wraps the inner VM in the exact ratified order (00 §11.1.2), with tracing and
 /// metering **both enabled** (the maximal stack):
@@ -518,7 +513,14 @@ pub fn wrap_snowman_vm<V: ChainVm, S: ValidatorState + 'static>(
     // inner -> tracedvm(primaryAlias)
     let traced_inner = TracedVm::new(inner, primary_alias.to_string());
     // -> proposervm
-    let proposer = ProposerVm::new(traced_inner, ctx, clock, validator_state, proposervm_db, identity);
+    let proposer = ProposerVm::new(
+        traced_inner,
+        ctx,
+        clock,
+        validator_state,
+        proposervm_db,
+        identity,
+    );
     // -> metervm
     let metered = MeterVm::new(proposer, reg)?;
     // -> tracedvm("proposervm")

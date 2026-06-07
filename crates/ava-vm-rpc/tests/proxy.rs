@@ -29,7 +29,10 @@ use ava_vm_rpc::proxy;
 async fn bind() -> (String, tokio_stream::wrappers::TcpListenerStream) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
-    (addr, tokio_stream::wrappers::TcpListenerStream::new(listener))
+    (
+        addr,
+        tokio_stream::wrappers::TcpListenerStream::new(listener),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

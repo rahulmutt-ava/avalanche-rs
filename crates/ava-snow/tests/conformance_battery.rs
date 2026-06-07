@@ -17,13 +17,15 @@
 use std::sync::Arc;
 
 use ava_snow::snowball::SnowballFactory;
-use ava_snow::snowtest::run_consensus_suite;
 use ava_snow::snowman::Topological;
 use ava_snow::snowman::block::BlockAcceptor;
+use ava_snow::snowtest::run_consensus_suite;
 
 #[test]
 fn snow_battery() {
-    run_consensus_suite(&|params, last_id, last_height, acceptor: Arc<dyn BlockAcceptor>| {
-        Topological::new(SnowballFactory, acceptor, params, last_id, last_height)
-    });
+    run_consensus_suite(
+        &|params, last_id, last_height, acceptor: Arc<dyn BlockAcceptor>| {
+            Topological::new(SnowballFactory, acceptor, params, last_id, last_height)
+        },
+    );
 }

@@ -63,7 +63,10 @@ async fn run_trial(n: usize, beta: u32) -> Option<(ava_types::id::Id, u64)> {
         if cluster.all_accepted(child_id) {
             // Every node must agree on the same last-accepted (no fork).
             let agreed = cluster.agreed_last_accepted()?;
-            assert_eq!(agreed.0, child_id, "agreed last-accepted is the issued block");
+            assert_eq!(
+                agreed.0, child_id,
+                "agreed last-accepted is the issued block"
+            );
             return Some(agreed);
         }
         // Safety invariant every round: nodes never disagree on last-accepted.

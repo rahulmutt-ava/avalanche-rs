@@ -12,9 +12,7 @@ use ava_crypto::hashing::sha256;
 use ava_database::prefixdb::{join_prefixes, make_prefix};
 use ava_database::{Batch, DynDatabase};
 use ava_types::id::Id;
-use ava_vm::components::avax::shared_memory::{
-    Element, IndexedResult, Requests, SharedMemory,
-};
+use ava_vm::components::avax::shared_memory::{Element, IndexedResult, Requests, SharedMemory};
 
 use crate::error::{Error, Result};
 
@@ -58,7 +56,11 @@ impl Memory {
 
     fn lock_for(&self, shared: [u8; 32]) -> Arc<Mutex<()>> {
         let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
-        Arc::clone(locks.entry(shared).or_insert_with(|| Arc::new(Mutex::new(()))))
+        Arc::clone(
+            locks
+                .entry(shared)
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
     }
 }
 
@@ -152,11 +154,7 @@ impl SharedMemory for SharedMemoryView {
         let mut values = Vec::with_capacity(keys.len());
         for key in keys {
             let full = self.value_key(&ns, key);
-            let raw = self
-                .memory
-                .db
-                .get(&full)
-                .map_err(map_db_err)?;
+            let raw = self.memory.db.get(&full).map_err(map_db_err)?;
             let elem = decode_db_element(&raw).map_err(map_err)?;
             if !elem.present {
                 // Indexed but tombstoned ⇒ NotFound (Go `state.Value`).
@@ -237,8 +235,10 @@ impl SharedMemoryView {
             .map(|peer| shared_id(self.this_chain, *peer))
             .collect();
         shared_ids.sort_unstable();
-        let guards: Vec<Arc<Mutex<()>>> =
-            shared_ids.iter().map(|s| self.memory.lock_for(*s)).collect();
+        let guards: Vec<Arc<Mutex<()>>> = shared_ids
+            .iter()
+            .map(|s| self.memory.lock_for(*s))
+            .collect();
         let _held: Vec<_> = guards
             .iter()
             .map(|g| g.lock().unwrap_or_else(|e| e.into_inner()))

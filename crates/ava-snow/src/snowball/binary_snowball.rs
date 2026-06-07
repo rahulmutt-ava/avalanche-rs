@@ -102,7 +102,10 @@ impl fmt::Display for BinarySnowball {
         write!(
             f,
             "SB(Preference = {}, PreferenceStrength[0] = {}, PreferenceStrength[1] = {}, {})",
-            self.preference, self.preference_strength[0], self.preference_strength[1], self.snowflake
+            self.preference,
+            self.preference_strength[0],
+            self.preference_strength[1],
+            self.snowflake
         )
     }
 }

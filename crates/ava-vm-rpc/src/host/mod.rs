@@ -31,6 +31,7 @@ use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_version::application::Application;
 
+use crate::MAX_MESSAGE_SIZE;
 use crate::pb::vm::vm_client::VmClient;
 use crate::pb::vm::{
     self, AppGossipMsg, AppRequestFailedMsg, AppRequestMsg, AppResponseMsg, BuildBlockRequest,
@@ -38,7 +39,6 @@ use crate::pb::vm::{
     ParseBlockRequest, SetPreferenceRequest, SetStateRequest,
 };
 use crate::runtime::{Handshake, RuntimeServiceImpl};
-use crate::MAX_MESSAGE_SIZE;
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
 use ava_vm::block::{Block, ChainVm};
@@ -430,7 +430,10 @@ impl Vm for RpcChainVm {
         Ok(HashMap::new())
     }
 
-    async fn new_http_handler(&mut self, _token: &CancellationToken) -> Result<Option<HttpHandler>> {
+    async fn new_http_handler(
+        &mut self,
+        _token: &CancellationToken,
+    ) -> Result<Option<HttpHandler>> {
         let _ = self.client().new_http_handler(()).await.map_err(rpc_err)?;
         Ok(None)
     }
@@ -455,7 +458,9 @@ impl ChainVm for RpcChainVm {
     async fn build_block(&mut self, _token: &CancellationToken) -> Result<Arc<dyn Block>> {
         let resp = self
             .client()
-            .build_block(BuildBlockRequest { p_chain_height: None })
+            .build_block(BuildBlockRequest {
+                p_chain_height: None,
+            })
             .await
             .map_err(rpc_err)?
             .into_inner();
@@ -489,7 +494,11 @@ impl ChainVm for RpcChainVm {
         ))
     }
 
-    async fn parse_block(&self, _token: &CancellationToken, bytes: &[u8]) -> Result<Arc<dyn Block>> {
+    async fn parse_block(
+        &self,
+        _token: &CancellationToken,
+        bytes: &[u8],
+    ) -> Result<Arc<dyn Block>> {
         let resp = self
             .client()
             .parse_block(ParseBlockRequest {

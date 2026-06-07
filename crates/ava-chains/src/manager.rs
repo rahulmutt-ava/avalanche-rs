@@ -116,11 +116,7 @@ impl VmManager {
     /// [`Error::NotFound`] if no factory is registered under `vm_id`.
     pub fn get_factory(&self, vm_id: Id) -> Result<Arc<dyn Factory>> {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        inner
-            .factories
-            .get(&vm_id)
-            .cloned()
-            .ok_or(Error::NotFound)
+        inner.factories.get(&vm_id).cloned().ok_or(Error::NotFound)
     }
 
     /// `RegisterFactory(vmID, factory)` — registers a factory, probing the

@@ -208,7 +208,11 @@ fn child(idgen: &mut IdGen, parent: &Arc<TestSnowmanBlock>) -> Arc<TestSnowmanBl
 
 fn genesis_block() -> Arc<TestSnowmanBlock> {
     // The genesis itself is never added; we just need its id/height for children.
-    Arc::new(TestSnowmanBlock::new(genesis_id(), Id::EMPTY, GENESIS_HEIGHT))
+    Arc::new(TestSnowmanBlock::new(
+        genesis_id(),
+        Id::EMPTY,
+        GENESIS_HEIGHT,
+    ))
 }
 
 /// Runs the full Snowman conformance suite against `make`.
@@ -241,10 +245,7 @@ pub fn run_consensus_suite<C: SnowmanConsensus>(make: &Ctor<C>) {
     acceptor_ordering(make);
 }
 
-fn new<C: SnowmanConsensus>(
-    make: &Ctor<C>,
-    p: Parameters,
-) -> (C, Arc<RecordingAcceptor>) {
+fn new<C: SnowmanConsensus>(make: &Ctor<C>, p: Parameters) -> (C, Arc<RecordingAcceptor>) {
     let acceptor = RecordingAcceptor::new();
     let sm = make(p, genesis_id(), GENESIS_HEIGHT, acceptor.clone())
         .expect("consensus must initialize with valid params");
@@ -313,7 +314,11 @@ fn add_on_unknown_parent<C: SnowmanConsensus>(make: &Ctor<C>) {
 fn add_decided_block_errors<C: SnowmanConsensus>(make: &Ctor<C>) {
     let (mut sm, _) = new(make, params(1, 1, 1));
     // Re-adding the genesis (last accepted) block has an unknown parent.
-    let g = Arc::new(TestSnowmanBlock::new(genesis_id(), Id::EMPTY, GENESIS_HEIGHT));
+    let g = Arc::new(TestSnowmanBlock::new(
+        genesis_id(),
+        Id::EMPTY,
+        GENESIS_HEIGHT,
+    ));
     let err = sm.add(dyn_block(&g)).unwrap_err();
     assert!(matches!(err, Error::UnknownParentBlock));
 }

@@ -54,10 +54,7 @@ impl VmRegistry {
     /// # Errors
     /// Propagates a discovery (`getter`) error; per-VM registration failures are
     /// collected into the returned `failed` map rather than aborting.
-    pub async fn reload(
-        &self,
-        token: &CancellationToken,
-    ) -> Result<(Vec<Id>, HashMap<Id, Error>)> {
+    pub async fn reload(&self, token: &CancellationToken) -> Result<(Vec<Id>, HashMap<Id, Error>)> {
         let discovered = self.getter.get(token).await?;
 
         let mut installed = Vec::new();

@@ -22,7 +22,7 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 use ava_snow::error::Error;
 use ava_snow::snowball::{
-    BinarySnowball, BinarySnowflake, DEFAULT_PARAMETERS, NnarySnowflake, Parameters,
+    BinarySnowball, BinarySnowflake, DEFAULT_PARAMETERS, NnarySnowball, NnarySnowflake, Parameters,
     TerminationCondition, UnarySnowflake,
 };
 use ava_types::id::Id;
@@ -355,4 +355,134 @@ fn golden_nnary_snowflake() {
     sf.record_poll(alpha_confidence, blue);
     assert_eq!(sf.preference(), red);
     assert!(sf.finalized());
+}
+
+/// The Go shared color ids (`consensus_test.go`): `ids.Empty.Prefix(i)`.
+fn red() -> Id {
+    Id::EMPTY.prefix(&[0])
+}
+fn blue() -> Id {
+    Id::EMPTY.prefix(&[1])
+}
+fn green() -> Id {
+    Id::EMPTY.prefix(&[2])
+}
+
+/// Port of Go `TestNnarySnowball`.
+#[test]
+fn golden_nnary_snowball() {
+    let (alpha_preference, alpha_confidence, beta) = (1u32, 2u32, 2u32);
+    let conditions = TerminationCondition::single(alpha_confidence, beta);
+
+    let mut sb = NnarySnowball::new(alpha_preference, conditions, red());
+    sb.add(blue());
+    sb.add(green());
+
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.preference(), blue());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, red());
+    assert_eq!(sb.preference(), blue());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_preference, red());
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, red());
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_preference, blue());
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.preference(), blue());
+    assert!(sb.finalized());
+}
+
+/// Port of Go `TestVirtuousNnarySnowball`.
+#[test]
+fn golden_virtuous_nnary_snowball() {
+    let (alpha_preference, alpha_confidence, beta) = (1u32, 2u32, 1u32);
+    let conditions = TerminationCondition::single(alpha_confidence, beta);
+
+    let mut sb = NnarySnowball::new(alpha_preference, conditions, red());
+
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, red());
+    assert_eq!(sb.preference(), red());
+    assert!(sb.finalized());
+}
+
+/// Port of Go `TestNarySnowballRecordUnsuccessfulPoll` — exercises the
+/// `record_unsuccessful_poll` reset and the `Display` golden string.
+#[test]
+fn golden_nnary_snowball_record_unsuccessful_poll() {
+    let (alpha_preference, alpha_confidence, beta) = (1u32, 2u32, 2u32);
+    let conditions = TerminationCondition::single(alpha_confidence, beta);
+
+    let mut sb = NnarySnowball::new(alpha_preference, conditions, red());
+    sb.add(blue());
+
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.preference(), blue());
+    assert!(!sb.finalized());
+
+    sb.record_unsuccessful_poll();
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.preference(), blue());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.preference(), blue());
+    assert!(sb.finalized());
+
+    let expected = format!(
+        "SB(Preference = {blue}, PreferenceStrength = 3, SF(Confidence = [2], Finalized = true, SL(Preference = {blue})))",
+        blue = blue()
+    );
+    assert_eq!(sb.to_string(), expected);
+
+    for _ in 0..4 {
+        sb.record_poll(alpha_confidence, red());
+        assert_eq!(sb.preference(), blue());
+        assert!(sb.finalized());
+    }
+}
+
+/// Port of Go `TestNarySnowballDifferentSnowflakeColor` — the snowball
+/// preference (strength-weighted) can differ from the embedded snowflake's.
+#[test]
+fn golden_nnary_snowball_different_snowflake_color() {
+    let (alpha_preference, alpha_confidence, beta) = (1u32, 2u32, 2u32);
+    let conditions = TerminationCondition::single(alpha_confidence, beta);
+
+    let mut sb = NnarySnowball::new(alpha_preference, conditions, red());
+    sb.add(blue());
+
+    assert_eq!(sb.preference(), red());
+    assert!(!sb.finalized());
+
+    sb.record_poll(alpha_confidence, blue());
+    assert_eq!(sb.snowflake_preference(), blue());
+
+    sb.record_poll(alpha_confidence, red());
+    assert_eq!(sb.preference(), blue());
+    assert_eq!(sb.snowflake_preference(), red());
 }

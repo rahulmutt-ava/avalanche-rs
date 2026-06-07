@@ -23,9 +23,9 @@ use ava_utils::bag::Bag;
 use super::block::{Block, BlockAcceptor, NoOpBlockAcceptor};
 use super::consensus::SnowmanConsensus;
 use crate::error::{Error, Result};
+use crate::snowball::Parameters;
 use crate::snowball::consensus::{Consensus, Factory};
 use crate::snowball::tree::Tree;
-use crate::snowball::Parameters;
 
 /// The maximum average acceptance time before the chain reports unhealthy
 /// (Go `maxAcceptanceTime`).
@@ -357,9 +357,7 @@ impl<F: Factory + Clone> Topological<F> {
                 .get(&vote.parent_id)
                 .is_some_and(|b| b.should_falter);
 
-            if should_transitively_falter
-                && let Some(b) = self.blocks.get_mut(&vote.parent_id)
-            {
+            if should_transitively_falter && let Some(b) = self.blocks.get_mut(&vote.parent_id) {
                 if let Some(sb) = &mut b.sb {
                     sb.record_unsuccessful_poll();
                 }
@@ -429,10 +427,7 @@ impl<F: Factory + Clone> Topological<F> {
                 .blocks
                 .get(parent_id)
                 .ok_or(Error::UnknownParentBlock)?;
-            let pref = n
-                .sb
-                .as_ref()
-                .map_or(Id::EMPTY, Consensus::preference);
+            let pref = n.sb.as_ref().map_or(Id::EMPTY, Consensus::preference);
             let pref_child = n
                 .children
                 .get(&pref)

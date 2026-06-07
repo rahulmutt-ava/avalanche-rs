@@ -201,7 +201,8 @@ fn first_binary() {
     assert_eq!(tree.preference(), one);
     assert!(tree.finalized());
 
-    let expected = "SB(PreferenceStrength = 2, SF(Confidence = [2], Finalized = true)) Bits = [1, 256)";
+    let expected =
+        "SB(PreferenceStrength = 2, SF(Confidence = [2], Finalized = true)) Bits = [1, 256)";
     assert_eq!(tree.to_string(), expected);
 }
 
@@ -310,7 +311,8 @@ fn transitive_reset() {
     assert!(tree.record_poll(&zero_bag));
     assert!(tree.record_poll(&zero_bag));
 
-    let expected = "SB(PreferenceStrength = 3, SF(Confidence = [2], Finalized = true)) Bits = [4, 256)";
+    let expected =
+        "SB(PreferenceStrength = 3, SF(Confidence = [2], Finalized = true)) Bits = [4, 256)";
     assert_eq!(tree.to_string(), expected);
     assert_eq!(tree.preference(), zero);
     assert!(tree.finalized());
@@ -351,7 +353,8 @@ fn fine_grained() {
     assert_eq!(tree.to_string(), expected);
 
     assert!(tree.record_poll(&bag_of(&[c0010])));
-    let expected = "SB(PreferenceStrength = 2, SF(Confidence = [2], Finalized = true)) Bits = [3, 256)";
+    let expected =
+        "SB(PreferenceStrength = 2, SF(Confidence = [2], Finalized = true)) Bits = [3, 256)";
     assert_eq!(tree.to_string(), expected);
     assert_eq!(tree.preference(), c0010);
     assert!(tree.finalized());

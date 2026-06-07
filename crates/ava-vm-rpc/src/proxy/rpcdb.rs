@@ -49,14 +49,13 @@ pub fn dial(addr: &str) -> Result<RpcDatabase> {
         .enable_all()
         .build()
         .map_err(|_| Error::HandshakeFailed)?;
-    let channel = rt
-        .block_on(async {
-            tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
-                .map_err(|_| Error::HandshakeFailed)?
-                .connect()
-                .await
-                .map_err(|_| Error::HandshakeFailed)
-        })?;
+    let channel = rt.block_on(async {
+        tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+            .map_err(|_| Error::HandshakeFailed)?
+            .connect()
+            .await
+            .map_err(|_| Error::HandshakeFailed)
+    })?;
     Ok(DatabaseClient::new(rt, channel))
 }
 

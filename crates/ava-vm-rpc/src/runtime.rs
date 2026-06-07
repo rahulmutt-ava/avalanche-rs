@@ -70,9 +70,7 @@ impl RuntimeService for RuntimeServiceImpl {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let handshake = if req.protocol_version == RPC_CHAIN_VM_PROTOCOL {
-            Handshake::Ok {
-                vm_addr: req.addr,
-            }
+            Handshake::Ok { vm_addr: req.addr }
         } else {
             Handshake::VersionMismatch {
                 got: req.protocol_version,

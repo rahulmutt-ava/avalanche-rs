@@ -162,7 +162,10 @@ fn aliaser_primary_alias() {
 
     // The chain id string itself always resolves (Go `PrimaryAliasOrDefault`).
     let undefined = Id::from([42u8; 32]);
-    assert_eq!(aliaser.primary_alias_or_default(undefined), undefined.to_string());
+    assert_eq!(
+        aliaser.primary_alias_or_default(undefined),
+        undefined.to_string()
+    );
     assert_eq!(aliaser.primary_alias_or_default(chain), "C");
 }
 

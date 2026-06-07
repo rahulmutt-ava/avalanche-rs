@@ -46,9 +46,7 @@ fn error_to_enum(err: &VmError) -> i32 {
 
 /// Builds a wire `google.protobuf.Timestamp` from a [`std::time::SystemTime`].
 fn system_time_to_proto(t: std::time::SystemTime) -> Option<prost_types::Timestamp> {
-    let dur = t
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     Some(prost_types::Timestamp {
         seconds: i64::try_from(dur.as_secs()).unwrap_or(0),
         nanos: i32::try_from(dur.subsec_nanos()).unwrap_or(0),
@@ -209,7 +207,8 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
         let req = request.into_inner();
         let node = ava_types::node_id::NodeId::from_slice(&req.node_id)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let version = ava_version::application::Application::new(req.name, req.major, req.minor, req.patch);
+        let version =
+            ava_version::application::Application::new(req.name, req.major, req.minor, req.patch);
         let mut vm = self.vm.lock().await;
         vm.connected(&self.token, node, version)
             .await
@@ -402,10 +401,7 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
         Ok(Response::new(()))
     }
 
-    async fn app_gossip(
-        &self,
-        request: Request<vm::AppGossipMsg>,
-    ) -> Result<Response<()>, Status> {
+    async fn app_gossip(&self, request: Request<vm::AppGossipMsg>) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let node = ava_types::node_id::NodeId::from_slice(&req.node_id)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -416,10 +412,7 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
         Ok(Response::new(()))
     }
 
-    async fn gather(
-        &self,
-        _request: Request<()>,
-    ) -> Result<Response<vm::GatherResponse>, Status> {
+    async fn gather(&self, _request: Request<()>) -> Result<Response<vm::GatherResponse>, Status> {
         // Metric gathering is deferred (no Prometheus registry plumbed through
         // the VM trait yet); report no families.
         Ok(Response::new(vm::GatherResponse {
@@ -431,16 +424,16 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
         &self,
         _request: Request<vm::GetAncestorsRequest>,
     ) -> Result<Response<vm::GetAncestorsResponse>, Status> {
-        Err(Status::unimplemented("GetAncestors (batched) — M3.25 follow-up"))
+        Err(Status::unimplemented(
+            "GetAncestors (batched) — M3.25 follow-up",
+        ))
     }
 
     async fn batched_parse_block(
         &self,
         _request: Request<vm::BatchedParseBlockRequest>,
     ) -> Result<Response<vm::BatchedParseBlockResponse>, Status> {
-        Err(Status::unimplemented(
-            "BatchedParseBlock — M3.25 follow-up",
-        ))
+        Err(Status::unimplemented("BatchedParseBlock — M3.25 follow-up"))
     }
 
     async fn get_block_id_at_height(

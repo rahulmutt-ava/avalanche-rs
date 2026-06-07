@@ -29,8 +29,8 @@ use crate::pb::sharedmemory::shared_memory_server::{
     SharedMemory as SharedMemoryService, SharedMemoryServer as PbSharedMemoryServer,
 };
 use crate::pb::sharedmemory::{
-    ApplyRequest, ApplyResponse, AtomicRequest, Batch, BatchDelete, BatchPut,
-    Element as PbElement, GetRequest, GetResponse, IndexedRequest, IndexedResponse,
+    ApplyRequest, ApplyResponse, AtomicRequest, Batch, BatchDelete, BatchPut, Element as PbElement,
+    GetRequest, GetResponse, IndexedRequest, IndexedResponse,
 };
 
 /// The guest-side `proto/sharedmemory` client: a [`SharedMemory`] over the
@@ -127,11 +127,7 @@ impl SharedMemory for RpcSharedMemory {
         let wire_requests = requests
             .into_iter()
             .map(|(chain, reqs)| AtomicRequest {
-                remove_requests: reqs
-                    .remove
-                    .into_iter()
-                    .map(bytes::Bytes::from)
-                    .collect(),
+                remove_requests: reqs.remove.into_iter().map(bytes::Bytes::from).collect(),
                 put_requests: reqs
                     .put
                     .into_iter()

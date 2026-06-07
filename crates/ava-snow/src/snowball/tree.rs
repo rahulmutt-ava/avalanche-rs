@@ -78,9 +78,7 @@ impl<F: Factory> Consensus for Tree<F> {
         // others are for rejected operations.
         let decided_prefix = self.node.decided_prefix();
         let preference = self.preference();
-        let filtered = filter_bag(votes, |id| {
-            equal_subset(0, decided_prefix, &preference, id)
-        });
+        let filtered = filter_bag(votes, |id| equal_subset(0, decided_prefix, &preference, id));
 
         let node = std::mem::replace(&mut self.node, Node::placeholder());
         let (new_node, successful) =

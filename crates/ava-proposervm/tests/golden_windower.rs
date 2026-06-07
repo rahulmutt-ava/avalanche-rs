@@ -102,14 +102,14 @@ fn validator_data(v: &Vectors) -> Vec<ValidatorData> {
 }
 
 #[test]
-fn chain_source_matches_go() {
+fn windower_schedule_chain_source() {
     let v = load();
     let chain = ava_types::id::Id::from_str(&v.chain_id).expect("parse chain id");
     assert_eq!(chain_source(chain), v.chain_source, "chain_source");
 }
 
 #[test]
-fn expected_proposer_matches_go() {
+fn windower_schedule_expected_proposer() {
     let v = load();
     let validators = validator_data(&v);
     let cs = v.chain_source;
@@ -127,7 +127,7 @@ fn expected_proposer_matches_go() {
 }
 
 #[test]
-fn proposers_and_delay_match_go() {
+fn windower_schedule_proposers_and_delay() {
     let v = load();
     let validators = validator_data(&v);
     let cs = v.chain_source;
@@ -204,7 +204,7 @@ impl ValidatorState for FixedState {
 /// The async `Windower` path (including the empty-NodeID drop) reproduces the
 /// same Go orderings as the pure-sync cores.
 #[tokio::test]
-async fn async_windower_matches_go() {
+async fn windower_schedule_async() {
     let v = load();
     let chain = Id::from_str(&v.chain_id).expect("chain id");
 

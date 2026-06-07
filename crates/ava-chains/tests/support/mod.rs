@@ -109,7 +109,9 @@ pub fn staking_identity() -> (StakingIdentity, NodeId) {
         let rng = SystemRandom::new();
         let signing = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8, &rng)
             .map_err(|e| format!("import pkcs8: {e:?}"))?;
-        let sig = signing.sign(&rng, msg).map_err(|e| format!("sign: {e:?}"))?;
+        let sig = signing
+            .sign(&rng, msg)
+            .map_err(|e| format!("sign: {e:?}"))?;
         Ok(sig.as_ref().to_vec())
     });
     (

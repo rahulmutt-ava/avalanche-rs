@@ -151,12 +151,13 @@ fn to_status(err: &Error) -> Status {
 
 #[tonic::async_trait]
 impl AliasReaderService for AliasReaderServer {
-    async fn lookup(
-        &self,
-        request: Request<Alias>,
-    ) -> std::result::Result<Response<PbId>, Status> {
+    async fn lookup(&self, request: Request<Alias>) -> std::result::Result<Response<PbId>, Status> {
         let alias = request.into_inner().alias;
-        let id = self.reader.lookup(&alias).await.map_err(|e| to_status(&e))?;
+        let id = self
+            .reader
+            .lookup(&alias)
+            .await
+            .map_err(|e| to_status(&e))?;
         Ok(Response::new(PbId {
             id: bytes::Bytes::copy_from_slice(&id.to_bytes()),
         }))
