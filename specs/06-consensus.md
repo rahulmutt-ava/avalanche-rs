@@ -589,6 +589,12 @@ outstanding responses can no longer change the alpha-preference/alpha-confidence
 outcome (the `EarlyTermFactory` is parameterized by `alpha_preference`/
 `alpha_confidence`). Port the early-term predicate exactly; it affects how quickly
 `record_poll` is invoked but not the final decision (safety is independent of it).
+> **Realized port (M3.11):** the `EarlyTermFactory`/`PollSet` implements the
+> per-id early-finish cases 1–4 (a poll finishes once no outstanding response can
+> still flip the alpha outcome). The *transitive-vote / shared-bit-prefix-graph*
+> short-circuit is **deferred** — it only ever finishes a poll *earlier* and never
+> changes the decision, so safety/liveness are unaffected; add it only if a
+> differential test needs exact Go poll-completion timing.
 
 `concurrent_repolls` bounds how many polls are outstanding while work is processing;
 `optimal_processing` throttles local block building. Both copied from `Parameters`.
@@ -1005,9 +1011,18 @@ the batched + state-syncable VM interfaces by delegating (`batched_vm.go`,
 (`getPreDurangoSlotTime`/`getPostDurangoSlotTime`), waits for this node's slot, signs
 with the staking cert, and emits the post-fork block.
 
----
-
-## 8. Simplex integration (`ava-simplex`)
+> **Realized port (M3.23):** `ProposerVm<V: ChainVm, S: ValidatorState>` is generic
+> over the validator-state source, which is **injected at construction** — unlike Go,
+> the Rust `ChainContext` (§3) carries no `validator_state` handle, so the windower's
+> set lookup is wired through the injected `S` (added `Windower::validator_state()`).
+> The slot-wait lives in `build_block` (waiting via `Arc<dyn Clock>` + a virtual-time
+> friendly sleep, `MAX_SKEW = 10s`) rather than Go's separate `WaitForEvent`. Signing
+> uses a pluggable `SignFn` because `ava-crypto` exposes only staking-cert
+> *verification*, not signing, at this layer. **Deferred** (tracked in the crate's
+> PORTING.md): Granite epoch (ACP-181) selection, oracle/option block wrapping, the
+> full post-fork verify graph + inner-block tree/cache, height-repair/pruning
+> (`NumHistoricalBlocks`), proposervm state-summary re-wrapping (state-sync currently
+> forwards to the inner VM verbatim), and the HTTP/RPC service.
 
 `simplex/` + `snow/consensus/simplex/parameters.go`. Simplex is an **alternative
 single-decree-per-round BFT** consensus (a classic propose→vote→finalize protocol

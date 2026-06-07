@@ -535,7 +535,14 @@ pub trait FxInstance: Send + Sync {
 pub trait FxVm: Send + Sync {
     fn codec_registry(&self) -> Arc<CodecRegistry>;   // 03
     fn clock(&self) -> SystemTime;                     // for locktime checks
-    fn logger(&self) -> Logger;
+    // NOTE (M3.20 realized port): `logger()` is deferred — there is no `Logger`
+    // facade in the workspace yet, so the realized `FxVm` ships only
+    // `codec_registry()` + `clock()`. Re-add `logger()` when a logging facade
+    // lands. Also, `CodecRegistry` is realized as
+    // `register_type(name: &str) -> Result<u32>` rather than Go's generic
+    // `RegisterType(interface{})`: concrete typeIDs are pinned on enums at
+    // derive time in `ava-codec` (03), so the fx registers *names* and receives
+    // the assigned typeID back.
 }
 ```
 
