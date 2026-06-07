@@ -46,6 +46,7 @@ pub mod error;
 pub mod factory;
 pub mod fx;
 pub mod genesis;
+pub mod network;
 pub mod reward;
 pub mod signer;
 pub mod stakeable;
