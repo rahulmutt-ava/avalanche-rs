@@ -26,10 +26,7 @@
 use arc_swap as _;
 use async_trait as _;
 use ava_codec_derive as _;
-use ava_crypto as _;
 use ava_database as _;
-use ava_secp256k1fx as _;
-use ava_types as _;
 use ava_utils as _;
 use ava_validators as _;
 use num_bigint as _;
@@ -37,7 +34,26 @@ use parking_lot as _;
 use ruint as _;
 use tokio as _;
 
+// Dev-dependencies not yet exercised by this crate's in-crate tests; each is
+// wired in by a later M4 task (proptest/rstest table tests, hex/serde_json
+// golden vectors). Silence `unused_crate_dependencies` for the lib-test unit.
+#[cfg(test)]
+use assert_matches as _;
+#[cfg(test)]
+use hex as _;
+#[cfg(test)]
+use pretty_assertions as _;
+#[cfg(test)]
+use proptest as _;
+#[cfg(test)]
+use rstest as _;
+#[cfg(test)]
+use serde as _;
+#[cfg(test)]
+use serde_json as _;
+
 pub mod error;
+pub mod txs;
 
 pub use error::{Error, Result};
 
