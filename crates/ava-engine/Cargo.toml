@@ -37,6 +37,12 @@ tokio = { workspace = true, features = [ "macros", "rt", "sync", "time" ] }
 # TaskTracker (halt + leaked-task drain) come from `rt`. NOTE: workspace pins
 # tokio-util with only `["rt"]`; `time` is added here for DelayQueue.
 tokio-util = { workspace = true, features = [ "time", "rt" ] }
+# The consensus core (`ava-snow`) decides accept/reject synchronously, but the
+# engine's `block.ChainVM` block accept/reject are async. The block adaptor
+# bridges them via a standalone `futures::executor::block_on` (a non-tokio
+# executor, so it does not re-enter the engine's runtime) — see
+# `snowman::adaptor`. M3.14+ revisits this for VMs that do tokio I/O in accept.
+futures = { workspace = true }
 
 [dev-dependencies]
 # Unit tests drive the async handler methods on the current-thread runtime;
@@ -44,3 +50,15 @@ tokio-util = { workspace = true, features = [ "time", "rt" ] }
 tokio = { workspace = true, features = [ "macros", "rt", "sync", "time", "test-util" ] }
 # Sentinel-error assertions on config verify.
 assert_matches = { workspace = true }
+# The engine integration + property tests drive the real engine against the
+# in-memory test VM (`ava-vm` testutil), the real `Topological` consensus
+# (`ava-snow`), the `DefaultManager` sampler, and a recording mock Sender/Router.
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
+ava-snow = { path = "../ava-snow", features = [ "testutil" ] }
+ava-database = { path = "../ava-database" }
+ava-version = { path = "../ava-version" }
+tokio-util = { workspace = true, features = [ "time", "rt" ] }
+# Property tests for liveness / preference monotonicity.
+proptest = { workspace = true }
+# The support harness derives block ids the same way the test VM does.
+sha2 = { workspace = true }

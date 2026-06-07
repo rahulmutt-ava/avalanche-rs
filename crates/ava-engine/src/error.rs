@@ -15,6 +15,22 @@ pub enum Error {
     /// A handler or sender operation failed.
     #[error("engine error: {0}")]
     Engine(String),
+
+    /// An error bubbled up from the underlying VM.
+    #[error("vm error: {0}")]
+    Vm(#[from] ava_vm::error::Error),
+
+    /// An error bubbled up from the consensus core.
+    #[error("consensus error: {0}")]
+    Consensus(#[from] ava_snow::error::Error),
+
+    /// An error bubbled up from the validator subsystem.
+    #[error("validators error: {0}")]
+    Validators(#[from] ava_validators::error::Error),
+
+    /// The engine was halted (the [`tokio_util::sync::CancellationToken`] fired).
+    #[error("engine halted")]
+    Halted,
 }
 
 /// Convenience alias for engine results.

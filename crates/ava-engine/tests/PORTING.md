@@ -197,3 +197,218 @@ Go reference (pinned `../avalanchego`):
   `async_op_runs_on_pool_and_drains`.
 - Unit: `benchlist::tests` (threshold/cooldown/reset), `tracker::tests`
   (accumulation + stake-weighted target).
+
+---
+
+# ava-engine — Snowman engine (Task M3.11)
+
+Port of `snow/engine/snowman/` (engine/issuer/voter) + `snow/consensus/snowman/poll/`
++ `snow/engine/snowman/getter/` into `crate::snowman` (specs 06 §4.2/§4.3).
+
+Go reference (pinned `../avalanchego`):
+- `snow/engine/snowman/engine.go` — the normal-op engine (Put/PullQuery/PushQuery/
+  Chits/QueryFailed/Notify, issueFrom/deliver/sendChits/sendQuery/repoll/
+  getProcessingAncestor).
+- `snow/engine/snowman/{issuer,voter}.go` — the parked-job machinery.
+- `snow/consensus/snowman/poll/{set,early_term_traversal}.go` — the poll set +
+  early-termination predicate.
+- `snow/engine/snowman/getter/getter.go` — the read-only `AllGetsServer`.
+
+## Module → Go mapping
+
+| Rust (`snowman::`) | Go |
+|---|---|
+| `engine::SnowmanEngine` + `Config` | `engine.Engine` + `engine.Config` |
+| `poll::{PollSet,Poll,EarlyTermFactory}` | `poll.{set,earlyTermPoll,earlyTermTraversalFactory}` |
+| `getter::Getter` | `getter.getter` (`common.AllGetsServer`) |
+| `adaptor::BlockAdaptor` | the async-VM-block → sync-consensus-block bridge |
+| `issuer` / `voter` (doc modules) | `issuer.go` / `voter.go` |
+
+## Deliberate deviations / findings (record for spec/plan)
+
+1. **Job scheduler folded into inline ancestry resolution.** Go parks
+   `issuer`/`voter` jobs in a `job.Scheduler` keyed by block-id dependencies and
+   drains them in `executeDeferredWork`. Because the engine task is single-owner
+   and the VM/consensus calls are `await`ed inline here, `issue_from` walks the
+   ancestry eagerly and chits are applied once their referenced blocks are issued.
+   The observable behaviour (outbound messages, accept/reject order) is identical
+   for the connected-ancestry cases the tests exercise. The `issuer`/`voter`
+   modules are doc-only maps onto the inline `engine.rs` flow. **Finding:** if a
+   later differential test needs the exact parked-job interleaving (e.g. an
+   out-of-order multi-Put ancestry fill that abandons mid-chain), a real
+   `JobScheduler<Id>` should be reintroduced.
+
+2. **Early-term predicate is the per-id cases 1–4, not the full transitive-vote
+   graph.** Go's `early_term_traversal.go` builds a transitive vote graph with
+   shared-prefix bifurcations on every `Finished()` call to finish polls as early
+   as theoretically possible. We require the engine to bubble each chit to the
+   nearest *processing ancestor* before `PollSet::vote` (so the votes bag already
+   holds ancestor ids), then apply Go's per-id `shouldTerminate` (cases 1–4)
+   incrementally (O(1) per chit). This only changes *when* a poll completes, never
+   the resulting decision (the safety argument of spec 06 §11). **Deferred:** the
+   shared-prefix bifurcation short-circuit (can only ever finish a poll *earlier*).
+   **Recommended spec note:** 06 §4.2/§11 should state the prefix-graph
+   short-circuit is an optional optimization, not a correctness requirement.
+
+3. **Two `Block` traits bridged by `BlockAdaptor`.** `ava-snow` exposes a
+   synchronous consensus `Block` (`snowman::block::Block`, accept/reject are
+   sync+fallible, matching Go's `RecordPoll` threading them directly) and an async
+   engine-facing `Block` (`decidable::Block` = `ava_vm::Block`). The engine gets
+   `Arc<dyn ava_vm::Block>` from the VM and must hand `Arc<dyn snowman::Block>` to
+   `Consensus::add`. `BlockAdaptor` bridges them, driving the async accept/reject
+   with `futures::executor::block_on` (a standalone executor — does **not**
+   re-enter the engine's tokio runtime, so it works on the current-thread test
+   runtime). **Sound** for VMs whose accept/reject perform no tokio-driven I/O
+   (the in-memory test VM). **M3.14+ caveat:** production VMs that await tokio I/O
+   inside accept must move acceptance off the synchronous `record_poll` path.
+
+4. **`getProcessingAncestor` walks the consensus parent map**, not a separate
+   `unverifiedIDToAncestor` tree. Since unverified blocks are not retained in a
+   side cache in this port, the bubble walks `Consensus::get_parent` until it hits
+   a processing block (or runs out). Equivalent for the issued-ancestry case;
+   votes for never-issued descendants are dropped (same end state as Go's
+   "ancestor isn't cached" drop).
+
+5. **Getter limits copied from Go config defaults:** `MaxContainersLen =
+   4*2MiB/5 = 1_677_721`, `maxContainersGetAncestors = 2000`,
+   `bootstrap-max-time-get-ancestors = 50ms`. `get_ancestors` reuses the
+   `ava_vm::block::get_ancestors` helper (batched-capability + local fallback).
+
+## Deps / features added (report for workspace promotion)
+
+- `futures` (workspace) added as a **non-dev** dep for `BlockAdaptor`'s
+  `block_on` bridge.
+- dev-deps: `ava-vm`/`ava-snow` with `testutil`, `ava-database`, `ava-version`,
+  `proptest`, `sha2`, `tokio-util` for the integration + property harness
+  (`tests/support/mod.rs`).
+
+## TDD (M3.11)
+
+- `src/snowman/poll.rs` unit: `early_term_case4`, `early_term_case2_unreachable`,
+  `early_term_drop_global_unreachable`, `polls_drain_in_order`.
+- `src/snowman/getter.rs` unit: `limit_constants`.
+- `tests/engine_flows.rs`: `engine_requests_missing_block` (exactly one Get to
+  the providing node for an unknown parent), `engine_records_poll_on_chits`
+  (completed poll → record_poll → set_preference → child accepted),
+  `early_term_completes_poll` (3/4 unanimous chits complete the poll early).
+
+---
+
+# ava-engine — Snowman bootstrapper + state-sync (Task M3.12)
+
+Port of `snow/engine/snowman/bootstrap/` (bootstrapper + interval tree +
+acceptor) and `snow/engine/snowman/syncer/` (no-op state-summary handlers) into
+`crate::snowman::{bootstrap,syncer}` (specs 06 §4.3/§4.4).
+
+Go reference (pinned `../avalanchego`):
+- `bootstrap/bootstrapper.go` — frontier discovery → agreement → fetch → execute
+  → handoff.
+- `bootstrap/storage.go` (`process`/`execute`) — chain processing + height-order
+  replay.
+- `bootstrap/acceptor.go` — the `blockAcceptor` (consensus acceptor fires before
+  the block's VM accept).
+- `bootstrap/interval/{interval,tree,blocks}.go` — the interval tree.
+- `syncer/state_syncer.go` — the state-sync engine (no-op path).
+
+## Module → Go mapping
+
+| Rust (`snowman::bootstrap::`) | Go |
+|---|---|
+| `Bootstrapper` + `Config` + `Phase` | `bootstrap.Bootstrapper` + `Config` |
+| `interval::{Tree,Interval,Blocks,add_block}` | `interval.{Tree,Interval,Add}` + `PutBlock` |
+| `acceptor::execute` | `storage.go::execute` + `acceptor.go::blockAcceptor.Accept` |
+| `syncer::StateSyncer` | `syncer.stateSyncer` (no-op handlers + capability probe) |
+
+## Deliberate deviations / findings (record for spec/plan)
+
+1. **In-memory interval tree (no DB persistence).** Go's `interval.Tree` writes
+   each interval to a `database.KeyValueWriterDeleter` so a restarted node
+   resumes bootstrap. This port keeps the tree + fetched-block-bytes purely
+   in-memory (`interval::{Tree,Blocks}`) — the engine drives a single
+   uninterrupted pass. `Add`/`Remove`/`Contains`/`Flatten`/`Len` are faithful to
+   the Go btree logic (keyed by `upper_bound`, merge/extend/split identical).
+   The btree-custom-comparator is replaced by a `BTreeMap<upper_bound, Interval>`.
+
+2. **Frontier agreement is a `> total_weight/2` quorum.** Go uses an `Alpha`
+   weight majority from the config. The in-memory beacon model uses a simple
+   strict-majority weight threshold (`Config::weight_threshold`). **Recommended
+   spec note:** 06 §4.3 step 2 says "≥ a weight threshold of peers"; the exact
+   threshold constant should be pulled from `Parameters`/config when the full
+   beacon/StartupTracker wiring lands.
+
+3. **Bootstrapper is driven by handler callbacks, not the Go StartupTracker /
+   PeerTracker / ETA / batch-DB machinery.** The five-step state machine
+   (`Phase` enum) + a round-robin fetch over the beacon set is the essential
+   port; bandwidth sampling, ETA, genesis checkpoints, and DB batching are
+   dropped. `on_finished` is folded into `finish()` (sets `EngineState::NormalOp`).
+   **Finding:** the StartupTracker "should I start yet" gating and peer health
+   sampling belong with the network/validator wiring (M3.10 / a later task).
+
+4. **`acceptor::execute` toggles `ConsensusContext.executing`** for the replay
+   duration and fires `ctx.block_acceptor.accept(...)` **before** `blk.accept()`
+   (the §2.4 ordering invariant), replaying in ascending height order. The halt
+   token is checked between blocks (the test `halt_aborts_bootstrap` cancels
+   mid-stream and asserts no block is accepted + no handoff).
+
+5. **State-sync is the no-op skeleton only (06 §4.4).** `syncer::StateSyncer`
+   probes `StateSyncableVm::state_sync_enabled` (a non-syncable VM reports
+   `false`) and drops the inbound `StateSummaryFrontier`/`AcceptedStateSummary`
+   (+ `*Failed`) ops. The active out-of-band summary-fetch flow is **deferred**.
+
+## TDD (M3.12)
+
+- `src/snowman/bootstrap/interval.rs` unit: `add_merge_extend`,
+  `contains_and_remove_interior`, `add_block_signals_parent_fetch`.
+- `src/snowman/syncer.rs` unit: `state_sync_disabled_and_handlers_noop`.
+- `tests/bootstrap.rs`: `bootstrap_fetches_and_executes_range` (frontier →
+  agreement → fetch → height-ordered execute with acceptor-before-accept +
+  executing flag → Bootstrapping→NormalOp handoff), `halt_aborts_bootstrap`
+  (token cancel aborts the execute pass; no accepts, no handoff).
+
+---
+
+# ava-engine — engine-driven cluster properties (Task M3.13)
+
+`prop::consensus_liveness` + `prop::preference_monotone` over an engine-driven
+cluster (specs 06 §2.4 / §10).
+
+## The cluster harness (`tests/support/mod.rs`)
+
+A `Cluster` of `n` real `SnowmanEngine`s, each over an in-memory `TestVm`, the
+real `Topological` consensus, and a shared `DefaultManager` validator set (one
+weight-1 validator per node). A `RecordingSender` per node captures outbound
+messages; the cluster is the **mock Router**: it loops each engine's recorded
+pull/push queries back as inbound `pull_query` on every recipient (which answers
+with `send_chits`), then feeds those chits back to the querier as inbound
+`chits`. This exercises the real poll/vote loop end-to-end. Time is virtual — the
+harness is purely message-driven with **no wall-clock sleeps** (the property
+tests build a `current_thread` runtime and `block_on` the trial).
+
+`run_round` snapshots the outstanding queries, routes them, and lets each
+engine's own `record_poll → repoll` emit the next round's query — so the loop is
+self-sustaining (one global poll wave per round).
+
+## Properties
+
+1. **`consensus_liveness`** (`n ∈ 3..=7`, `beta ∈ 1..=4`): with every honest
+   node voting one branch each round (≥ strict-majority alpha), the branch
+   finalizes on every node within `(beta+4)*4` rounds. Smoke test
+   `liveness_smoke_finalizes_branch` guards against a vacuous pass.
+
+2. **`preference_monotone`** (`n ∈ 3..=7`, `beta ∈ 1..=3`, sibling-issue order
+   randomized): two conflicting siblings at height 1; the honest cluster votes
+   its preference each round. Asserts every round, on every node: (a) the
+   accepted block at height 1 never changes once set; (b) a node never prefers a
+   sibling that has been rejected; (c) `preference_at_height(1)` never regresses
+   from an already-accepted block. Finally asserts all nodes agree on the same
+   accepted block (agreement). Smoke test `preference_smoke_no_regression`.
+
+Stress-checked at `PROPTEST_CASES=128`; no `proptest-regressions/` seeds were
+generated (all cases pass), so none are committed.
+
+## Engine accessors added (test-only surface)
+
+`SnowmanEngine::{consensus_last_accepted, preference_at_height, is_processing,
+poll_pending, num_polls, request_id}` expose consensus/poll state for the
+assertions. These are `#[must_use]` read-only views over the consensus core / poll
+set; they do not change behaviour.
