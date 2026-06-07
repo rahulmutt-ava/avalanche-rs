@@ -39,6 +39,11 @@ use ava_types::node_id::NodeId;
 /// Mirrors `vms/avm/network/atomic.go` `AppGossipHandler`.
 pub trait AppGossipHandler: Send + Sync {
     /// Handle an inbound gossip message from `node`.
+    ///
+    /// This method is fire-and-forget: any internal errors must be logged and
+    /// discarded, not propagated. Go parity: `AppHandler.AppGossip` does return
+    /// an error, but the engine ignores it for gossip messages — so this trait
+    /// uses `()` to make that contract explicit at the type level.
     fn handle_app_gossip(&self, node: NodeId, msg: &[u8]);
 }
 
@@ -82,8 +87,9 @@ impl AtomicAppHandler {
     /// Loads the current handler (a single atomic read — no blocking).
     #[must_use]
     pub fn load(&self) -> Arc<dyn AppGossipHandler> {
-        // ArcSwap::load returns an `arc_swap::Guard` (a smart pointer);
-        // clone the inner `Arc<Arc<…>>` and deref once to get `Arc<dyn …>`.
+        // `ArcSwap::load` returns a `Guard` that derefs to `&Arc<dyn AppGossipHandler>`.
+        // We clone through that deref to get an owned `Arc<dyn AppGossipHandler>`
+        // the caller can dispatch through after the guard is released.
         Arc::clone(&*self.inner.load())
     }
 

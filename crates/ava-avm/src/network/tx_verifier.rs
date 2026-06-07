@@ -99,7 +99,7 @@ impl<'a> TxVerifier for SemanticTxVerifier<'a> {
             .map_err(|e| e.to_string())?;
 
         // Run the stateful semantic verifier.
-        SemanticVerifier::new(self.backend, self.state, tx, self.fxs, Id::EMPTY)
+        SemanticVerifier::new(self.backend, self.state, tx, self.fxs, Id::EMPTY) // Id::EMPTY: the asset_id arg is unused per SemanticVerifier::new doc
             .verify()
             .map_err(|e| e.to_string())
     }
@@ -223,6 +223,16 @@ mod tests {
         assert!(v.verify_tx(&tx).is_ok());
     }
 
+    /// Tests UTXO-lookup semantics: the verifier finds the UTXO in state,
+    /// resolves the asset type, and passes fee + balance checks.
+    ///
+    /// The credential is an all-zeros fake (`[0u8; 65]` × 1); this is
+    /// intentional. The dispatch is constructed with `bootstrapped = true` in
+    /// the `Backend` but the `Dispatch` fx table is **not** bootstrapped, so
+    /// `secp256k1fx::Fx::VerifySpend` skips signature recovery entirely
+    /// (Go parity: `secp256k1fx.Fx` skips `VerifySpend` signatures until
+    /// `Bootstrapped()` is called). The test therefore targets UTXO-lookup
+    /// and amount-matching semantics, not credential validity.
     #[test]
     fn semantic_verifier_accepts_known_utxo() {
         let ca = create_asset_tx_for_secp();
@@ -251,6 +261,8 @@ mod tests {
             memo: vec![],
         };
         let mut spending_tx = crate::txs::Tx::new(UnsignedTx::Base(BaseTx::new(spending_tx_body)));
+        // All-zeros fake secp credential: signature recovery is skipped because
+        // the fx Dispatch is not bootstrapped (see doc above).
         spending_tx.creds = vec![secp_cred()];
         spending_tx
             .initialize(Codec())
@@ -287,6 +299,8 @@ mod tests {
             memo: vec![],
         };
         let mut spending_tx = crate::txs::Tx::new(UnsignedTx::Base(BaseTx::new(spending_tx_body)));
+        // All-zeros fake credential; sig recovery skipped (fx not bootstrapped — see
+        // `semantic_verifier_accepts_known_utxo` doc for the full rationale).
         spending_tx.creds = vec![secp_cred()];
         spending_tx
             .initialize(Codec())

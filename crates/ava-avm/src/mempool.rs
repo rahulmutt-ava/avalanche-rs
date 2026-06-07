@@ -88,8 +88,12 @@ impl Mempool {
         }
     }
 
-    /// An empty pool with a custom byte budget (for testing scenarios that need
-    /// a budget-limited pool without accessing private fields).
+    /// An empty pool with a custom byte budget — **test-only helper**.
+    ///
+    /// Use this in tests that need a budget-limited pool to exercise
+    /// drop-on-full behaviour without accessing private fields directly.
+    /// Production code should always use [`Mempool::new`] (full budget).
+    #[doc(hidden)]
     #[must_use]
     pub fn with_budget(bytes: usize) -> Self {
         Self {
