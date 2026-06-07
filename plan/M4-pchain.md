@@ -512,22 +512,60 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.22: Warp signing on P (`UnsignedMessage` + warp set serving)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.21  ·  **Spec:** 08 §8 (warp); 20 §2,§4,§5.1,§6.1 (P-Chain consumes ava-warp)
 **Files:** `crates/ava-platformvm/src/warp/mod.rs`, `crates/ava-platformvm/src/warp/signer.rs`.
-- [ ] **Step 1 — Red:** Add `golden::pchain_warp_message` asserting a P-Chain `UnsignedMessage{network_id, source_chain_id=P, payload}` marshals byte-identically to Go (`0x0000` version prefix + fields) and `id == sha256(bytes)`; add `conformance::pchain_warp_sign_verify` (local sign → `BitSetSignature` → `verify` against the §7 warp set Ok; flip a bit → fails).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm pchain_warp_message` → fails.
-- [ ] **Step 3 — Green:** Wire `ava-warp` (`UnsignedMessage`, `Signature::BitSet`, `verify`, `flatten_validator_set`) into the P-Chain: `LocalSigner` over the node BLS key signing `msg.bytes()` (signature DST, 20 §5.1); verification obtains the source-subnet `WarpSet` at the proposervm-pinned height via M4.21's `get_warp_validator_sets` (20 §6.1). This is the P-side glue; the generic primitives live in `ava-warp` (M0/M3).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm pchain_warp_message pchain_warp_sign_verify` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: warp signing on P + warp set serving`
+- [x] **Step 1 — Red:** Add `golden::pchain_warp_message` asserting a P-Chain `UnsignedMessage{network_id, source_chain_id=P, payload}` marshals byte-identically to Go (`0x0000` version prefix + fields) and `id == sha256(bytes)`; add `conformance::pchain_warp_sign_verify` (local sign → `BitSetSignature` → `verify` against the §7 warp set Ok; flip a bit → fails).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm pchain_warp_message` → fails.
+- [x] **Step 3 — Green:** Wire `ava-warp` (`UnsignedMessage`, `Signature::BitSet`, `verify`, `flatten_validator_set`) into the P-Chain: `LocalSigner` over the node BLS key signing `msg.bytes()` (signature DST, 20 §5.1); verification obtains the source-subnet `WarpSet` at the proposervm-pinned height via M4.21's `get_warp_validator_sets` (20 §6.1). This is the P-side glue; the generic primitives live in `ava-warp` (M0/M3).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm pchain_warp_message pchain_warp_sign_verify` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: warp signing on P + warp set serving`
+
+> **As-built (M4.22):** Added `UnsignedMessage::id()` (`sha256(marshal())`, single-pass, 20 §2.1 — did not
+> exist before) + `warp/signer.rs` (`LocalSigner` over the node BLS key: checks source-chain/network
+> authority then signs the version-prefixed `marshal()` bytes with the BLS **message** DST `sk.sign` — NOT
+> the PoP DST) + the **real verifier** in `warp/verifier.rs` (replacing M4.19's deferred seam):
+> `verify_bit_set_signature(sig, msg, network_id, &WarpSet, quorum_num, quorum_den)` parses the bitset
+> (no-padding invariant via `ava_utils::bits::Bits`), filters canonical-ordered signers, sums weight,
+> checks quorum (`verify_weight`: u128-scaled `quorum_num*total <= quorum_den*sig`, `checked_mul`), aggregates
+> signer pubkeys (`ava_crypto::bls::aggregate_public_keys`), and verifies the aggregate over `msg.marshal()`;
+> `WarpSetVerifier<'a, V: ValidatorState>::verify(&Message)` maps `source_chain_id → subnet_id` via
+> `get_subnet_id` then pulls `get_warp_validator_sets(p_chain_height)[subnet]` (M4.21's set is already
+> dedup+sorted by uncompressed pubkey = Go canonical order, so no re-flatten). Tests: `golden::pchain_warp_message`
+> (byte-EXACT marshal + `id==sha256` + Message round-trip), `conformance::pchain_warp_sign_verify` (2-validator
+> real `aggregate_signatures` verifies Ok; flipped-bit fails; below-quorum single signer 50<67% fails — proving
+> aggregate + quorum are actually checked). 9 new `error.rs` sentinels (`WrongSourceChainId`/`WrongNetworkId`/
+> `InvalidBitSet`/`UnknownValidator`/`InsufficientWeight`/`ParseSignature`/`InvalidSignature`/`NoValidatorSet`/
+> `Validators(#[from] ava_validators::error::Error)`). No `ava-crypto` changes (all primitives present). **Deferred
+> per scope:** `gwarp` gRPC service, ACP-118 aggregator, separate `ava-warp` crate, JSON-RPC warp API. 103 tests
+> green; clippy/fmt clean. (Integrated with M4.23/M4.25: 107 tests green on merged tree.)
 
 ---
 
 ### Task M4.23: `differential::validatorstate_parity`
 **Crate:** ava-platformvm  ·  **Depends on:** M4.21  ·  **Spec:** 08 §7,§7.1; 02 §11 (recorded-oracle); 00 §6.1
 **Files:** `crates/ava-platformvm/tests/differential_validatorstate.rs`, `crates/ava-platformvm/tests/vectors/platformvm/validator_diff_windows/*.json`.
-- [ ] **Step 1 — Red:** Add `differential::validatorstate_parity` replaying a recorded sequence of P-Chain blocks (Go-extracted, with per-height `GetValidatorSet`/`GetWarpValidatorSets` snapshots) and asserting the Rust manager's per-height windower-relevant view (weights + BLS keys, sorted) equals the recorded Go view at every height.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm validatorstate_parity` → fails (missing vectors / mismatch).
-- [ ] **Step 3 — Green:** Add the Go-extracted `validator_diff_windows` vectors (coordinate with tier X extraction harness). Fix any reconstruction discrepancies surfaced (the marquee diff-windowing test, 08 §11.4).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm validatorstate_parity` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: differential::validatorstate_parity (diff-window reconstruction)`
+- [x] **Step 1 — Red:** Add `differential::validatorstate_parity` replaying a recorded sequence of P-Chain blocks (Go-extracted, with per-height `GetValidatorSet`/`GetWarpValidatorSets` snapshots) and asserting the Rust manager's per-height windower-relevant view (weights + BLS keys, sorted) equals the recorded Go view at every height.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm validatorstate_parity` → fails (missing vectors / mismatch).
+- [x] **Step 3 — Green:** Add the Go-extracted `validator_diff_windows` vectors (coordinate with tier X extraction harness). Fix any reconstruction discrepancies surfaced (the marquee diff-windowing test, 08 §11.4).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm validatorstate_parity` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: differential::validatorstate_parity (diff-window reconstruction)`
+
+> **As-built (M4.23):** test-only + committed vectors. `tests/differential_validatorstate.rs` ships
+> `differential::validatorstate_parity` + a gated vector generator (`gen_vectors`, behind
+> `GENERATE_VALIDATOR_DIFF_WINDOWS=1`; a no-op pass in CI). Two recorded vector files under
+> `tests/vectors/platformvm/validator_diff_windows/`: `primary_add_remove.json` (add/add/remove over 3
+> heights) and `shared_key_and_churn.json` (multi-mutation blocks, two nodes sharing a BLS key → warp
+> dedup+sum, plus a churn/no-op block, over 4 heights). **Oracle is non-circular:** the recorded snapshots
+> are a **forward accumulation** (start empty, apply add/remove per block, flatten-by-key for warp) — the
+> opposite code path from the manager's **backward** diff-reconstruction; the test writes real per-height
+> weight/pk diffs into `State` (mirroring `BlockManager::write_validator_diffs`), `refresh`-es the manager
+> per block, then asserts `get_validator_set` + `get_warp_validator_sets` match the forward snapshots at
+> EVERY height (0..=N), weights AND compressed BLS keys, order-independent. Verified the test genuinely fails
+> on a tampered weight. **No reconstruction bugs found in M4.21** (matched across both scenarios incl. shared-key
+> warp dedup + no-op block). **Go vectors: none existed** (`tools/extract-vectors` has no P-Chain
+> validator-diff-window surface) — followed the M4.24 recorded-oracle precedent; the byte-exact Go-extracted
+> golden is recorded as a ⬜ na deferred row in `tests/PORTING.md` (pin once a tier-X harness for
+> `vms/platformvm/validators` lands). **Deferred:** an explicit L1-validator scenario (base-staker path exercises
+> the same weight/pk diff stores; L1 state would need the crate-internal L1 executor path to fabricate honestly).
+> 103 tests green; clippy/fmt clean. (Integrated with M4.22/M4.25: 107 tests green on merged tree.)
 
 ---
 
@@ -547,11 +585,37 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.25: `PlatformVm` — impl `block::ChainVm`/`Block` (StateSyncableVm = No)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.20, M4.21, M4.24  ·  **Spec:** 08 §1 (vm.rs), §4.3 (builder); 19 §5 (P-Chain: linear bootstrap only, no StateSyncableVm); 07 (ChainVm)
 **Files:** `crates/ava-platformvm/src/vm.rs`, `crates/ava-platformvm/src/factory.rs`, `crates/ava-platformvm/src/block/builder/mod.rs`.
-- [ ] **Step 1 — Red:** Add `conformance::vm_initialize_and_last_accepted` asserting `PlatformVm::initialize` from genesis sets `last_accepted == genesis_id`, `get_block(genesis_id)` returns the ApricotCommit block, and `parse_block`/`build_block` round-trip; assert the VM does **not** implement `StateSyncableVm` (linear bootstrap only, 19 §5).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm vm_initialize_and_last_accepted` → fails.
-- [ ] **Step 3 — Green:** `struct PlatformVm` impl `block::ChainVm` + `Block` (07): `initialize` (open State, seed genesis via M4.24, build the validator manager M4.21), `get_block`/`parse_block` (M4.5/M4.20), `last_accepted`, `set_preference`, `build_block` (the §4.3 builder: options if tip needs them → reward proposal if a staker's next_time arrived → BanffStandardBlock of mempool decision txs capped by size/gas → `ErrNoPendingBlocks`; advance time to `min(now, next_staker_change)` clamped by `SyncBound`), `set_state` (Bootstrapping→NormalOp). Expose `ValidatorState` (M4.21) to the snow context. **No `StateSyncableVm` impl** (19 §5). `factory.rs` constructs the VM for the chain manager.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm vm_initialize_and_last_accepted` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: PlatformVm impl ChainVm/Block + block builder`
+- [x] **Step 1 — Red:** Add `conformance::vm_initialize_and_last_accepted` asserting `PlatformVm::initialize` from genesis sets `last_accepted == genesis_id`, `get_block(genesis_id)` returns the ApricotCommit block, and `parse_block`/`build_block` round-trip; assert the VM does **not** implement `StateSyncableVm` (linear bootstrap only, 19 §5).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm vm_initialize_and_last_accepted` → fails.
+- [x] **Step 3 — Green:** `struct PlatformVm` impl `block::ChainVm` + `Block` (07): `initialize` (open State, seed genesis via M4.24, build the validator manager M4.21), `get_block`/`parse_block` (M4.5/M4.20), `last_accepted`, `set_preference`, `build_block` (the §4.3 builder: options if tip needs them → reward proposal if a staker's next_time arrived → BanffStandardBlock of mempool decision txs capped by size/gas → `ErrNoPendingBlocks`; advance time to `min(now, next_staker_change)` clamped by `SyncBound`), `set_state` (Bootstrapping→NormalOp). Expose `ValidatorState` (M4.21) to the snow context. **No `StateSyncableVm` impl** (19 §5). `factory.rs` constructs the VM for the chain manager.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm vm_initialize_and_last_accepted` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: PlatformVm impl ChainVm/Block + block builder`
+
+> **As-built (M4.25):** `vm.rs` ships `PlatformVm` impl `block::ChainVm` + the `Vm` supertrait family.
+> `initialize` opens `State` over the engine DB, seeds genesis via M4.24 `seed_state`, records the genesis
+> ApricotCommit block as last-accepted at height 0 (`add_block`+`set_last_accepted`+`set_height`, no `Accept`),
+> builds the M4.21 `PChainValidatorManager::from_state` and injects it as the `BlockAcceptanceNotifier`.
+> `get_block`/`parse_block`/`build_block`/`last_accepted`/`set_preference`/`get_block_id_at_height`/`set_state`
+> are wired to the shared M4.20 `BlockManager`. **`as_state_syncable()` returns `None`** (no `StateSyncableVm`,
+> 19 §5). Public surface: `PlatformVm::new()`, `validator_state() -> Option<Arc<PChainValidatorManager<DynDb>>>`
+> (exposes `ValidatorState` to the snow context / windower / Warp signer); constructed via `factory.rs`
+> `PlatformVmFactory::new_vm()` (mirrors Go `Factory.New`; does NOT impl `ava_chains::Factory` to avoid inverting
+> the T4-VM→T6-services layering — M4.27/M8 adapts it). **`DynDb`** (`vm/dyndb.rs`) adapts the engine-provided
+> `Arc<dyn DynDatabase>` to the typed `Database` surface `State<D>` is generic over (no such adapter existed).
+> **refresh-on-accept** (the M4.21 production wiring point): the manager is the `BlockAcceptanceNotifier`
+> (updates the recently-accepted window in `accept`), and `PChainBlock::accept` additionally calls
+> `Shared::refresh_validators()` to re-capture the manager's snapshot from the just-flushed state.
+> **`build_block` (block/builder/mod.rs, §4.3):** faithful to Go `buildBlock` — reward `BanffProposalBlock` if a
+> non-permissioned staker's `next_time == block time`, else size-capped `BanffStandardBlock`, else `ErrNoPendingBlocks`;
+> `next_block_time = min(max(now, parent_ts), next_staker_change)` clamped by `SyncBound` (10s). **Block wrapper note:**
+> the P-Chain `Block` is `!Sync` (its `Tx` holds a `!Sync OnceCell`), so `PChainBlock` stores a `Send+Sync` projection
+> (id/parent/height/timestamp/bytes) and re-parses from bytes inside the locked `verify`/`accept`/`reject`. **New
+> `error.rs`:** `NoPendingBlocks`, `NotInitialized`, + `From<Error> for ava_vm::Error`/`ava_snow::Error` (the
+> `ava-proposervm` precedent for the closed engine enums; non-`NotFound` collapses onto the nearest carrying variant).
+> Crate `Cargo.toml` gained `tokio-util`/`chrono`/`serde_json`/`ava-snow`/`ava-version`. **Deferred:** M4.26 (gossip
+> mempool — `build_block` uses a minimal in-VM `Vec<Tx>` queue, empty in read-only sync; Etna gas-aware packing),
+> M4.27 (bootstrap engine wiring beyond VM hooks), M4.28 (JSON-RPC — `create_handlers` empty). 103 tests green;
+> clippy/fmt clean; workspace builds. (Integrated with M4.22/M4.23: 107 tests green, workspace builds, on merged tree.)
 
 ---
 
