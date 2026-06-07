@@ -147,6 +147,12 @@ pub enum Error {
     #[error("tx has wrong blockchain ID")]
     WrongBlockchainId,
 
+    // ---- state / diff (M5.10) --------------------------------------------
+    /// `ErrMissingParentState` — a `Diff` could not resolve its parent state
+    /// through the `Versions` resolver (specs 09 §5).
+    #[error("missing parent state")]
+    MissingParentState,
+
     // ---- folded-in shared errors -----------------------------------------
     /// Linear-codec marshal/unmarshal failure.
     #[error(transparent)]
@@ -154,4 +160,8 @@ pub enum Error {
     /// Shared fx / `verify` error (re-exported on `ava_vm::error::Error`).
     #[error(transparent)]
     Fx(#[from] ava_vm::error::Error),
+    /// Database read/write failure (`database.ErrNotFound` / `ErrClosed` / other)
+    /// from the state stores (M5.10, specs 09 §5).
+    #[error(transparent)]
+    Database(#[from] ava_database::error::Error),
 }

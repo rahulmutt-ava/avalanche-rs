@@ -45,6 +45,7 @@ pub mod fx;
 pub mod fx_index;
 pub mod nftfx;
 pub mod propertyfx;
+pub mod state;
 pub mod txs;
 
 pub use error::{Error, Result};

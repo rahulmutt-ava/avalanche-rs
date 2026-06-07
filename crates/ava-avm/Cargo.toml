@@ -30,9 +30,12 @@ ava-utils = { path = "../ava-utils" }
 # consumed by the M5.5 Tx envelope.
 bytes = { workspace = true }
 thiserror = { workspace = true }
-# NOTE (as-built): `ava-database` (Wave 2 state, M5.10) and `ava-network`
-# (Wave 5 gossip, M5.18) are pulled in by their owning tasks to keep the Wave-0
-# build lean; `ava-api` does not exist yet (served via M8/M12). See plan/M5.
+# UTXO/tx/block/singleton state stores: VersionDb over base + five PrefixDb
+# sub-stores + the Diff layer (specs 09 §5); consumed by the M5.10 `state` module.
+ava-database = { path = "../ava-database" }
+# NOTE (as-built): `ava-network` (Wave 5 gossip, M5.18) is pulled in by its owning
+# task to keep the Wave-0 build lean; `ava-api` does not exist yet (served via
+# M8/M12). See plan/M5.
 
 [dev-dependencies]
 proptest = { workspace = true }
