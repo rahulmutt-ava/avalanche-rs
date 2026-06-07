@@ -37,6 +37,15 @@ use pretty_assertions as _;
 use proptest as _;
 #[cfg(test)]
 use rstest as _;
+// M5.20 ATOMIC-1: exercised only by the `atomic_xp` integration test (the REAL
+// `ava-chains` shared-memory backend + the P-Chain `Utxo` codec for cross-decode);
+// silence `unused_crate_dependencies` for the lib-test unit.
+#[cfg(test)]
+use ava_chains as _;
+#[cfg(test)]
+use ava_platformvm as _;
+#[cfg(test)]
+use serde_json as _;
 
 pub mod block;
 pub mod config;

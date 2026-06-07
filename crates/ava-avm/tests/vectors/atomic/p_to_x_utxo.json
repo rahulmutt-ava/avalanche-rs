@@ -1,0 +1,18 @@
+{
+  "description": "ATOMIC-1 reverse direction (specs 00 §11.1.7, 09 §9): the canonical avax.UTXO a P-Chain ExportTx places into shared memory (Element.value), proven to decode byte-identically on the X-Chain. The value bytes are the secp256k1fx.TransferOutput UTXO marshalled with the platformvm txs.Codec under CodecVersion 0; the SAME bytes are read back through the real ava-chains shared-memory channel by the X-Chain view and unmarshalled by ava_avm::txs::executor::semantic::Utxo.",
+  "provenance": "Derived from the Go encoding: vms/components/avax/utxo.go (UTXO = UTXOID{TxID,OutputIndex} ‖ Asset{ID} ‖ Out), vms/platformvm/txs/executor export path + vms/components/avax/utxo_handler.go (Element.Key = utxo.InputID()[:], Element.Value = Codec.Marshal(CodecVersion=0, utxo)), vms/secp256k1fx (TransferOutput = Amt u64 ‖ OutputOwners{Locktime u64, Threshold u32, Addrs []ShortID}), secp256k1fx.TransferOutput registered at type_id 7 on BOTH the platformvm (vms/platformvm/txs/codec.go) and the avm (vms/avm/txs/codec.go), and chains/atomic/element.go. Byte-layout-faithful; pending live two-binary oracle confirmation (gated on the unfinished differential LockstepDriver, task X.13/X.15).",
+  "utxo": {
+    "tx_id_hex": "9191919191919191919191919191919191919191919191919191919191919191",
+    "output_index": 3,
+    "asset_id_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+    "out_type_id": 7,
+    "amount": 250000,
+    "locktime": 7,
+    "threshold": 1,
+    "addrs_hex": [
+      "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    ]
+  },
+  "byte_layout": "0000 | txID(32) | outputIndex(u32-be) | assetID(32) | typeID=00000007 | amt(u64-be) | locktime(u64-be) | threshold(u32-be) | addrCount(u32-be) | addr(20)",
+  "value_hex": "0000919191919191919191919191919191919191919191919191919191919191919100000003555555555555555555555555555555555555555555555555555555555555555500000007000000000003d09000000000000000070000000100000001cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+}
