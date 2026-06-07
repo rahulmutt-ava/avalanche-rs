@@ -20,8 +20,8 @@ use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 
 use super::codec::{TYPE_ID_GRANITE_BLOCK, TYPE_ID_STATELESS_BLOCK, marshal_typed};
-use super::header::Header;
 use super::hash::sha256_id;
+use super::header::Header;
 use super::stateless::{Epoch, StatelessUnsignedBlock, StatelessUnsignedGraniteBlock};
 use ava_codec::packer::Packer;
 
@@ -68,12 +68,7 @@ impl Metadata {
     }
 
     /// Go `statelessBlockMetadata.verify`.
-    fn verify(
-        &self,
-        body: &StatelessUnsignedBlock,
-        sig: &[u8],
-        chain_id: Id,
-    ) -> crate::Result<()> {
+    fn verify(&self, body: &StatelessUnsignedBlock, sig: &[u8], chain_id: Id) -> crate::Result<()> {
         let Some(cert) = &self.cert else {
             if !sig.is_empty() {
                 return Err(crate::Error::UnexpectedSignature);
@@ -324,7 +319,9 @@ fn marshal_signed(body: &StatelessUnsignedBlock, signature: &[u8]) -> Vec<u8> {
             body.marshal_into(p);
             p.pack_bytes(signature);
         },
-        body.size().saturating_add(4).saturating_add(signature.len()),
+        body.size()
+            .saturating_add(4)
+            .saturating_add(signature.len()),
     )
 }
 
@@ -336,6 +333,8 @@ fn marshal_granite(body: &StatelessUnsignedGraniteBlock, signature: &[u8]) -> Ve
             body.marshal_into(p);
             p.pack_bytes(signature);
         },
-        body.size().saturating_add(4).saturating_add(signature.len()),
+        body.size()
+            .saturating_add(4)
+            .saturating_add(signature.len()),
     )
 }

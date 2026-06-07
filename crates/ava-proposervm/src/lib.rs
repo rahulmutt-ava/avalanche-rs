@@ -20,11 +20,10 @@
 
 #![forbid(unsafe_code)]
 
-// These crates are consumed by the windower (`proposer`, M3.22); keep the
-// dependency edges without an unused-crate warning until that lands.
+// `ava-vm` (the inner `ChainVm` the wrapper delegates to) and `async-trait`
+// (the `Vm`/`ChainVm` trait surface) are consumed by the VM wrapper (M3.23);
+// keep the dependency edges without an unused-crate warning until that lands.
 use async_trait as _;
-use ava_utils as _;
-use ava_validators as _;
 use ava_vm as _;
 
 pub mod block;
@@ -44,4 +43,5 @@ mod dev_deps {
     use proptest as _;
     use serde as _;
     use serde_json as _;
+    use tokio as _;
 }

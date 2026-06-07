@@ -142,9 +142,17 @@ fn check_metadata(block: &ParsedBlock, v: &Vec_) {
                 v.name
             );
             let epoch = b.epoch();
-            assert_eq!(epoch.p_chain_height, v.epoch_p_chain_height, "{}: epoch ph", v.name);
+            assert_eq!(
+                epoch.p_chain_height, v.epoch_p_chain_height,
+                "{}: epoch ph",
+                v.name
+            );
             assert_eq!(epoch.number, v.epoch_number, "{}: epoch num", v.name);
-            assert_eq!(epoch.start_time, v.epoch_start_time, "{}: epoch start", v.name);
+            assert_eq!(
+                epoch.start_time, v.epoch_start_time,
+                "{}: epoch start",
+                v.name
+            );
             if !v.proposer.is_empty() {
                 assert_eq!(b.proposer().to_string(), v.proposer, "{}: proposer", v.name);
             }
@@ -164,13 +172,19 @@ fn proposervm_block_signature_verifies() {
         let chain = chain_id_from_block(&v.chain_id);
         // parse() runs verify() including staking::check_signature over the
         // Header bytes — a Go-signed block must pass.
-        parse(&bytes, chain).unwrap_or_else(|e| panic!("{}: signature verify failed: {e:?}", v.name));
+        parse(&bytes, chain)
+            .unwrap_or_else(|e| panic!("{}: signature verify failed: {e:?}", v.name));
 
         // Confirm the verified header bytes match Go's `BuildHeader(...)`.
         let block = parse_without_verification(&bytes).unwrap();
         let header = Header::build(chain, block.parent_id(), block.id());
         let want_header = hex::decode(&v.header_bytes).expect("hex header");
-        assert_eq!(header.bytes(), want_header.as_slice(), "{}: header bytes", v.name);
+        assert_eq!(
+            header.bytes(),
+            want_header.as_slice(),
+            "{}: header bytes",
+            v.name
+        );
     }
 }
 

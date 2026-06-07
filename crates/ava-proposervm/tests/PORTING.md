@@ -44,6 +44,27 @@ The test (`golden_block.rs`) asserts:
 4. **zero-epoch rejection** — a Granite block with `Epoch{}` fails `verify()`
    with `Error::ZeroEpoch`.
 
+### `tests/vectors/proposervm/windower/windower.json` (M3.22 — CONFIRMS R1)
+
+Produced by a scratch Go program (run in `/tmp`) against
+`vms/proposervm/proposer`, driving `proposer.New(state, subnetID, chainID, NoLog)`
+over a fixed 5-validator set (plus an empty-NodeID validator that the windower
+must drop). Captured:
+
+- `chain_source` (BE `u64` of the chain id's first 8 bytes);
+- `ExpectedProposer(height, pChainHeight=1, slot)` over heights
+  `{0,1,2,100,12345,99999}` × slots `{0,1,2,5,50,719,720}` (42 cases);
+- `Proposers(height, 1, maxWindows)` over the heights × `{1,6,60}` (18 cases);
+- `Delay(height, 1, nodeID, 60)` for a few node ids incl. the empty NodeID
+  (12 cases, as nanoseconds).
+
+`golden_windower.rs` reproduces every ordering **bit-exactly** by driving the
+pure-sync cores (`expected_proposer_from`/`proposers_from`/`delay_for`) and,
+separately, the async `Windower` over a fixed `ValidatorState`. **R1 (gonum
+MT19937/-64 compatibility) is CONFIRMED on the windower** — the vendored
+`ava_utils::rng::{Mt19937, Mt19937_64}` + `WeightedWithoutReplacementGeneric`
+match Go's `gonum prng` + `DeterministicWeightedWithoutReplacement`.
+
 ## Findings / deviations
 
 - **Manual codec, not `#[derive(AvaCodec)]`.** The block bodies mix `Id`
@@ -61,6 +82,19 @@ The test (`golden_block.rs`) asserts:
 - **Pre-fork blocks** (`src/block/pre_fork.rs`) are a thin pass-through of the
   inner-VM bytes/identity; the full fork-regime selection lands with the VM
   wrapper (M3.23).
+- **Windower MT re-seeding (M3.22).** Go reuses one `prng` `source` object and
+  calls `source.Seed(...)` before each `sampler.Sample(...)`. The Rust
+  `WeightedWithoutReplacementGeneric` owns its `Box<dyn Source>` and exposes no
+  re-seed, so the windower constructs a **fresh** sampler from a freshly-seeded
+  MT per sample. This is bit-identical to Go: the weighted-heap `Initialize` is
+  RNG-free and `Sample` resets the uniform, so only the seed determines the
+  draw stream. Verified by `golden::windower_schedule` (no deviations).
+- **Windower async surface.** Go's `Windower` methods take a `context.Context`;
+  the Rust `Windower<S: ValidatorState>` methods are `async` (the
+  `ValidatorState` lookup is async). The determinism-critical math is factored
+  into pure-sync free functions (`*_from`) that the golden test drives directly
+  — that is the actual R1 gate; the async wrappers only add the set fetch +
+  empty-NodeID drop.
 
 ## Status
 

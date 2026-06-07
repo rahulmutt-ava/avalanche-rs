@@ -11,8 +11,8 @@
 //! - [`pre_fork`] — bare inner-block pass-through.
 
 pub mod codec;
-pub mod header;
 pub(crate) mod hash;
+pub mod header;
 pub mod option;
 pub mod post_fork;
 pub mod pre_fork;

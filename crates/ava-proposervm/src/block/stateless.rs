@@ -151,6 +151,8 @@ impl StatelessUnsignedGraniteBlock {
     }
 
     pub(crate) fn size(&self) -> usize {
-        self.stateless_block.size().saturating_add(self.epoch.size())
+        self.stateless_block
+            .size()
+            .saturating_add(self.epoch.size())
     }
 }
