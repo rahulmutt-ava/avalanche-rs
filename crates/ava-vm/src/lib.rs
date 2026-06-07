@@ -30,6 +30,7 @@ pub mod components;
 pub mod connector;
 pub mod error;
 pub mod health;
+pub mod middleware;
 pub mod vm;
 
 #[cfg(any(test, feature = "testutil"))]
@@ -45,6 +46,7 @@ pub use block::{
 pub use connector::Connector;
 pub use error::{Error, Result};
 pub use health::HealthCheck;
+pub use middleware::{BlockMetrics, MeterVm, TracedVm};
 pub use vm::{Fx, HttpHandler, LockOptions, Vm, VmEvent};
 
 // Re-export the consensus context + engine phase the VM consumes at the

@@ -145,3 +145,43 @@ Go source → Rust:
    (`08`/`09`): the trait + serializable payloads + cached-bytes `OnceLock` shape
    are in place; the concrete impls (atomic DB, codec-driven `initialize`) land
    with those VMs.
+
+## M3.16 — `middleware` (MeterVm + TracedVm)
+
+Go source: `vms/metervm/{block_vm.go,block_metrics.go,metrics.go,batched_vm.go,
+state_syncable_vm.go,build_block_with_context_vm.go,set_preference_with_context_vm.go}`
+and `vms/tracedvm/{block_vm.go,batched_vm.go,state_syncable_vm.go,…}`.
+
+1. **`MeterVm` uses an `Averager` (count + sum), not a Prometheus `Histogram`.**
+   The task spec says "Prometheus histogram"; the faithful Go port is
+   `metric.Averager` = a `<name>_count` counter + a `<name>_sum` gauge (summing
+   observed nanoseconds — `utils/metric/averager.go`). Metric **names** are
+   byte-identical to Go (`build_block_count`/`build_block_sum`/…), so dashboards
+   port unchanged. If a true `_bucket` histogram is wanted later it can swap in
+   under the same `<name>` prefix without changing call sites.
+2. **Capability forwarding = `Some(self)`, not a re-wrapped trait object.** Go
+   re-exposes `BatchedChainVM`/`StateSyncableVM`/`*WithContext` via interface
+   embedding + type-assertion. In Rust each wrapper probes the inner VM's
+   capabilities **once at construction** (storing a bool) and has
+   `as_batched()`/`as_state_syncable()`/`as_*_with_context()` return `Some(self)`;
+   the wrapper itself implements those traits, delegating to
+   `self.inner.as_batched()` etc. So the forwarded calls are themselves
+   metered/traced — a wrapped proposervm keeps its batched/state-sync surface.
+3. **`should_verify_with_context`/`verify_with_context`(`_err`) averagers are
+   registered (name-parity with Go) but not yet observed.** Go observes them from
+   the per-block `meterBlock` wrapper's `ShouldVerifyWithContext`/
+   `VerifyWithContext`. This port does not wrap individual blocks (the `Block`
+   trait is returned as `Arc<dyn Block>` straight through), so they are
+   `#[allow(dead_code)]` until a `MeterBlock`/`TracedBlock` wrapper lands.
+4. **`TracedVm` uses `tracing::Span` + `Instrument`, not OTel directly.** Each
+   async method runs `future.instrument(span)`, which guarantees the span ends
+   when the future resolves/drops — the Rust analogue of Go's `defer span.End()`
+   (00 §4.6). Span tag shape is `tracedvm{vm=<name>, method=<method>}`; the
+   `<name>.<method>` Go tag is reconstructible from the fields. A real OTel
+   exporter wires in at the node-assembly layer.
+5. **New deps pinned directly in `crates/ava-vm/Cargo.toml`** (not workspace
+   deps yet): `prometheus = { version = "0.13", default-features = false }`
+   (mirrors `crates/ava-network/Cargo.toml`) and `tracing = { workspace = true }`.
+   Promote `prometheus` to `[workspace.dependencies]` when a third crate needs it.
+6. **New `Error::FailedRegistering`** variant (= Go `metric.ErrFailedRegistering`)
+   for a metric name collision in the supplied registry.

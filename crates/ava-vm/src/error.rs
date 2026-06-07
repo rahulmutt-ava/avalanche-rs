@@ -142,4 +142,11 @@ pub enum Error {
     /// Addresses were not sorted-and-unique as the codec requires.
     #[error("addresses not sorted and unique")]
     AddrsNotSortedUnique,
+
+    // ---- middleware (metervm) sentinel (specs 07 §6) ----
+    /// `metric.ErrFailedRegistering` — a `MeterVm` averager could not be
+    /// registered into the supplied Prometheus registry (usually a name
+    /// collision).
+    #[error("failed registering metric")]
+    FailedRegistering,
 }
