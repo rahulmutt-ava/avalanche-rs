@@ -279,4 +279,49 @@ pub enum Error {
     /// originate from the subnet's recorded L1-conversion manager chain/address.
     #[error("warp message source does not match the subnet's L1 conversion")]
     WrongWarpMessageSource,
+
+    // ----- warp signing / verification sentinels (M4.22, `warp`) -----
+    /// `ErrWrongSourceChainID` — a [`LocalSigner`](crate::warp::signer::LocalSigner)
+    /// was asked to sign an `UnsignedMessage` for a chain other than its own.
+    #[error("wrong SourceChainID")]
+    WrongSourceChainId,
+
+    /// `ErrWrongNetworkID` — an `UnsignedMessage`'s network id does not match the
+    /// signer's / verifier's network id.
+    #[error("wrong networkID")]
+    WrongNetworkId,
+
+    /// `ErrInvalidBitSet` — a `BitSetSignature`'s signer bit-set has unnecessary
+    /// zero-padding (`set.BitsFromBytes(b).Bytes() != b`).
+    #[error("bitset is invalid")]
+    InvalidBitSet,
+
+    /// `ErrUnknownValidator` — a `BitSetSignature` selects a canonical index past
+    /// the end of the validator set.
+    #[error("unknown validator")]
+    UnknownValidator,
+
+    /// `ErrInsufficientWeight` — the signing validators' weight is below the
+    /// required quorum fraction of the total weight.
+    #[error("signature weight is insufficient")]
+    InsufficientWeight,
+
+    /// `ErrParseSignature` — the aggregate BLS signature bytes failed to parse.
+    #[error("failed to parse signature")]
+    ParseSignature,
+
+    /// `ErrInvalidSignature` — the aggregate BLS signature did not verify against
+    /// the aggregated public key over the message bytes.
+    #[error("signature is invalid")]
+    InvalidSignature,
+
+    /// The source chain's subnet has no validator set at the pinned P-Chain
+    /// height (no entry in
+    /// [`get_warp_validator_sets`](ava_validators::state::ValidatorState::get_warp_validator_sets)).
+    #[error("no validator set for source subnet")]
+    NoValidatorSet,
+
+    /// A wrapped validator-state failure surfaced while obtaining the warp set.
+    #[error("validators: {0}")]
+    Validators(#[from] ava_validators::error::Error),
 }

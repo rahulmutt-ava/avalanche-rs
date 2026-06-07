@@ -33,6 +33,7 @@
 
 pub mod message;
 pub mod payload;
+pub mod signer;
 pub mod verifier;
 
 use std::sync::{Arc, OnceLock};
@@ -73,6 +74,16 @@ impl UnsignedMessage {
     /// failure (cannot occur with a growable buffer).
     pub fn marshal(&self) -> Result<Vec<u8>> {
         warp_codec().marshal(CODEC_VERSION, self)
+    }
+
+    /// `UnsignedMessage.ID()` — the message identifier, `sha256(bytes)`
+    /// (single-pass; specs 20 §2.1, `vms/platformvm/warp/unsigned_message.go`).
+    ///
+    /// # Errors
+    /// Returns a [`CodecError`](ava_codec::error::CodecError) if [`Self::marshal`]
+    /// fails.
+    pub fn id(&self) -> Result<Id> {
+        Ok(Id::from(ava_crypto::hashing::sha256(&self.marshal()?)))
     }
 }
 
