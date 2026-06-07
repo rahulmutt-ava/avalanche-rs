@@ -1,0 +1,73 @@
+[package]
+name = "ava-vm-rpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The rpcchainvm out-of-process gRPC plugin host/guest: the v45 reverse-dial handshake, the proto/vm VM service, and the proxied callback services (M3.24/M3.25 / specs 07 §5)."
+
+[dependencies]
+# The VM trait family this crate hosts (host) and delegates to (guest).
+ava-vm = { path = "../ava-vm" }
+# ChainContext identity carried in InitializeRequest; EngineState <-> proto State.
+ava-snow = { path = "../ava-snow" }
+# DynDatabase (rpcdb proxy), the rpcdb proto client/server building blocks reused
+# by the guest-side RpcDatabase / host-side DatabaseServer (M3.25).
+ava-database = { path = "../ava-database", features = ["rpcdb"] }
+# ValidatorState (validatorstate proxy), GetValidatorOutput / WarpSet (M3.25).
+ava-validators = { path = "../ava-validators" }
+# BLS PublicKey/Signature for the warp Signer proxy + validator public keys.
+ava-crypto = { path = "../ava-crypto" }
+# Id / NodeId byte types crossing the wire.
+ava-types = { path = "../ava-types" }
+# Network-upgrade Config <-> proto NetworkUpgrades (InitializeRequest).
+ava-version = { path = "../ava-version" }
+
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+
+# tonic/prost: the generated VM/Runtime services + the callback proxies. The
+# channel is plain insecure loopback TCP (no TLS — 07 §5.4).
+prost = { workspace = true }
+prost-types = "0.13"
+tonic = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+# Adapts a bound `TcpListener` into the `Stream` of accepted conns that
+# `tonic::transport::Server::serve_with_incoming` consumes (so the host/guest can
+# bind an ephemeral port *first*, learn its address, then serve on it). Report:
+# candidate to promote to a workspace dep when the node assembly (M3.28) also
+# needs ephemeral-port gRPC servers.
+tokio-stream = { version = "0.1", features = ["net"] }
+
+# Linux Pdeathsig (PR_SET_PDEATHSIG) in the audited pre_exec closure (00 §7.6);
+# non-Linux falls back to kill-on-drop. libc is the minimal FFI surface.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+# Generates the tonic client/server + prost types for proto/vm, proto/vm/runtime
+# and the callback protos into OUT_DIR at build time (not committed; 01 §8.1).
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+# The host/guest roundtrip + proxy tests host an in-process tonic server over a
+# loopback TCP port and spawn the guest as a thread/subprocess.
+ava-vm = { path = "../ava-vm", features = ["testutil"] }
+ava-database = { path = "../ava-database", features = ["rpcdb"] }
+tokio = { workspace = true }
+
+# NOTE: this crate does NOT use `[lints] workspace = true` because the workspace
+# pins `unsafe_code = "forbid"`, which cannot be locally downgraded. The host
+# subprocess launcher needs one audited `unsafe` `pre_exec` for the Linux
+# `PR_SET_PDEATHSIG` parent-death signal (00 §7.6, specs 07 §5.1). We mirror the
+# `ava-crypto` pattern: replicate the workspace lints in `lib.rs` with
+# `#![deny(unsafe_code)]` (a *deny*, locally `#[allow]`-able on the audited block)
+# instead of the inherited *forbid*.
