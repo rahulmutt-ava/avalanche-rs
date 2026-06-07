@@ -221,12 +221,12 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestGetTxStatus` | ⬜ not ported |
 | `TestGetValidatorFeeConfig` | ⬜ not ported |
 | `TestGetValidatorRules` | ⬜ not ported |
-| `TestGetValidatorSet_AfterEtna` | ⬜ not ported |
+| `TestGetValidatorSet_AfterEtna` | 🟡 `differential::validatorstate_parity` (M4.23) replays recorded P-Chain block sequences and asserts the M4.21 `PChainValidatorManager` backward diff-window reconstruction (`get_validator_set` at every height: weights + BLS keys, `NodeId`-ascending) matches a forward-accumulation oracle; also `conformance::validator_set_at_height` (M4.21). ⬜ na — byte-exact Go-extracted `validator_diff_windows` golden deferred: `tools/extract-vectors` has no P-Chain validator-diff-window surface yet; the committed vectors are a deterministic recorded oracle (forward-accumulation, an independent code path from the manager's backward reconstruction), per the M4.24 genesis precedent. Pin the exact Go golden once a tier-X extraction harness for `vms/platformvm/validators` lands |
 | `TestGetValidatorsAt` | ⬜ not ported |
 | `TestGetValidatorsAtArgsMarshalling` | ⬜ not ported |
 | `TestGetValidatorsAtReplyMarshalling` | ⬜ not ported |
 | `TestGetValidatorsSetProperty` | ⬜ not ported |
-| `TestGetWarpValidatorSets` | ⬜ not ported |
+| `TestGetWarpValidatorSets` | 🟡 `differential::validatorstate_parity` (M4.23) asserts `get_warp_validator_sets` (flatten-by-key total weight + per-key entries) at every replayed height vs the forward oracle; also `conformance::warp_sets_flatten_and_dedup_by_key` (M4.21). ⬜ na — byte-exact Go-extracted golden deferred with `TestGetValidatorSet_AfterEtna` above |
 | `TestGossipAddBloomFilter` | ⬜ not ported |
 | `TestGossipMempoolAddVerificationError` | ⬜ not ported |
 | `TestHash` | ⬜ not ported |

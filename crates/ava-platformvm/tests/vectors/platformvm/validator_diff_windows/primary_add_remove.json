@@ -1,0 +1,110 @@
+{
+  "description": "Primary-network add A, add B, remove A across three heights; forward oracle vs backward diff reconstruction.",
+  "subnet": "0000000000000000000000000000000000000000000000000000000000000000",
+  "blocks": [
+    {
+      "height": 1,
+      "mutations": [
+        {
+          "op": "add",
+          "tx": 1,
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "bls_key": "97248533cef0908a5ebe52c3b487471301bf6369010e6167f63dd74feddac2dfb5336a59a331d38eb0e454d6f6fcb1a4",
+          "weight": 1000000000000
+        }
+      ]
+    },
+    {
+      "height": 2,
+      "mutations": [
+        {
+          "op": "add",
+          "tx": 2,
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6",
+          "weight": 2000000000000
+        }
+      ]
+    },
+    {
+      "height": 3,
+      "mutations": [
+        {
+          "op": "remove",
+          "tx": 1,
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "bls_key": "97248533cef0908a5ebe52c3b487471301bf6369010e6167f63dd74feddac2dfb5336a59a331d38eb0e454d6f6fcb1a4",
+          "weight": 1000000000000
+        }
+      ]
+    }
+  ],
+  "snapshots": [
+    {
+      "height": 0,
+      "validators": [],
+      "warp_total_weight": 0,
+      "warp_entries": []
+    },
+    {
+      "height": 1,
+      "validators": [
+        {
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "weight": 1000000000000,
+          "bls_key": "97248533cef0908a5ebe52c3b487471301bf6369010e6167f63dd74feddac2dfb5336a59a331d38eb0e454d6f6fcb1a4"
+        }
+      ],
+      "warp_total_weight": 1000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "97248533cef0908a5ebe52c3b487471301bf6369010e6167f63dd74feddac2dfb5336a59a331d38eb0e454d6f6fcb1a4",
+          "weight": 1000000000000
+        }
+      ]
+    },
+    {
+      "height": 2,
+      "validators": [
+        {
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "weight": 1000000000000,
+          "bls_key": "97248533cef0908a5ebe52c3b487471301bf6369010e6167f63dd74feddac2dfb5336a59a331d38eb0e454d6f6fcb1a4"
+        },
+        {
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "weight": 2000000000000,
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6"
+        }
+      ],
+      "warp_total_weight": 3000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6",
+          "weight": 2000000000000
+        },
+        {
+          "bls_key": "97248533cef0908a5ebe52c3b487471301bf6369010e6167f63dd74feddac2dfb5336a59a331d38eb0e454d6f6fcb1a4",
+          "weight": 1000000000000
+        }
+      ]
+    },
+    {
+      "height": 3,
+      "validators": [
+        {
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "weight": 2000000000000,
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6"
+        }
+      ],
+      "warp_total_weight": 2000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6",
+          "weight": 2000000000000
+        }
+      ]
+    }
+  ]
+}

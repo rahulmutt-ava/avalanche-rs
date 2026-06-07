@@ -1,0 +1,184 @@
+{
+  "description": "Multi-mutation blocks with two nodes sharing a BLS key (warp dedup + summed weight), then churn removing one.",
+  "subnet": "0000000000000000000000000000000000000000000000000000000000000000",
+  "blocks": [
+    {
+      "height": 1,
+      "mutations": [
+        {
+          "op": "add",
+          "tx": 1,
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 1000000000000
+        },
+        {
+          "op": "add",
+          "tx": 2,
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 2000000000000
+        },
+        {
+          "op": "add",
+          "tx": 3,
+          "node_id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+          "bls_key": "aa83450b028c82704cf0fae7ff3d88c5b793764cc924eb83fe0b6d0a749c585a9ec4d4440877e09fe5abe65a81f62559",
+          "weight": 3000000000000
+        }
+      ]
+    },
+    {
+      "height": 2,
+      "mutations": [
+        {
+          "op": "remove",
+          "tx": 2,
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 2000000000000
+        }
+      ]
+    },
+    {
+      "height": 3,
+      "mutations": [
+        {
+          "op": "remove",
+          "tx": 3,
+          "node_id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+          "bls_key": "aa83450b028c82704cf0fae7ff3d88c5b793764cc924eb83fe0b6d0a749c585a9ec4d4440877e09fe5abe65a81f62559",
+          "weight": 3000000000000
+        },
+        {
+          "op": "add",
+          "tx": 4,
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6",
+          "weight": 2000000000000
+        }
+      ]
+    },
+    {
+      "height": 4,
+      "mutations": []
+    }
+  ],
+  "snapshots": [
+    {
+      "height": 0,
+      "validators": [],
+      "warp_total_weight": 0,
+      "warp_entries": []
+    },
+    {
+      "height": 1,
+      "validators": [
+        {
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "weight": 1000000000000,
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da"
+        },
+        {
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "weight": 2000000000000,
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da"
+        },
+        {
+          "node_id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+          "weight": 3000000000000,
+          "bls_key": "aa83450b028c82704cf0fae7ff3d88c5b793764cc924eb83fe0b6d0a749c585a9ec4d4440877e09fe5abe65a81f62559"
+        }
+      ],
+      "warp_total_weight": 6000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 3000000000000
+        },
+        {
+          "bls_key": "aa83450b028c82704cf0fae7ff3d88c5b793764cc924eb83fe0b6d0a749c585a9ec4d4440877e09fe5abe65a81f62559",
+          "weight": 3000000000000
+        }
+      ]
+    },
+    {
+      "height": 2,
+      "validators": [
+        {
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "weight": 1000000000000,
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da"
+        },
+        {
+          "node_id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+          "weight": 3000000000000,
+          "bls_key": "aa83450b028c82704cf0fae7ff3d88c5b793764cc924eb83fe0b6d0a749c585a9ec4d4440877e09fe5abe65a81f62559"
+        }
+      ],
+      "warp_total_weight": 4000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 1000000000000
+        },
+        {
+          "bls_key": "aa83450b028c82704cf0fae7ff3d88c5b793764cc924eb83fe0b6d0a749c585a9ec4d4440877e09fe5abe65a81f62559",
+          "weight": 3000000000000
+        }
+      ]
+    },
+    {
+      "height": 3,
+      "validators": [
+        {
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "weight": 1000000000000,
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da"
+        },
+        {
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "weight": 2000000000000,
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6"
+        }
+      ],
+      "warp_total_weight": 3000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6",
+          "weight": 2000000000000
+        },
+        {
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 1000000000000
+        }
+      ]
+    },
+    {
+      "height": 4,
+      "validators": [
+        {
+          "node_id": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "weight": 1000000000000,
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da"
+        },
+        {
+          "node_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "weight": 2000000000000,
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6"
+        }
+      ],
+      "warp_total_weight": 3000000000000,
+      "warp_entries": [
+        {
+          "bls_key": "8b5602ce59fb113eec6a6d917909b45e10560e69a4caa384d9006ab4fa1616c4883f89b4c731fcc932fac1b3b8bf82d6",
+          "weight": 2000000000000
+        },
+        {
+          "bls_key": "8eef97180c9f0754e09e34a5b1477f955bd3b73065e5b0cb5371c594ad042c20fab70e1827302ca9cd73c1fd18a4a2da",
+          "weight": 1000000000000
+        }
+      ]
+    }
+  ]
+}
