@@ -27,9 +27,8 @@ tokio-util = { workspace = true }
 num-bigint = { workspace = true }
 # `BoxFuture` for the chain::State async get/unmarshal/build closures.
 futures = { workspace = true }
-# Per-method timing histograms for the MeterVm middleware (07 §6). Pinned
-# directly (not yet a workspace dep — mirrors crates/ava-network/Cargo.toml).
-prometheus = { version = "0.13", default-features = false }
+# Per-method timing averagers for the MeterVm middleware (07 §6).
+prometheus = { workspace = true }
 # OTel/tracing spans for the TracedVm middleware (07 §6).
 tracing = { workspace = true }
 

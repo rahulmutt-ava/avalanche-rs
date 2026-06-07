@@ -25,7 +25,7 @@ ava-codec = { path = "../ava-codec" }
 # meterdb (§2.5) wraps any Database in Prometheus counters/gauges under the exact
 # Go metric names (calls/duration/size, method label). linkeddb (§2.7) caches
 # the head key + decoded nodes in bounded LRUs.
-prometheus = { version = "0.13", default-features = false }
+prometheus = { workspace = true }
 lru = "0.12"
 
 # rocksdb (§2.1) is the on-disk default backend and the one FFI/unsafe-permitted

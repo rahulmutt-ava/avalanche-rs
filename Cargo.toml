@@ -90,6 +90,11 @@ futures = "0.3"
 # Key hygiene
 zeroize = "1"
 
+# Metrics (Prometheus registry/collectors; specs/18). Go-parity metric names are
+# emitted by ava-network (avalanche_network_*) and ava-vm (metervm averagers).
+# default-features off: we only need the core registry, not the HTTP push gateway.
+prometheus = { version = "0.13", default-features = false }
+
 # Math / collections
 num-bigint = "0.4"
 parking_lot = "0.12"
