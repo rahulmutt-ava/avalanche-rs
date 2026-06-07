@@ -47,6 +47,7 @@ pub mod error;
 pub mod factory;
 pub mod fx;
 pub mod genesis;
+pub mod network;
 pub mod reward;
 pub mod service;
 pub mod signer;

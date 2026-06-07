@@ -35,6 +35,7 @@ pub mod executor;
 pub mod fee;
 pub mod import_export;
 pub mod increase_l1_validator_balance;
+pub mod mempool;
 pub mod priorities;
 pub mod register_l1_validator;
 pub mod remove_subnet_validator;

@@ -28,8 +28,10 @@
 //!
 //! ## Scope (M4.25, read-only sync)
 //!
-//! No gossip mempool (M4.26 — `build_block` uses a minimal in-VM decision queue,
-//! empty during read-only sync), no JSON-RPC service (M4.28 — `create_handlers`
+//! The M4.26 mempool ([`crate::txs::mempool::Mempool`]) is wired in (the builder
+//! drains it in FIFO order), but it stays empty during read-only sync (no txs are
+//! issued); the p2p gossip transport that would fill it is the deferred seam (see
+//! [`crate::network`]). No JSON-RPC service (M4.28 — `create_handlers`
 //! returns empty), no bootstrap-engine wiring beyond the VM hooks (M4.27).
 
 use std::collections::HashMap;
@@ -58,9 +60,10 @@ use crate::block::executor::BlockManager;
 use crate::error::{Error, Result};
 use crate::state::chain::Chain;
 use crate::state::state::State;
+use crate::txs::codec;
 use crate::txs::executor::{Backend, StakingConfig, UpgradeSchedule};
 use crate::txs::fee::simple_calculator::StaticFeeConfig;
-use crate::txs::{Tx, codec};
+use crate::txs::mempool::Mempool;
 use crate::validators::manager::PChainValidatorManager;
 
 /// `SyncBound` — a built block's timestamp may be at most this far ahead of the
@@ -102,9 +105,10 @@ pub struct PlatformVm {
     preferred: Id,
     /// The genesis block id (the initial last-accepted / preference).
     genesis_id: Id,
-    /// A minimal in-VM decision-tx queue (placeholder for the M4.26 mempool;
-    /// empty during read-only sync).
-    mempool: Mutex<Vec<Tx>>,
+    /// The decision-tx mempool (M4.26). Inbound gossip is admitted here via
+    /// [`crate::network::TxGossipHandler`]; the builder drains it in FIFO order.
+    /// Empty during read-only sync (no txs are issued).
+    mempool: Mutex<Mempool>,
 }
 
 impl Default for PlatformVm {
@@ -123,7 +127,7 @@ impl PlatformVm {
             state: EngineState::Initializing,
             preferred: Id::EMPTY,
             genesis_id: Id::EMPTY,
-            mempool: Mutex::new(Vec::new()),
+            mempool: Mutex::new(Mempool::new()),
         }
     }
 
@@ -449,7 +453,8 @@ impl Vm for PlatformVm {
     }
 
     async fn wait_for_event(&self, _token: &CancellationToken) -> VmResult<VmEvent> {
-        // No gossip mempool yet (M4.26); read-only sync issues no txs.
+        // Read-only sync issues no txs, so the mempool stays empty (the p2p
+        // gossip transport that would fill it is the deferred seam).
         let pending = !self.mempool.lock().is_empty();
         if pending {
             Ok(VmEvent::PendingTxs)
@@ -489,8 +494,10 @@ impl ChainVm for PlatformVm {
             let (timestamp, time_was_capped) =
                 builder::next_block_time(now, parent_ts, next_change, SYNC_BOUND);
 
-            // Decision txs from the minimal in-VM queue (empty in read-only sync).
-            let decision_txs = self.mempool.lock().clone();
+            // Decision txs from the mempool, in FIFO order (empty in read-only
+            // sync). The builder caps them by size; accepted txs are removed on
+            // accept (a follow-up wires the accept-side drain).
+            let decision_txs = self.mempool.lock().snapshot();
 
             builder::build_block(
                 crate::txs::Codec(),
