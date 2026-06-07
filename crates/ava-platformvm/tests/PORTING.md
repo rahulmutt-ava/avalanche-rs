@@ -118,7 +118,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestBlockchainStatusJSON` | ⬜ not ported |
 | `TestBlockchainStatusString` | ⬜ not ported |
 | `TestBlockchainStatusVerify` | ⬜ not ported |
-| `TestBootstrapPartiallyAccepted` | ⬜ not ported |
+| `TestBootstrapPartiallyAccepted` | 🟡 `differential::pchain_sync_to_tip` (M4.27, in `src/vm.rs`) drives the M3 Snowman `Bootstrapper` end-to-end against a recorded **single-block frontier (= genesis, height 0)**: frontier discovery → agreement → fetch (answered by the M4.27 `PlatformVm: BatchedChainVm` over the block store) → execute (empty range, genesis is at the local last-accepted height) → handoff to NormalOp, asserting `last_accepted == genesis_id`. ⬜ na — the full multi-block Fuji sync (chasing the tip, partial-accept across heights) is **M4.29**; the recorded Go **state-hash oracle at height 0** is deferred (needs a tier-X extraction harness, per the M4.24 genesis precedent) — the test asserts `last_accepted == genesis_id` + the genesis block round-trips instead |
 | `TestBoundedBy` | ⬜ not ported |
 | `TestBuildBlockAdvanceTime` | ⬜ not ported |
 | `TestBuildBlockBasic` | ⬜ not ported |

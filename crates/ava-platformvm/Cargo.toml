@@ -57,6 +57,11 @@ thiserror = { workspace = true }
 # case; enabling the feature here (dev-only) makes `RocksDb` available to the
 # integration tests without pulling the C++ FFI into the library build.
 ava-database = { path = "../ava-database", features = ["rocksdb"] }
+# The M3 Snowman bootstrapper (`Bootstrapper`/`Config`/`Sender`) drives the
+# M4.27 `differential::pchain_sync_to_tip` height-0 bootstrap test end-to-end.
+# Dev-only: the bootstrap loop is exercised by the test, not the library (no
+# cycle — ava-engine does not depend on ava-platformvm).
+ava-engine = { path = "../ava-engine" }
 serde_json = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
