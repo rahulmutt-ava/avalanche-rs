@@ -1,0 +1,1285 @@
+{
+  "config": {
+    "max_consumption_rate": 120000,
+    "min_consumption_rate": 100000,
+    "minting_period_ns": 31536000000000000,
+    "supply_cap": 720000000000000000,
+    "percent_denominator": 1000000
+  },
+  "provenance": "Generated from github.com/ava-labs/avalanchego vms/platformvm/reward.NewCalculator(cfg).Calculate over a (Δt, stake, supply) grid; mainnet config.",
+  "grid": [
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 0,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 73500000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 52500000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 42000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 23100000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 73018080
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 36750000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 26250000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 21000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 11550000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 36509040
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 73500000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 52500000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 42000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 23100000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 73018080
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 3675000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 2625000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 2100000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 1155000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 3650904033
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 36750000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 26250000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 21000000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 11550000000000
+    },
+    {
+      "duration_ns": 7884000000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 36509040333
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 154000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 110000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 88000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 48400000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 152990264
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 77000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 55000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 44000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 24200000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 76495132
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 154000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 110000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 88000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 48400000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 152990264
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 7700000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 5500000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 4400000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 2420000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 7649513212
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 77000000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 55000000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 44000000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 24200000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 76495132127
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 241500000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 172500000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 138000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 75900000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 239916550
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 120750000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 86250000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 69000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 37950000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 119958275
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 241500000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 172500000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 138000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 75900000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 239916550
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 12075000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 8625000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 6900000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 3795000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 11995827538
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 120750000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 86250000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 69000000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 37950000000000
+    },
+    {
+      "duration_ns": 23652000000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 119958275382
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 336000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 240000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 192000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 105600000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 333796940
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 168000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 120000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 96000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 52800000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 166898470
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 336000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 240000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 192000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 105600000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 333796940
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 16800000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 12000000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 9600000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 5280000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 16689847009
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 168000000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 120000000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 96000000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 52800000000000
+    },
+    {
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 166898470097
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 5390459748
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 3850328391
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 3080262713
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 1694144492
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 5355115
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 2695229874
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 1925164195
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 1540131356
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 847072246
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 2677557
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 5390459748
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 3850328391
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 3080262713
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 1694144492
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 5355115
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 269522987427
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 192516419590
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 154013135672
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 84707224620
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 267755799
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 2695229874272
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 1925164195909
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 1540131356727
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 847072246200
+    },
+    {
+      "duration_ns": 604800000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 2677557991
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 10822112966
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 7730080690
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 6184064552
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 3401235503
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 10751155
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 5411056483
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 3865040345
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 3092032276
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 1700617751
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 5375577
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 10822112966
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 7730080690
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 6184064552
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 3401235503
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 10751155
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 541105648339
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 386504034528
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 309203227622
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 170061775192
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 537557767
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 5411056483392
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 3865040345280
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 3092032276224
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 1700617751923
+    },
+    {
+      "duration_ns": 1209600000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 5375577670
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 154000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 110000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 88000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 48400000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 152990264
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 77000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 55000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 44000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 24200000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 76495132
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 154000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 110000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 88000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 48400000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 2000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 152990264
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 7700000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 5500000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 4400000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 2420000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 100000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 7649513212
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 300000000000000000,
+      "expected_reward": 77000000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 360000000000000000,
+      "expected_reward": 55000000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 44000000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 500000000000000000,
+      "expected_reward": 24200000000000
+    },
+    {
+      "duration_ns": 15768000000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 76495132127
+    }
+  ],
+  "worked_examples": [
+    {
+      "name": "full_period_~192avax",
+      "duration_ns": 31536000000000000,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 192000000000
+    },
+    {
+      "name": "zero_duration",
+      "duration_ns": 0,
+      "stake": 2000000000000,
+      "supply": 400000000000000000,
+      "expected_reward": 0
+    },
+    {
+      "name": "near_cap_clamp",
+      "duration_ns": 31536000000000000,
+      "stake": 1000000000000000,
+      "supply": 719000000000000000,
+      "expected_reward": 166898470097
+    }
+  ],
+  "splits": [
+    {
+      "total": 1000000000,
+      "shares": 0,
+      "amount_from_shares": 0,
+      "remainder_amount": 1000000000
+    },
+    {
+      "total": 1000000000,
+      "shares": 1000000,
+      "amount_from_shares": 1000000000,
+      "remainder_amount": 0
+    },
+    {
+      "total": 1000000000,
+      "shares": 500000,
+      "amount_from_shares": 500000000,
+      "remainder_amount": 500000000
+    },
+    {
+      "total": 1000000000,
+      "shares": 250000,
+      "amount_from_shares": 250000000,
+      "remainder_amount": 750000000
+    },
+    {
+      "total": 192000000000,
+      "shares": 200000,
+      "amount_from_shares": 38400000000,
+      "remainder_amount": 153600000000
+    },
+    {
+      "total": 1,
+      "shares": 999999,
+      "amount_from_shares": 1,
+      "remainder_amount": 0
+    },
+    {
+      "total": 7,
+      "shares": 333333,
+      "amount_from_shares": 3,
+      "remainder_amount": 4
+    },
+    {
+      "total": 18446744073709,
+      "shares": 750000,
+      "amount_from_shares": 13835058055282,
+      "remainder_amount": 4611686018427
+    }
+  ]
+}

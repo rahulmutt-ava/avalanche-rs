@@ -32,12 +32,12 @@ use ava_secp256k1fx as _;
 use ava_types as _;
 use ava_utils as _;
 use ava_validators as _;
-use num_bigint as _;
 use parking_lot as _;
 use ruint as _;
 use tokio as _;
 
 pub mod error;
+pub mod reward;
 
 pub use error::{Error, Result};
 
