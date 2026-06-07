@@ -1,0 +1,33 @@
+[package]
+name = "ava-proposervm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "ProposerVM block formats (byte-exact) + windower (gonum MT19937/-64) (M3 / specs 06 §7, 07 §7.1-§7.3)."
+
+[lints]
+workspace = true
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-crypto = { path = "../ava-crypto" }
+ava-utils = { path = "../ava-utils" }
+ava-validators = { path = "../ava-validators" }
+ava-vm = { path = "../ava-vm" }
+
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }
+assert_matches = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
