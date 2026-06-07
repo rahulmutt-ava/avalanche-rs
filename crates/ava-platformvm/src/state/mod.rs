@@ -9,3 +9,4 @@
 
 pub mod metadata_codec;
 pub mod metadata_validator;
+pub mod staker;

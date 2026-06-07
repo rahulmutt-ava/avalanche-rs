@@ -39,8 +39,6 @@ use assert_matches as _;
 #[cfg(test)]
 use pretty_assertions as _;
 #[cfg(test)]
-use proptest as _;
-#[cfg(test)]
 use rstest as _;
 
 pub mod block;
