@@ -36,6 +36,7 @@ use crate::txs::Tx;
 pub mod apricot;
 pub mod banff;
 pub mod codec;
+pub mod executor;
 pub mod parse;
 
 pub use apricot::CommonBlock;
@@ -191,6 +192,100 @@ impl Block {
     #[must_use]
     pub fn txs(&self) -> Vec<&Tx> {
         self.body.txs()
+    }
+
+    /// `Timestamp()` — the block's proposed wall-clock time, if it carries one.
+    ///
+    /// Banff blocks embed a `Time` field; Apricot blocks do not (their timestamp
+    /// is the parent's chain time, resolved by the executor). Returns `None` for
+    /// Apricot blocks (the block manager falls back to the parent timestamp).
+    #[must_use]
+    pub fn banff_timestamp(&self) -> Option<u64> {
+        match &self.body {
+            BlockBody::BanffProposal(b) => Some(b.time),
+            BlockBody::BanffAbort(b) => Some(b.time),
+            BlockBody::BanffCommit(b) => Some(b.time),
+            BlockBody::BanffStandard(b) => Some(b.time),
+            _ => None,
+        }
+    }
+
+    /// `true` iff this is a `*ProposalBlock` (the only Snowman oracle block;
+    /// specs 08 §4.2). [`Block::options`] is only valid for these.
+    #[must_use]
+    pub fn is_proposal(&self) -> bool {
+        matches!(
+            &self.body,
+            BlockBody::ApricotProposal(_) | BlockBody::BanffProposal(_)
+        )
+    }
+
+    /// `block.NewApricotCommitBlock` — a fresh, initialized Apricot commit block
+    /// over `(parent_id, height)`.
+    ///
+    /// # Errors
+    /// Returns a [`ava_codec::error::CodecError`] if initialization fails.
+    pub fn new_apricot_commit(c: &Manager, parent_id: Id, height: u64) -> CodecResult<Self> {
+        let mut blk = Block::new(BlockBody::ApricotCommit(ApricotCommitBlock {
+            common: CommonBlock { parent_id, height },
+        }));
+        blk.initialize(c)?;
+        Ok(blk)
+    }
+
+    /// `block.NewApricotAbortBlock` — a fresh, initialized Apricot abort block
+    /// over `(parent_id, height)`.
+    ///
+    /// # Errors
+    /// Returns a [`ava_codec::error::CodecError`] if initialization fails.
+    pub fn new_apricot_abort(c: &Manager, parent_id: Id, height: u64) -> CodecResult<Self> {
+        let mut blk = Block::new(BlockBody::ApricotAbort(ApricotAbortBlock {
+            common: CommonBlock { parent_id, height },
+        }));
+        blk.initialize(c)?;
+        Ok(blk)
+    }
+
+    /// `block.NewBanffCommitBlock` — a fresh, initialized Banff commit block over
+    /// `(time, parent_id, height)`.
+    ///
+    /// # Errors
+    /// Returns a [`ava_codec::error::CodecError`] if initialization fails.
+    pub fn new_banff_commit(
+        c: &Manager,
+        time: u64,
+        parent_id: Id,
+        height: u64,
+    ) -> CodecResult<Self> {
+        let mut blk = Block::new(BlockBody::BanffCommit(BanffCommitBlock {
+            time,
+            apricot: ApricotCommitBlock {
+                common: CommonBlock { parent_id, height },
+            },
+        }));
+        blk.initialize(c)?;
+        Ok(blk)
+    }
+
+    /// `block.NewBanffAbortBlock` — a fresh, initialized Banff abort block over
+    /// `(time, parent_id, height)`.
+    ///
+    /// # Errors
+    /// Returns a [`ava_codec::error::CodecError`] if initialization fails.
+    pub fn new_banff_abort(
+        c: &Manager,
+        time: u64,
+        parent_id: Id,
+        height: u64,
+    ) -> CodecResult<Self> {
+        let mut blk = Block::new(BlockBody::BanffAbort(BanffAbortBlock {
+            time,
+            apricot: ApricotAbortBlock {
+                common: CommonBlock { parent_id, height },
+            },
+        }));
+        blk.initialize(c)?;
+        Ok(blk)
     }
 }
 

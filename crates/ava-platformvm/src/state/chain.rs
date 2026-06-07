@@ -190,6 +190,22 @@ pub trait Chain: Send + Sync {
     fn get_reward_utxos(&self, tx_id: Id) -> Vec<UtxoBytes>;
     /// `AddRewardUTXO` — append a reward UTXO blob under the staker tx `tx_id`.
     fn add_reward_utxo(&mut self, tx_id: Id, utxo: UtxoBytes);
+
+    // ----- tx store -----
+
+    /// `GetTx` — the **signed-tx codec bytes** stored for `tx_id` (Go
+    /// `state.GetTx`; the persisted status field is not yet tracked — 08 §3.2
+    /// note). Returns the opaque bytes so the caller can
+    /// [`Tx::parse`](crate::txs::Tx::parse) it; this is what the block manager's
+    /// reward-staker resolver reads to recover a staker's originating tx.
+    ///
+    /// # Errors
+    /// Returns [`Error::Database`](crate::error::Error) wrapping
+    /// `database.ErrNotFound` when the tx is absent.
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>>;
+    /// `AddTx` — store the signed-tx bytes under `tx_id` (the acceptor writes a
+    /// block's txs here so the reward path can later resolve a staker tx).
+    fn add_tx(&mut self, tx_id: Id, tx_bytes: Vec<u8>);
 }
 
 /// `state.Versions` — resolves a block ID to the `Chain` view at that block

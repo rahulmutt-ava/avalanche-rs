@@ -40,6 +40,7 @@ use parking_lot::Mutex;
 
 use crate::error::{Error, Result};
 use crate::state::chain::{Chain, UtxoBytes};
+use crate::state::diff_iterators::{PublicKeyDiffStore, WeightDiffStore};
 use crate::state::l1_validator::L1Validator;
 use crate::state::prefixes;
 use crate::state::staker::Staker;
@@ -133,12 +134,16 @@ pub struct State<D: Database> {
     subnet_managers: ByteSpace<D>,
     chains: PrefixDb<D>,
     singletons: ByteSpace<D>,
-    /// Handles created for M4.14 (weight/pk-diff iterators); unused here.
-    _weight_diffs: PrefixDb<D>,
-    _pk_diffs: PrefixDb<D>,
-    _blocks: PrefixDb<D>,
-    _block_ids: PrefixDb<D>,
-    _txs: PrefixDb<D>,
+    /// Weight/pk-diff parent prefix spaces (M4.14 iterators; the M4.20 block
+    /// acceptor writes diffs at the accepted height through these).
+    weight_diff_parent: PrefixDb<D>,
+    pk_diff_parent: PrefixDb<D>,
+    /// Accepted-block byte store (`blockDB`), keyed by block id (M4.20).
+    blocks: ByteSpace<D>,
+    /// Height → accepted block-id index (`blockIDDB`) (M4.20).
+    block_ids: ByteSpace<D>,
+    /// Signed-tx byte store (`txDB`), keyed by tx id (M4.20).
+    txs: ByteSpace<D>,
 
     // ----- scalar singletons (in-memory, written through to `singletons`) -----
     timestamp: SystemTime,
@@ -146,6 +151,10 @@ pub struct State<D: Database> {
     l1_validator_excess: u64,
     accrued_fees: u64,
     supply: BTreeMap<Id, u64>,
+
+    // ----- last-accepted block id + height singleton (M4.20) -----
+    last_accepted: Id,
+    height: u64,
 
     // ----- in-memory staker / L1-validator collections -----
     current: Stakers,
@@ -156,6 +165,12 @@ pub struct State<D: Database> {
     reward_utxo_index: BTreeMap<Id, Vec<UtxoBytes>>,
     subnet_ids: Vec<Id>,
     chain_index: BTreeMap<Id, Vec<Id>>,
+
+    // ----- in-memory block-id-at-height index (mirrors `block_ids`) -----
+    block_id_index: BTreeMap<u64, Id>,
+
+    // ----- base DB handle (retained for cheap read-only snapshots) -----
+    base: Arc<D>,
 }
 
 impl<D: Database> State<D> {
@@ -166,7 +181,6 @@ impl<D: Database> State<D> {
     pub fn new(base: D) -> Result<Self> {
         let base = Arc::new(base);
 
-        let validators = PrefixDb::new_arc(prefixes::VALIDATORS_PREFIX, Arc::clone(&base));
         let l1_parent = PrefixDb::new_arc(prefixes::L1_VALIDATORS_PREFIX, Arc::clone(&base));
 
         Ok(Self {
@@ -177,17 +191,20 @@ impl<D: Database> State<D> {
             subnet_managers: ByteSpace::new(prefixes::SUBNET_MANAGER_PREFIX, &base),
             chains: PrefixDb::new_arc(prefixes::CHAIN_PREFIX, Arc::clone(&base)),
             singletons: ByteSpace::new(prefixes::SINGLETON_PREFIX, &base),
-            _weight_diffs: l1_parent.join(prefixes::WEIGHT_DIFF_PREFIX),
-            _pk_diffs: l1_parent.join(prefixes::PK_DIFF_PREFIX),
-            _blocks: PrefixDb::new_arc(prefixes::BLOCK_PREFIX, Arc::clone(&base)),
-            _block_ids: PrefixDb::new_arc(prefixes::BLOCK_ID_PREFIX, Arc::clone(&base)),
-            _txs: validators.join(prefixes::TX_PREFIX),
+            weight_diff_parent: l1_parent.join(prefixes::WEIGHT_DIFF_PREFIX),
+            pk_diff_parent: l1_parent.join(prefixes::PK_DIFF_PREFIX),
+            blocks: ByteSpace::new(prefixes::BLOCK_PREFIX, &base),
+            block_ids: ByteSpace::new(prefixes::BLOCK_ID_PREFIX, &base),
+            txs: ByteSpace::new(prefixes::TX_PREFIX, &base),
 
             timestamp: UNIX_EPOCH,
             fee_state: GasState::default(),
             l1_validator_excess: 0,
             accrued_fees: 0,
             supply: BTreeMap::new(),
+
+            last_accepted: Id::EMPTY,
+            height: 0,
 
             current: Stakers::new(),
             pending: Stakers::new(),
@@ -196,6 +213,10 @@ impl<D: Database> State<D> {
             reward_utxo_index: BTreeMap::new(),
             subnet_ids: Vec::new(),
             chain_index: BTreeMap::new(),
+
+            block_id_index: BTreeMap::new(),
+
+            base,
         })
     }
 
@@ -217,6 +238,162 @@ impl<D: Database> State<D> {
         // for reads (matching Go, which treats these as cached fields flushed at
         // commit time).
         let _ = self.singletons.put(key, &v.to_be_bytes());
+    }
+
+    // ----- block store (`blockDB`) + height index (`blockIDDB`) (M4.20) -----
+
+    /// `GetStatelessBlock` — the stored codec bytes of the accepted block `id`.
+    ///
+    /// # Errors
+    /// Returns [`Error::Database`] wrapping `database.ErrNotFound` when the block
+    /// is absent.
+    pub fn get_block(&self, id: Id) -> Result<Vec<u8>> {
+        self.blocks.get(id.as_bytes())
+    }
+
+    /// `AddStatelessBlock` — store an accepted block's codec `bytes` under its
+    /// `id` and index its `height → id`.
+    pub fn add_block(&mut self, id: Id, height: u64, bytes: &[u8]) {
+        let _ = self.blocks.put(id.as_bytes(), bytes);
+        let _ = self.block_ids.put(&height.to_be_bytes(), id.as_bytes());
+        self.block_id_index.insert(height, id);
+    }
+
+    /// `GetBlockIDAtHeight` — the accepted block id at `height`, if any.
+    #[must_use]
+    pub fn get_block_id_at_height(&self, height: u64) -> Option<Id> {
+        self.block_id_index.get(&height).copied()
+    }
+
+    // ----- last-accepted / height singleton (M4.20) -----
+
+    /// `GetLastAccepted` — the id of the most-recently accepted block.
+    #[must_use]
+    pub fn last_accepted(&self) -> Id {
+        self.last_accepted
+    }
+
+    /// `SetLastAccepted` — record the last-accepted block id (singleton).
+    pub fn set_last_accepted(&mut self, id: Id) {
+        self.last_accepted = id;
+        let _ = self
+            .singletons
+            .put(prefixes::LAST_ACCEPTED_KEY, id.as_bytes());
+    }
+
+    /// `GetHeight` — the height of the most-recently accepted block.
+    #[must_use]
+    pub fn height(&self) -> u64 {
+        self.height
+    }
+
+    /// `SetHeight` — record the last-accepted block height (singleton).
+    pub fn set_height(&mut self, height: u64) {
+        self.height = height;
+        self.write_u64_singleton(prefixes::HEIGHT_KEY, height);
+    }
+
+    // ----- staker weight/pk-diff stores (M4.14/M4.20) -----
+
+    /// The persisted staker weight-diff store
+    /// ([`WeightDiffStore`](super::diff_iterators::WeightDiffStore)).
+    #[must_use]
+    pub fn weight_diff_store(&self) -> WeightDiffStore<D> {
+        WeightDiffStore::new(&self.weight_diff_parent)
+    }
+
+    /// The persisted staker public-key-diff store
+    /// ([`PublicKeyDiffStore`](super::diff_iterators::PublicKeyDiffStore)).
+    #[must_use]
+    pub fn public_key_diff_store(&self) -> PublicKeyDiffStore<D> {
+        PublicKeyDiffStore::new(&self.pk_diff_parent)
+    }
+
+    /// A snapshot of the total current-validator-set weight per `(subnet, node)`
+    /// — the sum of the node's current validator weight and all of its current
+    /// delegators' weights — used by the acceptor to compute the per-height
+    /// weight diffs (Go `calculateValidatorDiffs` → `diffValidator.WeightDiff`).
+    ///
+    /// The block acceptor snapshots this before applying a block's
+    /// [`Diff`](super::diff::Diff), applies it, then re-snapshots and writes the
+    /// deltas through [`weight_diff_store`](Self::weight_diff_store).
+    #[must_use]
+    pub fn current_validator_weights(&self) -> BTreeMap<(Id, NodeId), u64> {
+        let mut out: BTreeMap<(Id, NodeId), u64> = BTreeMap::new();
+        for s in self.current.iter() {
+            if s.priority.is_current() {
+                let entry = out.entry((s.subnet_id, s.node_id)).or_insert(0);
+                *entry = entry.saturating_add(s.weight);
+            }
+        }
+        out
+    }
+
+    /// A cheap **read-consistent snapshot** of this state as an immutable
+    /// [`Arc<dyn Chain>`], for use as a [`Diff`](super::diff::Diff) parent through
+    /// [`Versions`](super::chain::Versions).
+    ///
+    /// The snapshot shares the same underlying [`Database`] handle (so byte-valued
+    /// spaces read the same data) and clones the in-memory scalar/staker/index
+    /// fields, so subsequent mutations to `self` are not visible through it
+    /// (matching Go, where a verified block's diff parent is a frozen view).
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<dyn Chain>
+    where
+        D: 'static,
+    {
+        let base = Arc::clone(&self.base);
+        let l1_parent = PrefixDb::new_arc(prefixes::L1_VALIDATORS_PREFIX, Arc::clone(&base));
+        Arc::new(State {
+            utxos: ByteSpace::new(prefixes::UTXO_PREFIX, &base),
+            reward_utxos: PrefixDb::new_arc(prefixes::REWARD_UTXOS_PREFIX, Arc::clone(&base)),
+            subnets: ByteSpace::new(prefixes::SUBNET_PREFIX, &base),
+            subnet_owners: ByteSpace::new(prefixes::SUBNET_OWNER_PREFIX, &base),
+            subnet_managers: ByteSpace::new(prefixes::SUBNET_MANAGER_PREFIX, &base),
+            chains: PrefixDb::new_arc(prefixes::CHAIN_PREFIX, Arc::clone(&base)),
+            singletons: ByteSpace::new(prefixes::SINGLETON_PREFIX, &base),
+            weight_diff_parent: l1_parent.join(prefixes::WEIGHT_DIFF_PREFIX),
+            pk_diff_parent: l1_parent.join(prefixes::PK_DIFF_PREFIX),
+            blocks: ByteSpace::new(prefixes::BLOCK_PREFIX, &base),
+            block_ids: ByteSpace::new(prefixes::BLOCK_ID_PREFIX, &base),
+            txs: ByteSpace::new(prefixes::TX_PREFIX, &base),
+
+            timestamp: self.timestamp,
+            fee_state: self.fee_state,
+            l1_validator_excess: self.l1_validator_excess,
+            accrued_fees: self.accrued_fees,
+            supply: self.supply.clone(),
+
+            last_accepted: self.last_accepted,
+            height: self.height,
+
+            current: self.current.clone(),
+            pending: self.pending.clone(),
+            l1_validators: self.l1_validators.clone(),
+
+            reward_utxo_index: self.reward_utxo_index.clone(),
+            subnet_ids: self.subnet_ids.clone(),
+            chain_index: self.chain_index.clone(),
+
+            block_id_index: self.block_id_index.clone(),
+
+            base,
+        })
+    }
+
+    /// A snapshot of current validators' uncompressed BLS public-key bytes keyed
+    /// by `(subnet, node)` (only current validators that carry a key), used by the
+    /// acceptor to compute per-height public-key diffs. The bytes are the
+    /// uncompressed form Go stores (`PublicKeyToUncompressedBytes`).
+    #[must_use]
+    pub fn current_validator_public_keys(&self) -> BTreeMap<(Id, NodeId), Vec<u8>> {
+        let mut out = BTreeMap::new();
+        for s in self.current.iter() {
+            if let (true, Some(pk)) = (s.priority.is_current_validator(), &s.public_key) {
+                out.insert((s.subnet_id, s.node_id), pk.serialize().to_vec());
+            }
+        }
+        out
     }
 }
 
@@ -430,6 +607,14 @@ impl<D: Database> Chain for State<D> {
         let space = self.reward_utxos.join(tx_id.as_bytes());
         let _ = space.put(&(idx as u64).to_be_bytes(), &utxo);
         list.push(utxo);
+    }
+
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>> {
+        self.txs.get(tx_id.as_bytes())
+    }
+
+    fn add_tx(&mut self, tx_id: Id, tx_bytes: Vec<u8>) {
+        let _ = self.txs.put(tx_id.as_bytes(), &tx_bytes);
     }
 }
 
