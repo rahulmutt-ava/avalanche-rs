@@ -21,11 +21,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod atomic;
 pub mod driver;
 pub mod network;
 pub mod observation;
 pub mod program;
 
+pub use atomic::exported_utxo_observation;
 pub use driver::LockstepDriver;
 pub use network::{Binary, NetworkConfig};
 pub use observation::Observation;

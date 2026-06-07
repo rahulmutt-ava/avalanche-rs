@@ -59,6 +59,13 @@ hex = { workspace = true }
 # runtime the battery's `#[tokio::test]`s and the M5.19 unit tests run on.
 ava-vm = { path = "../ava-vm", features = ["testutil"] }
 tokio = { workspace = true }
+serde_json = { workspace = true }
+# M5.20 ATOMIC-1 cross-chain round-trip (`tests/atomic_xp.rs`): the REAL
+# shared-memory backend (`ava-chains`) + the P-Chain `Utxo` codec to prove an
+# X-Chain-exported UTXO decodes byte-identically on the P-Chain (and reverse).
+# Neither depends on `ava-avm`, so this is a leaf dev-dep (no cycle).
+ava-chains = { path = "../ava-chains" }
+ava-platformvm = { path = "../ava-platformvm" }
 
 [lints]
 workspace = true
