@@ -479,6 +479,7 @@ dependencies = [
  "ava-crypto",
  "ava-secp256k1fx",
  "ava-types",
+ "ava-utils",
  "ava-vm",
  "bytes",
  "hex",

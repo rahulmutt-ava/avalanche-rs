@@ -46,6 +46,14 @@ pub enum Error {
     /// `errSpendOverflow` — value summation overflowed `u64`.
     #[error("spend overflowed")]
     SpendOverflow,
+    /// `secp256k1fx.ErrMismatchedAmounts` — a consumed UTXO's amount differs
+    /// from the spending input's amount (the avm-side fx spend check, 09 §4.1).
+    #[error("utxo amount and input amount are not equal")]
+    MismatchedAmounts,
+    /// `secp256k1fx.ErrWrongMintCreated` — a mint operation produced a mint
+    /// output whose owners differ from the consumed `MintOutput` UTXO's.
+    #[error("wrong mint output created from the operation")]
+    WrongMintCreated,
 
     // ---- input / output / operation structure (syntactic verify) ---------
     /// `errDoubleSpend` — an input id appears more than once.

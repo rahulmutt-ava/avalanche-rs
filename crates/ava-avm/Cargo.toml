@@ -23,6 +23,9 @@ ava-vm = { path = "../ava-vm" }
 # secp256k1fx Input/OutputOwners/Credential/TransferInput/TransferOutput embedded
 # as the base fx (specs 09 §4.1); nft/property credentials embed secp's Credential.
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# `clock::Clock` — the injectable time source threaded into the secp fx adapter
+# (`SecpFx::new`, specs 09 §4.1 / 24); shared with `ava-secp256k1fx::Fx::new`.
+ava-utils = { path = "../ava-utils" }
 # Zero-copy cached signed/unsigned tx bytes (specs 09 §3.1 Tx.bytes); first
 # consumed by the M5.5 Tx envelope.
 bytes = { workspace = true }

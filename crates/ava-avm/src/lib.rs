@@ -41,6 +41,7 @@ use proptest as _;
 use rstest as _;
 
 pub mod error;
+pub mod fx;
 pub mod fx_index;
 pub mod nftfx;
 pub mod propertyfx;
