@@ -96,6 +96,80 @@ match Go's `gonum prng` + `DeterministicWeightedWithoutReplacement`.
   — that is the actual R1 gate; the async wrappers only add the set fetch +
   empty-NodeID drop.
 
+## VM wrapper (M3.23)
+
+`src/vm.rs` (`ProposerVm<V: ChainVm, S: ValidatorState>`), `src/state.rs`,
+`src/height_index.rs`, `tests/vm.rs`. Ports `vm.go`, `pre_fork_block.go`,
+`post_fork_block.go`, `block.go::buildChild`, `batched_vm.go`,
+`state_syncable_vm.go`, `height_indexed_vm.go`, `state/`.
+
+### What landed
+
+- **Fork-regime selection** by the preferred block's timestamp vs
+  `UpgradeConfig`: pre-fork (bare inner block) / post-fork transition (child of a
+  pre-fork block ⇒ always **unsigned**, no proposer, Go `preForkBlock.buildChild`)
+  / post-fork pre-Durango (proposer windows via `Windower::delay`) / post-Durango
+  (per-slot proposer via `Windower::expected_proposer`). Granite epoch wrapping is
+  deferred (see below).
+- **Height index** (`state.rs` + `height_index.rs`) over a `DynDatabase`: chain
+  state (`lastAccepted`), block-by-id, `height -> blockID`, and the lazily-set
+  fork height. `GetBlockIDAtHeight` serves heights `>= forkHeight` from the
+  proposervm index and delegates `< forkHeight` to the inner VM.
+- **Sign/build with slot wait**: `build_block` computes the child timestamp
+  (`max(clock.unix_time(), parentTimestamp)`), waits for this node's slot via
+  `Arc<dyn Clock>` + `tokio::time::sleep` (virtual-time-friendly, `start_paused`
+  in tests; `maxSkew = 10s` constant carried as `vm::MAX_SKEW`), and on its slot
+  signs the `Header` with the staking cert. Signing is pluggable via
+  `StakingIdentity { certificate, signer: BlockSigner }` because `ava-crypto`
+  exposes only cert *verification* (`check_signature`), not signing — the signer
+  closure (ECDSA P-256 / RSA over `header.bytes()`, hashed internally by `ring`)
+  is supplied by the caller, mirroring Go's `block.Build(..., key crypto.Signer)`.
+  Added `block::SignedBlock::build_signed` / `block::GraniteBlock::build_signed`
+  (Go `block.Build`) alongside the existing `build_unsigned`.
+- **Inner-VM delegation**: `Vm`/`ChainVm` ops (`initialize`/`set_state`/
+  `shutdown`/`version`/handlers/`wait_for_event`/`app_*`/`connected`/health/
+  `parse_block`/`get_block`/`set_preference`/`last_accepted`) all delegate, and
+  `as_batched`/`as_state_syncable` return `Some(self)` **iff** the inner VM
+  implements them (then forward each method). The wrapper passes the generic
+  `vm_conformance!` battery in the pre-fork regime.
+
+### Findings / deviations / deferrals
+
+- **`ProposerVm` is generic over `S: ValidatorState`** (owns `Windower<S>`),
+  whereas Go reads `chainCtx.ValidatorState`. The Rust `ChainContext` (06 §3)
+  intentionally has no `validator_state` handle, so it is injected at
+  construction. Added `Windower::validator_state()` to let the VM read the
+  recommended minimum P-Chain height (`selectChildPChainHeight`).
+- **Error mapping is lossy across crate boundaries.** Neither `ava_vm::Error` nor
+  `ava_snow::Error` exposes a free-form `Other(String)`, and this task may only
+  edit `ava-proposervm`. So non-`NotFound` proposervm errors collapse onto
+  `ava_vm::Error::InvalidComponent(&'static str)` (engine side) and
+  `ava_snow::Error::ParametersInvalid(String)` (block accept/verify side, message
+  preserved). `NotFound` round-trips exactly. **Recommended spec/plan follow-up:**
+  add a generic `Other(String)`/`Internal(String)` variant to `ava_vm::Error`
+  (and ideally `ava_snow::Error`) so middleware VMs can surface dynamic errors
+  faithfully (Go uses `fmt.Errorf`/`errors.Join` freely here).
+- **In-memory `verified` cache.** Go keeps freshly-built (verified, not yet
+  accepted) post-fork blocks in `vm.verifiedBlocks`; the Rust wrapper keeps a
+  `Shared.verified: HashMap<Id, Vec<u8>>` so `set_preference`/`get_block` resolve
+  a block before it is accepted (the accept path then persists it). No sized-LRU
+  inner-block cache (Go `innerBlkCache`, 64 MiB) yet — deferred.
+- **Slot-wait modeled in `build_block`** (per the task), not in `WaitForEvent` as
+  in Go (`WaitForEvent` here just forwards the inner VM's events). The wait polls
+  the injected `Clock`; under `#[tokio::test(start_paused)]` a single-validator
+  node resolves to a zero delay, so no wall-clock sleep occurs. A defensive
+  short-circuit avoids a busy-spin if a non-advancing mock clock is used.
+- **Deferrals** (recorded for later milestones): Granite epoch (ACP-181)
+  selection on build (`acp181.NewEpoch`) — only zero-epoch `SignedBlock`s are
+  built; oracle/option block wrapping (`postForkOption`); the full post-fork
+  verify graph (parent timestamp monotonicity, proposer/pchain-height bounds,
+  `verifyAndRecordInnerBlk` + the inner-block `tree.Tree`); height-repair
+  (`repairAcceptedChainByHeight`) and pruning (`NumHistoricalBlocks`); state-sync
+  *summary* re-wrapping (`buildStateSummary`/`summary.Build`) — the wrapper
+  forwards `StateSyncableVm` to the inner VM verbatim rather than building
+  proposervm summaries; `WithVerifyContext`/`BuildBlockWithContext` use; the
+  HTTP/RPC `proposervm` service; the Fuji P-Chain-height override.
+
 ## Status
 
 | Go file | Rust | Status |
@@ -105,5 +179,10 @@ match Go's `gonum prng` + `DeterministicWeightedWithoutReplacement`.
 | `block/header.go` + `BuildHeader` | `src/block/header.rs` | done |
 | `block/option.go` + `BuildOption` | `src/block/option.rs` | done |
 | `block/parse.go` | `src/block/codec.rs` (`parse`/`parse_without_verification`) | done |
-| `block/build.go` | `src/block/{post_fork,option,header}.rs` | done |
+| `block/build.go` | `src/block/{post_fork,option,header}.rs` | done (signed build added M3.23) |
 | `proposer/windower.go` | `src/proposer/windower.rs` | done (M3.22) |
+| `vm.go` | `src/vm.rs` | core done (M3.23); deferrals above |
+| `pre_fork_block.go` / `post_fork_block.go` / `block.go::buildChild` | `src/vm.rs` (`build_child`) | core done (M3.23) |
+| `state/` | `src/state.rs` | done (M3.23) |
+| `height_indexed_vm.go` | `src/height_index.rs` | done (no pruning) (M3.23) |
+| `batched_vm.go` / `state_syncable_vm.go` | `src/vm.rs` (delegation) | delegate-to-inner (M3.23) |

@@ -25,6 +25,11 @@ use super::header::Header;
 use super::stateless::{Epoch, StatelessUnsignedBlock, StatelessUnsignedGraniteBlock};
 use ava_codec::packer::Packer;
 
+/// A signing function over a block's `Header` bytes (Go `crypto.Signer.Sign`;
+/// the signer hashes the message internally with SHA-256). Returns the raw
+/// signature or a human-readable error.
+pub type SignFn<'a> = dyn Fn(&[u8]) -> std::result::Result<Vec<u8>, String> + 'a;
+
 /// The cached metadata shared by signed and Granite blocks.
 #[derive(Debug, Clone)]
 struct Metadata {
@@ -109,6 +114,44 @@ impl SignedBlock {
             block: inner,
         };
         let signature = Vec::new();
+        let bytes = marshal_signed(&stateless_block, &signature);
+        Self::initialize(stateless_block, signature, bytes)
+    }
+
+    /// Builds a **signed** post-fork block (Go `block.Build`, non-epoch).
+    ///
+    /// The signature is produced by `sign` over `Header{chain, parent, id}`'s
+    /// serialized bytes — `id = sha256(unsigned bytes)`, exactly as Go signs
+    /// `sha256(header.Bytes())`. The signer hashes the message internally
+    /// (matching `staking::check_signature`).
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::InvalidCertificate`] if `certificate` is
+    /// unparsable, or [`crate::Error::SignFailed`] if `sign` fails.
+    pub fn build_signed(
+        parent_id: Id,
+        timestamp: i64,
+        p_chain_height: u64,
+        certificate: Vec<u8>,
+        inner: Vec<u8>,
+        chain_id: Id,
+        sign: &SignFn<'_>,
+    ) -> crate::Result<Self> {
+        let stateless_block = StatelessUnsignedBlock {
+            parent_id,
+            timestamp,
+            p_chain_height,
+            certificate,
+            block: inner,
+        };
+        // Marshal with an empty signature to recover the unsigned preimage.
+        let empty_sig: Vec<u8> = Vec::new();
+        let unsigned_with_empty = marshal_signed(&stateless_block, &empty_sig);
+        let len_unsigned = unsigned_with_empty.len().saturating_sub(INT_LEN);
+        let preimage = unsigned_with_empty.get(..len_unsigned).unwrap_or_default();
+        let id = sha256_id(preimage);
+        let header = Header::build(chain_id, parent_id, id);
+        let signature = sign(header.bytes()).map_err(crate::Error::SignFailed)?;
         let bytes = marshal_signed(&stateless_block, &signature);
         Self::initialize(stateless_block, signature, bytes)
     }
@@ -220,6 +263,43 @@ impl GraniteBlock {
             epoch,
         };
         let signature = Vec::new();
+        let bytes = marshal_granite(&body, &signature);
+        Self::initialize(body, signature, bytes)
+    }
+
+    /// Builds a **signed** Granite block (Go `block.Build`, epoch set).
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::InvalidCertificate`] if `certificate` is
+    /// unparsable, or [`crate::Error::SignFailed`] if `sign` fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_signed(
+        parent_id: Id,
+        timestamp: i64,
+        p_chain_height: u64,
+        epoch: Epoch,
+        certificate: Vec<u8>,
+        inner: Vec<u8>,
+        chain_id: Id,
+        sign: &SignFn<'_>,
+    ) -> crate::Result<Self> {
+        let body = StatelessUnsignedGraniteBlock {
+            stateless_block: StatelessUnsignedBlock {
+                parent_id,
+                timestamp,
+                p_chain_height,
+                certificate,
+                block: inner,
+            },
+            epoch,
+        };
+        let empty_sig: Vec<u8> = Vec::new();
+        let unsigned_with_empty = marshal_granite(&body, &empty_sig);
+        let len_unsigned = unsigned_with_empty.len().saturating_sub(INT_LEN);
+        let preimage = unsigned_with_empty.get(..len_unsigned).unwrap_or_default();
+        let id = sha256_id(preimage);
+        let header = Header::build(chain_id, parent_id, id);
+        let signature = sign(header.bytes()).map_err(crate::Error::SignFailed)?;
         let bytes = marshal_granite(&body, &signature);
         Self::initialize(body, signature, bytes)
     }

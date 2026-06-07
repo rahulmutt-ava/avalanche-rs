@@ -19,10 +19,29 @@ ava-crypto = { path = "../ava-crypto" }
 ava-utils = { path = "../ava-utils" }
 ava-validators = { path = "../ava-validators" }
 ava-vm = { path = "../ava-vm" }
+# `Block` trait + `ChainContext` consumed by the VM wrapper (M3.23).
+ava-snow = { path = "../ava-snow" }
+# `DynDatabase` backing the height index + chain-state persistence (M3.23).
+ava-database = { path = "../ava-database" }
+# `UpgradeConfig` (fork schedule) drives the regime selection (M3.23).
+ava-version = { path = "../ava-version" }
 
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
+# `CancellationToken` on every VM/block method (replaces Go's context.Context).
+tokio-util = { workspace = true }
+# `tokio::time::sleep` for the virtual-time slot wait (honors `start_paused`).
+tokio = { workspace = true }
+# `serde_json::Value` health-check return type (delegated to the inner VM).
+serde_json = { workspace = true }
+# Block timestamps (`i64` unix secs) → `DateTime<Utc>` for the fork gates.
+chrono = { workspace = true }
+
+[features]
+# Exposes the in-memory test inner VM helpers so the integration test (and
+# downstream crates) can drive `ProposerVm` over `ava_vm::testutil::TestVm`.
+testutil = ["ava-vm/testutil"]
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -31,4 +50,11 @@ assert_matches = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
-tokio = { workspace = true }
+# `test-util` enables `#[tokio::test(start_paused = true)]` virtual time for the
+# slot-wait build path (no wall-clock sleeps).
+tokio = { workspace = true, features = ["test-util"] }
+ava-vm = { path = "../ava-vm", features = ["testutil"] }
+# Staking-cert generation + ECDSA P-256 signing for the build-block test.
+rcgen = { workspace = true }
+ring = { workspace = true }
+rustls-pemfile = { workspace = true }
