@@ -13,26 +13,13 @@ use std::sync::Arc;
 use ava_crypto::secp256k1::PublicKey;
 use ava_utils::clock::Clock;
 use ava_vm::error::{Error, Result};
+// The `UnsignedTx` boundary is owned by the fx framework (`ava-vm::fx`) so the
+// secp256k1fx `FxInstance` and `verify_credentials` share one tx-bytes trait
+// (specs 07 §4.1); re-exported for source-compatibility (incl. the blanket
+// `Vec<u8>`/`&[u8]` impls used by the multisig proptests).
+pub use ava_vm::fx::UnsignedTx;
 
 use crate::types::{Credential, Input, OutputOwners};
-
-/// `secp256k1fx.UnsignedTx` — the bytes a credential signs over.
-pub trait UnsignedTx: Send + Sync {
-    /// `Bytes()` — the unsigned-transaction bytes hashed for signature recovery.
-    fn bytes(&self) -> &[u8];
-}
-
-impl UnsignedTx for Vec<u8> {
-    fn bytes(&self) -> &[u8] {
-        self
-    }
-}
-
-impl UnsignedTx for &[u8] {
-    fn bytes(&self) -> &[u8] {
-        self
-    }
-}
 
 /// `secp256k1fx.Fx` — the verification state (clock + bootstrapped flag).
 ///

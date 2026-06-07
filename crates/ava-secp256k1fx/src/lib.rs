@@ -31,10 +31,12 @@ use serde_json as _;
 
 pub mod error;
 pub mod fx;
+pub mod instance;
 pub mod types;
 
 pub use error::{Error, Result};
 pub use fx::{Fx, UnsignedTx};
+pub use instance::Secp256k1Fx;
 pub use types::{
     CODEC_VERSION, Credential, FxMarshal, Input, MintOutput, OutputOwners, TransferInput,
     TransferOutput, TypeId, marshal, unmarshal_credential, unmarshal_input, unmarshal_mint_output,

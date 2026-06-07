@@ -15,17 +15,23 @@ them rather than re-deriving the gaps.
 - `snow/engine/common/message.go` (`Message`) → [`crate::vm::VmEvent`].
 - `snow/engine/common/sender.go` (`AppSender`, `SendConfig`) →
   [`crate::app_sender::{AppSender, SendConfig}`].
-- `snow/engine/common/fx.go` (`Fx`) → [`crate::vm::Fx`] (id-only placeholder).
+- `snow/engine/common/fx.go` (`Fx`) → [`crate::fx::Fx`] (`{ id, fx: Arc<dyn FxInstance> }`).
+- `vms/fx/fx.go` + `vms/secp256k1fx` verification surface →
+  [`crate::fx::{FxInstance, FxVm, CodecRegistry, UnsignedTx}`] (M3.20).
 - `snow/validators/connector.go` (`Connector`) → [`crate::connector::Connector`].
 - `api/health/checker.go` (`Checker`) → [`crate::health::HealthCheck`].
 
 ## Faithful placeholders / deferred surface
 
-1. **`Fx` payload.** Go's `common.Fx{ ID, Fx interface{} }` carries an arbitrary fx
-   instance. The fx framework (`FxInstance`, specs 07 §6) is not built yet, so
-   [`crate::vm::Fx`] carries only `id: ava_types::id::Id`. Add the `fx:
-   Arc<dyn FxInstance>` field when `ava-secp256k1fx` lands; `Vm::initialize` already
-   takes `Vec<Fx>` so the signature does not change.
+1. **`Fx` payload (M3.20 — DONE).** Go's `common.Fx{ ID, Fx interface{} }` is now
+   [`crate::fx::Fx`] `{ id, fx: Arc<dyn FxInstance> }`. The fx framework
+   ([`crate::fx`], specs 07 §4.1) is built: `FxInstance` (the `&dyn Any`
+   verification surface), `FxVm` (host `codec_registry()`/`clock()`),
+   `CodecRegistry`, and the `UnsignedTx` tx-bytes trait. `ava-secp256k1fx`
+   implements `FxInstance` as `Secp256k1Fx` (`tests/fx.rs` exercises the
+   wrong-type downcast sentinels + the 5-typeID codec registration). `FxVm`
+   omits Go's `Logger()` (no workspace `Logger` type yet — see the
+   `ava-secp256k1fx` PORTING note + the recommended 07 §4.1 spec tweak).
 
 2. **`HttpHandler` body.** The root workspace pulls in no `tower`/`http`/`hyper`
    dependency, so [`crate::vm::HttpHandler`] is a descriptor (`LockOptions` +

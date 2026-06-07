@@ -29,6 +29,7 @@ pub mod block;
 pub mod components;
 pub mod connector;
 pub mod error;
+pub mod fx;
 pub mod health;
 pub mod middleware;
 pub mod vm;
@@ -45,9 +46,10 @@ pub use block::{
 };
 pub use connector::Connector;
 pub use error::{Error, Result};
+pub use fx::{CodecRegistry, Fx, FxInstance, FxVm, UnsignedTx};
 pub use health::HealthCheck;
 pub use middleware::{BlockMetrics, MeterVm, TracedVm};
-pub use vm::{Fx, HttpHandler, LockOptions, Vm, VmEvent};
+pub use vm::{HttpHandler, LockOptions, Vm, VmEvent};
 
 // Re-export the consensus context + engine phase the VM consumes at the
 // boundary (specs 06 §3), so downstream VM crates depend only on `ava-vm`.
@@ -59,8 +61,11 @@ pub use ava_types::id::Id;
 #[cfg(test)]
 mod tests {
     // `proptest` is a declared dev-dependency reserved for the VM-conformance
-    // proptests (specs 07 §10); silence `unused_crate_dependencies` until then.
+    // proptests (specs 07 §10); `ava-secp256k1fx` is a dev-only edge exercised
+    // solely by `tests/fx.rs` (M3.20). Silence `unused_crate_dependencies` for
+    // the lib-test unit, which references neither.
     use assert_matches::assert_matches;
+    use ava_secp256k1fx as _;
     use proptest as _;
 
     use super::*;

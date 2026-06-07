@@ -18,6 +18,9 @@ use crate::app::AppHandler;
 use crate::app_sender::AppSender;
 use crate::connector::Connector;
 use crate::error::Result;
+// Re-exported so existing `crate::vm::Fx` consumers (the metervm/tracedvm
+// middleware, testutil) keep resolving after `Fx` moved to the `fx` module.
+pub use crate::fx::Fx;
 use crate::health::HealthCheck;
 
 /// `snow/engine/common.Message` — the VM→engine notification enum.
@@ -137,15 +140,4 @@ pub trait Vm: AppHandler + HealthCheck + Connector + Send + Sync {
     /// `WaitForEvent` — blocks until the VM has a [`VmEvent`] for the engine or
     /// the token is cancelled.
     async fn wait_for_event(&self, token: &CancellationToken) -> Result<VmEvent>;
-}
-
-/// `snow/engine/common.Fx` — a feature-extension instance bound to its id.
-///
-/// The full fx framework (`FxInstance`, specs 07 §6) is a follow-up; this base
-/// task carries only the id so the `Vm::initialize` signature is faithful. The
-/// `fx` payload is added when `ava-secp256k1fx` lands (see `tests/PORTING.md`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Fx {
-    /// The fx's id.
-    pub id: ava_types::id::Id,
 }

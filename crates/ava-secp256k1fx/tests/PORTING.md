@@ -92,3 +92,55 @@ locally rather than from captured sigs and still matches Go semantics.
   `AddrsNotSortedUnique`), and `prop::multisig_verify` (128 proptest cases:
   accept iff exactly `threshold` valid owner sigs at sorted-unique matured
   indices; reject over/under-sign, reordered, OOB, wrong-sig, premature).
+
+## M3.20 — `FxInstance` registration (`instance::Secp256k1Fx`)
+
+Ports the fx-framework surface of `vms/secp256k1fx/fx.go` (`Initialize`,
+`Bootstrapping`, `Bootstrapped`, `VerifyTransfer`/`VerifySpend`,
+`VerifyPermission`, `VerifyOperation`, `CreateOutput`) onto the new
+`ava_vm::fx::FxInstance` trait (specs 07 §4.1). The `&dyn Any` boundary mirrors
+Go's `interface{}` + type-assert: each method `downcast_ref`s its arguments and
+maps a downcast miss to the exact Go sentinel (`ErrWrongInputType`,
+`ErrWrongCredentialType`, `ErrWrongUTXOType`, `ErrWrongOwnerType`,
+`ErrWrongOpType`), then delegates to `Fx::verify_credentials`.
+
+| Go (`fx.go`) | Rust (`instance.rs`) | Notes |
+|---|---|---|
+| `Initialize` (`RegisterType` ×5) | `Secp256k1Fx::initialize` | Registers `TransferInput`/`MintOutput`/`TransferOutput`/`MintOperation`/`Credential` **by name in that order** into the host's `ava_vm::fx::CodecRegistry`. |
+| `InitializeVM` (`vmIntf.(VM)` ⇒ `ErrWrongVMType`) | folded into `FxVm` param | The host VM type is fixed by the `Arc<dyn FxVm>` signature, so the `ErrWrongVMType` downcast has no Rust analog. |
+| `VerifyTransfer` → `VerifySpend` | `verify_transfer` → `verify_spend` | `verify::All(utxo, in, cred)` then `utxo.amt != in.amt` ⇒ `MismatchedAmounts`, then `verify_credentials`. |
+| `VerifyPermission` | `verify_permission` | input downcasts to `Input` (not `TransferInput`), `verify::All(in, cred, owner)`, then `verify_credentials`. |
+| `CreateOutput` | `create_output` | owner ⇒ `OutputOwners`, `owner.verify()`, returns `Arc<TransferOutput>` as `Arc<dyn verify::State>`. |
+| `VerifyOperation`/`verifyOperation` | `verify_operation` | **partial deferral, see below.** |
+
+### Deferral — `verify_operation` (mint)
+
+`MintOperation` (typeID 3) is still not a Rust codec type (M3.19 reserved the
+discriminant only), and `MintOutput.Equals(op.MintOutput.OutputOwners)` /
+`op.MintInput` cannot be expressed without it. `verify_operation` therefore
+downcasts the op against a private never-constructed `MintOperationUnported`
+marker, so it faithfully returns `ErrWrongOpType` for any argument — matching Go
+for every input *except* a real `*MintOperation`, which does not yet exist in
+Rust. The full mint check (`verify::All(op, cred, utxo)` → `ErrWrongMintCreated`
+→ `verify_credentials(&op.MintInput, …)`) lands when `MintOperation` is ported
+(X-Chain, M4). No current consumer reaches the mint path.
+
+### Trait/type unification
+
+`UnsignedTx` moved to its canonical owner `ava_vm::fx` (the fx framework) so the
+`FxInstance` surface and `Fx::verify_credentials` share one tx-bytes trait; the
+blanket `impl UnsignedTx for Vec<u8>`/`&[u8]` (used by the multisig proptests)
+moved there too (orphan-rule: the impls must live with the trait).
+`ava_secp256k1fx::fx::UnsignedTx` is now a re-export of `ava_vm::fx::UnsignedTx`.
+
+### `FxVm` host surface
+
+`ava_vm::fx::FxVm` exposes `codec_registry()` + `clock()`. Go's `VM` interface
+also has `Logger()`; there is **no `Logger` type in the workspace yet**, so it is
+omitted from `FxVm`. **Recommended spec note** (07 §4.1): drop `logger: Logger`
+from the `FxVm` sketch until a logging facade lands, or annotate it as deferred.
+The `CodecRegistry` surface is modelled as a `register_type(name) -> Result<u32>`
+trait (returns the assigned sequential typeID) rather than the generic Go
+`RegisterType(interface{})`, since Rust codec typeIDs are pinned on the enum at
+derive time (`ava-codec` §`linearcodec`); registration here records ordering for
+host-side assertion.

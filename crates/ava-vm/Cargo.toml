@@ -46,6 +46,9 @@ proptest = { workspace = true }
 assert_matches = { workspace = true }
 tokio = { workspace = true }
 sha2 = { workspace = true }
+# Dev-only edge (Cargo permits the cycle): the `tests/fx.rs` integration test
+# drives `ava-secp256k1fx`'s `FxInstance` against the `ava-vm::fx` framework.
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
 
 [lints]
 workspace = true

@@ -30,8 +30,9 @@ use crate::app_sender::{AppSender, SendConfig};
 use crate::block::{Block, ChainVm};
 use crate::connector::Connector;
 use crate::error::{Error, Result};
+use crate::fx::Fx;
 use crate::health::HealthCheck;
-use crate::vm::{Fx, HttpHandler, Vm, VmEvent};
+use crate::vm::{HttpHandler, Vm, VmEvent};
 
 /// The shared, mutable state behind a [`TestVm`] and its [`TestBlock`]s.
 ///
