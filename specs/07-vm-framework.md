@@ -784,6 +784,33 @@ options must match: max recv/send message size (the p2p message limit), the
 `grpcutils` keepalive/dial defaults, and **insecure** transport (no TLS — the
 channel is loopback TCP).
 
+> **As built (M3.24/M3.25).** `vm.proto`'s `Gather` RPC transitively imports
+> `io/prometheus/client/metrics.proto`, so that file must be vendored into
+> `proto/` alongside the service protos (avalanchego's own `buf.yaml` flags it as
+> "required by languages such as rust"). The crate must opt out of the workspace
+> `unsafe_code = "forbid"` lint to carry the one audited Linux `PR_SET_PDEATHSIG`
+> `pre_exec` (drop `[lints] workspace = true`, re-declare the lints in `lib.rs`
+> with `#![deny(unsafe_code)]` + a localized `#[allow]` — the sanctioned pattern,
+> same as `ava-crypto`). `LastAccepted` is **client-side state, not an RPC**
+> (faithful to Go's `chain.State`): the host `RpcChainVm` holds `Arc<Mutex<Id>>`,
+> seeds it via a benign `SetState` probe, and advances it on `RpcBlock::accept`.
+> Two gaps surfaced for upstream crates: (a) `Block::verify/accept/reject` return
+> `ava_snow::Result`, which has **no transport/remote error variant**, so a gRPC
+> failure collapses to `ava_snow::Error::Multiple(vec![])` — **add a remote/
+> `Vm(String)` variant to `ava_snow::Error`** (and `ava_vm::Error::Internal(String)`,
+> per §9) so middleware/RPC VMs surface dynamic errors faithfully; (b) the
+> `validatorState` proxy decodes **uncompressed 96-byte** BLS public keys off the
+> wire, but `ava-crypto` exposes only `from_compressed`/`serialize` — **add
+> `PublicKey::from_uncompressed`** (must close before the validatorstate proxy is
+> relied on at M5). `warp::Signer` and `AliaserReader` were stubbed locally
+> pending their canonical owners (the latter now lives in `ava-chains`, §8.1).
+> The **host `VM.Initialize` is the cross-task seam folded at M3.28**: it must
+> stand up the §5.2 rpcdb/callback servers and encode `ChainContext` into
+> `InitializeRequest`; until then it returns a not-implemented sentinel and the
+> roundtrip test drives an already-initialized guest. Deferred guest RPCs:
+> batched (`GetAncestors`/`BatchedParseBlock`), state-sync, HTTP-handler proxying
+> (no `tower`/`http` stack yet), `Gather` metrics.
+
 ### 5.5 go-plugin legacy note
 
 If interop with *very old* avalanchego plugins (pre-runtime-handshake) is ever
@@ -980,6 +1007,34 @@ Finally it registers the chain's metrics gatherers under `primaryAlias`.
 special-cased: it must be created first (it initializes the shared
 `validator_state`), and creating a non-P-Chain with the P-Chain VM ID is an error
 (`errCreatePlatformVM`).
+
+> **As built (M3.26/M3.27).** The wrapping order above was **confirmed byte-for-byte
+> against Go `chains/manager.go` (~L1190-1235)** by `pipeline_wrapping_order`. In
+> Rust the wrapped VM is a concrete type — `WrappedVm<V,S> =
+> ChangeNotifier<TracedVm<MeterVm<ProposerVm<TracedVm<V>, S>>>>` — so the **type
+> itself is the compile-time proof of order**; the test also walks it via
+> `.inner()` (which required adding a non-behavioural `pub fn inner()` to
+> `ava_proposervm::ProposerVm`, mirroring `MeterVm`/`TracedVm`). Consequence: the
+> optional trace/meter layers are **built unconditionally** at M3.27, because
+> dropping a layer changes the concrete type and `Box<dyn ChainVm>` has no blanket
+> `ChainVm` impl — **runtime flag-gating of those layers is deferred to M3.28**
+> (a node-config concern). Three more seams are likewise deferred to M3.28, where
+> the real node handles exist: (1) the concrete `OutboundSender`/`TracedSender`
+> (steps 2/5 — `create_snowman_chain` is generic over `Snd: Sender` until then);
+> (2) adapting `SnowmanEngine`/`Bootstrapper`/`StateSyncer` into the handler's
+> `EngineManager` (step 7 registered empty at M3.27 — the `testvm_finalizes`
+> differential test drives `SnowmanEngine` directly, as `ava-engine`'s
+> `prop::consensus_liveness` does, but **around the full wrapped VM pipeline**);
+> (3) the per-chain `Logger` (no logging facade in the workspace yet, so
+> `Factory::new_vm` takes none — same deferral as `FxVm::logger()`). The atomic
+> `SharedMemory` (§3.1, owned by `ava-chains::atomic`) is **byte-exact in its
+> `dbElement` value encoding + `sharedID` + value-DB key layout**, but its
+> `indexed` index uses a flat `ns‖len‖trait‖key` key rather than Go's per-trait
+> `linkeddb` — observably identical for `get`/`indexed`/`apply`; on-disk
+> cross-impl interop is an M9 concern. `apply` commits via a single base `Batch`
+> (one `write()`) rather than Go's `versiondb.CommitBatch`+`WriteAll` (because
+> `versiondb<D: Database>` can't wrap an `Arc<dyn DynDatabase>`) — same
+> single-atomic-write guarantee.
 
 ### 8.3 Aliasing & subnets
 
