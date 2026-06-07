@@ -46,6 +46,7 @@ pub mod block;
 pub mod error;
 pub mod fx;
 pub mod fx_index;
+pub mod mempool;
 pub mod nftfx;
 pub mod propertyfx;
 pub mod state;

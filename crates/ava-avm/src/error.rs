@@ -195,6 +195,13 @@ pub enum Error {
     #[error("block state not found (block not verified)")]
     BlockNotVerified,
 
+    // ---- block builder (M5.17) -------------------------------------------
+    /// `ErrNoPendingBlocks` — the block builder was asked to build a block but
+    /// there are no pending txs and no reason to advance the chain time (Go
+    /// `builder.ErrNoPendingBlocks`, specs 09 §7.1).
+    #[error("no pending blocks")]
+    NoPendingBlocks,
+
     // ---- folded-in shared errors -----------------------------------------
     /// Linear-codec marshal/unmarshal failure.
     #[error(transparent)]
