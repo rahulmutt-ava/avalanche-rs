@@ -370,14 +370,17 @@ dependencies = [
 name = "ava-engine"
 version = "0.1.0"
 dependencies = [
+ "assert_matches",
  "async-trait",
  "ava-snow",
  "ava-types",
+ "ava-utils",
  "ava-validators",
  "ava-vm",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -3368,6 +3371,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "pin-project-lite",
+ "slab",
  "tokio",
 ]
 

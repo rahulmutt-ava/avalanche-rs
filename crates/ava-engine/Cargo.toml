@@ -20,6 +20,9 @@ ava-types = { path = "../ava-types" }
 ava-snow = { path = "../ava-snow" }
 ava-validators = { path = "../ava-validators" }
 ava-vm = { path = "../ava-vm" }
+# The networking glue reads time through the injected clock: monotonic for
+# latency/deadlines (specs 24 §B.4), and the benchlist EWMA timestamps.
+ava-utils = { path = "../ava-utils" }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -27,7 +30,17 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 # NoOpHandler logs+drops at debug level (mirrors common/no_ops_handlers.go).
 tracing = { workspace = true }
+# ChainHandler is one tokio task draining a bounded mpsc + VM channel + gossip
+# ticker via tokio::select!; the AdaptiveTimeoutManager fires over tokio time.
+tokio = { workspace = true, features = [ "macros", "rt", "sync", "time" ] }
+# DelayQueue (timeout firing) needs the `time` feature; CancellationToken /
+# TaskTracker (halt + leaked-task drain) come from `rt`. NOTE: workspace pins
+# tokio-util with only `["rt"]`; `time` is added here for DelayQueue.
+tokio-util = { workspace = true, features = [ "time", "rt" ] }
 
 [dev-dependencies]
-# Unit tests drive the async handler methods on the current-thread runtime.
-tokio = { workspace = true, features = [ "macros", "rt", "sync" ] }
+# Unit tests drive the async handler methods on the current-thread runtime;
+# `test-util` enables start_paused + tokio::time::advance for the §B.2 timing tests.
+tokio = { workspace = true, features = [ "macros", "rt", "sync", "time", "test-util" ] }
+# Sentinel-error assertions on config verify.
+assert_matches = { workspace = true }

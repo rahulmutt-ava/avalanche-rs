@@ -13,6 +13,11 @@
 //! `AppRequestFailed`/`SendAppError`; and the engine-facing [`Sender`] +
 //! [`SendConfig`].
 //!
+//! The [`networking`] module is the bridge to `ava-network` (specs 06 §5): the
+//! process-wide `ChainRouter`, the per-chain `ChainHandler` actor (one tokio
+//! task owning consensus state), the `AdaptiveTimeoutManager`, the `Benchlist`,
+//! and the `ResourceTracker`/`Targeter`.
+//!
 //! All node IDs reaching a handler are **pre-authenticated** by the network
 //! layer (specs 05).
 
@@ -20,6 +25,7 @@
 
 pub mod common;
 pub mod error;
+pub mod networking;
 
 pub use common::engine::Engine;
 pub use common::error::AppError;
