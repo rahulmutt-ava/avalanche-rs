@@ -48,6 +48,7 @@ pub mod error;
 pub mod reward;
 pub mod signer;
 pub mod stakeable;
+pub mod state;
 pub mod txs;
 pub mod validators;
 
