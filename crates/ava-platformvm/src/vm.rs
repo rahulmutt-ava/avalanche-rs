@@ -45,6 +45,7 @@ use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
+use ava_vm::block::batched::{BatchedChainVm, INT_LEN};
 use ava_vm::block::{Block as VmBlock, ChainVm, StateSyncableVm};
 use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
@@ -555,6 +556,92 @@ impl ChainVm for PlatformVm {
     fn as_state_syncable(&self) -> Option<&dyn StateSyncableVm> {
         None
     }
+
+    /// The P-Chain implements [`BatchedChainVm`] so the bootstrapper (M4.27) can
+    /// bulk-fetch ancestry via `GetAncestors` and bulk-parse a peer's `Ancestors`
+    /// reply (Go `vms/platformvm/vm.go` embeds `block.BatchedChainVM`).
+    fn as_batched(&self) -> Option<&dyn BatchedChainVm> {
+        Some(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BatchedChainVm (the linear-bootstrap fetch/parse capability, M4.27).
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl BatchedChainVm for PlatformVm {
+    /// `GetAncestors` — return the byte representations of `[blk_id]` and its
+    /// ancestors over the accepted block store, newest first, bounded by
+    /// `max_blocks_num` / `max_blocks_size` / `max_retrieval_time` (Go
+    /// `vms/platformvm/vm.go::GetAncestors`, the byte-accounting mirrors the
+    /// engine fallback in `ava_vm::block::batched`).
+    async fn get_ancestors(
+        &self,
+        _token: &CancellationToken,
+        blk_id: Id,
+        max_blocks_num: usize,
+        max_blocks_size: usize,
+        max_retrieval_time: Duration,
+    ) -> VmResult<Vec<Vec<u8>>> {
+        let shared = self.shared().map_err(VmError::from)?;
+        let start = std::time::Instant::now();
+        let mgr = shared.manager.lock();
+        let state = mgr.state();
+
+        // Fetch the requested block; a missing block yields an empty response
+        // (signals the peer to stop asking this node).
+        let first = match state.get_block(blk_id) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let mut ancestors: Vec<Vec<u8>> = Vec::with_capacity(max_blocks_num.min(1024));
+        let mut total_len = first.len().saturating_add(INT_LEN);
+        let mut current =
+            Block::parse(crate::txs::Codec(), &first).map_err(|e| VmError::from(Error::from(e)))?;
+        ancestors.push(first);
+
+        let mut num_fetched = 1usize;
+        while num_fetched < max_blocks_num && start.elapsed() < max_retrieval_time {
+            let parent_id = current.parent_id();
+            let parent_bytes = match state.get_block(parent_id) {
+                Ok(bytes) => bytes,
+                // Missing parent stops the walk (e.g. below the local root).
+                Err(_) => break,
+            };
+            let new_len = total_len
+                .saturating_add(parent_bytes.len())
+                .saturating_add(INT_LEN);
+            if new_len > max_blocks_size {
+                break;
+            }
+            current = Block::parse(crate::txs::Codec(), &parent_bytes)
+                .map_err(|e| VmError::from(Error::from(e)))?;
+            ancestors.push(parent_bytes);
+            total_len = new_len;
+            num_fetched = num_fetched.saturating_add(1);
+        }
+
+        Ok(ancestors)
+    }
+
+    /// `BatchedParseBlock` — parse a batch of block byte representations into the
+    /// engine-facing [`VmBlock`]s (Go `vms/platformvm/vm.go::BatchedParseBlock`).
+    async fn batched_parse_block(
+        &self,
+        _token: &CancellationToken,
+        blks: &[Vec<u8>],
+    ) -> VmResult<Vec<Arc<dyn VmBlock>>> {
+        self.shared().map_err(VmError::from)?;
+        let mut blocks: Vec<Arc<dyn VmBlock>> = Vec::with_capacity(blks.len());
+        for bytes in blks {
+            let block = Block::parse(crate::txs::Codec(), bytes)
+                .map_err(|e| VmError::from(Error::from(e)))?;
+            blocks.push(self.wrap(&block).map_err(VmError::from)?);
+        }
+        Ok(blocks)
+    }
 }
 
 /// The next staker change time (Go `state.GetNextStakerChangeTime`): the
@@ -741,5 +828,318 @@ mod conformance {
 
         // The ValidatorState is exposed to the snow context.
         assert!(vm.validator_state().is_some());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod differential {
+    //! `differential::pchain_sync_to_tip` (M4.27 — TDD ENTRY POINT #2, height-0
+    //! subset): drive the M3 Snowman [`Bootstrapper`] end-to-end against a
+    //! recorded single-block frontier (= genesis), proving the linear-bootstrap
+    //! fetch→execute-forward loop accepts the genesis block and stops at height 0
+    //! (specs 19 §1–§2, §5; 08 §4.2).
+    //!
+    //! The height-0 case is special and simple: the recorded frontier IS the
+    //! genesis block, which the VM already holds as last-accepted after
+    //! `initialize`. The bootstrapper fetches the frontier via `GetAncestors`
+    //! (answered by the M4.27 [`BatchedChainVm`] impl over the block store),
+    //! recognizes it is at the local last-accepted height (the interval tree's
+    //! `add_block` declines it), executes the empty range, and hands off to
+    //! NormalOp. `last_accepted` remains the genesis id throughout.
+    //!
+    //! The full multi-block Fuji sync (chasing the tip) is M4.29; the recorded
+    //! Go state-hash oracle at height 0 is deferred (see `tests/PORTING.md`).
+
+    use std::collections::{BTreeMap, HashSet};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use ava_database::{DynDatabase, MemDb};
+    use ava_snow::acceptor::NoOpAcceptor;
+    use ava_snow::{ChainContext, ConsensusContext};
+    use ava_types::id::Id;
+    use ava_types::node_id::NodeId;
+    use ava_vm::app_sender::{AppSender, SendConfig};
+    use tokio::sync::Mutex as AsyncMutex;
+    use tokio_util::sync::CancellationToken;
+
+    use ava_engine::common::sender::{SendConfig as EngineSendConfig, Sender};
+    use ava_engine::snowman::bootstrap::{Bootstrapper, Config, Phase};
+
+    use super::*;
+
+    /// A no-op [`AppSender`] for the `initialize` call.
+    #[derive(Debug, Default)]
+    struct NoopAppSender;
+
+    #[async_trait]
+    impl AppSender for NoopAppSender {
+        async fn send_app_request(
+            &self,
+            _token: &CancellationToken,
+            _nodes: &HashSet<NodeId>,
+            _request_id: u32,
+            _bytes: Vec<u8>,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_response(
+            &self,
+            _token: &CancellationToken,
+            _node: NodeId,
+            _request_id: u32,
+            _bytes: Vec<u8>,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_error(
+            &self,
+            _token: &CancellationToken,
+            _node: NodeId,
+            _request_id: u32,
+            _code: i32,
+            _message: &str,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_gossip(
+            &self,
+            _token: &CancellationToken,
+            _config: SendConfig,
+            _bytes: Vec<u8>,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A minimal [`Sender`] that records the outbound `GetAncestors` so the test
+    /// can answer it; every other bootstrap send is a no-op (height-0 needs only
+    /// the fetch round-trip).
+    #[derive(Default)]
+    struct FetchSender {
+        get_ancestors: parking_lot::Mutex<Vec<(NodeId, u32, Id)>>,
+    }
+
+    impl FetchSender {
+        fn take_get_ancestors(&self) -> Vec<(NodeId, u32, Id)> {
+            std::mem::take(&mut self.get_ancestors.lock())
+        }
+    }
+
+    #[async_trait]
+    impl Sender for FetchSender {
+        fn send_get_state_summary_frontier(&self, _nodes: &HashSet<NodeId>, _req: u32) {}
+        fn send_state_summary_frontier(&self, _node: NodeId, _req: u32, _summary: Vec<u8>) {}
+        fn send_get_accepted_state_summary(
+            &self,
+            _nodes: &HashSet<NodeId>,
+            _req: u32,
+            _heights: &[u64],
+        ) {
+        }
+        fn send_accepted_state_summary(&self, _node: NodeId, _req: u32, _summary_ids: &[Id]) {}
+        fn send_get_accepted_frontier(&self, _nodes: &HashSet<NodeId>, _req: u32) {}
+        fn send_accepted_frontier(&self, _node: NodeId, _req: u32, _container_id: Id) {}
+        fn send_get_accepted(&self, _nodes: &HashSet<NodeId>, _req: u32, _ids: &[Id]) {}
+        fn send_accepted(&self, _node: NodeId, _req: u32, _ids: &[Id]) {}
+        fn send_get(&self, _node: NodeId, _req: u32, _container_id: Id) {}
+        fn send_get_ancestors(&self, node: NodeId, req: u32, container_id: Id) {
+            self.get_ancestors.lock().push((node, req, container_id));
+        }
+        fn send_put(&self, _node: NodeId, _req: u32, _container: Vec<u8>) {}
+        fn send_ancestors(&self, _node: NodeId, _req: u32, _containers: Vec<Vec<u8>>) {}
+        fn send_push_query(
+            &self,
+            _nodes: &HashSet<NodeId>,
+            _req: u32,
+            _container: Vec<u8>,
+            _requested_height: u64,
+        ) {
+        }
+        fn send_pull_query(
+            &self,
+            _nodes: &HashSet<NodeId>,
+            _req: u32,
+            _container_id: Id,
+            _requested_height: u64,
+        ) {
+        }
+        fn send_chits(
+            &self,
+            _node: NodeId,
+            _req: u32,
+            _preferred: Id,
+            _preferred_at_height: Id,
+            _accepted: Id,
+            _accepted_height: u64,
+        ) {
+        }
+        async fn send_app_request(
+            &self,
+            _nodes: &HashSet<NodeId>,
+            _req: u32,
+            _bytes: Vec<u8>,
+        ) -> ava_engine::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_response(
+            &self,
+            _node: NodeId,
+            _req: u32,
+            _bytes: Vec<u8>,
+        ) -> ava_engine::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_error(
+            &self,
+            _node: NodeId,
+            _req: u32,
+            _code: i32,
+            _msg: &str,
+        ) -> ava_engine::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_gossip(
+            &self,
+            _cfg: EngineSendConfig,
+            _bytes: Vec<u8>,
+        ) -> ava_engine::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn chain_ctx() -> Arc<ChainContext> {
+        Arc::new(ChainContext {
+            network_id: 1,
+            subnet_id: Id::EMPTY,
+            chain_id: Id::EMPTY,
+            node_id: NodeId::default(),
+            public_key: None,
+            network_upgrades: ava_version::upgrade::get_config(1),
+            x_chain_id: Id::EMPTY,
+            c_chain_id: Id::EMPTY,
+            avax_asset_id: Id::EMPTY,
+            chain_data_dir: std::path::PathBuf::new(),
+        })
+    }
+
+    /// Initializes a `PlatformVm` from the synthetic genesis, returning the VM,
+    /// the genesis block id, and the genesis block bytes (what a peer would serve
+    /// as the recorded height-0 frontier).
+    async fn init_vm() -> (PlatformVm, Id, Vec<u8>) {
+        let genesis = crate::genesis::test_synthetic_genesis();
+        let genesis_bytes = crate::genesis::marshal(&genesis).expect("marshal genesis");
+        let genesis_block = crate::genesis::genesis_block(&genesis_bytes).expect("genesis block");
+        let genesis_id = genesis_block.id();
+        let genesis_block_bytes = genesis_block.bytes().to_vec();
+
+        let mut vm = PlatformVm::new();
+        let token = CancellationToken::new();
+        let db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+        vm.initialize(
+            &token,
+            chain_ctx(),
+            db,
+            &genesis_bytes,
+            b"",
+            b"",
+            Vec::new(),
+            Arc::new(NoopAppSender),
+        )
+        .await
+        .expect("initialize");
+        (vm, genesis_id, genesis_block_bytes)
+    }
+
+    /// `pchain_sync_to_tip` (height-0 subset): the bootstrapper drives the VM
+    /// from a recorded single-block frontier (= genesis) through frontier
+    /// discovery → agreement → fetch → execute → handoff, ending at height 0 with
+    /// `last_accepted == genesis_id`.
+    #[tokio::test]
+    async fn pchain_sync_to_tip() {
+        let token = CancellationToken::new();
+        let (vm, genesis_id, genesis_block_bytes) = init_vm().await;
+
+        // Sanity: the recorded frontier IS the VM's last-accepted genesis block,
+        // and the M4.27 BatchedChainVm capability is exposed.
+        assert_eq!(
+            vm.last_accepted(&token).await.expect("last accepted"),
+            genesis_id
+        );
+        assert!(
+            ChainVm::as_batched(&vm).is_some(),
+            "P-Chain must implement BatchedChainVm for linear bootstrap"
+        );
+
+        // A single beacon reporting genesis as its accepted frontier.
+        let acceptor = Arc::new(NoOpAcceptor);
+        let ctx = Arc::new(ConsensusContext::new(
+            chain_ctx(),
+            "P".to_string(),
+            acceptor,
+            Arc::new(NoOpAcceptor),
+        ));
+        let sender = Arc::new(FetchSender::default());
+        let beacon = NodeId::from([10u8; 20]);
+        let mut beacons = BTreeMap::new();
+        beacons.insert(beacon, 1u64);
+
+        let vm = Arc::new(AsyncMutex::new(vm));
+        let cfg = Config {
+            subnet_id: Id::EMPTY,
+            ctx: ctx.clone(),
+            vm: Arc::clone(&vm),
+            sender: sender.clone(),
+            beacons,
+            token: token.clone(),
+        };
+        let mut boot = Bootstrapper::new(cfg);
+
+        // Start: enters Bootstrapping + asks the beacon for its frontier.
+        boot.start(0).await.expect("start");
+        assert_eq!(boot.phase(), Phase::DiscoveringFrontier);
+        assert_eq!(**ctx.state.load(), EngineState::Bootstrapping);
+
+        // The beacon reports genesis as both its frontier and its accepted set →
+        // weight threshold met → fetch the genesis ancestry.
+        boot.accepted_frontier(beacon, 1, genesis_id)
+            .await
+            .expect("accepted_frontier");
+        assert_eq!(boot.phase(), Phase::AgreeingFrontier);
+        boot.accepted(beacon, 2, &[genesis_id])
+            .await
+            .expect("accepted");
+
+        // The bootstrapper requested the genesis ancestry; serve the genesis
+        // block bytes (the recorded height-0 frontier).
+        let ga = sender.take_get_ancestors();
+        let (node, req, wanted) = ga
+            .into_iter()
+            .find(|(_, _, id)| *id == genesis_id)
+            .expect("GetAncestors for the genesis frontier");
+        assert_eq!(wanted, genesis_id);
+        boot.ancestors(node, req, std::slice::from_ref(&genesis_block_bytes))
+            .await
+            .expect("ancestors");
+
+        // The range (empty: genesis is at the local last-accepted height) executed
+        // and the node handed off to normal operation.
+        assert!(boot.is_finished(), "bootstrapper must hand off at height 0");
+        assert_eq!(boot.phase(), Phase::Finished);
+        assert_eq!(**ctx.state.load(), EngineState::NormalOp);
+
+        // last_accepted is still the genesis id, and the genesis block round-trips
+        // through the (post-bootstrap) VM.
+        let vm = vm.lock().await;
+        let last = vm.last_accepted(&token).await.expect("last accepted");
+        assert_eq!(
+            last, genesis_id,
+            "P-Chain bootstrap stops at the genesis id"
+        );
+        let blk = vm.get_block(&token, genesis_id).await.expect("get genesis");
+        assert_eq!(blk.id(), genesis_id);
+        assert_eq!(blk.height(), 0);
+        assert_eq!(blk.bytes(), genesis_block_bytes.as_slice());
     }
 }

@@ -724,6 +724,7 @@ dependencies = [
  "ava-codec-derive",
  "ava-crypto",
  "ava-database",
+ "ava-engine",
  "ava-secp256k1fx",
  "ava-snow",
  "ava-types",
