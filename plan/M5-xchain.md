@@ -483,11 +483,39 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.17: Mempool wiring + block Builder
 **Crate:** ava-avm  ·  **Depends on:** M5.16; M3 (`ava_vm::mempool::Mempool`)  ·  **Spec:** 09 §7.1; 07 §7 (generic mempool); 00 §6.1 (pop order = total order identical to Go)
 **Files:** `crates/ava-avm/src/mempool.rs`, `crates/ava-avm/src/block/builder.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/builder.rs`: add N verified txs to the mempool; `build_block` drains in mempool order, re-verifies each against a running `Diff`, drops + records failures, and produces `StandardBlock{parent=last_accepted, height=parent.height+1, time=max(parent.time, now), txs}`; proptest `mempool_pop_order_total` asserts pop order is a stable total order independent of internal map layout (00 §6.1); byte-cap enforced (packs until `maxMempoolSize`).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm builder` → fails.
-- [ ] **Step 3 — Green:** `mempool.rs`: `MempoolTx for Tx` (`id=tx_id`, `size=bytes.len()`, `inputs`), `indexmap`-backed via M3 generic `Mempool` + dropped-reason LRU (09 §7.1). `builder.rs`: drain `peek`/`remove` in order, re-verify on `Diff`, pack to size cap, build the block with clamped-monotonic `time` (09 §7.1).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm builder`; commit regressions.
-- [ ] **Step 5 — Commit:** `avm: mempool + block builder (M5.17)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/builder.rs`: add N verified txs to the mempool; `build_block` drains in mempool order, re-verifies each against a running `Diff`, drops + records failures, and produces `StandardBlock{parent=last_accepted, height=parent.height+1, time=max(parent.time, now), txs}`; proptest `mempool_pop_order_total` asserts pop order is a stable total order independent of internal map layout (00 §6.1); byte-cap enforced (packs until `maxMempoolSize`).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm builder` → fails.
+- [x] **Step 3 — Green:** `mempool.rs`: `MempoolTx for Tx` (`id=tx_id`, `size=bytes.len()`, `inputs`), `indexmap`-backed via M3 generic `Mempool` + dropped-reason LRU (09 §7.1). `builder.rs`: drain `peek`/`remove` in order, re-verify on `Diff`, pack to size cap, build the block with clamped-monotonic `time` (09 §7.1).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm builder`; commit regressions.
+- [x] **Step 5 — Commit:** `avm: mempool + block builder (M5.17)`
+
+> **As-built (M5.17, 2026-06-07, commits `360d37f`+`24d156b`+`14c665f`, ff-merged to main):**
+> 110 ava-avm tests green; clippy `-D warnings` + fmt clean. Implementer (worktree branched
+> from verified HEAD) → spec review → code-quality review → fixes, per
+> subagent-driven-development.
+> - **Plan-text deviation (controller-verified):** there is **NO generic `ava_vm::mempool::Mempool`**
+>   and no `indexmap` dependency in the workspace. `mempool.rs` instead MIRRORS the concrete
+>   P-Chain precedent `crates/ava-platformvm/src/txs/mempool.rs` verbatim: `ava_utils::linked::LinkedHashmap`
+>   for insertion-ordered `tx_id→Tx` + `tx_id→consumed-input-id HashSet`, `MAX_TX_SIZE` (64 KiB) +
+>   `MAX_MEMPOOL_SIZE` (64 MiB) drop-on-full byte budget, conflict-free via `has_overlap`, and a
+>   **module-local** `enum Error { DuplicateTx, TxTooLarge, MempoolFull, ConflictsWithOtherTx }`
+>   (these are mempool-local "drop, no divergence" errors, NOT added to `crate::error::Error`).
+>   API = `new/add/get/contains/remove/peek/len/is_empty/iterate/snapshot` + private `has_overlap`.
+>   No `MempoolTx` trait (the P-Chain doesn't define one; `Tx` is used directly).
+> - **`builder.rs`:** `build_block(BuildBlockParams) -> Result<BuildBlockOutput>` (params bundled in a
+>   struct to dodge `clippy::too_many_arguments`; `BuildBlockOutput { block: Block, dropped: Vec<(Id, Error)> }`).
+>   Lays a fresh `Diff` on the parent `Chain`, drains candidate txs in FIFO order through the SAME
+>   running `Diff` (Syntactic→Semantic→`Executor::execute`, the exact loop from `block/executor.rs::verify`),
+>   so an **intra-block double-spend is caught by semantic verify** (2nd tx's `diff.get_utxo` hits the
+>   1st tx's executor tombstone → `Error::Database(NotFound)`) and the tx is dropped+recorded
+>   (`tracing::warn!` per drop + returned in `dropped`). Packs to `TARGET_BLOCK_SIZE` (128 KiB,
+>   `break`-on-overflow mirroring P-Chain `pack_decision_txs`). `StandardBlock{parent_id, height=
+>   parent_height.saturating_add(1), time=unix_secs(max(parent_time, now)), txs}`, initialized via
+>   `Codec()`. Returns `Error::NoPendingBlocks` (new variant) when nothing packs. X-Chain has no
+>   reward/proposal/advance-time/staker machinery, so the builder is the P-Chain one minus all of that.
+> - Added `tracing` workspace dep to `ava-avm/Cargo.toml`. New err variant `NoPendingBlocks`.
+> - **Snowman `Block` trait shim still deferred to M5.19** (concurrency model); the builder + mempool
+>   are plain structs the VM will own behind its own lock.
 
 ### Task M5.18: Tx gossip + Atomic app-handler switch
 **Crate:** ava-avm  ·  **Depends on:** M5.17; M3/M-network (`ava_network::p2p::gossip` push/pull, Bloom Set)  ·  **Spec:** 09 §8; 05 (gossip machinery)
