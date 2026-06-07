@@ -9,6 +9,42 @@ repository.workspace = true
 publish.workspace = true
 description = "Avalanche node (Rust) — drop-in replacement for avalanchego."
 
+[lib]
+name = "avalanchers"
+path = "src/lib.rs"
+
+[[bin]]
+name = "avalanchers"
+path = "src/main.rs"
+
 [dependencies]
 ava-version = { path = "../ava-version" }
 clap = { workspace = true }
+
+# In-process chain-manager assembly (M3.28): build the VmManager, register the
+# built-in no-op test-VM factory, and create one Snowman chain through the full
+# create_snowman_chain pipeline. `ava-vm/testutil` supplies the in-memory no-op
+# `TestVm` reused as the inner VM (no production no-op VM exists yet).
+ava-chains = { path = "../ava-chains" }
+ava-engine = { path = "../ava-engine" }
+ava-snow = { path = "../ava-snow" }
+ava-types = { path = "../ava-types" }
+ava-utils = { path = "../ava-utils" }
+ava-validators = { path = "../ava-validators" }
+ava-proposervm = { path = "../ava-proposervm" }
+ava-database = { path = "../ava-database" }
+ava-crypto = { path = "../ava-crypto" }
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
+
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
+tokio-util = { workspace = true }
+prometheus = { workspace = true }
+# Staking-cert generation + ECDSA P-256 signing for the proposervm identity.
+rcgen = { workspace = true }
+ring = { workspace = true }
+rustls-pemfile = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
