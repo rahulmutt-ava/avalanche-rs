@@ -622,33 +622,81 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.26: Mempool + network tx gossip
 **Crate:** ava-platformvm  ·  **Depends on:** M4.3, M4.25  ·  **Spec:** 08 §4.3 (mempool), §1 (network.rs); 05 (p2p Gossip)
 **Files:** `crates/ava-platformvm/src/txs/mempool.rs`, `crates/ava-platformvm/src/network.rs`.
-- [ ] **Step 1 — Red:** Add `conformance::mempool_dedupe_fifo` (FIFO order, drop-on-full, dedupe by tx ID) and `prop::mempool_no_loss` (add/remove idempotence).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm mempool_dedupe_fifo` → fails.
-- [ ] **Step 3 — Green:** `mempool.rs`: a `gossip::Gossipable` tx pool (FIFO + drop-on-full, deduped by tx ID), drained deterministically by the builder (M4.25). `network.rs`: tx gossip over `ava-network` p2p `Gossip` (08 §4.3). For read-only sync this need not issue txs, but the handler must accept and dedupe inbound gossip without divergence.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm mempool_dedupe_fifo prop::mempool_no_loss` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: mempool + p2p tx gossip`
+- [x] **Step 1 — Red:** Add `conformance::mempool_dedupe_fifo` (FIFO order, drop-on-full, dedupe by tx ID) and `prop::mempool_no_loss` (add/remove idempotence).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm mempool_dedupe_fifo` → fails.
+- [x] **Step 3 — Green:** `mempool.rs`: a `gossip::Gossipable` tx pool (FIFO + drop-on-full, deduped by tx ID), drained deterministically by the builder (M4.25). `network.rs`: tx gossip over `ava-network` p2p `Gossip` (08 §4.3). For read-only sync this need not issue txs, but the handler must accept and dedupe inbound gossip without divergence.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm mempool_dedupe_fifo prop::mempool_no_loss` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: mempool + p2p tx gossip`
+
+> **As-built (M4.26):** `txs/mempool.rs` ports the *generic* `vms/txs/mempool` base (not the Etna gas-priced
+> `platformvm/txs/mempool` — out of scope for read-only sync): FIFO via `ava_utils::linked::LinkedHashmap`
+> (Go `linked.Hashmap` analog — **no new external crate / no Cargo.toml change**), dedupe by tx id
+> (re-add → `DuplicateTx`, position preserved), **drop-on-full** by byte budget (`MAX_MEMPOOL_SIZE` 64 MiB summing
+> each tx's serialized `size()`; per-tx `MAX_TX_SIZE` 64 KiB; overflow → `MempoolFull`, **never evicts**),
+> conflict rejection on UTXO input-id overlap (`ConflictsWithOtherTx`). Public API `new/add/get/contains/remove/
+> peek/len/is_empty/iterate/snapshot`. Errors are a **module-local `txs::mempool::Error`** (admission-policy
+> outcomes, not consensus errors — not in `error.rs`). `network.rs`: `TxGossipHandler::handle_gossiped_tx(&mut
+> Mempool, &impl TxVerifier, Tx) -> HandleOutcome` (dedupe→verify-shape→admit, every drop divergence-free) with a
+> local `TxVerifier`/`SyntacticVerifier` seam. **VM placeholder SWAPPED:** `vm.rs` `mempool: Mutex<Vec<Tx>>` →
+> `Mutex<Mempool>` (build_block drains via `snapshot()` FIFO; `wait_for_event` uses `is_empty()`). **Deferred:**
+> the real `ava-network` p2p transport (`AppGossip` framing, bloom-pull, peer fan-out — `ava-network` exposes no
+> generic Gossip framework yet); a follow-up wires it to call `handle_gossiped_tx`. 113 tests green; clippy/fmt
+> clean. (Integrated with M4.27/M4.28: 121 tests green on merged tree.)
 
 ---
 
 ### Task M4.27: Bootstrap wiring + sync to genesis height (TDD entry point #2)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.25  ·  **Spec:** 19 §1–§2 (linear bootstrap), §5 (P-Chain linear); 08 §4.2 (acceptor)
 **Files:** `crates/ava-platformvm/tests/bootstrap_genesis.rs`; integration glue in `ava-engine` bootstrap config wiring (from M3) consumed here.
-- [ ] **Step 1 — Red:** Add `differential::pchain_sync_to_tip` (height-0 case — the TDD ENTRY POINT #2): boot the engine bootstrap loop (M3) against a recorded single-block frontier = genesis; assert the VM's `last_accepted == genesis_id` and state hash == recorded Go value at height 0. This proves the bootstrap loop end-to-end before chasing the tip.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm pchain_sync_to_tip` → fails.
-- [ ] **Step 3 — Green:** Wire `PlatformVm` into the M3 engine bootstrapper (19 §2.2): provide `batched_parse_block` (non-verifying acceptor path, M4.20), `last_accepted`, `get_ancestors`/getter server answers (19 §2.3), and `set_state(Bootstrapping)`. Confirm the linear-bootstrap fetch→execute-forward loop accepts the genesis block and stops at height 0 against the recorded frontier.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm pchain_sync_to_tip` (height-0 subset) green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: bootstrap wiring + sync to genesis height`
+- [x] **Step 1 — Red:** Add `differential::pchain_sync_to_tip` (height-0 case — the TDD ENTRY POINT #2): boot the engine bootstrap loop (M3) against a recorded single-block frontier = genesis; assert the VM's `last_accepted == genesis_id` and state hash == recorded Go value at height 0. This proves the bootstrap loop end-to-end before chasing the tip.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm pchain_sync_to_tip` → fails.
+- [x] **Step 3 — Green:** Wire `PlatformVm` into the M3 engine bootstrapper (19 §2.2): provide `batched_parse_block` (non-verifying acceptor path, M4.20), `last_accepted`, `get_ancestors`/getter server answers (19 §2.3), and `set_state(Bootstrapping)`. Confirm the linear-bootstrap fetch→execute-forward loop accepts the genesis block and stops at height 0 against the recorded frontier.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm pchain_sync_to_tip` (height-0 subset) green.
+- [x] **Step 5 — Commit:** `ava-platformvm: bootstrap wiring + sync to genesis height`
+
+> **As-built (M4.27):** Added **`impl BatchedChainVm for PlatformVm`** (`vm.rs`): `get_ancestors` walks the
+> accepted block store newest-first (re-parsing each block to follow `parent_id`, byte-accounting with
+> `INT_LEN`/`max_blocks_num`/`max_blocks_size`/`max_retrieval_time` bounds, missing-block→empty,
+> missing-parent→break); `batched_parse_block` via `Block::parse` + `wrap()`; `ChainVm::as_batched()` →
+> `Some(self)`. **Used the FULL real M3 `Bootstrapper`** (the `ava-engine` `tests/bootstrap.rs` + `tests/support`
+> harness was the template): builds a `Config`/`ConsensusContext` with one beacon + a minimal recording `Sender`,
+> drives `start → accepted_frontier → accepted → ancestors` against a single-block frontier (= genesis); the
+> interval tree declines the height-0 block (already at local last-accepted), `execute` runs the empty range, node
+> hands off to NormalOp; asserts `last_accepted == genesis_id` + `as_batched().is_some()` + genesis round-trips.
+> **No `ava-engine` src change** (existing public surface only); `ava-engine` added as a **dev-dependency** (no
+> cycle). **Test lives inline in `vm.rs`** (module `differential`), not `tests/bootstrap_genesis.rs`, because it
+> needs `crate::genesis::test_synthetic_genesis` (`#[cfg(test)] pub(crate)`, unavailable to integration tests) —
+> same M4.25 precedent; dev-deps are available to inline `#[cfg(test)]` mods. 108 tests green; clippy/fmt clean.
+> **Deferred:** Fuji multi-block sync / chasing-the-tip = **M4.29**; recorded Go height-0 state-hash oracle deferred
+> (no extraction harness — M4.24 precedent; PORTING.md row). (Integrated with M4.26/M4.28: 121 tests green.)
 
 ---
 
 ### Task M4.28: `service.rs` JSON-RPC (read methods)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.25, M4.21  ·  **Spec:** 08 §9 (service.go method set), §1; 14 (API reference); 09 status
 **Files:** `crates/ava-platformvm/src/service.rs`, `crates/ava-platformvm/src/status.rs`, `crates/ava-platformvm/src/client.rs`.
-- [ ] **Step 1 — Red:** Add `conformance::service_get_current_validators` asserting `getCurrentValidators` (incl. L1 validators) returns the sorted set matching a recorded Go JSON response, and `getHeight`/`getBlock`/`getBlockByHeight`/`getTimestamp`/`getCurrentSupply` shapes match.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm service_get_current_validators` → fails.
-- [ ] **Step 3 — Green:** Port the read-relevant `service.go` methods (08 §9): `getHeight`, `getCurrentValidators`, `getL1Validator`, `getCurrentSupply`, `getTimestamp`, `getBlock`, `getBlockByHeight`, `getTx`, `getTxStatus`, `getSubnet(s)`, `validatedBy`/`validates`, `getValidatorsAt`/`getAllValidatorsAt`, `sampleValidators`, `getFeeState`/`getValidatorFeeState`. JSON address encodings bech32 (`P-…`), BLS keys hex (`0x…`). `status.rs` ports the tx-status enum. `client.rs` typed async wrappers (`reqwest`). Served via `ava-api` (12); deterministic sort on `getCurrentValidators` (00 §6.1).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm service_get_current_validators` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: service.rs JSON-RPC read methods + client`
+- [x] **Step 1 — Red:** Add `conformance::service_get_current_validators` asserting `getCurrentValidators` (incl. L1 validators) returns the sorted set matching a recorded Go JSON response, and `getHeight`/`getBlock`/`getBlockByHeight`/`getTimestamp`/`getCurrentSupply` shapes match.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm service_get_current_validators` → fails.
+- [x] **Step 3 — Green:** Port the read-relevant `service.go` methods (08 §9): `getHeight`, `getCurrentValidators`, `getL1Validator`, `getCurrentSupply`, `getTimestamp`, `getBlock`, `getBlockByHeight`, `getTx`, `getTxStatus`, `getSubnet(s)`, `validatedBy`/`validates`, `getValidatorsAt`/`getAllValidatorsAt`, `sampleValidators`, `getFeeState`/`getValidatorFeeState`. JSON address encodings bech32 (`P-…`), BLS keys hex (`0x…`). `status.rs` ports the tx-status enum. `client.rs` typed async wrappers (`reqwest`). Served via `ava-api` (12); deterministic sort on `getCurrentValidators` (00 §6.1).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm service_get_current_validators` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: service.rs JSON-RPC read methods + client`
+
+> **As-built (M4.28):** `service.rs` `Service<D>` (holds `Arc<State<D>>` + `Arc<PChainValidatorManager<D>>` +
+> `network_id` for the bech32 HRP) implements the read surface over live seams: `getHeight`, `getCurrentSupply`,
+> `getTimestamp`, `getFeeState`/`getValidatorFeeState`, `getCurrentValidators` (**includes L1 validators**, sorted
+> by validation id via the manager's `BTreeMap`), `getL1Validator`, `getValidatorsAt`, `validatedBy`/`validates`,
+> `getTxStatus`, `getTx`, `getBlock`, `getBlockByHeight`. `status.rs` = `Status` enum (Go discriminants
+> Unknown=0/Committed=4/Aborted=5/Processing=6/Dropped=8, PascalCase JSON) + `BlockchainStatus`. `client.rs` = typed
+> async wrappers over a `Transport` trait seam (**reqwest HTTP transport deferred to ava-api M8/M12**; a
+> `StubTransport` exercises encode/decode round-trips in tests). Encodings match Go: avajson quoted-string ints,
+> `Id`/`NodeId` CB58/`NodeID-`, hex `0x…` compressed BLS keys, RFC3339 timestamps, bech32 `P-…` via
+> `ava_crypto::address::format`. **`ava-api` crate does NOT exist yet** → service implemented in-crate, NO HTTP
+> server wired (M8/M12). +`error.rs` `Error::Service(String)`; crate `Cargo.toml` promoted `serde`+`hex` to deps.
+> **Deferred (PORTING.md rows):** `getCurrentValidators` owner/delegator/reward/uptime/signer fields, `Processing`/
+> dropped-reason tx-status paths, `sampleValidators`/`getAllValidatorsAt`/`getSubnet(s)`, fee *price* field (dynamic-
+> fee-config seam), and the exact-Go JSON golden (no recorded vector — M4.24 precedent; shape+sort+encodings asserted
+> instead). `issueTx`/write methods omitted (read-only sync). 114 tests green; clippy/fmt clean. (Integrated with
+> M4.26/M4.27: 121 tests green on merged tree.)
 
 ---
 
