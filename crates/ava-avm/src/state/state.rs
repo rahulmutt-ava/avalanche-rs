@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ava_database::{
-    Database, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb, VersionDb,
+    Batch, BatchOps, Database, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb, VersionDb,
 };
 use ava_types::id::Id;
 
@@ -156,6 +156,20 @@ impl<D: Database> State<D> {
     pub fn commit(&self) -> Result<()> {
         self.db.commit()?;
         Ok(())
+    }
+
+    /// `CommitBatch` — snapshot the uncommitted overlay ops into a [`BatchOps`]
+    /// **without writing them**. The caller hands this to
+    /// [`SharedMemory::apply`] so the state commit and the atomic-memory
+    /// write share one underlying DB write (Go `state.CommitBatch`, 27 §2.2).
+    ///
+    /// # Errors
+    /// Returns [`Error::Database`] if the versiondb is closed.
+    pub fn commit_batch_ops(&self) -> Result<BatchOps> {
+        let version_batch = self.db.commit_batch().map_err(Error::Database)?;
+        let mut ops = BatchOps::new();
+        version_batch.replay(&mut ops).map_err(Error::Database)?;
+        Ok(ops)
     }
 
     /// `Abort` — discard every buffered (uncommitted) mutation.

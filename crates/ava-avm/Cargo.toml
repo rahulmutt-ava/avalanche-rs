@@ -43,6 +43,7 @@ rstest = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 hex = { workspace = true }
+parking_lot = { workspace = true }
 
 [lints]
 workspace = true

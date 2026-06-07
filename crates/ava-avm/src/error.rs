@@ -190,6 +190,11 @@ pub enum Error {
     #[error("missing parent state")]
     MissingParentState,
 
+    /// A block was asked to `accept`/`reject` but it was never `verify`-ed, so no
+    /// cached `Diff` exists for it (specs 09 §7).
+    #[error("block state not found (block not verified)")]
+    BlockNotVerified,
+
     // ---- folded-in shared errors -----------------------------------------
     /// Linear-codec marshal/unmarshal failure.
     #[error(transparent)]

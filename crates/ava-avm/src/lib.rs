@@ -34,6 +34,8 @@ use assert_matches as _;
 #[cfg(test)]
 use hex as _;
 #[cfg(test)]
+use parking_lot as _;
+#[cfg(test)]
 use pretty_assertions as _;
 #[cfg(test)]
 use proptest as _;

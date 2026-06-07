@@ -27,9 +27,11 @@ use ava_types::id::Id;
 
 use crate::txs::{CODEC_VERSION, Tx};
 
+pub mod executor;
 pub mod parser;
 pub mod standard_block;
 
+pub use executor::{BlockManager, BlockManagerConfig};
 pub use parser::parse;
 pub use standard_block::StandardBlock;
 

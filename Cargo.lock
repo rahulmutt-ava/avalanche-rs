@@ -484,6 +484,7 @@ dependencies = [
  "ava-vm",
  "bytes",
  "hex",
+ "parking_lot",
  "pretty_assertions",
  "proptest",
  "rstest",
