@@ -32,8 +32,6 @@ use ava_codec_derive as _;
 #[cfg(test)]
 use assert_matches as _;
 #[cfg(test)]
-use hex as _;
-#[cfg(test)]
 use pretty_assertions as _;
 #[cfg(test)]
 use proptest as _;
@@ -50,6 +48,7 @@ pub mod mempool;
 pub mod network;
 pub mod nftfx;
 pub mod propertyfx;
+pub mod service;
 pub mod state;
 pub mod txs;
 pub mod vm;

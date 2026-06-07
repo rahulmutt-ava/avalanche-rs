@@ -217,6 +217,12 @@ pub enum Error {
     #[error("invalid genesis bytes")]
     InvalidGenesis,
 
+    // ---- service / API layer (M5.21) -------------------------------------
+    /// A generic service-layer error (used by `service.rs` typed handlers for
+    /// conditions that do not map to a protocol-level sentinel).
+    #[error("service error: {0}")]
+    Service(String),
+
     // ---- folded-in shared errors -----------------------------------------
     /// Linear-codec marshal/unmarshal failure.
     #[error(transparent)]

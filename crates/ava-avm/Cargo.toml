@@ -47,6 +47,8 @@ tokio-util = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# hex: `0x<hex>` encoding of tx/block bytes in service.rs (Go `formatting.Hex`).
+hex = { workspace = true }
 # NOTE (as-built): `ava-api` does not exist yet (served via M8/M12). See plan/M5.
 
 [dev-dependencies]
