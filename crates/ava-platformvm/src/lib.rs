@@ -49,6 +49,7 @@ pub mod reward;
 pub mod signer;
 pub mod stakeable;
 pub mod txs;
+pub mod validators;
 
 pub use error::{Error, Result};
 
