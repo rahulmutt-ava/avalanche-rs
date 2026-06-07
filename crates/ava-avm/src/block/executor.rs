@@ -80,6 +80,13 @@ struct BlockState {
     atomic_requests: BTreeMap<Id, Requests>,
     /// The block's Unix-second timestamp (from [`Block::timestamp`]).
     timestamp: u64,
+    /// The block's height (`parent_height + 1`), cached for the VM's builder so a
+    /// child can be built on an unaccepted, verified parent (M5.19).
+    height: u64,
+    /// The block's raw codec bytes, so the VM's `get_block` can return a
+    /// processing (verified-but-unaccepted) block without a persisted store
+    /// entry (M5.19).
+    bytes: Vec<u8>,
 }
 
 /// Configuration injected into a [`BlockManager`] at construction.
@@ -111,6 +118,10 @@ pub struct BlockManager<D: Database> {
     blk_id_to_state: BTreeMap<Id, BlockState>,
     /// The id of the most-recently accepted block.
     last_accepted: Id,
+    /// The height of the most-recently accepted block (genesis is 0). Tracked so
+    /// the VM's builder can resolve a parent height without re-parsing the
+    /// accepted block bytes (M5.19).
+    last_accepted_height: u64,
 }
 
 impl<D: Database + 'static> BlockManager<D> {
@@ -121,6 +132,14 @@ impl<D: Database + 'static> BlockManager<D> {
     pub fn new(state: State<D>, config: BlockManagerConfig) -> Self {
         let last_accepted = state.get_last_accepted();
         let base_view = state.snapshot();
+        // Derive the last-accepted height from the persisted block bytes (the
+        // genesis block is at height 0; a freshly-seeded chain reads it back
+        // here). A missing/unparseable block defaults to 0.
+        let last_accepted_height = state
+            .get_block(last_accepted)
+            .ok()
+            .and_then(|bytes| Block::parse(crate::txs::codec::Codec(), &bytes).ok())
+            .map_or(0, |b| b.height());
         Self {
             state,
             base_view,
@@ -129,7 +148,66 @@ impl<D: Database + 'static> BlockManager<D> {
             shared_memory: config.shared_memory,
             blk_id_to_state: BTreeMap::new(),
             last_accepted,
+            last_accepted_height,
         }
+    }
+
+    /// The executor [`Backend`] (chain ids, fee schedule, fx count, bootstrapped
+    /// flag) — exposed to the VM's builder (M5.19).
+    #[must_use]
+    pub fn backend(&self) -> &Backend {
+        &self.backend
+    }
+
+    /// The fx [`Dispatch`] table — exposed to the VM's builder (M5.19).
+    #[must_use]
+    pub fn dispatch(&self) -> &Dispatch {
+        &self.dispatch
+    }
+
+    /// The height of `blk_id`, resolved from the processing-block cache or — when
+    /// `blk_id` is the last-accepted block — the tracked accepted height (M5.19).
+    ///
+    /// # Errors
+    /// Returns [`Error::MissingParentState`] if `blk_id` is neither a cached
+    /// processing block nor the last-accepted block.
+    pub fn height_of(&self, blk_id: Id) -> Result<u64> {
+        if let Some(s) = self.blk_id_to_state.get(&blk_id) {
+            return Ok(s.height);
+        }
+        if blk_id == self.last_accepted {
+            return Ok(self.last_accepted_height);
+        }
+        Err(Error::MissingParentState)
+    }
+
+    /// The raw codec bytes of a processing (verified-but-unaccepted) block, if it
+    /// is in the diff cache (M5.19). Accepted blocks are read from the persisted
+    /// block store instead.
+    #[must_use]
+    pub fn processing_block_bytes(&self, blk_id: Id) -> Option<Vec<u8>> {
+        self.blk_id_to_state.get(&blk_id).map(|s| s.bytes.clone())
+    }
+
+    /// Replaces the executor backend + fx dispatch with their bootstrapped
+    /// variants (Go `vm.onBootstrapped`; M5.19). Called by the VM on the
+    /// `set_state(NormalOp)` transition.
+    pub fn set_bootstrapped(&mut self, backend: Backend, dispatch: Dispatch) {
+        self.backend = backend;
+        self.dispatch = dispatch;
+    }
+
+    /// **Test/genesis-seed helper** — mutate the persisted [`State`] directly and
+    /// commit, then refresh the frozen base view (M5.19; the full Go genesis-asset
+    /// alloc is the M8/`ava-genesis` follow-up).
+    ///
+    /// # Errors
+    /// Returns an [`Error::Database`] if the commit fails.
+    pub fn seed_state(&mut self, seed: impl FnOnce(&mut State<D>)) -> Result<()> {
+        seed(&mut self.state);
+        self.state.commit()?;
+        self.base_view = self.state.snapshot();
+        Ok(())
     }
 
     /// The id of the most-recently accepted block.
@@ -204,6 +282,8 @@ impl<D: Database + 'static> BlockManager<D> {
                 on_accept: Arc::new(diff),
                 atomic_requests: merged_atomic,
                 timestamp,
+                height: block.height(),
+                bytes: block.bytes().to_vec(),
             },
         );
         Ok(())
@@ -246,6 +326,7 @@ impl<D: Database + 'static> BlockManager<D> {
             .unwrap_or(UNIX_EPOCH);
         self.state.set_timestamp(ts);
         self.last_accepted = blk_id;
+        self.last_accepted_height = block.height();
 
         // Atomic co-commit: if the block has cross-chain requests, hand the
         // not-yet-written state batch to SharedMemory::apply so both writes

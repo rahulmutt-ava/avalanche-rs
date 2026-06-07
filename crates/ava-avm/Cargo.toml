@@ -35,9 +35,19 @@ tracing = { workspace = true }
 # UTXO/tx/block/singleton state stores: VersionDb over base + five PrefixDb
 # sub-stores + the Diff layer (specs 09 §5); consumed by the M5.10 `state` module.
 ava-database = { path = "../ava-database" }
-# NOTE (as-built): `ava-network` (Wave 5 gossip, M5.18) is pulled in by its owning
-# task to keep the Wave-0 build lean; `ava-api` does not exist yet (served via
-# M8/M12). See plan/M5.
+# The engine-facing `Block` trait (verify/accept/reject) + `ChainContext` /
+# `EngineState` the VM (M5.19) returns/consumes are owned by `ava-snow`.
+ava-snow = { path = "../ava-snow" }
+# `network_upgrades` (`UpgradeConfig`) carried on the `ChainContext` (M5.19).
+ava-version = { path = "../ava-version" }
+# The VM assembly (M5.19): async trait impls, the engine cancellation token, the
+# shared mempool guard, and the JSON `config_bytes` parse.
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# NOTE (as-built): `ava-api` does not exist yet (served via M8/M12). See plan/M5.
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -45,7 +55,10 @@ rstest = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 hex = { workspace = true }
-parking_lot = { workspace = true }
+# The generic VM-conformance battery (`vm_conformance!`, 07 §10) + the async
+# runtime the battery's `#[tokio::test]`s and the M5.19 unit tests run on.
+ava-vm = { path = "../ava-vm", features = ["testutil"] }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

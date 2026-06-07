@@ -34,8 +34,6 @@ use assert_matches as _;
 #[cfg(test)]
 use hex as _;
 #[cfg(test)]
-use parking_lot as _;
-#[cfg(test)]
 use pretty_assertions as _;
 #[cfg(test)]
 use proptest as _;
@@ -43,7 +41,9 @@ use proptest as _;
 use rstest as _;
 
 pub mod block;
+pub mod config;
 pub mod error;
+pub mod factory;
 pub mod fx;
 pub mod fx_index;
 pub mod mempool;
@@ -52,10 +52,14 @@ pub mod nftfx;
 pub mod propertyfx;
 pub mod state;
 pub mod txs;
+pub mod vm;
 
+pub use config::Config;
 pub use error::{Error, Result};
+pub use factory::AvmFactory;
 pub use fx_index::FxIndex;
 pub use txs::{
     BaseTx, CreateAssetTx, Credential, ExportTx, FxCredential, FxOperation, ImportTx, InitialState,
     Operation, OperationTx, Tx, UnsignedTx,
 };
+pub use vm::AvmVm;

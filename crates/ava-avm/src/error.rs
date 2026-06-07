@@ -202,6 +202,21 @@ pub enum Error {
     #[error("no pending blocks")]
     NoPendingBlocks,
 
+    // ---- VM assembly (M5.19) ---------------------------------------------
+    /// The VM was driven before [`initialize`](crate::vm::AvmVm) ran (no shared
+    /// core yet). Mirrors the P-Chain `NotInitialized` guard.
+    #[error("vm not initialized")]
+    NotInitialized,
+    /// The engine-supplied JSON `config_bytes` failed to decode into a
+    /// [`Config`](crate::config::Config) (`vms/avm` config parse, specs 09 §6).
+    #[error("invalid config bytes: {0}")]
+    Config(String),
+    /// The `genesis_bytes` handed to [`initialize`](crate::vm::AvmVm) were too
+    /// short to carry the synthetic stop-vertex id + timestamp seed (specs 09
+    /// §1; the full Go genesis-asset format is the M8/`ava-genesis` follow-up).
+    #[error("invalid genesis bytes")]
+    InvalidGenesis,
+
     // ---- folded-in shared errors -----------------------------------------
     /// Linear-codec marshal/unmarshal failure.
     #[error(transparent)]
@@ -213,4 +228,36 @@ pub enum Error {
     /// from the state stores (M5.10, specs 09 §5).
     #[error(transparent)]
     Database(#[from] ava_database::error::Error),
+}
+
+// The `ChainVm`/`Block` trait surfaces return `ava_vm::Error` / `ava_snow::Error`
+// respectively; map the X-Chain error onto those crates' (closed, non-exhaustive)
+// enums. The orphan rule permits these `From` impls because the source type is
+// local. Mirrors the `ava-platformvm` / `ava-proposervm` precedent (their
+// `error.rs`).
+//
+// Neither `ava_vm::Error` nor `ava_snow::Error` exposes a free-form `Other`
+// variant, so a `database.ErrNotFound` round-trips exactly to
+// [`ava_vm::error::Error::NotFound`] (the `get_block` / `get_block_id_at_height`
+// contract the conformance battery asserts), while every other X-Chain error
+// collapses onto the nearest carrying variant.
+impl From<Error> for ava_vm::error::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Database(ava_database::error::Error::NotFound) => ava_vm::error::Error::NotFound,
+            // No generic string variant exists on `ava_vm::Error`; surface a
+            // stable, descriptive static message (the detailed message stays on
+            // the X-Chain log path, not the engine-facing error).
+            _ => ava_vm::error::Error::InvalidComponent("avm vm/build error"),
+        }
+    }
+}
+
+impl From<Error> for ava_snow::error::Error {
+    fn from(e: Error) -> Self {
+        // `ava_snow::Error::ParametersInvalid(String)` is the only string-carrying
+        // variant; reuse it to preserve the X-Chain error message on the critical
+        // verify/accept path (a returned `Err` halts the chain).
+        ava_snow::error::Error::ParametersInvalid(format!("avm: {e}"))
+    }
 }
