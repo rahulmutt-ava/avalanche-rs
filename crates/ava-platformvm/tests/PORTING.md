@@ -42,7 +42,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestAddPermissionlessDelegatorTxNotValidatorTx` | ⬜ not ported |
 | `TestAddPermissionlessDelegatorTxSyntacticVerify` | ⬜ not ported |
 | `TestAddPermissionlessPrimaryDelegatorSerialization` | ⬜ not ported |
-| `TestAddPermissionlessPrimaryValidator` | ⬜ not ported |
+| `TestAddPermissionlessPrimaryValidator` | ✅ ported — byte-exact golden `golden_codec::pchain_tx_codec` (`AddPermissionlessValidatorTx`) + `prop_roundtrip::pchain_tx_roundtrip` |
 | `TestAddPermissionlessSubnetDelegatorSerialization` | ⬜ not ported |
 | `TestAddPermissionlessSubnetValidator` | ⬜ not ported |
 | `TestAddPermissionlessValidatorTxNotDelegatorTx` | ⬜ not ported |
@@ -183,7 +183,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestDiffUTXO` | ⬜ not ported |
 | `TestDiffValidatorReplacement` | ⬜ not ported |
 | `TestDiffValidatorWeightDiffAfterDeleteAndAdd` | ⬜ not ported |
-| `TestDisableL1ValidatorTxSerialization` | ⬜ not ported |
+| `TestDisableL1ValidatorTxSerialization` | ✅ ported — byte-exact golden `golden_codec::pchain_tx_codec` (`DisableL1ValidatorTx`) + `prop_roundtrip::pchain_tx_roundtrip` |
 | `TestDisableL1ValidatorTxSyntacticVerify` | ⬜ not ported |
 | `TestDurangoDisabledTransactions` | ⬜ not ported |
 | `TestDurangoMemoField` | ⬜ not ported |
@@ -233,7 +233,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestHashBytes` | ⬜ not ported |
 | `TestHeightMarshalJSON` | ⬜ not ported |
 | `TestHeightUnmarshalJSON` | ⬜ not ported |
-| `TestIncreaseL1ValidatorBalanceTxSerialization` | ⬜ not ported |
+| `TestIncreaseL1ValidatorBalanceTxSerialization` | ✅ ported — byte-exact golden `golden_codec::pchain_tx_codec` (`IncreaseL1ValidatorBalanceTx`) + `prop_roundtrip::pchain_tx_roundtrip` |
 | `TestIncreaseL1ValidatorBalanceTxSyntacticVerify` | ⬜ not ported |
 | `TestInputComplexity` | ⬜ not ported |
 | `TestInterface` | ⬜ not ported |
@@ -323,7 +323,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestPutAndGetFeeState` | ⬜ not ported |
 | `TestPutL1Validator` | ⬜ not ported |
 | `TestRegisterL1Validator` | ⬜ not ported |
-| `TestRegisterL1ValidatorTxSerialization` | ⬜ not ported |
+| `TestRegisterL1ValidatorTxSerialization` | ✅ ported — byte-exact golden `golden_codec::pchain_tx_codec` (`RegisterL1ValidatorTx`) + `prop_roundtrip::pchain_tx_roundtrip` |
 | `TestRegisterL1ValidatorTxSyntacticVerify` | ⬜ not ported |
 | `TestRegisterL1Validator_Verify` | ⬜ not ported |
 | `TestReindexBlocks` | ⬜ not ported |
@@ -353,7 +353,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestServiceGetSubnets` | ⬜ not ported |
 | `TestSetAutoRenewedValidatorConfigTxSerialization` | ⬜ not ported |
 | `TestSetAutoRenewedValidatorConfigTxSyntacticVerify` | ⬜ not ported |
-| `TestSetL1ValidatorWeightTxSerialization` | ⬜ not ported |
+| `TestSetL1ValidatorWeightTxSerialization` | ✅ ported — byte-exact golden `golden_codec::pchain_tx_codec` (`SetL1ValidatorWeightTx`) + `prop_roundtrip::pchain_tx_roundtrip` |
 | `TestSetL1ValidatorWeightTxSyntacticVerify` | ⬜ not ported |
 | `TestSetUptimeAndSetStakingInfoBothPersist` | ⬜ not ported |
 | `TestSignatureRequestVerify` | ⬜ not ported |
@@ -450,3 +450,49 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestVerifyWarpMessages` | ⬜ not ported |
 | `TestWriteDelegatorMetadata` | ⬜ not ported |
 | `TestWriteValidatorMetadata` | ⬜ not ported |
+
+## M4.6 — codec gate (`tests/golden_codec.rs`, `tests/prop_roundtrip.rs`)
+
+The codec gate has two layers:
+
+1. **Round-trip property** (`prop_roundtrip::pchain_tx_roundtrip`, 1024 cases) —
+   `decode(encode(x)) == x` for an arbitrary `UnsignedTx` covering **every** one
+   of the 23 enum variants, plus `pchain_signed_tx_roundtrip` (signed `Tx`
+   `initialize`/`parse`) and `decode_never_panics` (arbitrary bytes → `Tx::parse`
+   / `Block::parse`, the stable substitute for the `decode_block_tx` cargo-fuzz
+   target).
+2. **Byte-exact goldens** (`golden_codec::pchain_tx_codec` /
+   `golden_codec::pchain_block_hash`) — ported verbatim from the Go
+   `expectedBytes` constants.
+
+### Per-`UnsignedTx`-variant golden-vector coverage
+
+| Variant | Byte-exact Go golden | Round-trip prop |
+|---|---|---|
+| `AddPermissionlessValidator` | ✅ `golden_codec` | ✅ |
+| `RegisterL1Validator` | ✅ `golden_codec` | ✅ |
+| `IncreaseL1ValidatorBalance` | ✅ `golden_codec` | ✅ |
+| `SetL1ValidatorWeight` | ✅ `golden_codec` | ✅ |
+| `DisableL1Validator` | ✅ `golden_codec` | ✅ |
+| `ConvertSubnetToL1` | 🟡 na — Go vector exists (`convert_subnet_to_l1_tx_test.go`) but is large; deferred | ✅ |
+| `AddValidator` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `AddSubnetValidator` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `AddDelegator` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `CreateChain` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `CreateSubnet` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `Import` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `Export` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `AdvanceTime` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `RewardValidator` | ⬜ na — Go `expectedBytes` not yet ported | ✅ |
+| `RemoveSubnetValidator` | ⬜ na — Go vector exists; deferred | ✅ |
+| `TransformSubnet` | ⬜ na — Go vector exists; deferred | ✅ |
+| `AddPermissionlessDelegator` | ⬜ na — Go vector exists; deferred | ✅ |
+| `TransferSubnetOwnership` | ⬜ na — Go vector exists; deferred | ✅ |
+| `Base` | ⬜ na — Go vector exists (`base_tx_test.go`); deferred | ✅ |
+| `AddAutoRenewedValidator` | ⬜ na — Go vector exists; deferred | ✅ |
+| `SetAutoRenewedValidatorConfig` | ⬜ na — Go vector exists; deferred | ✅ |
+| `RewardAutoRenewedValidator` | ⬜ na — Go vector exists; deferred | ✅ |
+
+Variants without a ported byte-exact Go vector are covered by the round-trip
+property (item 1), which is sufficient to catch any field-ordering / encoding
+regression; the byte-exact ports are additive and tracked here for follow-up.
