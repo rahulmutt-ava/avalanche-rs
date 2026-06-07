@@ -29,7 +29,6 @@ use ava_codec_derive as _;
 use ava_database as _;
 use ava_utils as _;
 use ava_validators as _;
-use num_bigint as _;
 use parking_lot as _;
 use ruint as _;
 use tokio as _;
@@ -53,6 +52,7 @@ use serde as _;
 use serde_json as _;
 
 pub mod error;
+pub mod reward;
 pub mod txs;
 
 pub use error::{Error, Result};
