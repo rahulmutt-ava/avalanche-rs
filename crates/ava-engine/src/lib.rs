@@ -26,6 +26,7 @@
 pub mod common;
 pub mod error;
 pub mod networking;
+pub mod snowman;
 
 pub use common::engine::Engine;
 pub use common::error::AppError;
