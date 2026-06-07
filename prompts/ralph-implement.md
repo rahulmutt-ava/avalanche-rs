@@ -9,3 +9,6 @@ If in the process of implementing new items you find that you need to update the
 Use the following skills as needed:
 - superpowers:subagent-driven-development
 - superpowers:dispatching-parallel-agents
+- superpowers:using-git-worktrees
+- superpowers:test-driven-development
+- superpowers:verification-before-completion
