@@ -44,6 +44,11 @@ tokio-util = { workspace = true }
 chrono = { workspace = true }
 # `HealthCheck`/`Database` health surfaces return `serde_json::Value` (M4.25).
 serde_json = { workspace = true }
+# JSON-RPC read-service request/response types (M4.28 `service.rs`/`client.rs`):
+# field names + avajson string-encoded ints, bech32 addrs, hex BLS keys.
+serde = { workspace = true, features = ["derive"] }
+# Hex (`0x…`) encoding of compressed BLS public keys in API replies (M4.28).
+hex = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 
@@ -52,8 +57,6 @@ thiserror = { workspace = true }
 # case; enabling the feature here (dev-only) makes `RocksDb` available to the
 # integration tests without pulling the C++ FFI into the library build.
 ava-database = { path = "../ava-database", features = ["rocksdb"] }
-hex = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 proptest = { workspace = true }
 rstest = { workspace = true }
