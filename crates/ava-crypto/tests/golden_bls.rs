@@ -108,4 +108,21 @@ mod golden {
         assert!(aggregate_public_keys(&[]).is_err());
         assert!(aggregate_signatures(&[]).is_err());
     }
+
+    /// `from_uncompressed` round-trips a key's 96-byte uncompressed serialization
+    /// (the form the P-Chain stores in its public-key-diff sublists, M4.21).
+    #[test]
+    fn public_key_uncompressed_roundtrip() {
+        let sk = SecretKey::from_bytes(&[0x11; SECRET_KEY_LEN]).expect("sk");
+        let pk = sk.public_key();
+        let uncompressed = pk.serialize();
+        assert_eq!(uncompressed.len(), 96);
+
+        let back = PublicKey::from_uncompressed(&uncompressed).expect("uncompressed roundtrip");
+        assert_eq!(back.compress(), pk.compress());
+        assert_eq!(back.serialize(), uncompressed);
+
+        // Garbage bytes are rejected (subgroup check fails).
+        assert!(PublicKey::from_uncompressed(&[0xAB; 96]).is_err());
+    }
 }
