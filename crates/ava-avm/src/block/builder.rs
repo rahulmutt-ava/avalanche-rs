@@ -18,12 +18,15 @@
 //!    - Run `SemanticVerifier` against the running `Diff` (detects double-spends
 //!      against already-packed txs — the diff already records their consumed UTXOs).
 //!    - Run `Executor::execute` (mutates the diff; packed state accumulates).
-//!    - On any verification failure, drop the tx and continue.
+//!    - On any verification failure, **record** the tx id + reason in `dropped`
+//!      and emit a `tracing::warn!`; then continue.
 //! 3. Stop packing once cumulative serialized tx bytes would exceed
 //!    [`TARGET_BLOCK_SIZE`] (128 KiB); always pack at least the first tx.
 //! 4. If no txs packed, return [`Error::NoPendingBlocks`].
 //! 5. Build `StandardBlock { parent_id, height = parent_height + 1,
 //!    time = max(parent_time, now), txs }` and initialize it via the codec.
+//! 6. Return [`BuildBlockOutput`] — the packed block plus the list of dropped
+//!    (tx_id, reason) pairs (mirrors Go's logged-drops + dropped-LRU recording).
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -48,6 +51,24 @@ use crate::txs::executor::{Executor, ExecutorOutputs};
 ///
 /// Mirrors `crates/ava-platformvm/src/block/builder/mod.rs` `TARGET_BLOCK_SIZE`.
 pub const TARGET_BLOCK_SIZE: usize = 128 * 1024;
+
+/// The result of a successful [`build_block`] call.
+///
+/// Carries both the assembled block and the list of txs that were **dropped**
+/// during the packing pipeline (failed syntactic/semantic verify or execution),
+/// together with the reason for each drop. The Go X-Chain builder logs each
+/// dropped tx and records it in a "dropped" LRU; this struct makes that
+/// information observable to callers instead of silently discarding it.
+#[derive(Debug)]
+pub struct BuildBlockOutput {
+    /// The assembled `StandardBlock`.
+    pub block: Block,
+    /// Txs that were rejected during packing, in the order they were encountered.
+    ///
+    /// Each entry is `(tx_id, reason)` — the tx id that was dropped and the
+    /// first verification/execution error that caused the drop.
+    pub dropped: Vec<(Id, Error)>,
+}
 
 /// Parameters for [`build_block`], bundled to avoid the too-many-arguments lint.
 pub struct BuildBlockParams<'a> {
@@ -82,11 +103,16 @@ pub struct BuildBlockParams<'a> {
 /// The block `time` field is `max(parent_time, now)` in Unix seconds (monotonic
 /// clamping, specs 09 §7.1).
 ///
+/// Dropped txs (those that fail syntactic/semantic verify or execution) are
+/// returned in [`BuildBlockOutput::dropped`] alongside the packed block, and a
+/// `tracing::warn!` is emitted per drop — mirroring Go's logged-drops + mempool
+/// dropped-LRU recording.
+///
 /// # Errors
 /// - [`Error::NoPendingBlocks`] — no txs passed verification (nothing to build).
 /// - [`Error::Codec`] — block initialization (marshaling) failed.
 /// - [`Error::MissingParentState`] — diff construction failed.
-pub fn build_block(params: BuildBlockParams<'_>) -> Result<Block> {
+pub fn build_block(params: BuildBlockParams<'_>) -> Result<BuildBlockOutput> {
     let BuildBlockParams {
         codec,
         parent_id,
@@ -103,6 +129,7 @@ pub fn build_block(params: BuildBlockParams<'_>) -> Result<Block> {
     let mut diff = Diff::new_on(parent_state)?;
 
     let mut packed: Vec<Tx> = Vec::new();
+    let mut dropped: Vec<(Id, Error)> = Vec::new();
     let mut cumulative_bytes: usize = 0;
 
     for tx in candidate_txs {
@@ -113,24 +140,33 @@ pub fn build_block(params: BuildBlockParams<'_>) -> Result<Block> {
             break;
         }
 
+        let tx_id = tx.id();
+
         // 1. Syntactic verify (stateless).
-        if SyntacticVerifier::new(backend, &tx).verify().is_err() {
+        if let Err(e) = SyntacticVerifier::new(backend, &tx).verify() {
+            tracing::warn!(tx_id = %tx_id, reason = %e, "build_block: dropping tx (syntactic verify failed)");
+            dropped.push((tx_id, e));
             continue;
         }
 
         // 2. Semantic verify (stateful — reads from the running diff, so
         //    double-spends against already-packed txs are detected here).
-        if SemanticVerifier::new(backend, &diff, &tx, dispatch, backend.fee_asset_id)
-            .verify()
-            .is_err()
+        if let Err(e) =
+            SemanticVerifier::new(backend, &diff, &tx, dispatch, backend.fee_asset_id).verify()
         {
+            tracing::warn!(tx_id = %tx_id, reason = %e, "build_block: dropping tx (semantic verify failed)");
+            dropped.push((tx_id, e));
             continue;
         }
 
         // 3. Execute — mutates the diff; state accumulates for the next tx.
-        let ExecutorOutputs { .. } = match Executor::execute(&tx.unsigned, tx.id(), &mut diff) {
+        let ExecutorOutputs { .. } = match Executor::execute(&tx.unsigned, tx_id, &mut diff) {
             Ok(out) => out,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!(tx_id = %tx_id, reason = %e, "build_block: dropping tx (execute failed)");
+                dropped.push((tx_id, e));
+                continue;
+            }
         };
 
         cumulative_bytes = next_bytes;
@@ -144,7 +180,10 @@ pub fn build_block(params: BuildBlockParams<'_>) -> Result<Block> {
     let height = parent_height.saturating_add(1);
     let time_secs = unix_secs(now.max(parent_time));
 
-    StandardBlock::new_block(codec, parent_id, height, time_secs, packed).map_err(Error::Codec)
+    let block = StandardBlock::new_block(codec, parent_id, height, time_secs, packed)
+        .map_err(Error::Codec)?;
+
+    Ok(BuildBlockOutput { block, dropped })
 }
 
 /// Seconds since the Unix epoch for `t` (saturating; `0` for pre-epoch).

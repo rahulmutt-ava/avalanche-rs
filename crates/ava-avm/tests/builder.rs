@@ -25,7 +25,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use proptest::prelude::*;
 
-use ava_avm::block::builder::{BuildBlockParams, TARGET_BLOCK_SIZE, build_block};
+use ava_avm::block::builder::{BuildBlockOutput, BuildBlockParams, TARGET_BLOCK_SIZE, build_block};
 use ava_avm::block::executor::{BlockManager, BlockManagerConfig};
 use ava_avm::fx::dispatch::Dispatch;
 use ava_avm::mempool::Mempool;
@@ -267,7 +267,10 @@ fn build_block_happy_path_n_txs() {
     let parent_time = UNIX_EPOCH;
     let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
 
-    let blk = build_block(BuildBlockParams {
+    let BuildBlockOutput {
+        block: blk,
+        dropped,
+    } = build_block(BuildBlockParams {
         codec: &c,
         parent_id: genesis_id,
         parent_height: 0,
@@ -285,6 +288,9 @@ fn build_block_happy_path_n_txs() {
     assert_eq!(blk.txs()[0].id(), id_a);
     assert_eq!(blk.txs()[1].id(), id_b);
     assert_eq!(blk.txs()[2].id(), id_c);
+
+    // No txs should be dropped in the happy path.
+    assert!(dropped.is_empty(), "no drops expected; got: {dropped:?}");
 
     // Height = parent_height + 1 = 1.
     assert_eq!(blk.height(), 1);
@@ -352,6 +358,7 @@ fn build_block_drops_conflicting_tx() {
     );
 
     let id_ok = tx_ok.id();
+    let id_conflict = tx_conflict.id();
     let id_ok2 = tx_ok2.id();
 
     let c = ava_avm::txs::codec::codec().expect("codec");
@@ -360,7 +367,10 @@ fn build_block_drops_conflicting_tx() {
     let parent_time = UNIX_EPOCH;
     let now = UNIX_EPOCH + Duration::from_secs(2_000_000);
 
-    let blk = build_block(BuildBlockParams {
+    let BuildBlockOutput {
+        block: blk,
+        dropped,
+    } = build_block(BuildBlockParams {
         codec: &c,
         parent_id: genesis_id,
         parent_height: 0,
@@ -377,6 +387,13 @@ fn build_block_drops_conflicting_tx() {
     assert_eq!(blk.txs().len(), 2, "conflicting tx dropped");
     assert_eq!(blk.txs()[0].id(), id_ok);
     assert_eq!(blk.txs()[1].id(), id_ok2);
+
+    // The conflicting tx must be recorded in the dropped list.
+    assert_eq!(dropped.len(), 1, "exactly one tx should be dropped");
+    assert_eq!(
+        dropped[0].0, id_conflict,
+        "the dropped tx id must be tx_conflict"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -414,7 +431,7 @@ fn build_block_time_clamp_uses_max_of_parent_time_and_now() {
         s.add_utxo(utxo_id, utxo.clone());
     });
 
-    let blk1 = build_block(BuildBlockParams {
+    let BuildBlockOutput { block: blk1, .. } = build_block(BuildBlockParams {
         codec: &c,
         parent_id: genesis_id,
         parent_height: 0,
@@ -440,7 +457,7 @@ fn build_block_time_clamp_uses_max_of_parent_time_and_now() {
         s.add_utxo(utxo_id, utxo);
     });
 
-    let blk2 = build_block(BuildBlockParams {
+    let BuildBlockOutput { block: blk2, .. } = build_block(BuildBlockParams {
         codec: &c,
         parent_id: genesis_id,
         parent_height: 0,
@@ -547,7 +564,7 @@ fn build_block_respects_byte_cap() {
     let parent_time = UNIX_EPOCH;
     let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
 
-    let blk = build_block(BuildBlockParams {
+    let BuildBlockOutput { block: blk, .. } = build_block(BuildBlockParams {
         codec: &c,
         parent_id: genesis_id,
         parent_height: 0,
@@ -607,71 +624,100 @@ fn build_block_no_txs_returns_no_pending_blocks() {
 
 // ---------------------------------------------------------------------------
 // mempool_pop_order_total: FIFO is a stable total order independent of map internals
+//
+// The key property (spec 00 §6.1): given the SAME insertion sequence, snapshot()
+// is deterministic and equals the insertion sequence — across runs and independent
+// of tx-id hash values.  A HashMap-backed impl that returned map-iteration order
+// would fail because HashMap randomises iteration per run.
 // ---------------------------------------------------------------------------
 
 proptest! {
-    /// Adding the same set of txs in two different orders and taking snapshots
-    /// should yield the same FIFO order (insertion-ordered, not hash-map dependent).
-    /// This validates that the total order is deterministic and stable.
+    /// Adds a proptest-shuffled sequence of distinct txs and asserts that
+    /// `snapshot()` / `peek()` order equals EXACTLY the insertion order on every run.
+    ///
+    /// The txs have varied IDs (derived from proptest-controlled `perm` indices),
+    /// so any implementation that uses hash-map iteration order for its output would
+    /// produce a different, non-deterministic sequence — and fail this test.
     #[test]
-    fn mempool_pop_order_total(tags in proptest::collection::vec(0u32..64, 2..20)) {
-        // Deduplicate tags so each tx is unique.
+    fn mempool_pop_order_total(
+        // A permutation of [0..N): each element is a unique index in 0..64 that
+        // determines both the memo bytes (→ distinct tx ID) and the insertion order.
+        perm in proptest::collection::vec(0u32..64u32, 2..20usize)
+    ) {
+        // Deduplicate to get a unique insertion sequence.
         let mut seen = std::collections::HashSet::new();
-        let unique_tags: Vec<u32> = tags.into_iter().filter(|t| seen.insert(*t)).collect();
-        if unique_tags.len() < 2 {
+        let insertion_order: Vec<u32> = perm.into_iter().filter(|t| seen.insert(*t)).collect();
+        if insertion_order.len() < 2 {
             return Ok(());
         }
 
         let c = ava_avm::txs::codec::codec().expect("codec");
 
-        // Build txs from tags.
-        let txs: Vec<Tx> = unique_tags.iter().map(|&tag| {
+        // Build txs with varied IDs: memo = 4-byte big-endian of the index value,
+        // mixed with a fixed high byte so ids spread widely across hash space.
+        // This means a HashMap-backed implementation that uses hash-ordered
+        // iteration would return them in a different order than insertion order.
+        let txs: Vec<Tx> = insertion_order.iter().map(|&idx| {
+            // Embed idx in the last two bytes of a 4-byte memo so IDs are
+            // spread across the full 32-byte ID space (via SHA-256 of bytes).
+            let mut memo = [0xDE_u8, 0xAD, 0u8, 0u8];
+            memo[2] = (idx >> 8) as u8;
+            memo[3] = idx as u8;
             let mut tx = Tx::new(UnsignedTx::Base(BaseTx::new(AvaxBaseTx {
                 network_id: 1,
                 blockchain_id: Id::EMPTY,
                 outs: vec![],
                 ins: vec![],
-                memo: tag.to_be_bytes().to_vec(),
+                memo: memo.to_vec(),
             })));
             tx.initialize(&c).expect("initialize tx");
             tx
         }).collect();
 
-        // Pool A: add in the original order.
-        let mut pool_a = Mempool::new();
+        // Verify all tx IDs are distinct (required for the FIFO test to be meaningful).
+        let ids: Vec<Id> = txs.iter().map(Tx::id).collect();
+        let id_set: std::collections::HashSet<_> = ids.iter().copied().collect();
+        prop_assert_eq!(
+            id_set.len(), txs.len(),
+            "all tx IDs must be distinct so hash-ordering is a real threat"
+        );
+
+        // --- Insert in the proptest-controlled order ---
+        let mut pool = Mempool::new();
         for tx in &txs {
-            pool_a.add(tx.clone()).expect("add to pool A");
+            pool.add(tx.clone()).expect("add to pool");
         }
 
-        // Pool B: add in reversed order.
-        let mut pool_b = Mempool::new();
-        for tx in txs.iter().rev() {
-            pool_b.add(tx.clone()).expect("add to pool B");
+        // --- snapshot() must equal EXACTLY the insertion order ---
+        let snap: Vec<Id> = pool.snapshot().iter().map(Tx::id).collect();
+        prop_assert_eq!(
+            &snap, &ids,
+            "snapshot must equal the insertion sequence (FIFO); \
+             a HashMap-backed impl would fail here because its iteration \
+             order depends on hash values, not insertion order"
+        );
+
+        // --- peek() must be the FIRST inserted tx ---
+        prop_assert_eq!(
+            pool.peek().map(Tx::id),
+            Some(ids[0]),
+            "peek must return the oldest (first inserted) tx"
+        );
+
+        // --- After removing the front, peek advances to the second ---
+        let front_id = ids[0];
+        pool.remove(&front_id).expect("remove front");
+        prop_assert_eq!(
+            pool.snapshot().iter().map(Tx::id).collect::<Vec<_>>(),
+            &ids[1..],
+            "after removing front, snapshot must equal insertion order sans the first"
+        );
+        if ids.len() > 1 {
+            prop_assert_eq!(
+                pool.peek().map(Tx::id),
+                Some(ids[1]),
+                "peek after removing front must be the second inserted tx"
+            );
         }
-
-        // Snapshot A should be in insertion order (original order).
-        let snap_a: Vec<Id> = pool_a.snapshot().iter().map(Tx::id).collect();
-        let expected_order: Vec<Id> = txs.iter().map(Tx::id).collect();
-        prop_assert_eq!(&snap_a, &expected_order, "pool A snapshot must be in FIFO order");
-
-        // Snapshot B should be in the reversed insertion order.
-        let snap_b: Vec<Id> = pool_b.snapshot().iter().map(Tx::id).collect();
-        let expected_reversed: Vec<Id> = txs.iter().rev().map(Tx::id).collect();
-        prop_assert_eq!(&snap_b, &expected_reversed, "pool B snapshot must be in its FIFO order");
-
-        // Both pools contain the same set of txs (just different orders).
-        let mut set_a = snap_a.clone();
-        let mut set_b = snap_b.clone();
-        set_a.sort();
-        set_b.sort();
-        prop_assert_eq!(&set_a, &set_b, "both pools should contain the same set");
-
-        // Peek is always the oldest (front of FIFO).
-        let peek_a = pool_a.peek().map(Tx::id);
-        prop_assert_eq!(peek_a, Some(txs[0].id()), "pool A peek is the first added");
-
-        let peek_b = pool_b.peek().map(Tx::id);
-        let last_tx_id = txs.last().map(Tx::id);
-        prop_assert_eq!(peek_b, last_tx_id, "pool B peek is the last-original (first in reversed)");
     }
 }
