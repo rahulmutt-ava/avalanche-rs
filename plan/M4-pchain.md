@@ -324,44 +324,120 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.16: `StandardTx` executor + staker/subnet verification helpers
 **Crate:** ava-platformvm  ·  **Depends on:** M4.15, M4.7, M4.8  ·  **Spec:** 08 §2.4 (StandardTx + shared helpers)
 **Files:** `crates/ava-platformvm/src/txs/executor/mod.rs` (Visitor trait), `standard_tx_executor.rs`, `staker_tx_verification.rs`, `subnet_tx_verification.rs`, `state_changes.rs`.
-- [ ] **Step 1 — Red:** Port `txs/executor/standard_tx_executor_test.go` cases as `conformance::standard_executor` table tests: each input (state, tx) produces the expected `(consumed_input_ids, atomic_requests, resulting Diff)`; include `verify_add_permissionless_validator` bound checks and a subnet-auth case.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm standard_executor` → fails.
-- [ ] **Step 3 — Green:** `trait Visitor { type Error; one method per UnsignedTx variant defaulting to Err(ErrWrongTxType) }`; `UnsignedTx::visit` dispatches. `StandardTxExecutor` overrides the decision txs (Base, Create*, Import/Export, Add/RemovePermissionless*, all L1 txs, TransferSubnetOwnership), mutating a `Diff` and returning `(consumed_input_ids, atomic_requests, on_accept_fn)`. Shared free functions over `&Diff`: `verify_add_permissionless_validator`/`_delegator` (stake bounds, `MaxStakeDuration`, subnet existence, staker overlap, fee charge via M4.8, BLS uniqueness, `MaxFutureStartTime=24*7*2h`, `SyncBound=10s`), `verify_subnet_authorization` (resolve owner from CreateSubnetTx/TransferSubnetOwnershipTx + check `subnet_auth`).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm standard_executor` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: StandardTx executor + staker/subnet verification`
+- [x] **Step 1 — Red:** Port `txs/executor/standard_tx_executor_test.go` cases as `conformance::standard_executor` table tests: each input (state, tx) produces the expected `(consumed_input_ids, atomic_requests, resulting Diff)`; include `verify_add_permissionless_validator` bound checks and a subnet-auth case.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm standard_executor` → fails.
+- [x] **Step 3 — Green:** `trait Visitor { type Error; one method per UnsignedTx variant defaulting to Err(ErrWrongTxType) }`; `UnsignedTx::visit` dispatches. `StandardTxExecutor` overrides the decision txs (Base, Create*, Import/Export, Add/RemovePermissionless*, all L1 txs, TransferSubnetOwnership), mutating a `Diff` and returning `(consumed_input_ids, atomic_requests, on_accept_fn)`. Shared free functions over `&Diff`: `verify_add_permissionless_validator`/`_delegator` (stake bounds, `MaxStakeDuration`, subnet existence, staker overlap, fee charge via M4.8, BLS uniqueness, `MaxFutureStartTime=24*7*2h`, `SyncBound=10s`), `verify_subnet_authorization` (resolve owner from CreateSubnetTx/TransferSubnetOwnershipTx + check `subnet_auth`).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm standard_executor` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: StandardTx executor + staker/subnet verification`
+
+> **As-built (M4.16):** The `Visitor` trait already shipped in M4.2 (`txs/mod.rs`), so M4.16
+> only added the executor module + `StandardTxExecutor` impl. **Public sibling contract** in
+> `txs/executor/mod.rs` (the gateway the M4.17/18/19 wave built on): `Backend { upgrades:
+> UpgradeSchedule, staking: StakingConfig, static_fee_config, network_id, chain_id, avax_asset_id,
+> node_id, fx, bootstrapped }` (a self-contained port collapsing Go's `Backend` + `snow.Context` +
+> `config.Internal` — fork activation is `SystemTime` compares `is_durango_activated`/`is_etna_activated`);
+> `StandardTxExecutor::new(backend, &mut Diff, &Tx, unsigned_bytes) -> Self` + `into_outputs() ->
+> StandardTxOutputs { inputs: BTreeSet<Id>, atomic_requests: BTreeMap<Id, AtomicRequests>, on_accept:
+> Option<Box<dyn FnOnce()+Send>> }`; `AtomicRequests { put_requests, remove_requests }` (reused by M4.18);
+> `pub(crate)` helpers `subnet_tx_verification::{verify_subnet_authorization, verify_authorization,
+> decode_owner}`, `staker_tx_verification::{verify_add_permissionless_validator/_delegator,
+> verify_staker_start_time, get_validator}` + consts `SYNC_BOUND`/`MAX_FUTURE_START_TIME`,
+> `state_changes::{fee_calculator(backend, &dyn Chain) -> FeeCalculator, verify_spend(...)}`. **Choices/deferrals:**
+> (1) flow check = the single-asset AVAX `utxo::verify_spend` (M4.15 byte-stored model); full multi-asset/locktime
+> credential check deferred to the maturing flow checker. (2) Import/Export handled decision-side (local
+> UTXO consume/produce + record `AtomicRequests`) but the shared-memory flow check was deferred to **M4.18**.
+> (3) L1-lifecycle + proposal txs fall through to the default `WrongTxType` (M4.17/M4.19's domain). (4) Legacy
+> `AddValidator/AddSubnetValidator/AddDelegator/TransformSubnet` not overridden (pre-Durango legacy / post-Etna
+> removed — need the `Bootstrapped`-gated credential flow checker). (5) Added executor `Error` sentinels to
+> `error.rs`; **no `Chain`/`Diff` API changes**. Ported Go cases: CreateSubnet valid, BaseTx-pre-Durango reject,
+> proposal-tx reject, AddPermissionlessValidator weight-bound + valid-primary, two subnet-auth (CreateChain
+> unknown-subnet / 0-of-0 owner), AddValidatorTx → WrongTxType. Deferred: warp/shared-memory-heavy L1 suites
+> (M4.18/19), TransformSubnet, full Apricot/Banff/Etna AddSubnetValidator + over-delegation (need legacy executors
+> + VM env). 63 tests green, clippy clean.
 
 ---
 
 ### Task M4.17: `ProposalTx` executor (advance_time + reward) — the oracle
 **Crate:** ava-platformvm  ·  **Depends on:** M4.16, M4.7, M4.9  ·  **Spec:** 08 §2.4 (ProposalTx, advance_time_to), §4.2 (oracle); 21 §3
 **Files:** `crates/ava-platformvm/src/txs/executor/proposal_tx_executor.rs`, `crates/ava-platformvm/src/txs/executor/advance_time.rs`.
-- [ ] **Step 1 — Red:** Port `advance_time_test.go` + `reward_validator_test.go` as `conformance::proposal_executor`: `AdvanceTimeTx` and `RewardValidatorTx` each produce `on_commit_state` AND `on_abort_state` diffs and the "commit preferred" bool; assert supply mint on commit, no mint on abort, staker promotion/removal order.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm proposal_executor` → fails.
-- [ ] **Step 3 — Green:** `ProposalTxExecutor` overrides `AdvanceTimeTx` (Apricot-only) and `RewardValidatorTx`, producing two diffs. `advance_time_to(diff, new_time)`: promote pending→current stakers whose `next_time <= new_time` in `Staker` (Less) order; remove expired permissioned subnet validators; charge L1 continuous fees (M4.9) and deactivate exhausted L1 validators in `EndAccumulatedFee` order (08 §2.4). `RewardValidatorTx`: pay `PotentialReward` (commit) or not (abort), update supply, write reward UTXOs, restake auto-renewed validators (Helicon). Returns `prefers_commit`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm proposal_executor` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: ProposalTx executor (advance_time + reward oracle)`
+- [x] **Step 1 — Red:** Port `advance_time_test.go` + `reward_validator_test.go` as `conformance::proposal_executor`: `AdvanceTimeTx` and `RewardValidatorTx` each produce `on_commit_state` AND `on_abort_state` diffs and the "commit preferred" bool; assert supply mint on commit, no mint on abort, staker promotion/removal order.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm proposal_executor` → fails.
+- [x] **Step 3 — Green:** `ProposalTxExecutor` overrides `AdvanceTimeTx` (Apricot-only) and `RewardValidatorTx`, producing two diffs. `advance_time_to(diff, new_time)`: promote pending→current stakers whose `next_time <= new_time` in `Staker` (Less) order; remove expired permissioned subnet validators; charge L1 continuous fees (M4.9) and deactivate exhausted L1 validators in `EndAccumulatedFee` order (08 §2.4). `RewardValidatorTx`: pay `PotentialReward` (commit) or not (abort), update supply, write reward UTXOs, restake auto-renewed validators (Helicon). Returns `prefers_commit`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm proposal_executor` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: ProposalTx executor (advance_time + reward oracle)`
+
+> **As-built (M4.17):** `proposal_tx_executor.rs` (`ProposalTxExecutor`, `Visitor` over `advance_time`
+> + `reward_validator`, both producing `on_commit`/`on_abort` `Diff`s) + `advance_time.rs`
+> (`advance_time_to`: promote pending→current in `Staker::Ord` order with supply mint, remove expired
+> permissioned-subnet currents, charge L1 continuous fee + deactivate exhausted L1 validators post-Etna).
+> **NEW `Chain` trait method (cross-cutting — relevant to M4.20/M4.21):** `fn active_l1_validators(&self)
+> -> Vec<L1Validator>` (Go `GetActiveL1ValidatorsIterator`/`NumActiveL1Validators`), sorted
+> `(end_accumulated_fee, validation_id)`, implemented in `state.rs` (filter+sort) and `diff.rs`
+> (overlay-aware). **Key deviations:** (1) **No tx store in-crate yet** (M4.20) → `ProposalTxExecutor::new`
+> takes an injected `StakerTxResolver` closure (`Fn(&Id) -> Option<RewardedStakerTx>`) standing in for
+> Go's `state.GetTx`; the block manager (M4.20) injects the real lookup. (2) `prefers_commit` returns
+> `true` from the executor; RewardValidator's real uptime-based preference is computed at the block layer
+> (M4.20). (3) Deferred (crate lacks the accessors): delegatee-reward split / `GetStakingInfo`,
+> `GetExpiryIterator`, Helicon auto-renew restake, and the dynamic gas-fee `advanceDynamicFeeState`
+> (only L1 continuous-fee was needed for the named conformance). Added `error.rs` sentinel `RemoveWrongStaker`.
+> Ported Go cases: advance-time promote+mint vs abort-unchanged, permissioned-subnet removal, reward commit
+> (refund + reward UTXO) vs abort (supply down, staker removed both sets), `RemoveWrongStaker`/`RemoveStakerTooEarly`,
+> credentialed-proposal-tx reject. Deferred: full `TestAdvanceTimeTxUpdateStakers` matrix, delegator-reward,
+> `TestTrackedSubnet` (need full VM env + tx store).
 
 ---
 
 ### Task M4.18: `AtomicTx` executor (Apricot import/export path)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.15  ·  **Spec:** 08 §2.4 (AtomicTx)
 **Files:** `crates/ava-platformvm/src/txs/executor/atomic_tx_executor.rs`.
-- [ ] **Step 1 — Red:** Port `atomic_tx_executor_test.go` as `conformance::atomic_executor`: an `ImportTx`/`ExportTx` in the Apricot atomic-block path emits the expected `atomic::Requests` against the peer chain's shared memory and the resulting Diff.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm atomic_executor` → fails.
-- [ ] **Step 3 — Green:** `AtomicTxExecutor` wraps Import/Export for the pre-Banff `ApricotAtomicBlock` path, producing `atomic::Requests` (shared-memory ops, ATOMIC-1). Note post-Banff these are ordinary StandardTx decision txs inside a `BanffStandardBlock` (handled by M4.16) — this executor is for the legacy atomic-block path only.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm atomic_executor` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: AtomicTx executor (Apricot import/export)`
+- [x] **Step 1 — Red:** Port `atomic_tx_executor_test.go` as `conformance::atomic_executor`: an `ImportTx`/`ExportTx` in the Apricot atomic-block path emits the expected `atomic::Requests` against the peer chain's shared memory and the resulting Diff.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm atomic_executor` → fails.
+- [x] **Step 3 — Green:** `AtomicTxExecutor` wraps Import/Export for the pre-Banff `ApricotAtomicBlock` path, producing `atomic::Requests` (shared-memory ops, ATOMIC-1). Note post-Banff these are ordinary StandardTx decision txs inside a `BanffStandardBlock` (handled by M4.16) — this executor is for the legacy atomic-block path only.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm atomic_executor` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: AtomicTx executor (Apricot import/export)`
+
+> **As-built (M4.18):** `atomic_tx_executor.rs` (`AtomicTxExecutor`, the legacy `ApricotAtomicBlock`
+> Import/Export path) reuses M4.16's `AtomicRequests`/`StandardTxOutputs`/`Backend`/`state_changes`/`utxo`
+> verbatim. Computes the shared-memory flow accounting M4.16 deferred: **import** fetches imported UTXOs,
+> checks single-asset AVAX balance `local_in + imported_avax_in == out + fee` (gated on `bootstrapped`),
+> records `remove_requests`; **export** balances `local_in == local_out + exported_out + fee` with
+> deterministic `PutRequest` UTXOIDs at `len(outs)+i` (byte-identical to M4.16's export keying).
+> **Shared-memory seam (flagged):** added a minimal in-file `trait SharedMemory { fn get(&self, peer_chain:
+> Id, keys) -> Result<Vec<Vec<u8>>> }` (read-only for imports; writes flow only through `AtomicRequests`) with
+> an in-memory test double — to be **unified with the real `chains/atomic` `SharedMemory`** when it lands
+> (M4.20). **No `error.rs`/state-API/`Cargo.toml` changes** (only `mod.rs` +1 line). Ported Go cases:
+> wrong-tx-type reject; import valid / insufficient-funds / missing-shared-memory-UTXO / unbootstrapped-skip /
+> wrong-asset; export valid / insufficient-funds. Deferred: per-credential `VerifySpendUTXOs` (locktime+sig,
+> same single-asset slice M4.16 uses) and `verify.SameSubnet` peer-chain check (→ M4.20 chain-manager wiring).
+> 71 tests green (8 new), clippy clean.
 
 ---
 
 ### Task M4.19: ACP-77 L1 validator lifecycle executor
 **Crate:** ava-platformvm  ·  **Depends on:** M4.16, M4.9, M4.12  ·  **Spec:** 08 §6 (ACP-77 lifecycle); 20 §3.1 (RegistryPayload), §6 (warp verify on P)
 **Files:** `crates/ava-platformvm/src/txs/executor/l1_executor.rs`, `crates/ava-platformvm/src/warp/verifier.rs`.
-- [ ] **Step 1 — Red:** Port `convert_subnet_to_l1`/`register_l1_validator`/`set_l1_validator_weight`/`increase_balance`/`disable` executor tests + `warp_verifier_test.go` as `conformance::l1_lifecycle`: assert ConvertSubnetToL1 removes permissioned validators and installs L1 validators; Register funds `EndAccumulatedFee` via a verified Warp `RegisterL1Validator` message + PoP; SetWeight enforces monotonic `nonce >= MinNonce` and rejects removing the last validator; Disable refunds remaining balance to `RemainingBalanceOwner`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm l1_lifecycle` → fails.
-- [ ] **Step 3 — Green:** Implement the five L1 tx handlers per 08 §6, all mutating through `Diff::put_l1_validator` with the immutable-field guard (M4.12). `warp/verifier.rs` verifies the embedded Warp messages by parsing `RegistryPayload` (via `ava-warp::registry`, 20 §3.1) and checking the BLS aggregate against the source subnet set at the pinned height (deferred quorum integration consumes M4.21/M4.22). Continuous-fee deactivation during time-advance reuses M4.17's `advance_time_to`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm l1_lifecycle` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: ACP-77 L1 validator lifecycle executor + warp verifier`
+- [x] **Step 1 — Red:** Port `convert_subnet_to_l1`/`register_l1_validator`/`set_l1_validator_weight`/`increase_balance`/`disable` executor tests + `warp_verifier_test.go` as `conformance::l1_lifecycle`: assert ConvertSubnetToL1 removes permissioned validators and installs L1 validators; Register funds `EndAccumulatedFee` via a verified Warp `RegisterL1Validator` message + PoP; SetWeight enforces monotonic `nonce >= MinNonce` and rejects removing the last validator; Disable refunds remaining balance to `RemainingBalanceOwner`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm l1_lifecycle` → fails.
+- [x] **Step 3 — Green:** Implement the five L1 tx handlers per 08 §6, all mutating through `Diff::put_l1_validator` with the immutable-field guard (M4.12). `warp/verifier.rs` verifies the embedded Warp messages by parsing `RegistryPayload` (via `ava-warp::registry`, 20 §3.1) and checking the BLS aggregate against the source subnet set at the pinned height (deferred quorum integration consumes M4.21/M4.22). Continuous-fee deactivation during time-advance reuses M4.17's `advance_time_to`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm l1_lifecycle` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: ACP-77 L1 validator lifecycle executor + warp verifier`
+
+> **As-built (M4.19):** `txs/executor/l1_executor.rs` (5 handlers: Convert/Register/SetWeight/IncreaseBalance/Disable,
+> all through `Diff::put_l1_validator` + the M4.12 immutable-field guard) + a **new local `warp` module**
+> (`src/warp/{mod,verifier}.rs` + `warp/payload/` + `warp/message/`) since no `ava-warp` crate exists yet — it
+> implements the three nested codec layers per 20 §3.1 (`Message`/`UnsignedMessage`/`BitSetSignature`;
+> `AddressedCall`/`Hash`; `RegisterL1Validator`/`L1ValidatorWeight`/`SubnetToL1Conversion`/
+> `L1ValidatorRegistration`/`PChainOwner`). **Flag: move these to `ava-warp` when it lands** (no cross-crate dep
+> added). **Signature/quorum seam for M4.21/M4.22:** a `WarpSignatureVerifier` trait injected into the verifier
+> + executor — parsing/registry-`verify()`/PoP run unconditionally; the BLS-aggregate/`WarpSet`/quorum step is the
+> trait method (`WARP_QUORUM 67/100` consts in place; `AcceptingVerifier`/`RejectingVerifier` test doubles).
+> **Two state seams deferred (no-op stubs, flagged for the state task to wire):** (a) `NumActiveL1Validators` vs
+> `ValidatorFeeConfig.Capacity` capacity gate; (b) `RegisterL1Validator` expiry-replay guard (`HasExpiry`/`PutExpiry`).
+> `SubnetToL1Conversion` is stored in the existing `subnet_manager` slot (new local `SubnetConversion` codec struct);
+> `conversion_id` left as `Id::EMPTY` (full `SubnetToL1ConversionID` hash derivation deferred — flagged). lib.rs +1
+> (`pub mod warp;`), mod.rs +1, 9 new `error.rs` sentinels. Ported all five handler suites + 4 warp_verifier tests;
+> deferred `errMaxNumActiveValidators`/`errWarpMessageAlreadyIssued` (need the two state seams) and quorum-failure
+> cases (need the M4.21/M4.22 real verifier). 79 tests green, clippy clean.
 
 ---
 
