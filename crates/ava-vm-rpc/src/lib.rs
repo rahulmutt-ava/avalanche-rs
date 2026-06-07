@@ -37,11 +37,10 @@
 
 use std::time::Duration;
 
-// These crates are consumed by the proxied callback services (M3.25:
-// rpcdb/appsender/sharedmemory/validatorstate/warp/aliasreader). The references
-// here satisfy `unused_crate_dependencies` until those modules land; remove when
-// each crate is used for real.
-use {anyhow as _, ava_crypto as _, ava_validators as _, thiserror as _};
+// `anyhow`/`thiserror` are pulled in for parity with the other crates' error
+// stacks but this crate surfaces `ava_vm::Error` directly, so reference them to
+// keep `unused_crate_dependencies` quiet.
+use {anyhow as _, thiserror as _};
 
 pub mod guest;
 pub mod host;

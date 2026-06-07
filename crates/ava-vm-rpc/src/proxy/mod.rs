@@ -7,3 +7,10 @@
 //! whichever side is the *node* always **serves** them. So each module ships a
 //! guest-side client implementing a Rust trait and a host-side tonic server
 //! wrapping the host's implementation of that trait.
+
+pub mod aliasreader;
+pub mod appsender;
+pub mod rpcdb;
+pub mod sharedmemory;
+pub mod validatorstate;
+pub mod warp;
