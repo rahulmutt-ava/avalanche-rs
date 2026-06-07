@@ -91,7 +91,8 @@ const STOP_VERTEX: [u8; 32] = [0x07; 32];
 /// across runs. Were genesis in the past, `now` would win and the (second-
 /// truncated) wall clock would occasionally straddle a second boundary between
 /// the two determinism-gate runs, making the block id nondeterministic. This is
-/// the harness's clock-pinning until a clock-injection seam lands (X.13/X.15).
+/// the harness's clock-pinning until `ava-avm` `build_block` adopts the
+/// injectable `ava_utils::clock::Clock` seam (tracked by tier-X task X.19).
 const GENESIS_TS: u64 = 9_000_000_000;
 
 fn chain_id() -> Id {

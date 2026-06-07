@@ -682,11 +682,37 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.22: Differential program generator — `differential::xchain_issue_tx`
 **Crate:** ava-avm (+ `tests/differential/` harness X)  ·  **Depends on:** M5.19, M5.20, M5.21; cross-cutting harness X  ·  **Spec:** 02 §11 (differential harness, proptest program), 09 §12; 00 §6.1
 **Files:** `tests/differential/src/xchain.rs`, `tests/differential/tests/xchain_issue_tx.rs`, `tests/differential/proptest-regressions/xchain_issue_tx.txt`
-- [ ] **Step 1 — Red (TDD ENTRY POINT — start tiny):** `tests/differential/tests/xchain_issue_tx.rs` with `mod differential { #[test] fn xchain_issue_tx() {...} }`. Begin with `cases = 1` and a generator that emits a **single BaseTx program** (one issue-tx + `AwaitFinalization`); assert identical last-accepted block ID + height **and identical UTXO set** vs the Go oracle (recorded mode). This first failing test is the milestone's entry point.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential differential::xchain_issue_tx` → fails (generator/oracle absent).
-- [ ] **Step 3 — Green:** `xchain.rs`: a proptest `Strategy` producing `(seed, Vec<Action>)` where `Action::IssueTx(TxSpec)` deterministically builds X-Chain txs (BaseTx first; then CreateAsset, Operation with each fx, Import, Export) from the seed (02 §11.2); tx/key bytes derived from the seed so both nodes get identical bytes. `Observation` collects per-chain last-accepted block id+height + the full UTXO set (sorted, 00 §6.1). Compare via `prop_assert_eq!`. Grow generator coverage, then scale `cases` 1 → 100 → 1k → **10k**. Live two-binary mode gated behind feature/env with recorded-oracle fallback (coordinate with harness X); print `DIFFERENTIAL_SEED=<n>` on mismatch (02 §11.5).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential differential::xchain_issue_tx` (recorded mode, `cases = 10000`); commit `proptest-regressions/xchain_issue_tx.txt`.
-- [ ] **Step 5 — Commit:** `avm: differential xchain_issue_tx generator scaled to 10k (M5.22)`
+- [x] **Step 1 — Red (TDD ENTRY POINT — start tiny):** `tests/differential/tests/xchain_issue_tx.rs` with `mod differential { #[test] fn xchain_issue_tx() {...} }`. Begin with `cases = 1` and a generator that emits a **single BaseTx program** (one issue-tx + `AwaitFinalization`); assert identical last-accepted block ID + height **and identical UTXO set** vs the Go oracle (recorded mode). This first failing test is the milestone's entry point.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential differential::xchain_issue_tx` → fails (generator/oracle absent).
+- [x] **Step 3 — Green:** `xchain.rs`: a proptest `Strategy` producing `(seed, Vec<Action>)` where `Action::IssueTx(TxSpec)` deterministically builds X-Chain txs (BaseTx first; then CreateAsset, Operation with each fx, Import, Export) from the seed (02 §11.2); tx/key bytes derived from the seed so both nodes get identical bytes. `Observation` collects per-chain last-accepted block id+height + the full UTXO set (sorted, 00 §6.1). Compare via `prop_assert_eq!`. Grow generator coverage, then scale `cases` 1 → 100 → 1k → **10k**. Live two-binary mode gated behind feature/env with recorded-oracle fallback (coordinate with harness X); print `DIFFERENTIAL_SEED=<n>` on mismatch (02 §11.5).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential differential::xchain_issue_tx` (recorded mode, `cases = 10000`); commit `proptest-regressions/xchain_issue_tx.txt`.
+- [x] **Step 5 — Commit:** `avm: differential xchain_issue_tx generator scaled to 10k (M5.22)`
+
+> **As-built (M5.22, 2026-06-07, commit `187bed6` + comment fixup, ff-merged to main):** 9
+> ava-differential tests green (incl. the 512-case `differential::xchain_issue_tx` proptest, ~1.6s);
+> ava-avm 178 unchanged; clippy `-D warnings` + fmt clean. Reviewed (spec+quality, opus) → APPROVE.
+> - **SCOPING:** the harness `LockstepDriver` is an unimplemented tier-X scaffold (no Go recorded-oracle,
+>   no live two-binary) — so `differential::xchain_issue_tx` is delivered as a **self-vs-self DETERMINISM
+>   proptest** (the entry point the plan calls for): a seed-derived program of BaseTx issuances run
+>   through the REAL `ava-avm` VM pipeline (seed genesis → `mempool_add` → `build_block` → `set_preference`
+>   → verify → accept) on TWO independent `AvmVm` instances, asserting BYTE-IDENTICAL normalized
+>   `Observation` (last-accepted id + height + full sorted UTXO set). **Go-oracle (recorded + live) +
+>   richer tx kinds (CreateAsset/Operation/Import/Export) + 10k scaling are DEFERRED to X.13/X.15**
+>   (documented in both new files).
+> - `tests/differential/src/xchain.rs` (generator `program(seed)` via splitmix64 `mix`, deterministic
+>   chained-spend BaseTxs; `xchain_observation`/`run_program`) + `tests/differential/tests/xchain_issue_tx.rs`
+>   (`cases=512`, prints `DIFFERENTIAL_SEED=<seed>` on mismatch). `ava-avm`/`ava-vm`/etc promoted to real
+>   `ava-differential` deps (no cycle). Added a minimal `#[doc(hidden)] AvmVm::with_state` read seam
+>   (`crates/ava-avm/src/vm.rs`) for UTXO-set enumeration (the `Chain` trait has none).
+> - **REAL FINDING the proptest CAUGHT (record + follow-up under X.19):** `ava-avm` `ChainVm::build_block`
+>   stamps blocks with `time = max(parent_time, SystemTime::now())` using an **un-injectable wall clock**
+>   — across the two determinism runs this occasionally straddled a second boundary → divergent block ids
+>   (~30/256). Worked around deterministically by pinning the synthetic genesis timestamp far in the future
+>   (`GENESIS_TS=9_000_000_000`) so every block inherits the fixed `parent_time`. **The real fix is to adopt
+>   the injectable `ava_utils::clock::Clock` seam in `build_block`/the VM — tracked by tier-X task X.19
+>   (`plan/X-cross-cutting.md`, spec 24 PART B).** `ava-utils` already has `clock::Clock`; the VM does not
+>   yet consume it. (This is a genuine determinism hazard in `ava-avm`, masked only by the harness clock-pin
+>   today; flagged for X.19.)
 
 ### Task M5.23: cargo-fuzz target for block/tx/op decoder
 **Crate:** ava-avm  ·  **Depends on:** M5.15, M5.5  ·  **Spec:** 02 §8 (fuzzing, block parsers), 02 §13.5
