@@ -470,6 +470,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-proposervm"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "ava-codec",
+ "ava-crypto",
+ "ava-types",
+ "ava-utils",
+ "ava-validators",
+ "ava-vm",
+ "hex",
+ "pretty_assertions",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "ava-secp256k1fx"
 version = "0.1.0"
 dependencies = [
