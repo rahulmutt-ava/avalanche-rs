@@ -1,0 +1,255 @@
+{
+  "codec": [
+    {
+      "name": "transfer_input",
+      "type": "TransferInput",
+      "hex": "000000000000075bcd15000000020000000300000007"
+    },
+    {
+      "name": "mint_output",
+      "type": "MintOutput",
+      "hex": "0000000000000000d431000000010000000251025c61fbcfc078f69334f834be6dd26d55a955c3344128e060128ede3523a24a461c8943ab0859"
+    },
+    {
+      "name": "transfer_output",
+      "type": "TransferOutput",
+      "hex": "00000000000000003039000000000000d431000000010000000251025c61fbcfc078f69334f834be6dd26d55a955c3344128e060128ede3523a24a461c8943ab0859"
+    },
+    {
+      "name": "output_owners",
+      "type": "OutputOwners",
+      "hex": "0000000000000000d431000000020000000251025c61fbcfc078f69334f834be6dd26d55a955c3344128e060128ede3523a24a461c8943ab0859"
+    },
+    {
+      "name": "input",
+      "type": "Input",
+      "hex": "000000000003000000000000000100000005"
+    },
+    {
+      "name": "credential",
+      "type": "Credential",
+      "hex": "000000000002000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80"
+    },
+    {
+      "name": "credential_empty",
+      "type": "Credential",
+      "hex": "000000000000"
+    }
+  ],
+  "keys": {
+    "k0": {
+      "priv_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "addr_hex": "3bc28d6d92d9073fb5e3adf481795eaf446bceed"
+    }
+  },
+  "multisig": [
+    {
+      "name": "ok_threshold1_one_sig",
+      "locktime": 0,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": ""
+    },
+    {
+      "name": "ok_threshold2_two_sigs",
+      "locktime": 0,
+      "threshold": 2,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0,
+        2
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00",
+        "9b8f34a59741cb38b7421a8f2f1ab42ba1837e5cf0f65bfe024b97d46f1fe2ee44d6752c9a0d71c43768816f8bfa6a4d72591c7667640f6fa9cb6a9d96a3b5f601"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": ""
+    },
+    {
+      "name": "ok_threshold3_all",
+      "locktime": 0,
+      "threshold": 3,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0,
+        1,
+        2
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00",
+        "623bdfbe900bffcec9a0ea2ce260c3cee2668ccdd1908b43afaed2bf84fded740f9971a3cf0da4796e7788c0bb2d200cd565ffbb69aa6db65ecaec3494626b0e00",
+        "9b8f34a59741cb38b7421a8f2f1ab42ba1837e5cf0f65bfe024b97d46f1fe2ee44d6752c9a0d71c43768816f8bfa6a4d72591c7667640f6fa9cb6a9d96a3b5f601"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": ""
+    },
+    {
+      "name": "matured_locktime_ok",
+      "locktime": 50,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        1
+      ],
+      "sigs_hex": [
+        "623bdfbe900bffcec9a0ea2ce260c3cee2668ccdd1908b43afaed2bf84fded740f9971a3cf0da4796e7788c0bb2d200cd565ffbb69aa6db65ecaec3494626b0e00"
+      ],
+      "clock_unix": 50,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": ""
+    },
+    {
+      "name": "timelocked",
+      "locktime": 200,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": "ErrTimelocked"
+    },
+    {
+      "name": "too_many_signers",
+      "locktime": 0,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0,
+        1
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00",
+        "623bdfbe900bffcec9a0ea2ce260c3cee2668ccdd1908b43afaed2bf84fded740f9971a3cf0da4796e7788c0bb2d200cd565ffbb69aa6db65ecaec3494626b0e00"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": "ErrTooManySigners"
+    },
+    {
+      "name": "too_few_signers",
+      "locktime": 0,
+      "threshold": 2,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": "ErrTooFewSigners"
+    },
+    {
+      "name": "wrong_sig",
+      "locktime": 0,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0
+      ],
+      "sigs_hex": [
+        "8dcc86b31157b39d1ea8ae7efd3f341f6ab9cdf692c572216fe7fd633b75227d23b9031ff86becd96bc607dbfe774eebac099087d6ddd484b42117cdfb8f080e01"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": "ErrWrongSig"
+    },
+    {
+      "name": "oob_index",
+      "locktime": 0,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        5
+      ],
+      "sigs_hex": [
+        "c50ed2e2c16d389d6594afc3b3798da6c5b02bb60b8df8e2df5d885ca446be4d638c6c9220ced27fe21b34cb6f9b3cb7e8336559e2af216c4dece2c7a1ae8b7a00"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": true,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": "ErrInputOutputIndexOutOfBounds"
+    },
+    {
+      "name": "bootstrap_skip_verification",
+      "locktime": 0,
+      "threshold": 1,
+      "addrs_hex": [
+        "3bc28d6d92d9073fb5e3adf481795eaf446bceed",
+        "531260aa2a199e228c537dfa42c82bea2c7c1f4d",
+        "fc7250a211deddc70ee5a2738de5f07817351cef"
+      ],
+      "sig_indices": [
+        0
+      ],
+      "sigs_hex": [
+        "8dcc86b31157b39d1ea8ae7efd3f341f6ab9cdf692c572216fe7fd633b75227d23b9031ff86becd96bc607dbfe774eebac099087d6ddd484b42117cdfb8f080e01"
+      ],
+      "clock_unix": 100,
+      "bootstrapped": false,
+      "tx_bytes_hex": "74686520756e7369676e6564207472616e73616374696f6e20627974657320746f206265207369676e6564",
+      "expect_err": ""
+    }
+  ]
+}

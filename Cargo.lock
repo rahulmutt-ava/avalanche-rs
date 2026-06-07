@@ -467,6 +467,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-secp256k1fx"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "ava-codec",
+ "ava-crypto",
+ "ava-types",
+ "ava-utils",
+ "ava-vm",
+ "hex",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ava-snow"
 version = "0.1.0"
 dependencies = [
