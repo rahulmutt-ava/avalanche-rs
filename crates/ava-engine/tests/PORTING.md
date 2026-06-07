@@ -291,3 +291,76 @@ Go reference (pinned `../avalanchego`):
   the providing node for an unknown parent), `engine_records_poll_on_chits`
   (completed poll → record_poll → set_preference → child accepted),
   `early_term_completes_poll` (3/4 unanimous chits complete the poll early).
+
+---
+
+# ava-engine — Snowman bootstrapper + state-sync (Task M3.12)
+
+Port of `snow/engine/snowman/bootstrap/` (bootstrapper + interval tree +
+acceptor) and `snow/engine/snowman/syncer/` (no-op state-summary handlers) into
+`crate::snowman::{bootstrap,syncer}` (specs 06 §4.3/§4.4).
+
+Go reference (pinned `../avalanchego`):
+- `bootstrap/bootstrapper.go` — frontier discovery → agreement → fetch → execute
+  → handoff.
+- `bootstrap/storage.go` (`process`/`execute`) — chain processing + height-order
+  replay.
+- `bootstrap/acceptor.go` — the `blockAcceptor` (consensus acceptor fires before
+  the block's VM accept).
+- `bootstrap/interval/{interval,tree,blocks}.go` — the interval tree.
+- `syncer/state_syncer.go` — the state-sync engine (no-op path).
+
+## Module → Go mapping
+
+| Rust (`snowman::bootstrap::`) | Go |
+|---|---|
+| `Bootstrapper` + `Config` + `Phase` | `bootstrap.Bootstrapper` + `Config` |
+| `interval::{Tree,Interval,Blocks,add_block}` | `interval.{Tree,Interval,Add}` + `PutBlock` |
+| `acceptor::execute` | `storage.go::execute` + `acceptor.go::blockAcceptor.Accept` |
+| `syncer::StateSyncer` | `syncer.stateSyncer` (no-op handlers + capability probe) |
+
+## Deliberate deviations / findings (record for spec/plan)
+
+1. **In-memory interval tree (no DB persistence).** Go's `interval.Tree` writes
+   each interval to a `database.KeyValueWriterDeleter` so a restarted node
+   resumes bootstrap. This port keeps the tree + fetched-block-bytes purely
+   in-memory (`interval::{Tree,Blocks}`) — the engine drives a single
+   uninterrupted pass. `Add`/`Remove`/`Contains`/`Flatten`/`Len` are faithful to
+   the Go btree logic (keyed by `upper_bound`, merge/extend/split identical).
+   The btree-custom-comparator is replaced by a `BTreeMap<upper_bound, Interval>`.
+
+2. **Frontier agreement is a `> total_weight/2` quorum.** Go uses an `Alpha`
+   weight majority from the config. The in-memory beacon model uses a simple
+   strict-majority weight threshold (`Config::weight_threshold`). **Recommended
+   spec note:** 06 §4.3 step 2 says "≥ a weight threshold of peers"; the exact
+   threshold constant should be pulled from `Parameters`/config when the full
+   beacon/StartupTracker wiring lands.
+
+3. **Bootstrapper is driven by handler callbacks, not the Go StartupTracker /
+   PeerTracker / ETA / batch-DB machinery.** The five-step state machine
+   (`Phase` enum) + a round-robin fetch over the beacon set is the essential
+   port; bandwidth sampling, ETA, genesis checkpoints, and DB batching are
+   dropped. `on_finished` is folded into `finish()` (sets `EngineState::NormalOp`).
+   **Finding:** the StartupTracker "should I start yet" gating and peer health
+   sampling belong with the network/validator wiring (M3.10 / a later task).
+
+4. **`acceptor::execute` toggles `ConsensusContext.executing`** for the replay
+   duration and fires `ctx.block_acceptor.accept(...)` **before** `blk.accept()`
+   (the §2.4 ordering invariant), replaying in ascending height order. The halt
+   token is checked between blocks (the test `halt_aborts_bootstrap` cancels
+   mid-stream and asserts no block is accepted + no handoff).
+
+5. **State-sync is the no-op skeleton only (06 §4.4).** `syncer::StateSyncer`
+   probes `StateSyncableVm::state_sync_enabled` (a non-syncable VM reports
+   `false`) and drops the inbound `StateSummaryFrontier`/`AcceptedStateSummary`
+   (+ `*Failed`) ops. The active out-of-band summary-fetch flow is **deferred**.
+
+## TDD (M3.12)
+
+- `src/snowman/bootstrap/interval.rs` unit: `add_merge_extend`,
+  `contains_and_remove_interior`, `add_block_signals_parent_fetch`.
+- `src/snowman/syncer.rs` unit: `state_sync_disabled_and_handlers_noop`.
+- `tests/bootstrap.rs`: `bootstrap_fetches_and_executes_range` (frontier →
+  agreement → fetch → height-ordered execute with acceptor-before-accept +
+  executing flag → Bootstrapping→NormalOp handoff), `halt_aborts_bootstrap`
+  (token cancel aborts the execute pass; no accepts, no handoff).

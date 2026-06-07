@@ -8,20 +8,24 @@
 //! * [`poll`] — the outstanding-[`PollSet`](poll::PollSet) with the
 //!   [`EarlyTermFactory`](poll::EarlyTermFactory) early-termination predicate.
 //! * [`getter`] — the read-only [`Getter`](getter::Getter) server side.
+//! * [`bootstrap`] — the [`Bootstrapper`](bootstrap::Bootstrapper) state machine
+//!   + interval tree + height-ordered acceptor.
+//! * [`syncer`] — the state-sync skeleton (no-op state-summary handlers).
 //! * [`issuer`] / [`voter`] — doc modules mapping the Go job machinery onto the
 //!   inline engine flow.
-//!
-//! M3.12 adds `bootstrap` (the bootstrapper state machine + interval tree +
-//! height-ordered acceptor) and `syncer` (the state-sync skeleton).
 
 pub mod adaptor;
+pub mod bootstrap;
 pub mod engine;
 pub mod getter;
 pub mod issuer;
 pub mod poll;
+pub mod syncer;
 pub mod voter;
 
 pub use adaptor::BlockAdaptor;
+pub use bootstrap::Bootstrapper;
 pub use engine::{Config, SnowmanEngine};
 pub use getter::Getter;
 pub use poll::{EarlyTermFactory, Poll, PollSet};
+pub use syncer::StateSyncer;
