@@ -18,11 +18,11 @@ use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 use ava_avm::state::{Chain, Diff, ReadOnlyChain, State};
-// Txs are read back via the genesis codec (specs 09 §5.3). M5.5 lands the real
-// 21-entry `txs::codec::GenesisCodec()` singleton; in this worktree we use the
-// crate's `txs::codec()` manager (same registration), since the storage layer is
+// Txs are read back via the genesis codec (specs 09 §5.3) — the real 21-entry
+// `txs::codec::GenesisCodec()` singleton from M5.5. The storage layer itself is
 // codec-agnostic and only round-trips opaque tx bytes.
-use ava_avm::txs::{BaseTx, Tx, UnsignedTx, codec};
+use ava_avm::txs::codec::GenesisCodec;
+use ava_avm::txs::{BaseTx, Tx, UnsignedTx};
 use ava_database::MemDb;
 use ava_database::error::Error as DbError;
 use ava_types::id::Id;
@@ -84,9 +84,9 @@ fn add_tx_then_get_tx_parses_via_genesis_codec() {
     let base = Arc::new(MemDb::new());
     let mut state = State::new(Arc::clone(&base)).expect("state");
 
-    let c = codec().expect("codec");
+    let c = GenesisCodec();
     let mut tx = Tx::new(UnsignedTx::Base(BaseTx::default()));
-    tx.initialize(&c).expect("initialize");
+    tx.initialize(c).expect("initialize");
     let tx_id = tx.id();
     let want_bytes = tx.bytes().to_vec();
 
@@ -96,7 +96,7 @@ fn add_tx_then_get_tx_parses_via_genesis_codec() {
     let reopened = State::new(Arc::clone(&base)).expect("reopen");
     let got = reopened.get_tx(tx_id).expect("get tx");
     // The stored bytes round-trip through the genesis codec into the same Tx.
-    let parsed = Tx::parse(&c, &got).expect("parse");
+    let parsed = Tx::parse(c, &got).expect("parse");
     assert_eq!(parsed.id(), tx_id);
     assert_eq!(parsed.unsigned, tx.unsigned);
     assert_eq!(got, want_bytes);
