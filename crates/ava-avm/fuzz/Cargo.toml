@@ -1,0 +1,24 @@
+# cargo-fuzz crate for ava-avm. Detached from the root workspace (own
+# `[workspace]` table) so `cargo build --workspace` ignores it; build with
+# `cargo +nightly fuzz build` (see plan/M5-xchain.md M5.23).
+[package]
+name = "ava-avm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ava-avm = { path = ".." }
+
+[[bin]]
+name = "decode_block"
+path = "fuzz_targets/decode_block.rs"
+test = false
+doc = false
+bench = false
