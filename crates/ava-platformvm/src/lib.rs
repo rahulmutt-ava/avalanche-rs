@@ -52,6 +52,7 @@ pub mod state;
 pub mod txs;
 pub mod utxo;
 pub mod validators;
+pub mod warp;
 
 pub use error::{Error, Result};
 

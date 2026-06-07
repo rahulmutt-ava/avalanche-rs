@@ -227,4 +227,51 @@ pub enum Error {
     /// Durango.
     #[error("AddDelegatorTx is not permitted post-Durango")]
     AddDelegatorTxPostDurango,
+
+    // ----- ACP-77 L1 lifecycle sentinels (M4.19, `txs/executor`) -----
+    /// `errMaxNumActiveValidators` — the converted subnet is already at the
+    /// configured maximum number of active L1 validators.
+    #[error("already at the max number of active validators")]
+    MaxNumActiveValidators,
+
+    /// `errCouldNotLoadL1Validator` — the referenced L1 validator could not be
+    /// loaded from state.
+    #[error("could not load L1 validator")]
+    CouldNotLoadL1Validator,
+
+    /// `errWarpMessageContainsStaleNonce` — a `SetL1ValidatorWeight` message's
+    /// nonce is below the validator's `MinNonce`.
+    #[error("warp message contains stale nonce")]
+    WarpMessageContainsStaleNonce,
+
+    /// `errRemovingLastValidator` — attempted to remove the last L1 validator
+    /// from a converted subnet (weight would drop to zero).
+    #[error("attempting to remove the last L1 validator from a converted subnet")]
+    RemovingLastValidator,
+
+    /// `errStateCorruption` — an invariant that should be unreachable was
+    /// violated (e.g. an active validator's `EndAccumulatedFee <= accruedFees`).
+    #[error("state corruption")]
+    StateCorruption,
+
+    /// `errWarpMessageExpired` — a `RegisterL1Validator` message's expiry is at or
+    /// before the current chain time.
+    #[error("warp message expired")]
+    WarpMessageExpired,
+
+    /// `errWarpMessageNotYetAllowed` — a `RegisterL1Validator` message's expiry is
+    /// further in the future than the allowed registration window.
+    #[error("warp message not yet allowed")]
+    WarpMessageNotYetAllowed,
+
+    /// `errWarpMessageAlreadyIssued` — a `RegisterL1Validator` message replays a
+    /// validation id that has already been issued (expiry-set replay guard).
+    #[error("warp message already issued")]
+    WarpMessageAlreadyIssued,
+
+    /// `errCouldNotLoadSubnetToL1Conversion` / `errWrongWarpMessageSourceChainID`
+    /// / `errWrongWarpMessageSourceAddress` — the embedded Warp message did not
+    /// originate from the subnet's recorded L1-conversion manager chain/address.
+    #[error("warp message source does not match the subnet's L1 conversion")]
+    WrongWarpMessageSource,
 }

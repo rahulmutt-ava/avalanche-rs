@@ -23,6 +23,7 @@
 //! executor's files.
 
 pub mod backend;
+pub mod l1_executor;
 pub mod staker_tx_verification;
 pub mod standard_tx_executor;
 pub mod state_changes;
