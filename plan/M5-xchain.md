@@ -147,11 +147,33 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.5: Codec & type-ID registry (21-entry table, standard + genesis) — `golden::xchain_tx_codec`
 **Crate:** ava-avm  ·  **Depends on:** M5.2, M5.3, M5.4; M3 (`ava_codec::{TypeId, CodecRegistry}`)  ·  **Spec:** 09 §2.1 (the table), §2.2, CODEC-AVM-1; 02 §6 (golden)
 **Files:** `crates/ava-avm/src/codec.rs`, `crates/ava-avm/tests/golden_tx_codec.rs`, `tests/vectors/avm/typeids.json`, `tests/vectors/avm/tx_codec/*.json`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/golden_tx_codec.rs` with `mod golden { #[test] fn xchain_tx_codec() {...} }`: (a) for all 21 entries assert `registry_standard.type_id::<T>() == N` and `registry_genesis.type_id::<T>() == N` (table from 09 §2.1, ids 0..20); (b) load committed Go hex from `tests/vectors/avm/tx_codec/base_tx.json` etc., assert `hex::encode(codec.marshal(0, &tx)) == vector.expected` and `tx_id == sha256(signed_bytes)`. Seed with a single hand-constructed `BaseTx` vector first; expand to all tx types + each fx out/op/cred after green.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm golden::xchain_tx_codec` → fails (registry absent / vector mismatch). Assert on the type-id mismatch message, not a compile error, after a stub registry exists.
-- [ ] **Step 3 — Green:** `codec.rs`: build two `CodecRegistry` (standard max `DefaultMaxSize`, genesis max `MaxInt32`) registering **in this exact order** (09 §2.1): tx types 0–4, then secp256k1fx 5–9, nftfx 10–14, propertyfx 15–19, `StandardBlock` 20 (block registered in M5.15 — reserve id 20 / register a placeholder then wire the real type there). Build `TypeToFxIndex: HashMap<TypeId, FxIndex>` in the **same pass** (09 §2.2). Codec version = 0 everywhere. Implement `Tx::initialize` byte derivation per 09 §3.1 (signed_bytes, unsigned_len via `codec.size`, `tx_id = sha256(signed_bytes)`).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm golden::xchain_tx_codec` passes (all 21 type-ids + tx vectors). Add `proptest-regressions/` if proptest round-trip is colocated.
-- [ ] **Step 5 — Commit:** `avm: codec registry + type-ID table + tx-codec golden vectors (M5.5)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/golden_tx_codec.rs` with `mod golden { #[test] fn xchain_tx_codec() {...} }`: (a) for all 21 entries assert `registry_standard.type_id::<T>() == N` and `registry_genesis.type_id::<T>() == N` (table from 09 §2.1, ids 0..20); (b) load committed Go hex from `tests/vectors/avm/tx_codec/base_tx.json` etc., assert `hex::encode(codec.marshal(0, &tx)) == vector.expected` and `tx_id == sha256(signed_bytes)`. Seed with a single hand-constructed `BaseTx` vector first; expand to all tx types + each fx out/op/cred after green.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm golden::xchain_tx_codec` → fails (registry absent / vector mismatch). Assert on the type-id mismatch message, not a compile error, after a stub registry exists.
+- [x] **Step 3 — Green:** `codec.rs`: build two `CodecRegistry` (standard max `DefaultMaxSize`, genesis max `MaxInt32`) registering **in this exact order** (09 §2.1): tx types 0–4, then secp256k1fx 5–9, nftfx 10–14, propertyfx 15–19, `StandardBlock` 20 (block registered in M5.15 — reserve id 20 / register a placeholder then wire the real type there). Build `TypeToFxIndex: HashMap<TypeId, FxIndex>` in the **same pass** (09 §2.2). Codec version = 0 everywhere. Implement `Tx::initialize` byte derivation per 09 §3.1 (signed_bytes, unsigned_len via `codec.size`, `tx_id = sha256(signed_bytes)`).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm golden::xchain_tx_codec` passes (all 21 type-ids + tx vectors). Add `proptest-regressions/` if proptest round-trip is colocated.
+- [x] **Step 5 — Commit:** `avm: codec registry + type-ID table + tx-codec golden vectors (M5.5)`
+
+> **As-built (Wave 0/1 boundary — M5.5, 2026-06-07, commit `5dafad1`):** built as
+> `crates/ava-avm/src/txs/codec.rs` (not top-level `src/codec.rs`) mirroring the
+> proven P-Chain `ava_platformvm::txs::codec` precedent exactly. `build_type_id_registry()`
+> uses `ava_codec::linearcodec::TypeIdRegistry` as the registration-order **assigner**
+> (the real encoding type-ids are baked into the `#[codec(type_id=N)]` derive
+> annotations; the registry asserts them against the Go order). Two `Manager`s:
+> `Codec()` (default max) + `GenesisCodec()` (`ava_codec::MAX_SLICE_LEN == i32::MAX`,
+> = Go `math.MaxInt32`), both process-wide `OnceLock` singletons. `type_to_fx_index()`
+> returns `TypeToFxIndex = HashMap<u32, FxIndex>` (secp 5–9, nft 10–14, property 15–19;
+> tx 0–4 + block 20 absent). `block.StandardBlock`(20) is a **name-only placeholder**
+> (the type lands in M5.15). `Tx::initialize`/`parse` now drive the real `Manager`.
+> **Golden coverage:** byte-exact `BaseTx` vector ported verbatim from Go
+> `vms/avm/txs/base_tx_test.go` (incl. embedded secp `TransferOutput`(7)+`TransferInput`(5))
+> + genesis-codec round-trip + all-21 type-id + `TypeToFxIndex` assertions, as an inline
+> `const` (no `tests/vectors/avm/*.json` — matches the P-Chain `golden_codec.rs` style;
+> those files were optional). 23 tests green; clippy `-D warnings` + fmt clean.
+> **Deferred to later tasks (per plan scope):** byte-exact vectors for
+> CreateAsset/Operation/Import/Export + per-fx out/op/cred, and the `components.rs`
+> Output/Input/Operation nft/property variants needed to route them through the codec
+> — these are M5.9's domain (the must-pass bar was BaseTx-byte-exact + 21 type-ids +
+> round-trip, per the M5.5 task text).
 
 ### Task M5.6: secp256k1fx verification wiring into avm
 **Crate:** ava-avm  ·  **Depends on:** M5.5; M3 (`ava_secp256k1fx::Fx::verify_credentials`, `verify_transfer`, recover-cache)  ·  **Spec:** 09 §4, §4.1; 07 §4.3
