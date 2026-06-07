@@ -25,6 +25,7 @@
 pub mod advance_time;
 pub mod atomic_tx_executor;
 pub mod backend;
+pub mod l1_executor;
 pub mod proposal_tx_executor;
 pub mod staker_tx_verification;
 pub mod standard_tx_executor;
