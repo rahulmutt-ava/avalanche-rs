@@ -798,9 +798,16 @@ pipeline (§8).
 
 ```rust
 /// `metervm.blockVM`. Wraps a `ChainVm`, times every method into a
-/// per-method Prometheus histogram (same metric names/labels as Go — golden
-/// tested, 00 §7.3). Probes inner optional capabilities once at construction so
-/// the wrapper re-exposes them (`as_batched`, etc.).
+/// per-method **averager** (a `<name>_count` counter + `<name>_sum` ns gauge —
+/// the faithful port of Go `utils/metric/averager.go`, NOT a bucketed
+/// `Histogram`; metric *names/labels* are byte-identical to Go so the name-parity
+/// golden holds — 00 §7.3). A `_bucket` histogram can swap in under the same
+/// prefix later. Probes inner optional capabilities once at construction so the
+/// wrapper re-exposes them (`as_batched`, etc.). As-built M3.16: capability
+/// forwarding = probe-once bool + `Some(self)` (the wrapper implements the
+/// optional trait, delegating to `inner.as_*()`); the
+/// `(should_)verify_with_context` averagers are registered for name-parity but
+/// not observed until a per-block `MeterBlock` wrapper lands.
 pub struct MeterVm<V: ChainVm> { inner: V, metrics: BlockMetrics }
 
 /// `tracedvm.blockVM`. Wraps a `ChainVm`, opening an OTel span per method

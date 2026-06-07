@@ -772,6 +772,14 @@ the `Sender` immediately fails requests to it (and skips it in sampling) for a
 randomized cooldown, preventing the engine from stalling on an unresponsive
 high-stake validator. Port the thresholds and the randomized duration.
 
+> **As-built (M3.10):** the initial `ava-engine` port implements the
+> consecutive-failure-threshold model described above (threshold + randomized
+> cooldown). Go's actual `benchlist.go`, however, benches when an EWMA
+> `failureProbability` crosses a `benchProbability`, driven by a single consumer
+> goroutine — a richer model. The threshold port is sufficient for the engine
+> wiring and tests; upgrade to the EWMA model if exact Go bench parity is later
+> required (e.g. a differential bench test).
+
 ### 5.6 ResourceTracker / Targeter
 
 `snow/networking/tracker/`. Measures per-peer CPU and disk usage attributed to
