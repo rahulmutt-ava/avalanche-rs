@@ -88,6 +88,11 @@ pub enum Error {
     #[error("no feature extensions specified")]
     NoFxs,
 
+    // ---- nftfx payload ---------------------------------------------------
+    /// `errPayloadTooLarge` — nftfx payload exceeds the 1 KiB limit.
+    #[error("nftfx payload exceeds maximum size")]
+    PayloadTooLarge,
+
     // ---- CreateAssetTx name / symbol / denomination ----------------------
     /// `errNameTooLong`.
     #[error("asset name is too long")]

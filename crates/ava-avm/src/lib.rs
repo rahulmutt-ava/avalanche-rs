@@ -19,14 +19,12 @@
 
 #![forbid(unsafe_code)]
 
-// Dependencies declared up front but not yet consumed by the skeleton; each is
-// wired in by a later M5 wave task, which drops its silencer.
-// `unused_crate_dependencies` (warn) would otherwise fire on the bare crate.
+// `ava_codec_derive` is consumed only transitively (the `#[derive(AvaCodec)]`
+// macro is re-exported by `ava_codec`), so the direct dependency still reads as
+// unused to `unused_crate_dependencies` (warn) — keep its silencer.
+// (M5.2 drops the ava-crypto / ava-types / bytes silencers: the `txs` module now
+// consumes them directly.)
 use ava_codec_derive as _;
-use ava_crypto as _;
-use ava_secp256k1fx as _;
-use ava_types as _;
-use bytes as _;
 
 // Dev-dependencies not yet exercised by this crate's in-crate tests; each is
 // wired in by a later M5 task (proptest/rstest fx & roundtrip tests, hex golden
@@ -44,6 +42,13 @@ use rstest as _;
 
 pub mod error;
 pub mod fx_index;
+pub mod nftfx;
+pub mod propertyfx;
+pub mod txs;
 
 pub use error::{Error, Result};
 pub use fx_index::FxIndex;
+pub use txs::{
+    BaseTx, CreateAssetTx, Credential, ExportTx, FxCredential, FxOperation, ImportTx, InitialState,
+    Operation, OperationTx, Tx, UnsignedTx,
+};

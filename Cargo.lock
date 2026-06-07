@@ -470,6 +470,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-avm"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "ava-codec",
+ "ava-codec-derive",
+ "ava-crypto",
+ "ava-secp256k1fx",
+ "ava-types",
+ "ava-vm",
+ "bytes",
+ "hex",
+ "pretty_assertions",
+ "proptest",
+ "rstest",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-blockdb"
 version = "0.1.0"
 dependencies = [
