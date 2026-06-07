@@ -104,33 +104,33 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.3: Per-tx structs (Apricot/Banff/Durango) + `syntactic_verify`
 **Crate:** ava-platformvm  ·  **Depends on:** M4.2  ·  **Spec:** 08 §2.2 (per-tx field table), §2.1; 23 (genesis tx shapes); ATOMIC-1 (00 §11.1.7)
 **Files:** `crates/ava-platformvm/src/txs/base_tx.rs`, `add_validator.rs`, `add_delegator.rs`, `add_subnet_validator.rs`, `add_permissionless_validator.rs`, `add_permissionless_delegator.rs`, `remove_subnet_validator.rs`, `transform_subnet.rs`, `create_subnet.rs`, `create_chain.rs`, `transfer_subnet_ownership.rs`, `import_export.rs`, `advance_time.rs`, `reward_validator.rs`, `validator.rs` (the `Validator`/`SubnetValidator` shared structs).
-- [ ] **Step 1 — Red:** Add `golden::pchain_tx_codec_app_validator` (the TDD ENTRY POINT) loading `tests/vectors/platformvm/add_permissionless_validator_tx.json` (Go-extracted) and asserting `encode(decode(bytes)) == bytes` and `tx_id == expected`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-platformvm pchain_tx_codec_app_validator` → fails (`AddPermissionlessValidatorTx` undefined).
-- [ ] **Step 3 — Green:** Define all structs in the §2.2 field table, each `#[derive(AvaCodec)]`. `BaseTx { network_id: u32, blockchain_id: Id, outs: Vec<TransferableOutput>, ins: Vec<TransferableInput>, memo: Vec<u8> }`. `Validator { node_id, start: u64, end: u64, wght: u64 }`; `SubnetValidator { validator, subnet }`. `AddPermissionlessValidatorTx { base, validator, subnet, signer: Signer, stake_outs, validator_rewards_owner, delegator_rewards_owner, delegation_shares: u32 }`. Implement `syntactic_verify` per 08 §2.2: outputs sorted (`avax::is_sorted_transferable_outputs`), inputs sorted & unique, stake outputs sorted & summing to `validator.wght`, `delegation_shares <= reward::PERCENT_DENOMINATOR (1_000_000)`, BLS signer present iff Primary Network; memoize via `OnceCell<()>` (not serialized).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-platformvm pchain_tx_codec_app_validator` passes.
-- [ ] **Step 5 — Commit:** `ava-platformvm: per-tx structs + syntactic_verify (apricot/banff/durango)`
+- [x] **Step 1 — Red:** Add `golden::pchain_tx_codec_app_validator` (the TDD ENTRY POINT) loading `tests/vectors/platformvm/add_permissionless_validator_tx.json` (Go-extracted) and asserting `encode(decode(bytes)) == bytes` and `tx_id == expected`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-platformvm pchain_tx_codec_app_validator` → fails (`AddPermissionlessValidatorTx` undefined).
+- [x] **Step 3 — Green:** Define all structs in the §2.2 field table, each `#[derive(AvaCodec)]`. `BaseTx { network_id: u32, blockchain_id: Id, outs: Vec<TransferableOutput>, ins: Vec<TransferableInput>, memo: Vec<u8> }`. `Validator { node_id, start: u64, end: u64, wght: u64 }`; `SubnetValidator { validator, subnet }`. `AddPermissionlessValidatorTx { base, validator, subnet, signer: Signer, stake_outs, validator_rewards_owner, delegator_rewards_owner, delegation_shares: u32 }`. Implement `syntactic_verify` per 08 §2.2: outputs sorted (`avax::is_sorted_transferable_outputs`), inputs sorted & unique, stake outputs sorted & summing to `validator.wght`, `delegation_shares <= reward::PERCENT_DENOMINATOR (1_000_000)`, BLS signer present iff Primary Network; memoize via `OnceCell<()>` (not serialized).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-platformvm pchain_tx_codec_app_validator` passes.
+- [x] **Step 5 — Commit:** `ava-platformvm: per-tx structs + syntactic_verify (apricot/banff/durango)`
 
 ---
 
 ### Task M4.4: ACP-77 L1 tx structs, `Signer`, `stakeable` outputs
 **Crate:** ava-platformvm  ·  **Depends on:** M4.2  ·  **Spec:** 08 §2.2 (L1 rows), §6 (ACP-77 lifecycle); 20 §3.1 (RegistryPayload referenced); 08 §2.1 (ids 21,22,27,28,35–42)
 **Files:** `crates/ava-platformvm/src/txs/convert_subnet_to_l1.rs`, `register_l1_validator.rs`, `set_l1_validator_weight.rs`, `increase_l1_validator_balance.rs`, `disable_l1_validator.rs`, `crates/ava-platformvm/src/txs/auto_renew.rs` (Helicon 40–42), `crates/ava-platformvm/src/signer.rs`, `crates/ava-platformvm/src/stakeable.rs`.
-- [ ] **Step 1 — Red:** Add `golden::pchain_tx_codec_l1` loading `tests/vectors/platformvm/convert_subnet_to_l1_tx.json` and `register_l1_validator_tx.json` (the Go `*_test.json` fixtures, 08 §11.1), asserting round-trip + tx_id under the **GenesisCodec** (some are oversized).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-platformvm pchain_tx_codec_l1` → fails.
-- [ ] **Step 3 — Green:** Define `ConvertSubnetToL1Tx { base, subnet, chain_id, address: Vec<u8>, validators: Vec<ConvertSubnetToL1Validator>, subnet_auth }`, `RegisterL1ValidatorTx { base, balance: u64, proof_of_possession: [u8;96], message: Vec<u8> }`, `SetL1ValidatorWeightTx { base, message: Vec<u8> }`, `IncreaseL1ValidatorBalanceTx { base, validation_id: Id, balance: u64 }`, `DisableL1ValidatorTx { base, validation_id: Id, disable_auth: Verifiable }`, and the three Helicon auto-renew txs. `signer.rs`: `enum Signer { Empty (type_id 27), ProofOfPossession(ProofOfPossession) (type_id 28) }` with `ProofOfPossession { public_key: [u8;48], proof: [u8;96] }` and `verify()` via `ava-crypto::bls::verify_proof_of_possession` (08 §8). `stakeable.rs`: `LockIn` (Input, type_id 21) / `LockOut { locktime, transferable_out }` (Output, type_id 22).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-platformvm pchain_tx_codec_l1` passes.
-- [ ] **Step 5 — Commit:** `ava-platformvm: ACP-77 L1 txs + signer + stakeable outputs`
+- [x] **Step 1 — Red:** Add `golden::pchain_tx_codec_l1` loading `tests/vectors/platformvm/convert_subnet_to_l1_tx.json` and `register_l1_validator_tx.json` (the Go `*_test.json` fixtures, 08 §11.1), asserting round-trip + tx_id under the **GenesisCodec** (some are oversized).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-platformvm pchain_tx_codec_l1` → fails.
+- [x] **Step 3 — Green:** Define `ConvertSubnetToL1Tx { base, subnet, chain_id, address: Vec<u8>, validators: Vec<ConvertSubnetToL1Validator>, subnet_auth }`, `RegisterL1ValidatorTx { base, balance: u64, proof_of_possession: [u8;96], message: Vec<u8> }`, `SetL1ValidatorWeightTx { base, message: Vec<u8> }`, `IncreaseL1ValidatorBalanceTx { base, validation_id: Id, balance: u64 }`, `DisableL1ValidatorTx { base, validation_id: Id, disable_auth: Verifiable }`, and the three Helicon auto-renew txs. `signer.rs`: `enum Signer { Empty (type_id 27), ProofOfPossession(ProofOfPossession) (type_id 28) }` with `ProofOfPossession { public_key: [u8;48], proof: [u8;96] }` and `verify()` via `ava-crypto::bls::verify_proof_of_possession` (08 §8). `stakeable.rs`: `LockIn` (Input, type_id 21) / `LockOut { locktime, transferable_out }` (Output, type_id 22).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-platformvm pchain_tx_codec_l1` passes.
+- [x] **Step 5 — Commit:** `ava-platformvm: ACP-77 L1 txs + signer + stakeable outputs`
 
 ---
 
 ### Task M4.5: `Block` enum, `parse`, byte-exact block_id hashing
 **Crate:** ava-platformvm  ·  **Depends on:** M4.2  ·  **Spec:** 08 §4.1 (block enum + byte order), §4.2 (oracle model); 23 §4.1 (genesis block)
 **Files:** `crates/ava-platformvm/src/block/mod.rs`, `crates/ava-platformvm/src/block/codec.rs`, `crates/ava-platformvm/src/block/parse.rs`, `crates/ava-platformvm/src/block/apricot.rs`, `crates/ava-platformvm/src/block/banff.rs`.
-- [ ] **Step 1 — Red:** Add `golden::pchain_block_hash` loading `tests/vectors/platformvm/banff_standard_block.json` + `apricot_commit_block.json` and asserting `Block::parse(bytes).id() == expected_id` (sha256 of codec bytes) and `encode == bytes`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-platformvm pchain_block_hash` → fails.
-- [ ] **Step 3 — Green:** Define `enum Block` with the 9 variants & type_ids 0–4, 29–32 (08 §4.1) over the **shared** registry (same managers as M4.2). `CommonBlock { parent_id: Id, height: u64 }`. Apricot variants per §4.1; Banff variants prefix `time: u64` then (standard/proposal) `Vec<Tx>`. **Byte-exact field order**: `BanffProposalBlock` lays out `time`, then `transactions: Vec<Tx>`, then the embedded `ApricotProposalBlock` (single proposal `Tx`); `Txs()` returns `decision_txs ++ [proposal_tx]` (§4.1). `block_id = sha256(codec_bytes)`. `Block::parse(codec, bytes)` (zero-copy). Wire the fuzz target from M4.1 to `Block::parse`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-platformvm pchain_block_hash` passes.
-- [ ] **Step 5 — Commit:** `ava-platformvm: Block enum + parse + byte-exact block_id`
+- [x] **Step 1 — Red:** Add `golden::pchain_block_hash` loading `tests/vectors/platformvm/banff_standard_block.json` + `apricot_commit_block.json` and asserting `Block::parse(bytes).id() == expected_id` (sha256 of codec bytes) and `encode == bytes`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-platformvm pchain_block_hash` → fails.
+- [x] **Step 3 — Green:** Define `enum Block` with the 9 variants & type_ids 0–4, 29–32 (08 §4.1) over the **shared** registry (same managers as M4.2). `CommonBlock { parent_id: Id, height: u64 }`. Apricot variants per §4.1; Banff variants prefix `time: u64` then (standard/proposal) `Vec<Tx>`. **Byte-exact field order**: `BanffProposalBlock` lays out `time`, then `transactions: Vec<Tx>`, then the embedded `ApricotProposalBlock` (single proposal `Tx`); `Txs()` returns `decision_txs ++ [proposal_tx]` (§4.1). `block_id = sha256(codec_bytes)`. `Block::parse(codec, bytes)` (zero-copy). Wire the fuzz target from M4.1 to `Block::parse`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-platformvm pchain_block_hash` passes.
+- [x] **Step 5 — Commit:** `ava-platformvm: Block enum + parse + byte-exact block_id`
 
 ---
 
@@ -170,11 +170,11 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.9: L1 validator continuous fee (ACP-77)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.1, M4.8  ·  **Spec:** 08 §6 (continuous fee); 21 §2b (the loop + golden table)
 **Files:** `crates/ava-platformvm/src/validators/fee.rs`.
-- [ ] **Step 1 — Red:** Add `golden::l1_validator_fee` loading the full `validators/fee/fee_test.go` table (21 §2b, esp. the `177 321 939` per-second-loop-with-underflow row and the `122 880 = 60·2048` constant-price rows). Add `prop::l1_fee_zero_excess_fast_path` (once excess hits 0 it stays 0).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm golden::l1_validator_fee` → fails.
-- [ ] **Step 3 — Green:** Implement `L1State { current, excess }`, `L1Config { target, min_price, k }`, `advance_one`/`advance_time` (excess only), `cost_of(c, seconds)` and `seconds_remaining(c, max, funds)` EXACTLY per 21 §2b: constant-price fast path when `current==target`; else **advance excess one second BEFORE pricing each second**, with the zero-excess short-circuit (`+= min_price·remaining`). Genesis constants: `Capacity=20_000`, `Target=10_000`, `MinPrice=512`, `K`=1_246_488_515 (mainnet) / 51_937_021 (Fuji). Reuses `calculate_price` from M4.8.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm golden::l1_validator_fee prop::l1_fee_zero_excess_fast_path` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: ACP-77 L1 validator continuous fee`
+- [x] **Step 1 — Red:** Add `golden::l1_validator_fee` loading the full `validators/fee/fee_test.go` table (21 §2b, esp. the `177 321 939` per-second-loop-with-underflow row and the `122 880 = 60·2048` constant-price rows). Add `prop::l1_fee_zero_excess_fast_path` (once excess hits 0 it stays 0).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm golden::l1_validator_fee` → fails.
+- [x] **Step 3 — Green:** Implement `L1State { current, excess }`, `L1Config { target, min_price, k }`, `advance_one`/`advance_time` (excess only), `cost_of(c, seconds)` and `seconds_remaining(c, max, funds)` EXACTLY per 21 §2b: constant-price fast path when `current==target`; else **advance excess one second BEFORE pricing each second**, with the zero-excess short-circuit (`+= min_price·remaining`). Genesis constants: `Capacity=20_000`, `Target=10_000`, `MinPrice=512`, `K`=1_246_488_515 (mainnet) / 51_937_021 (Fuji). Reuses `calculate_price` from M4.8.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm golden::l1_validator_fee prop::l1_fee_zero_excess_fast_path` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: ACP-77 L1 validator continuous fee`
 
 ---
 
@@ -192,11 +192,11 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.11: `ValidatorMetadata` codec v0/v1/v2 + length-based legacy fallbacks
 **Crate:** ava-platformvm  ·  **Depends on:** M4.2  ·  **Spec:** 08 §3.4 (ACP-236 metadata codec, three versions + fallbacks)
 **Files:** `crates/ava-platformvm/src/state/metadata_validator.rs`, `crates/ava-platformvm/src/state/metadata_codec.rs`.
-- [ ] **Step 1 — Red:** Add `golden::metadata_codec_v2` round-tripping `ValidatorMetadata` at v0/v1/v2 against Go vectors (`metadata_validator_test.go`) AND the length-based fallbacks: 0 bytes (nil), 8 bytes (potential reward only), `VERSION_SIZE+3*8` bytes (`preDelegateeRewardMetadata`).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm metadata_codec_v2` → fails.
-- [ ] **Step 3 — Green:** Separate `MetadataCodec` manager (08 §3.4) with version tag selecting fields via `#[codec(version = N)]`: v0 `{up_duration, last_updated, potential_reward, potential_delegatee_reward}`; v1 adds `staker_start_time`; v2 adds `accrued_validation_rewards, accrued_delegatee_rewards, auto_compound_reward_shares: u32, next_period, staker_end_time`; non-serialized `tx_id`. `parse_validator_metadata` reproduces the length-based legacy fallbacks before full codec decode. Auto-renewed effective weight = `tx.weight + accrued_validation_rewards + accrued_delegatee_rewards`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm metadata_codec_v2` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: validator metadata codec v0/v1/v2 + legacy fallbacks`
+- [x] **Step 1 — Red:** Add `golden::metadata_codec_v2` round-tripping `ValidatorMetadata` at v0/v1/v2 against Go vectors (`metadata_validator_test.go`) AND the length-based fallbacks: 0 bytes (nil), 8 bytes (potential reward only), `VERSION_SIZE+3*8` bytes (`preDelegateeRewardMetadata`).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm metadata_codec_v2` → fails.
+- [x] **Step 3 — Green:** Separate `MetadataCodec` manager (08 §3.4) with version tag selecting fields via `#[codec(version = N)]`: v0 `{up_duration, last_updated, potential_reward, potential_delegatee_reward}`; v1 adds `staker_start_time`; v2 adds `accrued_validation_rewards, accrued_delegatee_rewards, auto_compound_reward_shares: u32, next_period, staker_end_time`; non-serialized `tx_id`. `parse_validator_metadata` reproduces the length-based legacy fallbacks before full codec decode. Auto-renewed effective weight = `tx.weight + accrued_validation_rewards + accrued_delegatee_rewards`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm metadata_codec_v2` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: validator metadata codec v0/v1/v2 + legacy fallbacks`
 
 ---
 

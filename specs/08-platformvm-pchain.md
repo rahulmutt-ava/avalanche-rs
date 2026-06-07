@@ -242,10 +242,24 @@ must reproduce the prefix-length trick** to recover unsigned bytes for caching.
 > M4.15** (which must embed `TransferableInput`/`TransferableOutput`/`OutputOwners` as tx
 > fields, shared with the X-Chain): promote the `ava-secp256k1fx` types to implement the public
 > `ava_codec` codec traits (their `marshal_fields` already does the byte-exact work) so P-Chain
-> **and** X-Chain reuse one definition rather than each maintaining a mirror. Until that lands,
-> the local-mirror pattern is the interim. (Codec-derive aside: `Vec<[u8; 65]>` cannot be
-> auto-derived because the derive's generic `Vec<T>` requires `T: Default`, which `[u8; 65]`
-> lacks — `Credential` needs a hand-written codec impl regardless of approach.)
+> **and** X-Chain reuse one definition rather than each maintaining a mirror.
+>
+> **DONE (M4.3).** The promotion landed: `ava-secp256k1fx`'s `OutputOwners`/`Input`/`TransferInput`/
+> `MintOutput`/`TransferOutput`/`Credential` now implement public `ava_codec::Serializable`/
+> `Deserializable` (writing only their `serialize:"true"` fields — no version/typeID prefix), and
+> `Id`/`ShortId`/`NodeId` got public codec impls in `ava-codec::ids` (since `ava-types` cannot
+> depend on `ava-codec`). P-Chain tx fields embed fx payloads via **codec-serializable interface
+> enums** in `ava-platformvm/src/txs/components.rs` (`Owner`=11, `Output`=7/22, `Input`=5/21,
+> `Auth`=10) that emit the `u32` typeID + payload exactly as Go's `reflectcodec` does for an
+> interface field; the recursive `LockOut→Output→LockOut` is broken with `Box`. The `ava_vm::
+> components::avax` `TransferableInput/Output/BaseTx` (which hold `Arc<dyn TransferableOut>` with
+> no codec support) are **not** used as codec fields — `components.rs` mirrors their shapes with
+> the fx payload replaced by the typed enum. Concretely: `subnet_auth`/`disable_auth`
+> (`verify.Verifiable`) is `secp256k1fx.Input` (type_id 10); `fx.Owner` is `OutputOwners`
+> (type_id 11). The `tx.rs::Credential` mirror is still retained for the `Vec<[u8; 65]>` reason
+> below. (Codec-derive aside: `Vec<[u8; 65]>` cannot be auto-derived because the derive's generic
+> `Vec<T>` requires `T: Default`, which `[u8; 65]` lacks — `Credential` needs a hand-written codec
+> impl regardless of approach.)
 
 ### 2.4 Executor visitors (semantic verification + state transition)
 
@@ -400,7 +414,16 @@ becomes an overlay map in `Diff`.
 
 `MetadataCodec` is a **separate manager** (`state/metadata_codec.go`) with **three versions**
 v0/v1/v2 selected by the value's serialized version tag (`03` §2 version-prefixed records). Fields
-are gated by version tag — port via `#[codec(version = N)]` on the struct fields:
+are gated by version tag.
+
+> **DONE (M4.11) — hand-rolled, not derived.** `ava-codec-derive` does **not** implement
+> `#[codec(version = N)]` (no `version` token exists in the derive crate), and `Manager` does not
+> do version-gated fields. The `#[codec(version = N)]` sketch below is illustrative only; the
+> shipped impl hand-rolls `marshal_fields`/`unmarshal_fields` over `Packer` (the same pattern
+> `ava-secp256k1fx` uses): a 2-byte big-endian version prefix, fields emitted/read in declaration
+> order gated `<= version`, `UnknownVersion` for unregistered versions, and a mandatory
+> trailing-byte (`ExtraSpace`) check on decode. `last_updated` is kept as `u64` unix-seconds (the
+> single source of truth); Go's derived `lastUpdated time.Time` mirror is not modeled.
 
 ```rust
 /// Go: vms/platformvm/state/metadata_validator.go (validatorMetadata)
