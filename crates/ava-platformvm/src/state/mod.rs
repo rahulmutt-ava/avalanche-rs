@@ -11,6 +11,8 @@
 
 pub mod chain;
 pub mod diff;
+pub mod diff_iterators;
+pub mod disk_staker_diff_iterator;
 pub mod l1_validator;
 pub mod metadata_codec;
 pub mod metadata_validator;
