@@ -137,4 +137,94 @@ pub enum Error {
     /// expected fixed length (`state/disk_staker_diff_iterator.go`, 08 §7.1).
     #[error("unexpected weight value length")]
     UnexpectedWeightValueLength,
+
+    // ----- executor sentinels (M4.16, `txs/executor`) -----
+    /// `ErrWeightTooLarge` — a validator's weight exceeds the configured maximum.
+    #[error("weight of this validator is too large")]
+    WeightTooLarge,
+
+    /// `ErrInsufficientDelegationFee` — the declared delegation fee is below the
+    /// configured minimum.
+    #[error("staker charges an insufficient delegation fee")]
+    InsufficientDelegationFee,
+
+    /// `ErrStakeTooShort` — the staking period is shorter than the minimum.
+    #[error("staking period is too short")]
+    StakeTooShort,
+
+    /// `ErrStakeTooLong` — the staking period is longer than the maximum.
+    #[error("staking period is too long")]
+    StakeTooLong,
+
+    /// `ErrFlowCheckFailed` — the value-conservation flow check failed.
+    #[error("flow check failed")]
+    FlowCheckFailed,
+
+    /// `ErrNotValidator` — the referenced node is not a current/pending
+    /// validator (of the primary network or the named subnet).
+    #[error("isn't a current or pending validator")]
+    NotValidator,
+
+    /// `ErrRemovePermissionlessValidator` — attempted to remove a permissionless
+    /// validator via `RemoveSubnetValidatorTx`.
+    #[error("attempting to remove permissionless validator")]
+    RemovePermissionlessValidator,
+
+    /// `ErrWrongStakedAssetID` — the stake output asset is not the subnet's
+    /// configured staking asset.
+    #[error("incorrect staked assetID")]
+    WrongStakedAssetId,
+
+    /// `ErrDuplicateValidator` — the node is already a validator of the subnet.
+    #[error("duplicate validator")]
+    DuplicateValidator,
+
+    /// `ErrAlreadyValidator` — the node is already a primary-network validator.
+    #[error("already a validator")]
+    AlreadyValidator,
+
+    /// `ErrTimestampNotBeforeStartTime` — pre-Durango, the staker start time is
+    /// not strictly after the chain time.
+    #[error("chain timestamp not before start time")]
+    TimestampNotBeforeStartTime,
+
+    /// `errTimeTooAdvanced` — pre-Durango, the staker start time is too far in
+    /// the future (beyond `MaxFutureStartTime`).
+    #[error("staker start time too far in the future")]
+    TimeTooAdvanced,
+
+    /// `errPeriodMismatch` — the proposed staking period is not inside the
+    /// dependent (primary-network) staking period.
+    #[error("proposed staking period is not inside dependent staking period")]
+    PeriodMismatch,
+
+    /// `errWrongNumberOfCredentials` — the tx has no credential available for the
+    /// subnet/owner authorization.
+    #[error("should have the same number of credentials as inputs")]
+    WrongNumberOfCredentials,
+
+    /// `errUnauthorizedModification` — the subnet/owner authorization credential
+    /// failed to prove control of the owner.
+    #[error("unauthorized modification")]
+    UnauthorizedModification,
+
+    /// `ErrDurangoUpgradeNotActive` — a Durango-gated tx was issued before the
+    /// Durango upgrade activated.
+    #[error("attempting to use a Durango-upgrade feature prior to activation")]
+    DurangoUpgradeNotActive,
+
+    /// `errEtnaUpgradeNotActive` — an Etna-gated tx was issued before the Etna
+    /// upgrade activated.
+    #[error("attempting to use an Etna-upgrade feature prior to activation")]
+    EtnaUpgradeNotActive,
+
+    /// `ErrAddValidatorTxPostDurango` — `AddValidatorTx` is not permitted post
+    /// Durango.
+    #[error("AddValidatorTx is not permitted post-Durango")]
+    AddValidatorTxPostDurango,
+
+    /// `ErrAddDelegatorTxPostDurango` — `AddDelegatorTx` is not permitted post
+    /// Durango.
+    #[error("AddDelegatorTx is not permitted post-Durango")]
+    AddDelegatorTxPostDurango,
 }

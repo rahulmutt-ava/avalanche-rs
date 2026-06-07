@@ -31,6 +31,7 @@ pub mod convert_subnet_to_l1;
 pub mod create_chain;
 pub mod create_subnet;
 pub mod disable_l1_validator;
+pub mod executor;
 pub mod fee;
 pub mod import_export;
 pub mod increase_l1_validator_balance;
