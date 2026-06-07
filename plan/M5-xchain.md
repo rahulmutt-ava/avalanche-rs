@@ -752,16 +752,38 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.24: Milestone exit gate
 **Crate:** ava-avm (+ workspace)  ·  **Depends on:** all prior M5 tasks  ·  **Spec:** 09 (full), 02 §13 (per-crate contract), 00 (buildable-&-green invariant)
 **Files:** `crates/ava-avm/tests/PORTING.md`, workspace `Cargo.toml` (member registration), `.config/nextest.toml` (ci profile)
-- [ ] **Step 1 — Red:** Run the full gate; expect any remaining gaps (missing PORTING rows, clippy warnings, unregistered workspace member) to fail.
-- [ ] **Step 2 — Confirm red:** `cargo clippy --workspace -- -D warnings` and/or the named exit tests surface remaining issues.
-- [ ] **Step 3 — Green:** Run and pass all of:
+- [x] **Step 1 — Red:** Run the full gate; expect any remaining gaps (missing PORTING rows, clippy warnings, unregistered workspace member) to fail.
+- [x] **Step 2 — Confirm red:** `cargo clippy --workspace -- -D warnings` and/or the named exit tests surface remaining issues.
+- [x] **Step 3 — Green:** Run and pass all of:
   - `cargo build --workspace`
   - `cargo build -p avalanchers` (the binary now runs the X-Chain)
   - `cargo nextest run --profile ci` including the named exit tests: `golden::xchain_block_hash`, `golden::xchain_tx_codec`, `differential::xchain_issue_tx`, `differential::atomic_xp`
   - `cargo clippy --workspace -- -D warnings`
   Confirm every per-crate contract artifact (02 §13): proptest suite + committed `crates/ava-avm/proptest-regressions/`, golden vectors under `tests/vectors/avm/` + `tests/vectors/atomic/`, the cargo-fuzz target, and `crates/ava-avm/tests/PORTING.md` (every Go `vms/avm`, `vms/nftfx`, `vms/propertyfx` test mapped to a Rust counterpart or `na` with reason). Confirm `avalanchers` boots an X-Chain end-to-end. Coordinate `differential::xchain_issue_tx` live mode behind feature/env with recorded-oracle fallback (cross-cutting harness X).
-- [ ] **Step 4 — Confirm green:** all four commands above pass; PORTING.md has no `wip` rows for ported surfaces.
-- [ ] **Step 5 — Commit:** `avm: M5 milestone exit gate — X-Chain full issue/accept green (M5.24)`
+- [x] **Step 4 — Confirm green:** all four commands above pass; PORTING.md has no `wip` rows for ported surfaces.
+- [x] **Step 5 — Commit:** `avm: M5 milestone exit gate — X-Chain full issue/accept green (M5.24)`
+
+> **As-built (M5.24, 2026-06-07):** **M5 MILESTONE COMPLETE.** Gate run on main:
+> - `cargo build --workspace` ✅ + `cargo build -p avalanchers` ✅ (binary builds with the X-Chain VM).
+> - Named exit tests all pass: `golden::xchain_block_hash`, `golden::xchain_tx_codec`,
+>   `differential::xchain_issue_tx`, `differential::atomic_xp` (4/4).
+> - `cargo clippy --workspace --all-targets --all-features -- -D warnings` ✅ clean (1m37s).
+> - Full `cargo nextest run -p ava-avm -p ava-differential` = **187 passed, 0 skipped**.
+> - Per-crate contract artifacts present: golden vectors (`golden_tx_codec`/`golden_block_hash` inline
+>   consts + `tests/vectors/atomic/{x_to_p,p_to_x}_utxo.json`), proptest suites + `proptest-regressions/`,
+>   the cargo-fuzz target (`crates/ava-avm/fuzz/decode_block`, M5.23), and the new
+>   `crates/ava-avm/tests/PORTING.md` (**121 ✅ / 31 🟡 / 0 ⬜ / 12 n/a; 0 `wip` rows**; 100% of
+>   non-n/a Go `vms/{avm,nftfx,propertyfx}` tests mapped to a Rust counterpart).
+> - **Open follow-ups carried out of M5 (all documented in code + the as-built notes above, none block
+>   the gate):** (1) `build_block` un-injectable `SystemTime::now()` → adopt `ava_utils::clock::Clock`
+>   (tier-X **X.19**); (2) VM-`initialize` production cross-chain `SharedMemory` wiring needs a
+>   `ChainContext.shared_memory` field (chain-manager/M8); (3) `verify.SameSubnet` validator-state hook
+>   (M8); (4) full Go X-Chain genesis-asset parsing (M8/ava-genesis); (5) JSON-RPC HTTP router / `ava-api`
+>   (M8/M12) — the typed `avm.*` service handlers are ready to wire; (6) the OperationTx typed fx-op
+>   codec (concrete op type-ids 8/12/13/17/18 + `components.rs` nft/property Output/Input variants) →
+>   unblocks full OperationTx semantic+exec+output-production + address-indexed `getUTXOs`/`getBalance`;
+>   (7) the Go recorded-oracle + live two-binary differential arms + richer tx kinds + 10k scaling
+>   (tier-X X.13/X.15); (8) the `avm` `Client<Transport>` + `wallet.*` keystore.
 
 ---
 
