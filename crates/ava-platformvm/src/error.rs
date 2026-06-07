@@ -66,6 +66,12 @@ pub enum Error {
     #[error("codec: {0}")]
     Codec(#[from] ava_codec::error::CodecError),
 
+    /// A wrapped base-database failure. A `database.ErrNotFound` surfaces here
+    /// for absent state keys (e.g. `get_utxo` / `get_current_validator` on a
+    /// missing entry), matching Go's `errors.Is(err, database.ErrNotFound)`.
+    #[error("database: {0}")]
+    Database(#[from] ava_database::error::Error),
+
     /// A tx/UTXO component (`avax`/`secp256k1fx`) failed verification.
     #[error("invalid component")]
     InvalidComponent,

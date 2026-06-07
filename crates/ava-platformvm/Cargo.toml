@@ -27,12 +27,19 @@ ruint = { workspace = true }
 # first consumed by M4.5 Block::parse / a Tx.bytes upgrade.
 bytes = { workspace = true }
 parking_lot = { workspace = true }
+# LRU front caches over each flat-KV prefix space (specs 08 §3.2); same version
+# already used by ava-database/ava-blockdb/ava-merkledb in the workspace.
+lru = "0.12"
 arc-swap = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# The RocksDB backend powers the M4.13 `conformance::state_roundtrip` temp-dir
+# case; enabling the feature here (dev-only) makes `RocksDb` available to the
+# integration tests without pulling the C++ FFI into the library build.
+ava-database = { path = "../ava-database", features = ["rocksdb"] }
 hex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
