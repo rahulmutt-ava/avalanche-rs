@@ -438,11 +438,47 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.16: Block verify/accept/reject over Diff; Snowman Block trait
 **Crate:** ava-avm  ·  **Depends on:** M5.14, M5.15, M5.10; M4 (`SharedMemory.apply`), M3 (`ava_vm::block::Block`)  ·  **Spec:** 09 §7 (accept = commit diff + apply atomic requests), §6; 07 §2.3 Block trait
 **Files:** `crates/ava-avm/src/block/executor.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/block_lifecycle.rs`: build a `StandardBlock` with one BaseTx over a seeded UTXO set; `verify()` (syntactic+semantic over a `Diff` on parent) succeeds; `accept()` commits the diff, advances `lastAccepted`+timestamp, marks txs accepted, and (for an ExportTx block) applies the atomic `put` via a fake `SharedMemory` **in the same batch** as the state commit; `reject()` discards. Conflicting-tx block → verify error.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm block_lifecycle` → fails.
-- [ ] **Step 3 — Green:** Impl `ava_vm::block::Block` for the avm block wrapper: `verify` runs Syntactic+Semantic+Executor over a `Diff` on the parent; `accept` calls `state.commit_batch()` and `SharedMemory.apply(requests, &[batch])` atomically (09 §7, §9), sets txs accepted, advances `lastAccepted`/`timestamp`; `reject` aborts the diff. `parent()/height()/bytes()/id()/timestamp()` from `StandardBlock`. Wrap in `enum Block { Standard(StandardBlock) }` (09 §11) for future extensibility.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm block_lifecycle`.
-- [ ] **Step 5 — Commit:** `avm: block verify/accept/reject + atomic commit (M5.16)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/block_lifecycle.rs`: build a `StandardBlock` with one BaseTx over a seeded UTXO set; `verify()` (syntactic+semantic over a `Diff` on parent) succeeds; `accept()` commits the diff, advances `lastAccepted`+timestamp, marks txs accepted, and (for an ExportTx block) applies the atomic `put` via a fake `SharedMemory` **in the same batch** as the state commit; `reject()` discards. Conflicting-tx block → verify error.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm block_lifecycle` → fails.
+- [x] **Step 3 — Green:** Impl `ava_vm::block::Block` for the avm block wrapper: `verify` runs Syntactic+Semantic+Executor over a `Diff` on the parent; `accept` calls `state.commit_batch()` and `SharedMemory.apply(requests, &[batch])` atomically (09 §7, §9), sets txs accepted, advances `lastAccepted`/`timestamp`; `reject` aborts the diff. `parent()/height()/bytes()/id()/timestamp()` from `StandardBlock`. Wrap in `enum Block { Standard(StandardBlock) }` (09 §11) for future extensibility.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm block_lifecycle`.
+- [x] **Step 5 — Commit:** `avm: block verify/accept/reject + atomic commit (M5.16)`
+
+> **As-built (M5.16, 2026-06-07, commit `d9297ce`):** `block/executor.rs` = `BlockManager<D:
+> Database>` mirroring the P-Chain `block::executor` precedent, simplified to the X-Chain's
+> single `StandardBlock` (no oracle/proposal/option blocks, no validator-diff machinery). Owns
+> `state: State<D>`, `base_view: Arc<dyn Chain>` (refreshed on each accept via `state.snapshot()`),
+> a `Dispatch` (fx table), a `Backend`, `last_accepted: Id`, and a `blk_id_to_state:
+> BTreeMap<Id, BlockState>` diff cache; implements `Versions` for parent resolution.
+> - **`verify`** layers a fresh `Diff` on the parent, then per tx runs `SyntacticVerifier` →
+>   `SemanticVerifier` → `Executor::execute` over the **same** `Diff`, caching the on-accept diff +
+>   merged atomic requests. **Double-spend is caught by semantic verification** (the second tx's
+>   `diff.get_utxo` returns `Database(NotFound)` because the first tx's executor already tombstoned
+>   the UTXO in the shared diff) — NOT a hand-rolled input-set check. Reuses the M5.14 `exec.rs`
+>   `Executor` verbatim (`Executor::execute(&unsigned, tx_id, &mut diff)`).
+> - **`accept`** applies the cached diff to `State`, records tx + block bytes, advances
+>   `lastAccepted`/`timestamp`, and — if the block carries atomic requests — performs a **true
+>   single-batch co-commit**: `State::commit_batch_ops()` (new; snapshots the `VersionDb` overlay
+>   into a `BatchOps` WITHOUT writing) → `SharedMemory.apply(requests, &[batch_ops])` (one
+>   underlying DB write covers both state + cross-chain ops) → `state.abort()` to drop the
+>   now-written overlay. Empty-requests path is a plain `state.commit()`. Returns
+>   `Error::BlockNotVerified` (new variant) if accept/reject is called on an unverified block.
+> - **`reject`** discards the cached diff. 7 tests assert real persisted-state postconditions
+>   (UTXO set changes, last-accepted/timestamp, tx/block bytes, fake-`SharedMemory` put on export,
+>   reject leaves state untouched, double-spend → `assert_matches!(…NotFound)`). Combined avm tree
+>   **102 green**, clippy `-D warnings` + fmt clean. Two review passes (spec ✅ + code-quality)
+>   applied before merge.
+> **WORKTREE-BASE GOTCHA (recorded):** the first implementer's `isolation:"worktree"` branched from
+> a STALE pre-M5.14 base, so it rebuilt a duplicate `execute.rs` Executor AND skipped semantic
+> verification (faking double-spend via the executor's input set — which broke once rebased onto
+> the canonical `exec.rs`). Discarded; redone in a worktree branched explicitly from the correct
+> main HEAD with the implementer pointed at it directly (no `isolation:"worktree"`). Lesson: for
+> SEQUENTIAL tasks, branch the worktree yourself from the verified HEAD rather than relying on the
+> Agent's auto-isolation base.
+> **Deferred (per task latitude):** the synchronous Snowman `Block` trait wrapper
+> (`ava_snow::snowman::block::Block`) — the `BlockManager` exposes the full verify/accept/reject
+> semantics; the `Arc<Mutex<…>>` Snowman shim lands with VM assembly (M5.19) where the VM's
+> concurrency model is settled.
 
 ### Task M5.17: Mempool wiring + block Builder
 **Crate:** ava-avm  ·  **Depends on:** M5.16; M3 (`ava_vm::mempool::Mempool`)  ·  **Spec:** 09 §7.1; 07 §7 (generic mempool); 00 §6.1 (pop order = total order identical to Go)
