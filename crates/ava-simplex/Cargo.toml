@@ -1,0 +1,54 @@
+[package]
+name = "ava-simplex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Simplex BFT consensus integration: parameters + canoto wire messages/QC + feature-gated engine stub (port of simplex/, specs 06 §8)."
+
+# Tier T2b. Depends on ava-engine (the common::Engine/Handler/Sender surface the
+# stub presents), ava-crypto (bls aggregation/verify for QCs), and ava-types
+# (Id/NodeId). The canoto message wire format is hand-rolled (no canoto codegen
+# crate in this workspace) to round-trip byte-identical to Go's *.canoto.go.
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-crypto = { path = "../ava-crypto" }
+# Only the feature-gated engine stub needs ava-engine + the async surface; they
+# are optional and pulled in by the `simplex` feature.
+ava-engine = { path = "../ava-engine", optional = true }
+# The engine stub's Connector/InternalHandler impls reference these directly.
+ava-validators = { path = "../ava-validators", optional = true }
+ava-vm = { path = "../ava-vm", optional = true }
+
+thiserror = { workspace = true }
+# sha2 for the block digest (Go hashing.ComputeHash256Array == SHA-256).
+sha2 = { workspace = true }
+# The engine stub presents the async Handler/Engine surface.
+async-trait = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+# tokio drives the async engine-stub tests (tests/engine.rs, feature = "simplex").
+tokio = { workspace = true, features = [ "macros", "rt" ] }
+
+[features]
+# Off by default: the round-based BFT engine stub presenting the
+# common::Engine/Handler surface (specs 06 §8). The parameters + canoto
+# messages + block wrapper are always compiled.
+default = []
+simplex = [
+    "dep:ava-engine",
+    "dep:ava-validators",
+    "dep:ava-vm",
+    "dep:async-trait",
+    "dep:serde_json",
+    "dep:tracing",
+]
+
+[lints]
+workspace = true

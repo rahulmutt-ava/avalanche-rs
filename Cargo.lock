@@ -508,6 +508,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-simplex"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "ava-crypto",
+ "ava-engine",
+ "ava-types",
+ "ava-validators",
+ "ava-vm",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ava-snow"
 version = "0.1.0"
 dependencies = [
