@@ -2,19 +2,21 @@
 // See the file LICENSE for licensing terms.
 
 //! Fuzz target: decode-never-panics over arbitrary bytes for the P-Chain block
-//! and tx parsers.
+//! and tx parsers (`specs/02` §8).
 //!
-//! Stub for M4.1 — wired to `Block::parse` / `Tx::parse` once those land in
-//! M4.5 / M4.2 (then re-marshal + round-trip per `specs/02` §8). For now it only
-//! exercises that arbitrary input does not panic the (empty) parse surface.
+//! Drives `block::Block::parse` and `txs::Tx::parse` with arbitrary input,
+//! asserting only that decoding never panics (errors are expected and ignored).
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 
+use ava_platformvm::block::Block;
+use ava_platformvm::txs::{self, Tx};
+
 fuzz_target!(|data: &[u8]| {
-    // Touch the codec version so the harness links the crate; replaced by
-    // `Block::parse(data)` / `Tx::parse(data)` decode-never-panics drivers in
-    // M4.5 / M4.2.
-    let _ = (ava_platformvm::CODEC_VERSION, data);
+    // Decode-never-panics over the block parser (default-max-size codec).
+    let _ = Block::parse(txs::Codec(), data);
+    // ...and over the signed-tx parser.
+    let _ = Tx::parse(txs::Codec(), data);
 });

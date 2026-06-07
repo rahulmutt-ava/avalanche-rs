@@ -1,0 +1,8 @@
+{
+  "comment": "Apricot abort block (type_id=1) golden vector. Generated from Go vms/platformvm/block.NewApricotAbortBlock(parent, height) via the platformvm block Codec (CodecVersion=0). parent = bytes [1..=32], height = 0x0102030405060708. bytes = codec.Marshal(&Block); id = sha256(bytes) = b.ID(). See M4.5.",
+  "type_id": 1,
+  "parent_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "height": 72623859790382856,
+  "bytes": "0000000000010102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f200102030405060708",
+  "id_hex": "b9e42e5505fca9423d1f8cc3e676112117ac18234df6a5e87af63d187452ccd1"
+}
