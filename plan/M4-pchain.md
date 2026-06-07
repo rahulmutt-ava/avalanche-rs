@@ -481,13 +481,33 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.21: `PChainValidatorManager` — the `ValidatorState` impl
 **Crate:** ava-platformvm  ·  **Depends on:** M4.14, M4.20  ·  **Spec:** 08 §7 (ValidatorState), §7.1 (diff windowing); 00 §6.1 (BTreeMap determinism)
 **Files:** `crates/ava-platformvm/src/validators/manager.rs`, `crates/ava-platformvm/src/validators/mod.rs`.
-- [ ] **Step 1 — Red:** Port `manager_test.go` + `validator_set_property_test.go` as `conformance::validator_set_at_height`: build a chain of staker add/remove blocks, then for **every** height assert `get_validator_set(h, subnet)` (weight + BLS key) equals the Go output via the `inverseHeight` reconstruction; assert `get_minimum_height`/`get_current_height`/`get_subnet_id` and `errUnfinalizedHeight` (not panic) when `current < target`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm validator_set_at_height` → fails.
-- [ ] **Step 3 — Green:** Implement `PChainValidatorManager` impl of `ava_validators::ValidatorState` (08 §7): `get_minimum_height` (recently-accepted window oldest parent, or current if `use_current_height`), `get_current_height` (last-accepted height), `get_subnet_id` (PLATFORM→PRIMARY else CreateChainTx.subnet), `get_validator_set(target, subnet)` reconstructing from the in-mem current set by un-applying weight+pk diffs over `(target, current]` with the per-subnet height→set LRU (size 64), `get_current_validator_set` (base stakers keyed tx_id + L1 validators keyed validation_id), `get_warp_validator_sets(height)` (flatten each subnet via `FlattenValidatorSet`, skip un-flattenable). All returns are `BTreeMap<NodeId,_>` (canonical order). Use `recently_accepted: Window<Id>` (MaxSize 64, TTL 30s) and `ArcSwap` for the current set (lock-free reads, 08 §12).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm validator_set_at_height` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: PChainValidatorManager (ValidatorState + diff windowing)`
+- [x] **Step 1 — Red:** Port `manager_test.go` + `validator_set_property_test.go` as `conformance::validator_set_at_height`: build a chain of staker add/remove blocks, then for **every** height assert `get_validator_set(h, subnet)` (weight + BLS key) equals the Go output via the `inverseHeight` reconstruction; assert `get_minimum_height`/`get_current_height`/`get_subnet_id` and `errUnfinalizedHeight` (not panic) when `current < target`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm validator_set_at_height` → fails.
+- [x] **Step 3 — Green:** Implement `PChainValidatorManager` impl of `ava_validators::ValidatorState` (08 §7): `get_minimum_height` (recently-accepted window oldest parent, or current if `use_current_height`), `get_current_height` (last-accepted height), `get_subnet_id` (PLATFORM→PRIMARY else CreateChainTx.subnet), `get_validator_set(target, subnet)` reconstructing from the in-mem current set by un-applying weight+pk diffs over `(target, current]` with the per-subnet height→set LRU (size 64), `get_current_validator_set` (base stakers keyed tx_id + L1 validators keyed validation_id), `get_warp_validator_sets(height)` (flatten each subnet via `FlattenValidatorSet`, skip un-flattenable). All returns are `BTreeMap<NodeId,_>` (canonical order). Use `recently_accepted: Window<Id>` (MaxSize 64, TTL 30s) and `ArcSwap` for the current set (lock-free reads, 08 §12).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm validator_set_at_height` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: PChainValidatorManager (ValidatorState + diff windowing)`
 
----
+> **As-built (M4.21):** `validators/manager.rs` ships `PChainValidatorManager<D>` impl of
+> `ava_validators::ValidatorState` (all six async methods). **Construction:** `from_state(state,
+> use_current_height) -> Self` captures an immutable `ManagerView` (current per-subnet sets, diff
+> stores, height, block-id→height index, frozen `Chain`) behind an **`ArcSwap`** (lock-free reads,
+> 08 §12); `refresh(&self, state)` re-captures the view + clears caches — **the acceptor integration
+> point** (called after `commit_accept` flushes a block). `get_validator_set` un-applies BOTH weight
+> and pk diffs over `[target+1, current]` from the current set (per-subnet height→set LRU size 64),
+> reconstructing weights **and** BLS keys, returning `BTreeMap<NodeId, GetValidatorOutput>`.
+> `errUnfinalizedHeight` is **returned** (`VError::UnfinalizedHeight`), never panicked. Implements the
+> M4.20 **`BlockAcceptanceNotifier`** (`on_accepted_block_id` pushes into a local sliding window —
+> `parking_lot::Mutex<VecDeque<(Instant, Id)>>`, MaxSize 64 + TTL 30s, size-takes-precedence; no new
+> external crate). `get_warp_validator_sets` flattens per subnet by BLS-key dedup (sum weights per key;
+> keyless dropped from `validators` but counted in `total_weight`; deduped entries use `NodeId::EMPTY`),
+> skipping un-flattenable subnets. **Cross-crate additions (minimal, justified, spec-reviewed):**
+> `ava-validators::Error::{UnfinalizedHeight, State{message}}`; `ava-crypto` `PublicKey::from_uncompressed`
+> (parses the 96-byte uncompressed bytes the pk-diff store holds — `blst::key_validate`, subgroup-checked
+> — no parse path existed) + roundtrip test; `State` accessors `current_validator_sets()`/`block_id_index()`/
+> `base()`. **Deferred:** `get_current_validator_set` reads L1 validators via `Chain::active_l1_validators()`
+> (active only — no "all L1 for subnet" accessor yet); production wiring of `refresh` into the acceptor loop
+> is the integration task (M4.25). 101 tests green (was 97); clippy `--all-targets --all-features -D warnings`
+> clean; fmt clean. Spec-reviewed ✅ (independent re-run, 141 tests across ava-platformvm/ava-validators/ava-crypto).
 
 ### Task M4.22: Warp signing on P (`UnsignedMessage` + warp set serving)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.21  ·  **Spec:** 08 §8 (warp); 20 §2,§4,§5.1,§6.1 (P-Chain consumes ava-warp)
