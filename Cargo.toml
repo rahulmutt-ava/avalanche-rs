@@ -97,6 +97,9 @@ prometheus = { version = "0.13", default-features = false }
 
 # Math / collections
 num-bigint = "0.4"
+# Fixed-width big integers for exact fee math (ACP-103 CalculatePrice U256 ops,
+# specs/21 §0); first consumed by ava-platformvm M4.8.
+ruint = "1"
 parking_lot = "0.12"
 arc-swap = "1"
 indexmap = "2"

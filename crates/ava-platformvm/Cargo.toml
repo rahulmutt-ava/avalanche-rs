@@ -1,0 +1,39 @@
+[package]
+name = "ava-platformvm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "P-Chain (PlatformVM): staking/validator-metadata chain — txs, blocks, state, reward/fee math, ValidatorState service (port of vms/platformvm) (M4 / specs 08)."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-codec-derive = { path = "../ava-codec-derive" }
+ava-crypto = { path = "../ava-crypto" }
+ava-database = { path = "../ava-database" }
+ava-validators = { path = "../ava-validators" }
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+ava-utils = { path = "../ava-utils" }
+num-bigint = { workspace = true }
+ruint = { workspace = true }
+parking_lot = { workspace = true }
+arc-swap = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+proptest = { workspace = true }
+rstest = { workspace = true }
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true
