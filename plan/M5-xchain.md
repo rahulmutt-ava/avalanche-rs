@@ -178,11 +178,28 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.6: secp256k1fx verification wiring into avm
 **Crate:** ava-avm  ·  **Depends on:** M5.5; M3 (`ava_secp256k1fx::Fx::verify_credentials`, `verify_transfer`, recover-cache)  ·  **Spec:** 09 §4, §4.1; 07 §4.3
 **Files:** `crates/ava-avm/src/fx/mod.rs`, `fx/secp.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/fx_secp.rs`: proptest `verify_transfer_accepts_iff_threshold_valid_sigs` — generate `OutputOwners` (locktime/threshold/addrs) + signer sets + sig-index permutations; assert accept iff exactly `threshold` valid sorted-unique sigs and locktime matured (reuse M3 `verify_credentials`); assert `utxo.amt != in.amt` → `Error::MismatchedAmounts`. Include `verify_disabled_when_not_bootstrapped` (returns `Ok` even with garbage sigs).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm fx_secp` → fails (wiring absent).
-- [ ] **Step 3 — Green:** Wrap `ava_secp256k1fx::Fx` so the avm verifier can call `verify_transfer(tx,in,cred,utxo)` (checks `utxo.amt==in.amt` then `verify_credentials`) and `verify_operation` (one `MintOutput` UTXO, owners equality, then `verify_credentials` over the mint input). `bootstrapped` gate matches Go (`!bootstrapped ⇒ Ok(())`). Share one recover-cache (`dashmap`/`lru` cap 256) per 09 §4.1 / 13.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm fx_secp`; commit `proptest-regressions/fx_secp.txt`.
-- [ ] **Step 5 — Commit:** `avm: secp256k1fx verify wiring + proptests (M5.6)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/fx_secp.rs`: proptest `verify_transfer_accepts_iff_threshold_valid_sigs` — generate `OutputOwners` (locktime/threshold/addrs) + signer sets + sig-index permutations; assert accept iff exactly `threshold` valid sorted-unique sigs and locktime matured (reuse M3 `verify_credentials`); assert `utxo.amt != in.amt` → `Error::MismatchedAmounts`. Include `verify_disabled_when_not_bootstrapped` (returns `Ok` even with garbage sigs).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm fx_secp` → fails (wiring absent).
+- [x] **Step 3 — Green:** Wrap `ava_secp256k1fx::Fx` so the avm verifier can call `verify_transfer(tx,in,cred,utxo)` (checks `utxo.amt==in.amt` then `verify_credentials`) and `verify_operation` (one `MintOutput` UTXO, owners equality, then `verify_credentials` over the mint input). `bootstrapped` gate matches Go (`!bootstrapped ⇒ Ok(())`). Share one recover-cache (`dashmap`/`lru` cap 256) per 09 §4.1 / 13.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm fx_secp`; commit `proptest-regressions/fx_secp.txt`.
+- [x] **Step 5 — Commit:** `avm: secp256k1fx verify wiring + proptests (M5.6)`
+
+> **As-built (M5.6, 2026-06-07, commit `404fe96`):** `fx/mod.rs` defines a minimal
+> `trait Fx { verify_transfer, verify_operation }` (the documented extension point for
+> M5.7/M5.8 nft/property adapters + M5.9 `ParsedFx` dispatch); `fx/secp.rs` `SecpFx`
+> wraps `ava_secp256k1fx::Fx`, sharing its existing recover-cache + `bootstrapped` flag
+> (no new cache built — reuses M3's per 09 §4.1). `verify_transfer` = `!bootstrapped ⇒
+> Ok` → `utxo.amt==in.amt` (else `Error::MismatchedAmounts`) → `verify_credentials`;
+> `verify_operation` = `!bootstrapped ⇒ Ok` → produced-mint-owners == consumed
+> `MintOutput` UTXO owners (else `Error::WrongMintCreated`) → `verify_credentials` over
+> the mint input. Added two avm-native error variants (`MismatchedAmounts`,
+> `WrongMintCreated`); multisig-gate sentinels reused via `Error::Fx(#[from]
+> ava_vm::error::Error)`. Added `ava-utils` dep (`clock::Clock`). **Known Go-parity
+> deviation (documented in `secp.rs`):** the `!bootstrapped` short-circuit happens
+> *before* the avm-side amount/owners checks, so during bootstrap this returns `Ok`
+> where Go would still surface `ErrMismatchedAmounts`/`ErrWrongMintCreated` — this is
+> exactly the contract the M5.6 task text + `verify_disabled_when_not_bootstrapped` test
+> specified; revisit if strict bootstrap-time parity is later required.
 
 ### Task M5.7: nftfx verify_operation (transfer-disallowed)
 **Crate:** ava-avm  ·  **Depends on:** M5.6, M5.3  ·  **Spec:** 09 §4.2, FX-AVM-1
@@ -214,11 +231,28 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.10: UTXO state stores + Diff layer
 **Crate:** ava-avm  ·  **Depends on:** M5.5; M3 (`ava_database::{VersionDb, PrefixDb}`, `avax::UTXOState`), M0  ·  **Spec:** 09 §5, §5.1, §5.2; 00 §6.1 (BTreeMap on flush)
 **Files:** `crates/ava-avm/src/state/mod.rs`, `state/state.rs`, `state/diff.rs`, `state/versions.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/state_utxo.rs`: open `State` over an in-memory base DB; add a UTXO, `commit`, reopen, `get_utxo` returns identical bytes; `add_tx` then `get_tx` parses via genesis codec; `Diff` over parent: `delete_utxo` then `apply` removes it; `abort` discards; proptest `diff_flush_is_sorted` asserts flush key order is sorted (BTreeMap), independent of insertion order.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm state_utxo` → fails.
-- [ ] **Step 3 — Green:** `state.rs`: `versiondb` over base with five `prefixdb` sub-stores `"utxo"/"tx"/"blockID"/"block"/"singleton"` (09 §5). Traits `ReadOnlyChain`, `Chain`, `State` per 09 §5. UTXO `input_id = sha256(tx_id ++ be_u64(output_index))` (09 §5.1) via M3 `UtxoId::input_id`. `diff.rs`: `Diff` tracks modified UTXOs (`Some`=add / `None`=delete), added txs/blocks, pending ts/lastAccepted; `apply`/`commit`/`abort`; flush uses `BTreeMap` (00 §6.1). txs read with **genesis codec** (09 §5.3).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm state_utxo`; commit regressions.
-- [ ] **Step 5 — Commit:** `avm: UTXO state stores + Diff layer (M5.10)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/state_utxo.rs`: open `State` over an in-memory base DB; add a UTXO, `commit`, reopen, `get_utxo` returns identical bytes; `add_tx` then `get_tx` parses via genesis codec; `Diff` over parent: `delete_utxo` then `apply` removes it; `abort` discards; proptest `diff_flush_is_sorted` asserts flush key order is sorted (BTreeMap), independent of insertion order.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm state_utxo` → fails.
+- [x] **Step 3 — Green:** `state.rs`: `versiondb` over base with five `prefixdb` sub-stores `"utxo"/"tx"/"blockID"/"block"/"singleton"` (09 §5). Traits `ReadOnlyChain`, `Chain`, `State` per 09 §5. UTXO `input_id = sha256(tx_id ++ be_u64(output_index))` (09 §5.1) via M3 `UtxoId::input_id`. `diff.rs`: `Diff` tracks modified UTXOs (`Some`=add / `None`=delete), added txs/blocks, pending ts/lastAccepted; `apply`/`commit`/`abort`; flush uses `BTreeMap` (00 §6.1). txs read with **genesis codec** (09 §5.3).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm state_utxo`; commit regressions.
+- [x] **Step 5 — Commit:** `avm: UTXO state stores + Diff layer (M5.10)`
+
+> **As-built (M5.10, 2026-06-07, commits `f57547e` + `c946f3e` merge-fixup):** mirrors
+> the P-Chain `ava_platformvm::state` precedent. `state/chain.rs` = `ReadOnlyChain`+`Chain`
+> traits (UTXOs stored as opaque codec bytes, `UtxoBytes`); `state/state.rs` =
+> `State<D: Database>` = a `VersionDb` over the base partitioned into five `PrefixDb`
+> sub-stores (`utxo`/`tx`/`blockID`/`block`/`singleton`), singleton keys
+> `0x00 initialized | 0x01 timestamp | 0x02 lastAccepted`, `commit`/`abort`/`load`/`snapshot`;
+> `state/diff.rs` = layered `Diff` (all overlay maps `BTreeMap` → sorted flush, 00 §6.1),
+> exposes `flush_utxo_ids()` for the determinism proptest; `state/versions.rs` =
+> block-id→`Chain` resolver. **Storage layer is codec-agnostic** (round-trips opaque tx/UTXO
+> bytes; the block store is byte/id-level — no `StandardBlock` type, that's M5.15; no
+> `initialize_chain_state`/genesis seed, that's M5.11). Added `ava-database` dep + error
+> variants `MissingParentState` + `Database(#[from] ava_database::error::Error)`. 8 tests.
+> **Merge note (recorded in memory):** the worktree was branched from the pre-M5.5 base, so
+> its `state_utxo` test referenced the old `txs::codec()` function; on merge it was rewired
+> to M5.5's `txs::codec::GenesisCodec()` singleton (commit `c946f3e`). Combined tree: 35
+> tests green, clippy + fmt clean.
 
 ### Task M5.11: initialize_chain_state (genesis Snowman block seed) + persistence byte-details
 **Crate:** ava-avm  ·  **Depends on:** M5.10  ·  **Spec:** 09 §1 (stop-vertex parent, height 0), §5.3; 07 (genesis block)
