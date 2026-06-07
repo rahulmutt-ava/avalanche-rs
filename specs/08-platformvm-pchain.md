@@ -231,6 +231,22 @@ sha256(signed_bytes)`. Signing: hash = `sha256(unsigned_bytes)`, each signer gro
 `Credential{sigs: Vec<[u8;65]>}` of recoverable secp256k1 signatures over the hash. **Parsing
 must reproduce the prefix-length trick** to recover unsigned bytes for caching.
 
+> **Implementation note (M4.2, codec reuse of `ava-secp256k1fx` types).** As of M3,
+> `ava-secp256k1fx`'s codec types (`Credential`, `Input`, `OutputOwners`, `TransferInput`,
+> `TransferOutput`) expose only `pub(crate) marshal_fields/unmarshal_fields` and do **not**
+> implement the public `ava_codec::Serializable`/`Deserializable` traits, so a foreign crate
+> cannot embed them as codec fields (the orphan rule blocks `impl Serializable for
+> secp256k1fx::Credential` in `ava-platformvm`). M4.2 therefore defined a **local byte-exact
+> `Credential` mirror** (`u32` count + fixed 65-byte sigs — identical wire bytes) with
+> `From`/`Into` conversions to/from `secp256k1fx::Credential`. **Chosen resolution for M4.3 /
+> M4.15** (which must embed `TransferableInput`/`TransferableOutput`/`OutputOwners` as tx
+> fields, shared with the X-Chain): promote the `ava-secp256k1fx` types to implement the public
+> `ava_codec` codec traits (their `marshal_fields` already does the byte-exact work) so P-Chain
+> **and** X-Chain reuse one definition rather than each maintaining a mirror. Until that lands,
+> the local-mirror pattern is the interim. (Codec-derive aside: `Vec<[u8; 65]>` cannot be
+> auto-derived because the derive's generic `Vec<T>` requires `T: Default`, which `[u8; 65]`
+> lacks — `Credential` needs a hand-written codec impl regardless of approach.)
+
 ### 2.4 Executor visitors (semantic verification + state transition)
 
 Three executor entry points, each a Go `txs.Visitor`. Port the visitor as a Rust trait with a

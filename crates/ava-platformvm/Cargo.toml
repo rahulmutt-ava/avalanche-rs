@@ -20,6 +20,9 @@ ava-secp256k1fx = { path = "../ava-secp256k1fx" }
 ava-utils = { path = "../ava-utils" }
 num-bigint = { workspace = true }
 ruint = { workspace = true }
+# Zero-copy cached tx/block bytes (specs 08 §2.3 Tx.bytes, §4.1 Block bytes);
+# first consumed by M4.5 Block::parse / a Tx.bytes upgrade.
+bytes = { workspace = true }
 parking_lot = { workspace = true }
 arc-swap = { workspace = true }
 tokio = { workspace = true }

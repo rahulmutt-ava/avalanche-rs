@@ -27,6 +27,7 @@ use arc_swap as _;
 use async_trait as _;
 use ava_codec_derive as _;
 use ava_database as _;
+use bytes as _;
 use ava_utils as _;
 use ava_validators as _;
 use parking_lot as _;

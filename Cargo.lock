@@ -728,6 +728,7 @@ dependencies = [
  "ava-types",
  "ava-utils",
  "ava-validators",
+ "bytes",
  "hex",
  "num-bigint",
  "parking_lot",
