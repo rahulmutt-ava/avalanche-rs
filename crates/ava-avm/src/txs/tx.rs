@@ -12,11 +12,8 @@
 //! `unsigned_len = Codec::size(&unsigned)`, `unsigned_bytes =
 //! signed_bytes[..unsigned_len]` (specs 09 §3.1).
 
-use std::sync::Arc;
-
 use ava_codec::AvaCodec;
 use ava_codec::error::Result as CodecResult;
-use ava_codec::linearcodec::LinearCodec;
 use ava_codec::manager::Manager;
 use ava_crypto::hashing;
 use ava_types::id::Id;
@@ -26,22 +23,6 @@ use crate::txs::credential::FxCredential;
 
 /// The X-Chain codec version (`txs.CodecVersion = 0`; specs 09 §2.1).
 pub const CODEC_VERSION: u16 = 0;
-
-/// A minimal default-max-size codec [`Manager`] for tx (un)marshalling.
-///
-/// TODO(M5.5): replace with the real 21-entry standard / genesis `CodecRegistry`
-/// pair (and `TypeToFxIndex`). The `type_registry` derives already embed the
-/// type-id prefixes inline, so a bare [`LinearCodec`] suffices for the M5.2
-/// round-trip / `Tx::initialize` byte derivation.
-///
-/// # Errors
-/// Returns a [`ava_codec::error::CodecError`] only on a duplicate codec-version
-/// registration (cannot occur here).
-pub fn codec() -> CodecResult<Manager> {
-    let m = Manager::with_default_max_size();
-    m.register(CODEC_VERSION, Arc::new(LinearCodec::new()))?;
-    Ok(m)
-}
 
 /// `txs.Tx` — a signed transaction (specs 09 §3.1).
 ///
@@ -142,6 +123,7 @@ impl Tx {
 mod tests {
     use super::*;
     use crate::txs::BaseTx;
+    use crate::txs::codec::codec;
 
     #[test]
     fn initialize_roundtrip_and_prefix() {

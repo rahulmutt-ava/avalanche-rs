@@ -19,6 +19,7 @@
 use ava_codec::AvaCodec;
 
 pub mod base_tx;
+pub mod codec;
 pub mod components;
 pub mod create_asset;
 pub mod credential;
@@ -37,7 +38,7 @@ pub use import::ImportTx;
 pub use initial_state::InitialState;
 pub use operation::{FxOperation, Operation};
 pub use operation_tx::OperationTx;
-pub use tx::{CODEC_VERSION, Tx, codec};
+pub use tx::{CODEC_VERSION, Tx};
 
 // ---------------------------------------------------------------------------
 // UnsignedTx interface enum
