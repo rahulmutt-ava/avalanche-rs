@@ -473,6 +473,7 @@ dependencies = [
 name = "ava-avm"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "assert_matches",
  "ava-codec",
  "ava-codec-derive",

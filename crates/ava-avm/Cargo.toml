@@ -28,6 +28,7 @@ ava-secp256k1fx = { path = "../ava-secp256k1fx" }
 ava-utils = { path = "../ava-utils" }
 # Zero-copy cached signed/unsigned tx bytes (specs 09 §3.1 Tx.bytes); first
 # consumed by the M5.5 Tx envelope.
+arc-swap = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
