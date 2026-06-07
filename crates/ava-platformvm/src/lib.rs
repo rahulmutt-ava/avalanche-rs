@@ -34,10 +34,24 @@ use ava_utils as _;
 use ava_validators as _;
 use num_bigint as _;
 use parking_lot as _;
-use ruint as _;
 use tokio as _;
 
+// Dev-dependencies declared up front (specs/08 §1) but not yet consumed by the
+// in-crate unit tests; silence `unused_crate_dependencies` on the lib-test
+// target until later M4 waves use them. (Integration test binaries silence
+// their own.)
+#[cfg(test)]
+mod test_dep_silencers {
+    use assert_matches as _;
+    use hex as _;
+    use pretty_assertions as _;
+    use rstest as _;
+    use serde as _;
+    use serde_json as _;
+}
+
 pub mod error;
+pub mod txs;
 
 pub use error::{Error, Result};
 
