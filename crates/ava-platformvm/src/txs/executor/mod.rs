@@ -22,6 +22,7 @@
 //! these `pub(crate)` verification helpers without editing the standard
 //! executor's files.
 
+pub mod atomic_tx_executor;
 pub mod backend;
 pub mod staker_tx_verification;
 pub mod standard_tx_executor;
