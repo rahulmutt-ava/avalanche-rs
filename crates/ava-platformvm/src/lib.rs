@@ -28,7 +28,6 @@ use async_trait as _;
 use ava_codec_derive as _;
 use ava_database as _;
 use ava_validators as _;
-use bytes as _;
 use parking_lot as _;
 use tokio as _;
 
@@ -38,18 +37,13 @@ use tokio as _;
 #[cfg(test)]
 use assert_matches as _;
 #[cfg(test)]
-use hex as _;
-#[cfg(test)]
 use pretty_assertions as _;
 #[cfg(test)]
 use proptest as _;
 #[cfg(test)]
 use rstest as _;
-#[cfg(test)]
-use serde as _;
-#[cfg(test)]
-use serde_json as _;
 
+pub mod block;
 pub mod error;
 pub mod reward;
 pub mod signer;

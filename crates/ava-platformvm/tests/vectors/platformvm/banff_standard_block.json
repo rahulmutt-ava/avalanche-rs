@@ -1,0 +1,9 @@
+{
+  "comment": "Banff standard block (type_id=32) with an EMPTY tx list. Generated from Go vms/platformvm/block.NewBanffStandardBlock(time.Unix(1700000000,0), parent, height, nil) via the platformvm block Codec (CodecVersion=0). Field order is byte-exact: time (u64 BE), then the embedded ApricotStandardBlock = CommonBlock{parent,height} + Transactions(empty Vec<Tx> -> u32 count 0). parent = bytes [1..=32], height = 0x0102030405060708, time = 1700000000. id = sha256(bytes). See M4.5.",
+  "type_id": 32,
+  "time": 1700000000,
+  "parent_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "height": 72623859790382856,
+  "bytes": "000000000020000000006553f1000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20010203040506070800000000",
+  "id_hex": "6e452dc960626c0839d39166fb7e4c7e7b1472b103d6a67e96d43be6adb93d20"
+}

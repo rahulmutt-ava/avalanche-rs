@@ -1,0 +1,8 @@
+{
+  "comment": "Apricot commit block (type_id=2) golden vector. Generated from Go vms/platformvm/block.NewApricotCommitBlock(parent, height) via the platformvm block Codec (CodecVersion=0). parent = bytes [1..=32], height = 0x0102030405060708. bytes = codec.Marshal(&Block); id = sha256(bytes) = b.ID(). See M4.5.",
+  "type_id": 2,
+  "parent_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "height": 72623859790382856,
+  "bytes": "0000000000020102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f200102030405060708",
+  "id_hex": "1190d518c33d75eb6b94b3137ae3cb186ee591dd95fc05cbf2a5c49a3624140d"
+}
