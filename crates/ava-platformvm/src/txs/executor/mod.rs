@@ -23,6 +23,7 @@
 //! executor's files.
 
 pub mod advance_time;
+pub mod atomic_tx_executor;
 pub mod backend;
 pub mod proposal_tx_executor;
 pub mod staker_tx_verification;
