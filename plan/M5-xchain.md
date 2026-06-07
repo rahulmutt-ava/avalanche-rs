@@ -204,20 +204,43 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.7: nftfx verify_operation (transfer-disallowed)
 **Crate:** ava-avm  ·  **Depends on:** M5.6, M5.3  ·  **Spec:** 09 §4.2, FX-AVM-1
 **Files:** `crates/ava-avm/src/nftfx/fx.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/nftfx_verify.rs`: `verify_transfer_disallowed` asserts `Error::CantTransfer`; `mint_group_id_mismatch` → `Error::WrongUniqueId`; `transfer_payload_mismatch` → `Error::WrongBytes`; happy path mint + transfer accept; wrong UTXO type → `Error::WrongUtxoType`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm nftfx_verify` → fails.
-- [ ] **Step 3 — Green:** Implement `nftfx::Fx::verify_operation(tx, op, cred, utxos)` per 09 §4.2 match: `Mint` requires one `MintOutput` (`try_into()?` else `WrongUtxoType`), `verify_all(&[op,cred,out])`, `group_id` equality, delegate to secp `verify_credentials`; `Transfer` requires `TransferOutput`, `group_id`+`payload` equality, delegate. `verify_transfer` returns `Err(CantTransfer)`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm nftfx_verify`.
-- [ ] **Step 5 — Commit:** `avm: nftfx verify_operation (M5.7)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/nftfx_verify.rs`: `verify_transfer_disallowed` asserts `Error::CantTransfer`; `mint_group_id_mismatch` → `Error::WrongUniqueId`; `transfer_payload_mismatch` → `Error::WrongBytes`; happy path mint + transfer accept; wrong UTXO type → `Error::WrongUtxoType`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm nftfx_verify` → fails.
+- [x] **Step 3 — Green:** Implement `nftfx::Fx::verify_operation(tx, op, cred, utxos)` per 09 §4.2 match: `Mint` requires one `MintOutput` (`try_into()?` else `WrongUtxoType`), `verify_all(&[op,cred,out])`, `group_id` equality, delegate to secp `verify_credentials`; `Transfer` requires `TransferOutput`, `group_id`+`payload` equality, delegate. `verify_transfer` returns `Err(CantTransfer)`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm nftfx_verify`.
+- [x] **Step 5 — Commit:** `avm: nftfx verify_operation (M5.7)`
+
+> **As-built (M5.7, 2026-06-07, commit `5ddce64`):** `nftfx/fx.rs` = `nftfx::Fx` struct
+> wrapping `ava_secp256k1fx::Fx` (shares recover-cache + bootstrapped flag). Since the
+> M5.6 `crate::fx::Fx` trait is secp-typed, nftfx implements **inherent** methods +
+> models Go's `opIntf`/`utxoIntf` type switches as two new pub enums `NftOperation
+> {Mint,Transfer}` / `NftOutput {Mint,Transfer}` (the polymorphic cross-fx dispatch is
+> M5.9). `verify_transfer` → `Error::CantTransfer`; `verify_operation` asserts UTXO
+> variant (`WrongUtxoType`), `group_id` eq (`WrongUniqueId`), payload eq for transfer
+> (`WrongBytes`), delegates sig check to `verify_credentials`. Added err variants
+> `WrongUniqueId`/`WrongBytes` (+ shared `CantTransfer`/`WrongUtxoType`, deduped at merge
+> against M5.8). 6 tests.
 
 ### Task M5.8: propertyfx verify_operation (transfer-disallowed)
 **Crate:** ava-avm  ·  **Depends on:** M5.6, M5.4  ·  **Spec:** 09 §4.3, FX-AVM-1
 **Files:** `crates/ava-avm/src/propertyfx/fx.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/propertyfx_verify.rs`: `verify_transfer_disallowed`; `mint_owners_mismatch` → `Error::WrongMintOutput`; mint happy path; burn happy path; wrong UTXO type → `Error::WrongUtxoType`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm propertyfx_verify` → fails.
-- [ ] **Step 3 — Green:** Implement `propertyfx::Fx::verify_operation` per 09 §4.3: `Mint` requires `MintOutput`, `out.owners == op.mint_output.owners` else `WrongMintOutput`, delegate; `Burn` requires `OwnedOutput`, delegate via secp `verify_credentials` over `op.input`. `verify_transfer` disallowed.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm propertyfx_verify`.
-- [ ] **Step 5 — Commit:** `avm: propertyfx verify_operation (M5.8)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/propertyfx_verify.rs`: `verify_transfer_disallowed`; `mint_owners_mismatch` → `Error::WrongMintOutput`; mint happy path; burn happy path; wrong UTXO type → `Error::WrongUtxoType`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm propertyfx_verify` → fails.
+- [x] **Step 3 — Green:** Implement `propertyfx::Fx::verify_operation` per 09 §4.3: `Mint` requires `MintOutput`, `out.owners == op.mint_output.owners` else `WrongMintOutput`, delegate; `Burn` requires `OwnedOutput`, delegate via secp `verify_credentials` over `op.input`. `verify_transfer` disallowed.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm propertyfx_verify`.
+- [x] **Step 5 — Commit:** `avm: propertyfx verify_operation (M5.8)`
+
+> **As-built (M5.8, 2026-06-07, commit `241a91d`):** `propertyfx/fx.rs` = `propertyfx::Fx`
+> struct wrapping `ava_secp256k1fx::Fx`; inherent methods + two pub enums
+> `PropertyOperation {Mint,Burn}` / `PropertyUtxo {Mint,Owned}` modeling Go's type
+> switches. `verify_transfer` → `Error::CantTransfer`; `verify_operation`: Mint requires
+> `PropertyUtxo::Mint` (`WrongUtxoType`), `out.owners==op.mint_output.owners`
+> (`WrongMintOutput`), delegate over `mint_input`; Burn requires `PropertyUtxo::Owned`,
+> delegate over `input`. Added err variant `WrongMintOutput` (+ shared `CantTransfer`/
+> `WrongUtxoType`). **Merge:** M5.7+M5.8 ran concurrently in worktrees (each `git merge
+> main` as Step 0 to pick up M5.5+M5.6), cherry-picked onto main; the shared
+> `CantTransfer`/`WrongUtxoType` error variants were deduped by hand at merge (combined
+> tree: **46 tests green**, clippy + fmt clean).
 
 ### Task M5.9: fx dispatch table (ParsedFx + TypeToFxIndex routing)
 **Crate:** ava-avm  ·  **Depends on:** M5.5, M5.6, M5.7, M5.8  ·  **Spec:** 09 §2.2, §4, FX-AVM-1
