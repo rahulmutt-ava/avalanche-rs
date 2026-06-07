@@ -11,18 +11,29 @@
 //! capability probes default to `None`, the `set_state` phase cycle, and
 //! idempotent shutdown.
 //!
-//! ## Seeding the battery
+//! ## Seeding the battery (chained spends)
 //!
 //! The X-Chain has no "advance time" block: a `StandardBlock` only forms when
 //! the builder packs at least one tx (else `Error::NoPendingBlocks`). The
 //! conformance battery builds up to two blocks per VM (genesis-child at h1, then
-//! a child of that *unaccepted* block at h2 — see `set_preference_ok`), so
-//! [`init_avm_vm`] seeds the genesis state with **two** spendable secp UTXOs of a
-//! pre-seeded asset and pre-loads the mempool with **two** `BaseTx`es (one per
-//! UTXO). The VM packs one tx per block (its M5.19 policy) and removes the packed
-//! tx from the mempool on build, so the first build (h1) consumes the first
-//! tx/UTXO and the second build (h2, over the verified-but-unaccepted h1)
-//! consumes the second — both succeed.
+//! a child of that *unaccepted* block at h2 — see `set_preference_ok`).
+//!
+//! The VM packs Go-parity **multi-tx** blocks (FIFO + size-capped) and removes
+//! every packed tx from the mempool on build. So [`init_avm_vm`] seeds **one**
+//! spendable secp UTXO (`U0`) of a pre-seeded asset and pre-loads the mempool
+//! with a **chain** of two `BaseTx`es: `tx1` spends `U0` and produces `U1` (its
+//! own output index 0), and `tx2` spends `U1`. Crucially `tx2` is enqueued
+//! BEFORE `tx1`: building over the genesis diff in FIFO order the builder hits
+//! `tx2` first, `U1` does not exist yet so `tx2` is dropped (left in the pool),
+//! then `tx1` packs and produces `U1`. So h1 carries only `tx1` and the builder
+//! removes only `tx1`. The h2-child build over h1's verified-but-unaccepted diff
+//! then finds `U1` and packs `tx2`.
+//!
+//! (Were `tx1` enqueued first, the builder would pack BOTH into a single block —
+//! the running diff already holds `tx1`'s freshly produced `U1` within the same
+//! packing run — leaving the child with nothing (`NoPendingBlocks`). The FIFO
+//! ordering is what forces the two-block shape while keeping genuine Go-parity
+//! multi-tx packing.)
 
 #![allow(
     unused_crate_dependencies,
@@ -161,15 +172,20 @@ fn transfer_output(asset_id: Id, amt: u64) -> TransferableOutput {
     }
 }
 
-fn transfer_input(tx_byte: u8, idx: u32, asset_id: Id, amt: u64) -> TransferableInput {
-    let mut tx_id = [0u8; 32];
-    tx_id[0] = tx_byte;
+fn transfer_input(tx_id: Id, idx: u32, asset_id: Id, amt: u64) -> TransferableInput {
     TransferableInput {
-        tx_id: Id::from(tx_id),
+        tx_id,
         output_index: idx,
         asset_id,
         r#in: Input::SecpTransfer(TransferInput::new(amt, vec![0])),
     }
+}
+
+/// The id of a synthetic seeded UTXO's producing tx (first byte = `tx_byte`).
+fn seeded_tx_id(tx_byte: u8) -> Id {
+    let mut tx_id = [0u8; 32];
+    tx_id[0] = tx_byte;
+    Id::from(tx_id)
 }
 
 fn secp_credential() -> FxCredential {
@@ -188,13 +204,15 @@ fn utxo_bytes(tx_byte: u8, idx: u32, asset_id: Id, amt: u64) -> (Id, Vec<u8>) {
     (utxo.input_id(), utxo.marshal().expect("marshal utxo"))
 }
 
-/// A signed `BaseTx` consuming one seeded UTXO and producing a single output.
-fn base_tx(in_byte: u8, asset_id: Id) -> Tx {
+/// A signed `BaseTx` consuming the UTXO at (`in_tx_id`, index 0) holding `amt`
+/// and producing a single output of the same amount (zero fee) at its own
+/// index 0 — so its output UTXO chains into the next spend.
+fn base_tx(in_tx_id: Id, asset_id: Id, amt: u64) -> Tx {
     let mut tx = Tx::new(UnsignedTx::Base(BaseTx::new(AvaxBaseTx {
         network_id: NETWORK_ID,
         blockchain_id: chain_id(),
-        outs: vec![transfer_output(asset_id, 1000)],
-        ins: vec![transfer_input(in_byte, 0, asset_id, 2000)],
+        outs: vec![transfer_output(asset_id, amt)],
+        ins: vec![transfer_input(in_tx_id, 0, asset_id, amt)],
         memo: Vec::new(),
     })));
     tx.creds = vec![secp_credential()];
@@ -212,13 +230,16 @@ fn genesis_bytes() -> Vec<u8> {
 }
 
 /// Initializes a fully-wired [`AvmVm`] from the synthetic genesis, seeds the
-/// state with a `CreateAssetTx` + two spendable UTXOs, and pre-loads the mempool
-/// with two `BaseTx`es so every `build_block` the battery issues succeeds.
+/// state with a `CreateAssetTx` + a single spendable UTXO (`U0`), and pre-loads
+/// the mempool with a CHAIN of two `BaseTx`es (`tx1` spends `U0` → `U1`; `tx2`
+/// spends `U1`). With Go-parity multi-tx packing, the genesis-diff build packs
+/// only `tx1` (`U1` does not exist yet) and the h2-child build over h1's diff
+/// then packs `tx2` — so every `build_block` the battery issues succeeds.
 async fn init_avm_vm(token: &CancellationToken) -> AvmVm {
     let ca = create_asset_tx();
     let asset_id = ca.id();
-    let (utxo_id1, utxo1) = utxo_bytes(0xb1, 0, asset_id, 2000);
-    let (utxo_id2, utxo2) = utxo_bytes(0xb2, 0, asset_id, 2000);
+    // The single seeded UTXO U0 (2000 of the asset), produced by synthetic tx 0xb1.
+    let (utxo_id0, utxo0) = utxo_bytes(0xb1, 0, asset_id, 2000);
 
     let mut vm = AvmVm::new();
     let db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
@@ -246,14 +267,26 @@ async fn init_avm_vm(token: &CancellationToken) -> AvmVm {
     // M8/ava-genesis follow-up — this test seeds them directly).
     vm.seed_genesis_state(|s| {
         s.add_tx(asset_id, ca.bytes().to_vec());
-        s.add_utxo(utxo_id1, utxo1);
-        s.add_utxo(utxo_id2, utxo2);
+        s.add_utxo(utxo_id0, utxo0);
     })
     .expect("seed genesis state");
 
-    // Pre-load the mempool with one spend per seeded UTXO.
-    vm.mempool_add(base_tx(0xb1, asset_id)).expect("add tx1");
-    vm.mempool_add(base_tx(0xb2, asset_id)).expect("add tx2");
+    // Pre-load the mempool with a CHAIN of two spends: tx1 consumes U0 and
+    // produces U1 (its own output index 0); tx2 consumes U1. tx2 is enqueued
+    // BEFORE tx1 so that, building over the genesis diff (FIFO order), the
+    // builder hits tx2 first — U1 does not exist yet, so tx2 is dropped (left in
+    // the pool) — then packs tx1, producing U1. So h1 carries only tx1 and the
+    // builder removes only tx1 from the pool. The h2-child build over h1's
+    // verified-but-unaccepted diff now finds U1 and packs tx2.
+    //
+    // (Were tx1 enqueued first, the builder would pack BOTH into h1 in one run —
+    // the running diff already holds tx1's freshly produced U1 — and the child
+    // build would find nothing. The ordering is what forces the two-block shape
+    // while keeping genuine Go-parity multi-tx packing.)
+    let tx1 = base_tx(seeded_tx_id(0xb1), asset_id, 2000);
+    let tx2 = base_tx(tx1.id(), asset_id, 2000);
+    vm.mempool_add(tx2).expect("add tx2");
+    vm.mempool_add(tx1).expect("add tx1");
 
     vm
 }

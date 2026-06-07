@@ -124,10 +124,10 @@ pub struct AvmVm {
     /// The atomic gossip-handler switch (M5.18); `app_gossip` delegates here.
     /// `None` until `initialize` installs the live handler.
     gossip_handler: Option<Arc<AtomicAppHandler>>,
-    /// The fx dispatch table (secp256k1fx / nftfx / propertyfx). Held so
-    /// `set_state(NormalOp)` can flip it bootstrapped (Go `vm.onBootstrapped`).
-    /// Mirrored into the manager at `initialize`; this copy is informational —
-    /// the bootstrap flip is applied to the manager's dispatch via a re-build.
+    /// The parsed VM [`Config`] (fee schedule: `tx_fee` / `create_asset_tx_fee`).
+    /// Retained from `initialize` so `set_state(NormalOp)` can rebuild the
+    /// manager's executor [`Backend`] with the same fees and `bootstrapped=true`
+    /// (Go `vm.onBootstrapped`).
     fee_config: Config,
 }
 
@@ -637,17 +637,16 @@ impl ChainVm for AvmVm {
         // immediately resolvable as a parent state view (the conformance battery
         // sets preference to an unaccepted built block, then builds its child).
         //
-        // ## One-tx-per-block packing policy (M5.19)
+        // ## Block packing policy (M5.19, Go-parity)
         //
-        // The M5.17 `build_block` packs every candidate that verifies against the
-        // running diff. The VM hands it the FIFO mempool snapshot but caps the
-        // candidate set to the single oldest tx, so a StandardBlock carries
-        // exactly one tx in this milestone. This keeps successive builds over a
-        // chain of unaccepted blocks productive (each build advances the chain by
-        // one tx) — without it, the first build would drain every spendable UTXO
-        // into one block and a child built on the (unaccepted) parent would have
-        // nothing left to pack (`NoPendingBlocks`). Multi-tx packing + the
-        // accept-side mempool drain is the throughput follow-up.
+        // Block packing is FIFO + size-capped (Go `builder.go` /
+        // `packDecisionTxs`): the VM hands the M5.17 `build_block` the full FIFO
+        // mempool snapshot and the builder packs as many txs as verify against
+        // the running diff and fit under `TARGET_BLOCK_SIZE`, dropping the rest.
+        // Only the txs the builder actually PACKED are removed from the mempool
+        // (remove-on-build); a reject re-admits exactly those (see
+        // [`AvmBlock::reject`]), and an accept drops them permanently (see
+        // [`AvmBlock::accept`]). Dropped (unpacked) candidates stay in the pool.
         let block = {
             let mut mgr = shared.manager.lock();
 
@@ -656,9 +655,9 @@ impl ChainVm for AvmVm {
             let parent_height = mgr.height_of(parent_id).map_err(VmError::from)?;
             let parent_time = parent_state.get_timestamp();
 
-            // The oldest mempool tx (FIFO head) is the sole candidate this build.
-            let candidate_txs: Vec<Tx> =
-                shared.mempool.lock().peek().cloned().into_iter().collect();
+            // The full FIFO mempool snapshot is the candidate set; the builder
+            // packs as many as fit/verify (Go packs multiple txs per block).
+            let candidate_txs: Vec<Tx> = shared.mempool.lock().snapshot();
 
             let out = build_block(BuildBlockParams {
                 codec: Codec(),
@@ -679,10 +678,12 @@ impl ChainVm for AvmVm {
             out.block
         };
 
-        // Remove the packed tx from the mempool so a subsequent build over an
-        // unaccepted child advances to the next tx. A reject re-admits it
-        // (see [`AvmBlock::reject`]); an accept drops it permanently
-        // (see [`AvmBlock::accept`]).
+        // Remove exactly the txs the builder PACKED into the block from the
+        // mempool (remove-on-build, Go-parity), so a subsequent build over an
+        // unaccepted child advances past them. Dropped (unpacked) candidates are
+        // left in the pool. A reject re-admits the packed set (see
+        // [`AvmBlock::reject`]); an accept drops it permanently (see
+        // [`AvmBlock::accept`]).
         {
             let mut pool = shared.mempool.lock();
             for tx in block.txs() {
