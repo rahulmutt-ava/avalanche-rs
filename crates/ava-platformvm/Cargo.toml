@@ -17,6 +17,9 @@ ava-crypto = { path = "../ava-crypto" }
 ava-database = { path = "../ava-database" }
 ava-validators = { path = "../ava-validators" }
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# avax UTXO components (TransferableInput/Output, BaseTx, sort helpers) shared
+# with the AVM (specs 08 §2.4, M4.15); first consumed by M4.3 per-tx structs.
+ava-vm = { path = "../ava-vm" }
 ava-utils = { path = "../ava-utils" }
 num-bigint = { workspace = true }
 ruint = { workspace = true }

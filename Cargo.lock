@@ -728,6 +728,7 @@ dependencies = [
  "ava-types",
  "ava-utils",
  "ava-validators",
+ "ava-vm",
  "bytes",
  "hex",
  "num-bigint",
