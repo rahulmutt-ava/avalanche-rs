@@ -42,14 +42,17 @@ use pretty_assertions as _;
 use rstest as _;
 
 pub mod block;
+pub mod client;
 pub mod error;
 pub mod factory;
 pub mod fx;
 pub mod genesis;
 pub mod reward;
+pub mod service;
 pub mod signer;
 pub mod stakeable;
 pub mod state;
+pub mod status;
 pub mod txs;
 pub mod utxo;
 pub mod validators;

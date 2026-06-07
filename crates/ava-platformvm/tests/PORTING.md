@@ -200,14 +200,14 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestGetBlock` | ⬜ not ported |
 | `TestGetBlock` | ⬜ not ported |
 | `TestGetCanonicalValidatorSet` | ⬜ not ported |
-| `TestGetCurrentValidators` | ⬜ not ported |
-| `TestGetCurrentValidators` | ⬜ not ported |
-| `TestGetCurrentValidatorsForL1` | ⬜ not ported |
+| `TestGetCurrentValidators` | 🟡 `service::conformance::service_get_current_validators` (M4.28) — asserts the `getCurrentValidators` reply shape (field names `txID`/`nodeID`/`weight`/`startTime`/`publicKey`, avajson string-encoded ints, hex `0x…` BLS keys) and the canonical validation-id sorted order over the M4.21 `get_current_validator_set` seam. ⬜ na — exact-Go JSON golden deferred (no recorded `getCurrentValidators` vector; `tools/extract-vectors` has no P-Chain service surface yet, M4.24 precedent); the delegator/reward-owner/uptime fields of the full Go reply are deferred (out of scope for read-only sync — need the staker-attribute cache + owner formatting + delegator iteration) |
+| `TestGetCurrentValidators` | 🟡 see row above (`service_get_current_validators`, M4.28) |
+| `TestGetCurrentValidatorsForL1` | 🟡 `service_get_current_validators` includes L1 validators (the manager's `get_current_validator_set` merges base stakers + L1 validators, emitting `validationID`/`minNonce` for L1 entries); shape asserted, exact-Go JSON golden deferred (M4.28) |
 | `TestGetDelegatorRules` | ⬜ not ported |
 | `TestGetFeeConfig` | ⬜ not ported |
 | `TestGetFeeStateErrors` | ⬜ not ported |
 | `TestGetInputOutputs` | ⬜ not ported |
-| `TestGetL1Validator` | ⬜ not ported |
+| `TestGetL1Validator` | 🟡 `service::Service::get_l1_validator` ported (M4.28): `getL1Validator` reply shape (`nodeID`/`weight`/`startTime`/`validationID`/`publicKey`/`minNonce`/`subnetID`/`height`) over the M4.20 `State::get_l1_validator` seam; balance/owner fields deferred (need codec-unmarshal of the stored owners + fee accounting), exact-Go JSON golden deferred |
 | `TestGetNextStakerChangeTime` | ⬜ not ported |
 | `TestGetNextStakerToReward` | ⬜ not ported |
 | `TestGetProposedHeight` | ⬜ not ported |
@@ -215,10 +215,10 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestGetStake` | ⬜ not ported |
 | `TestGetStakerIteratorDeleteAndPut` | ⬜ not ported |
 | `TestGetState` | ⬜ not ported |
-| `TestGetTimestamp` | ⬜ not ported |
-| `TestGetTimestamp` | ⬜ not ported |
-| `TestGetTx` | ⬜ not ported |
-| `TestGetTxStatus` | ⬜ not ported |
+| `TestGetTimestamp` | 🟡 `service::conformance::service_read_method_shapes` (M4.28) — asserts `getTimestamp` RFC3339 encoding (`time.Time` JSON) over `State::timestamp` |
+| `TestGetTimestamp` | 🟡 see row above (`service_read_method_shapes`, M4.28) |
+| `TestGetTx` | 🟡 `service::Service::get_tx_bytes` returns the raw stored tx bytes (M4.28); the encoding-selection / JSON-typed decode is deferred to the transport layer that owns `formatting.Encoding` |
+| `TestGetTxStatus` | 🟡 `service::Service::get_tx_status` + `status.rs` `Status` enum ported (M4.28): accepted tx ⇒ `Committed`, absent ⇒ `Unknown`; the mempool / preferred-block `Processing` + dropped-reason paths are deferred (need the builder/mempool seam, read-only sync does not require them). `status::tests::status_json_roundtrip` pins the Go PascalCase JSON + discriminants |
 | `TestGetValidatorFeeConfig` | ⬜ not ported |
 | `TestGetValidatorRules` | ⬜ not ported |
 | `TestGetValidatorSet_AfterEtna` | 🟡 `differential::validatorstate_parity` (M4.23) replays recorded P-Chain block sequences and asserts the M4.21 `PChainValidatorManager` backward diff-window reconstruction (`get_validator_set` at every height: weights + BLS keys, `NodeId`-ascending) matches a forward-accumulation oracle; also `conformance::validator_set_at_height` (M4.21). ⬜ na — byte-exact Go-extracted `validator_diff_windows` golden deferred: `tools/extract-vectors` has no P-Chain validator-diff-window surface yet; the committed vectors are a deterministic recorded oracle (forward-accumulation, an independent code path from the manager's backward reconstruction), per the M4.24 genesis precedent. Pin the exact Go golden once a tier-X extraction harness for `vms/platformvm/validators` lands |
@@ -349,7 +349,7 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestRewards` | ⬜ not ported |
 | `TestRewardsMint` | ⬜ not ported |
 | `TestRewardsOverflow` | ⬜ not ported |
-| `TestServiceGetBlockByHeight` | ⬜ not ported |
+| `TestServiceGetBlockByHeight` | 🟡 `service::Service::get_block_by_height` ported (M4.28): resolves the block id via `State::get_block_id_at_height` then returns the stored block bytes (`conformance::service_get_block_by_height_roundtrip` covers the missing-height error path); the encoding-selection / JSON block decode is deferred to the transport layer (`getBlock` likewise via `get_block`) |
 | `TestServiceGetSubnets` | ⬜ not ported |
 | `TestSetAutoRenewedValidatorConfigTxSerialization` | ⬜ not ported |
 | `TestSetAutoRenewedValidatorConfigTxSyntacticVerify` | ⬜ not ported |

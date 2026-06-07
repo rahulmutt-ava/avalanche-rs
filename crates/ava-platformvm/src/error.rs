@@ -337,6 +337,14 @@ pub enum Error {
     /// ran (the block manager / validator manager are not yet constructed).
     #[error("VM not initialized")]
     NotInitialized,
+
+    // ----- read-service failures (M4.28, `service.rs`/`client.rs`) -----
+    /// A JSON-RPC read-method failure that carries a descriptive message
+    /// (a wrapped [`ValidatorState`](ava_validators::state::ValidatorState)
+    /// error, a missing block at a height, a malformed address, etc.). These
+    /// surface to the API caller, not the consensus engine.
+    #[error("service: {0}")]
+    Service(String),
 }
 
 // The `ChainVm`/`Block` trait surfaces return `ava_vm::Error` / `ava_snow::Error`
