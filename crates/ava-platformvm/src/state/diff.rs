@@ -78,6 +78,9 @@ pub struct Diff {
     subnet_managers: BTreeMap<Id, Vec<u8>>,
     added_chains: BTreeMap<Id, Vec<Id>>,
     reward_utxos: BTreeMap<Id, Vec<UtxoBytes>>,
+
+    // ----- tx store overlay -----
+    txs: BTreeMap<Id, Vec<u8>>,
 }
 
 impl Diff {
@@ -109,6 +112,7 @@ impl Diff {
             subnet_managers: BTreeMap::new(),
             added_chains: BTreeMap::new(),
             reward_utxos: BTreeMap::new(),
+            txs: BTreeMap::new(),
         })
     }
 
@@ -184,6 +188,9 @@ impl Diff {
             for u in utxos {
                 base.add_reward_utxo(tx_id, u.clone());
             }
+        }
+        for (&tx_id, bytes) in &self.txs {
+            base.add_tx(tx_id, bytes.clone());
         }
         Ok(())
     }
@@ -420,5 +427,16 @@ impl Chain for Diff {
 
     fn add_reward_utxo(&mut self, tx_id: Id, utxo: UtxoBytes) {
         self.reward_utxos.entry(tx_id).or_default().push(utxo);
+    }
+
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>> {
+        match self.txs.get(&tx_id) {
+            Some(b) => Ok(b.clone()),
+            None => self.parent.get_tx(tx_id),
+        }
+    }
+
+    fn add_tx(&mut self, tx_id: Id, tx_bytes: Vec<u8>) {
+        self.txs.insert(tx_id, tx_bytes);
     }
 }
