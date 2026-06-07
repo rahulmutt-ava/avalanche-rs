@@ -35,6 +35,7 @@ use crate::txs::Tx;
 
 pub mod apricot;
 pub mod banff;
+pub mod builder;
 pub mod codec;
 pub mod executor;
 pub mod parse;
