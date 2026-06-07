@@ -88,6 +88,17 @@ impl Mempool {
         }
     }
 
+    /// An empty pool with a custom byte budget (for testing scenarios that need
+    /// a budget-limited pool without accessing private fields).
+    #[must_use]
+    pub fn with_budget(bytes: usize) -> Self {
+        Self {
+            unissued: LinkedHashmap::new(),
+            consumed: LinkedHashmap::new(),
+            bytes_available: bytes,
+        }
+    }
+
     /// `Add` — admit `tx`, appending it to the back (newest) of the FIFO order.
     ///
     /// Returns the corresponding [`Error`] without mutating the pool when the tx

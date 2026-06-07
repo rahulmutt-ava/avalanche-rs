@@ -135,27 +135,25 @@ fn drops_uninitialized_tx() {
 }
 
 #[test]
-fn drops_mempool_conflict() {
+fn drops_mempool_full() {
     let h = TxGossipHandler::new();
     let v = SyntacticTxVerifier;
-    let mut m = Mempool::new();
 
-    // First tx is admitted.
-    let tx1 = make_tx(10);
-    assert_eq!(
-        h.handle_gossiped_tx(&mut m, &v, tx1.clone()),
-        HandleOutcome::Added
+    // Build a pool whose byte budget is exactly zero — any tx will fail with
+    // MempoolFull, which maps to DropReason::Mempool.
+    let mut m = Mempool::with_budget(0);
+
+    let tx = make_tx(10);
+    let out = h.handle_gossiped_tx(&mut m, &v, tx);
+
+    // The handler must produce Dropped(Mempool(_)) — the arm that was never
+    // exercised before this fix.
+    assert!(
+        matches!(out, HandleOutcome::Dropped(DropReason::Mempool(_))),
+        "expected Dropped(Mempool(_)), got {out:?}",
     );
-
-    // Force mempool full: shrink budget to 0 to trigger MempoolFull on a second tx.
-    // We'll just verify that a duplicate → Duplicate.
-    let out = h.handle_gossiped_tx(&mut m, &v, tx1);
-    assert_eq!(out, HandleOutcome::Dropped(DropReason::Duplicate));
-
-    // Also test: a second distinct tx still adds fine.
-    let tx2 = make_tx(11);
-    assert_eq!(h.handle_gossiped_tx(&mut m, &v, tx2), HandleOutcome::Added);
-    assert_eq!(m.len(), 2);
+    // Divergence-free: the pool must remain untouched.
+    assert!(m.is_empty());
 }
 
 // ---------------------------------------------------------------------------
