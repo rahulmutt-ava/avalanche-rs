@@ -591,6 +591,22 @@ lastAccepted/timestamp), `reject()`.
   initialized once to the real handler but the indirection is preserved for the
   gRPC-plugin path (07) where linearization timing is observable.
 
+> **As-built scoping note (M5.18, 2026-06-07).** Spec 05's *generic* p2p push/pull
+> gossip framework — a `Gossipable` trait, the `Gossiper`/`Marshaller`/pull-`Handler`
+> machinery, and a **writable** Bloom `Set` for set reconciliation — does **not yet
+> exist** in `ava-network`/`ava-message` (only a read-only `ReadFilter` for IP-list
+> gossip is present). The P-Chain (M4) set the precedent: it implements the **VM-side
+> handler logic only** (`crates/ava-platformvm/src/network.rs`: a `TxVerifier` trait,
+> `TxGossipHandler` with dedupe→verify→admit, `DropReason`/`HandleOutcome`) and leaves
+> `AppHandler::app_gossip` as a transport seam. M5.18 mirrors this: `ava-avm` supplies
+> the **marshaller + verify hook + `TxGossipHandler` + the `ArcSwap` atomic app-handler
+> switch** and a local minimal `Gossipable` (`gossip_id = tx_id`) seam, but **defers the
+> generic push/pull Bloom-`Set` wire protocol** (and the `bloomfilter` dependency) to a
+> future 05/M2 cross-cutting deepening. None of the M5 exit-gate tests
+> (`golden::xchain_*`, `differential::{xchain_issue_tx,atomic_xp}`) exercise live gossip,
+> so this deferral does not affect the milestone gate; the recorded-oracle differential
+> issues txs directly via the VM, not over the wire.
+
 ---
 
 ## 9. Cross-chain atomic import/export (X↔P, X↔C)

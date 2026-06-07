@@ -520,11 +520,41 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.18: Tx gossip + Atomic app-handler switch
 **Crate:** ava-avm  ·  **Depends on:** M5.17; M3/M-network (`ava_network::p2p::gossip` push/pull, Bloom Set)  ·  **Spec:** 09 §8; 05 (gossip machinery)
 **Files:** `crates/ava-avm/src/network/mod.rs`, `network/gossip.rs`, `network/atomic.rs`, `network/tx_verifier.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/gossip.rs`: `Tx` is `Gossipable` with `gossip_id == tx_id`; an inbound `AppGossip` of a valid tx adds it to the mempool and the Bloom set; an invalid tx is dropped with reason; `Atomic` switch (`ArcSwap<dyn AppHandler>`) forwards to the live handler.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm gossip` → fails.
-- [ ] **Step 3 — Green:** `gossip.rs`: implement `Gossipable for Tx` (gossip_id = tx_id), supply marshaller + verify hook (`tx_verifier.rs` wraps semantic verify) into 05's push/pull gossip + Bloom `Set` (09 §8). `atomic.rs`: `ArcSwap<dyn AppHandler>` initialized once to the real handler (post-linearization), indirection preserved for the gRPC path (09 §8).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm gossip`.
-- [ ] **Step 5 — Commit:** `avm: tx gossip + atomic app-handler switch (M5.18)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/gossip.rs`: `Tx` is `Gossipable` with `gossip_id == tx_id`; an inbound `AppGossip` of a valid tx adds it to the mempool and the Bloom set; an invalid tx is dropped with reason; `Atomic` switch (`ArcSwap<dyn AppHandler>`) forwards to the live handler.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm gossip` → fails.
+- [x] **Step 3 — Green:** `gossip.rs`: implement `Gossipable for Tx` (gossip_id = tx_id), supply marshaller + verify hook (`tx_verifier.rs` wraps semantic verify) into 05's push/pull gossip + Bloom `Set` (09 §8). `atomic.rs`: `ArcSwap<dyn AppHandler>` initialized once to the real handler (post-linearization), indirection preserved for the gRPC path (09 §8).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm gossip`.
+- [x] **Step 5 — Commit:** `avm: tx gossip + atomic app-handler switch (M5.18)`
+
+> **As-built (M5.18, 2026-06-07, commits `7b3b84f`+`6c4ddd4`+`d0091d7`, ff-merged to main):**
+> 128 ava-avm tests green; clippy `-D warnings` + fmt clean. Implementer → spec review →
+> code-quality review → fixes, per subagent-driven-development.
+> - **SCOPING (recorded in spec 09 §8 as-built note):** spec 05's generic push/pull gossip
+>   framework + **writable** Bloom `Set` do **not exist** (only a read-only IP `ReadFilter`).
+>   M5.18 mirrors the P-Chain precedent (`crates/ava-platformvm/src/network.rs`): VM-side handler
+>   logic only, transport DEFERRED to a 05/M2 follow-up. The M5 exit gate needs no live gossip
+>   (the recorded-oracle differential issues txs via the VM, not the wire).
+> - **`network/gossip.rs`:** local `trait Gossipable { gossip_id() -> Id }` + `impl for Tx` (= `tx.id()`);
+>   `TxMarshaller` (`marshal` = `tx.bytes().to_vec()`, `unmarshal` = `Tx::parse(Codec(), .)`, panic-free);
+>   `TxGossipHandler` + `DropReason{Duplicate, Verification(String), Mempool(mempool::Error)}` +
+>   `HandleOutcome{Added, Dropped(..)}` — dedupe→verify→admit, divergence-free, line-for-line the P-Chain
+>   handler. All three drop paths are test-exercised (incl. `DropReason::Mempool` via a new
+>   `Mempool::with_budget(0)` `#[doc(hidden)]` test ctor).
+> - **`network/tx_verifier.rs`:** `trait TxVerifier { verify_tx(&Tx) -> Result<(),String> }`; cheap
+>   state-free `SyntacticTxVerifier` (renamed +`Tx` to avoid colliding with
+>   `executor::syntactic::SyntacticVerifier`); `SemanticTxVerifier<'a>` = the real "wraps semantic
+>   verify" hook holding `&Backend`/`&dyn ReadOnlyChain`/`&Dispatch`, running
+>   `SyntacticVerifier`+`SemanticVerifier::verify()` over a seeded state (tested with a real
+>   `MemDb`-backed `State` + seeded CreateAssetTx + UTXO).
+> - **`network/atomic.rs`:** `arc-swap`-backed `AtomicAppHandler { ArcSwap<Arc<dyn AppGossipHandler>> }`
+>   with `new`/`swap`/`load` + delegating fire-and-forget `handle_app_gossip`. **DESIGN NOTE:** the
+>   canonical `ava_vm::AppHandler` methods are `&mut self`, which a shared `Arc<dyn …>` cannot call —
+>   so the switch is defined over a local `&self` `AppGossipHandler` trait (the gossip handler is
+>   effectively stateless; the mempool it mutates is owned+locked by the VM). The swap primitive +
+>   indirection is built and tested (A→B→A routing); **wiring the VM's `AppHandler::app_gossip` to call
+>   this switch + constructing the real handler is M5.19.**
+> - Added `arc-swap` workspace dep to `ava-avm/Cargo.toml`. No new `crate::error::Error` variants
+>   (mempool/codec errors reused; DropReason is gossip-local).
 
 ### Task M5.19: VM assembly — ChainVm impl
 **Crate:** ava-avm  ·  **Depends on:** M5.16, M5.17, M5.18, M5.11; M3 (`ava_vm::{Vm, ChainVm, block::Block}`), M4 (chain manager wiring)  ·  **Spec:** 09 §0, §5 (initialize_chain_state hook); 07 §2.1, §2.4
