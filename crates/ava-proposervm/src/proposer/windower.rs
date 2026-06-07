@@ -92,6 +92,13 @@ impl<S: ValidatorState> Windower<S> {
         self.chain_source
     }
 
+    /// Borrows the underlying [`ValidatorState`] (used by the VM wrapper's
+    /// `selectChildPChainHeight` to read the recommended minimum height).
+    #[must_use]
+    pub fn validator_state(&self) -> &S {
+        &self.state
+    }
+
     /// Fetches and canonicalizes the validator set at `p_chain_height`:
     /// the empty `NodeId` is dropped and the rest are sorted by `NodeId`
     /// (Go `makeSampler`, minus the sampler — the sampler is constructed per

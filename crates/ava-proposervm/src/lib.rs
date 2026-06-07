@@ -14,23 +14,28 @@
 //! - [`proposer`] — the windower (gonum MT19937/-64 seeding, pre/post-Durango
 //!   proposer scheduling) reusing the vendored `ava_utils::rng` MT and the
 //!   `ava_utils::sampler` weighted-without-replacement sampler (M3.22).
+//! - [`vm`] — the [`ProposerVm`] wrapper (M3.23): fork-regime selection by the
+//!   inner block timestamp, the height index + inner-VM delegation, and the
+//!   slot-wait sign/build path. Presents itself as an `ava_vm::ChainVm`.
+//! - [`state`] — the persisted chain state + `height -> blockID` index over a
+//!   `DynDatabase` (Go `vms/proposervm/state`).
+//! - [`height_index`] — the `GetBlockIDAtHeight`/`updateHeightIndex` logic
+//!   (Go `height_indexed_vm.go`).
 //!
 //! Byte-for-byte parity with Go `vms/proposervm/block` and
 //! `vms/proposervm/proposer` is the contract (R1 confirmation on the windower).
 
 #![forbid(unsafe_code)]
 
-// `ava-vm` (the inner `ChainVm` the wrapper delegates to) and `async-trait`
-// (the `Vm`/`ChainVm` trait surface) are consumed by the VM wrapper (M3.23);
-// keep the dependency edges without an unused-crate warning until that lands.
-use async_trait as _;
-use ava_vm as _;
-
 pub mod block;
 pub mod error;
+pub mod height_index;
 pub mod proposer;
+pub mod state;
+pub mod vm;
 
 pub use error::{Error, Result};
+pub use vm::{BlockSigner, ProposerVm, StakingIdentity};
 
 // Dev-dependencies are exercised only by the integration test crates under
 // `tests/`; reference them here so the unit-test build of the lib does not warn
@@ -41,7 +46,8 @@ mod dev_deps {
     use hex as _;
     use pretty_assertions as _;
     use proptest as _;
+    use rcgen as _;
+    use ring as _;
+    use rustls_pemfile as _;
     use serde as _;
-    use serde_json as _;
-    use tokio as _;
 }
