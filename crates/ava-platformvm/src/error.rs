@@ -324,4 +324,46 @@ pub enum Error {
     /// A wrapped validator-state failure surfaced while obtaining the warp set.
     #[error("validators: {0}")]
     Validators(#[from] ava_validators::error::Error),
+
+    // ----- VM lifecycle sentinels (M4.25, `vm.rs`/`block/builder`) -----
+    /// `ErrNoPendingBlocks` — the block builder was asked to build a block but
+    /// the mempool is empty and no time-advance / reward proposal is due
+    /// (`block/builder.builder`, 08 §4.3). The engine treats this as "the VM
+    /// declined to issue a block", not a hard failure.
+    #[error("no pending blocks")]
+    NoPendingBlocks,
+
+    /// The VM was driven before [`PlatformVm::initialize`](crate::vm::PlatformVm)
+    /// ran (the block manager / validator manager are not yet constructed).
+    #[error("VM not initialized")]
+    NotInitialized,
+}
+
+// The `ChainVm`/`Block` trait surfaces return `ava_vm::Error` / `ava_snow::Error`
+// respectively; map the P-Chain error onto those crates' (closed, non-exhaustive)
+// enums. The orphan rule permits these `From` impls because the source type is
+// local. This mirrors the established `ava-proposervm` precedent (its `error.rs`).
+//
+// Neither `ava_vm::Error` nor `ava_snow::Error` exposes a free-form `Other`
+// variant, so non-`NotFound` P-Chain errors collapse onto the nearest carrying
+// variant; `NotFound` round-trips exactly.
+impl From<Error> for ava_vm::error::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::Database(ava_database::error::Error::NotFound) => ava_vm::error::Error::NotFound,
+            // No generic string variant exists on `ava_vm::Error`; surface a
+            // stable, descriptive static message (the detailed message stays in
+            // the P-Chain log path, not the engine-facing error).
+            _ => ava_vm::error::Error::InvalidComponent("platformvm vm/build error"),
+        }
+    }
+}
+
+impl From<Error> for ava_snow::error::Error {
+    fn from(e: Error) -> Self {
+        // `ava_snow::Error::ParametersInvalid(String)` is the only string-carrying
+        // variant; reuse it to preserve the P-Chain error message on the critical
+        // verify/accept path (a returned `Err` halts the chain).
+        ava_snow::error::Error::ParametersInvalid(format!("platformvm: {e}"))
+    }
 }

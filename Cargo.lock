@@ -725,11 +725,14 @@ dependencies = [
  "ava-crypto",
  "ava-database",
  "ava-secp256k1fx",
+ "ava-snow",
  "ava-types",
  "ava-utils",
  "ava-validators",
+ "ava-version",
  "ava-vm",
  "bytes",
+ "chrono",
  "hex",
  "lru 0.12.5",
  "num-bigint",
@@ -742,6 +745,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

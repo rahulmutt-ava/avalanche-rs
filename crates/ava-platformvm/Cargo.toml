@@ -17,6 +17,11 @@ ava-crypto = { path = "../ava-crypto" }
 ava-database = { path = "../ava-database" }
 ava-validators = { path = "../ava-validators" }
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# The engine-facing `Block` trait (verify/accept/reject) is owned by `ava-snow`
+# and returns `ava_snow::Result`; the M4.25 block wrapper implements it.
+ava-snow = { path = "../ava-snow" }
+# `ChainContext.network_upgrades` typing + the `Connector::connected` version arg.
+ava-version = { path = "../ava-version" }
 # avax UTXO components (TransferableInput/Output, BaseTx, sort helpers) shared
 # with the AVM (specs 08 §2.4, M4.15); first consumed by M4.3 per-tx structs.
 ava-vm = { path = "../ava-vm" }
@@ -32,6 +37,13 @@ parking_lot = { workspace = true }
 lru = "0.12"
 arc-swap = { workspace = true }
 tokio = { workspace = true }
+# `CancellationToken` on the `Vm`/`ChainVm`/`Block` async trait surfaces (M4.25).
+tokio-util = { workspace = true }
+# Convert the chain-context `UpgradeConfig` `DateTime<Utc>` activation times to
+# the executor `Backend`'s `SystemTime` schedule (M4.25 `vm.rs`).
+chrono = { workspace = true }
+# `HealthCheck`/`Database` health surfaces return `serde_json::Value` (M4.25).
+serde_json = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 

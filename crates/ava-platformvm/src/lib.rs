@@ -43,6 +43,7 @@ use rstest as _;
 
 pub mod block;
 pub mod error;
+pub mod factory;
 pub mod fx;
 pub mod genesis;
 pub mod reward;
@@ -52,6 +53,7 @@ pub mod state;
 pub mod txs;
 pub mod utxo;
 pub mod validators;
+pub mod vm;
 pub mod warp;
 
 pub use error::{Error, Result};
