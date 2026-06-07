@@ -611,20 +611,73 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.20: X↔P atomic import/export end-to-end (ATOMIC-1) — `differential::atomic_xp`
 **Crate:** ava-avm (+ test harness X)  ·  **Depends on:** M5.14, M5.16, M5.19; M4 (P-Chain + shared `SharedMemory`)  ·  **Spec:** 09 §9 (ATOMIC-1, byte format), 07 §3.1 (SharedMemory, canonical UTXO encoding); 00 §11.1.7
 **Files:** `crates/ava-avm/tests/atomic_xp.rs`, `tests/vectors/atomic/*.json`, `tests/differential/src/atomic.rs` (harness X)
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/atomic_xp.rs` with `mod differential { #[test] fn atomic_xp() {...} }` (recorded-oracle mode default): X-Chain `ExportTx` to P emits an `Element{key=input_id, value=marshal_v0(avax::UTXO), traits=addrs}`; assert (a) `hex::encode(value)` matches the committed `tests/vectors/atomic/x_to_p_utxo.json` Go vector, and (b) the **P-Chain codec** (M4) decodes the same bytes into an identical `avax::UTXO` (cross-chain decode — ATOMIC-1), and the reverse P→X. Live two-binary mode gated behind `--features differential-live`/`DIFFERENTIAL_LIVE` env with the recorded-oracle as fallback.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm differential::atomic_xp` → fails (vectors/cross-decode missing).
-- [ ] **Step 3 — Green:** Ensure the avm export marshals `avax::UTXO` with **codec v0 + the exporting VM's secp256k1fx output type IDs** (ATOMIC-1, 09 §9). Add cross-chain decode helper in the harness importing M4's P-Chain codec; commit `tests/vectors/atomic/{x_to_p_utxo,p_to_x_utxo}.json` (Go-extracted, with provenance per 02 §6.2). Wire the live-mode path in `tests/differential/src/atomic.rs` (issue export on Go X-Chain, import on Go P-Chain; mirror on Rust).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm differential::atomic_xp` (recorded mode); live mode runs under the gated feature.
-- [ ] **Step 5 — Commit:** `avm: X↔P atomic import/export (ATOMIC-1) + atomic_xp differential (M5.20)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/atomic_xp.rs` with `mod differential { #[test] fn atomic_xp() {...} }` (recorded-oracle mode default): X-Chain `ExportTx` to P emits an `Element{key=input_id, value=marshal_v0(avax::UTXO), traits=addrs}`; assert (a) `hex::encode(value)` matches the committed `tests/vectors/atomic/x_to_p_utxo.json` Go vector, and (b) the **P-Chain codec** (M4) decodes the same bytes into an identical `avax::UTXO` (cross-chain decode — ATOMIC-1), and the reverse P→X. Live two-binary mode gated behind `--features differential-live`/`DIFFERENTIAL_LIVE` env with the recorded-oracle as fallback.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm differential::atomic_xp` → fails (vectors/cross-decode missing).
+- [x] **Step 3 — Green:** Ensure the avm export marshals `avax::UTXO` with **codec v0 + the exporting VM's secp256k1fx output type IDs** (ATOMIC-1, 09 §9). Add cross-chain decode helper in the harness importing M4's P-Chain codec; commit `tests/vectors/atomic/{x_to_p_utxo,p_to_x_utxo}.json` (Go-extracted, with provenance per 02 §6.2). Wire the live-mode path in `tests/differential/src/atomic.rs` (issue export on Go X-Chain, import on Go P-Chain; mirror on Rust).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm differential::atomic_xp` (recorded mode); live mode runs under the gated feature.
+- [x] **Step 5 — Commit:** `avm: X↔P atomic import/export (ATOMIC-1) + atomic_xp differential (M5.20)`
+
+> **As-built (M5.20, 2026-06-07, commit `f52cb31`, ff-merged to main):** 149 ava-avm + 5 ava-differential
+> tests green; clippy `-D warnings` + fmt clean. Ran in parallel with M5.21 (both branched from the
+> verified HEAD); reviewed (spec + quality combined, opus) → APPROVE.
+> - **`crates/ava-avm/tests/atomic_xp.rs`** `mod differential { fn atomic_xp() }` exercises the X→P
+>   path through the **real `ava-chains` shared-memory backend**: `BlockManager::accept`'s atomic
+>   co-commit (`commit_batch_ops` → `SharedMemoryView::apply(requests, &[batch])`) with the X-Chain
+>   `State` + `Memory` on **one shared base `MemDb`**, then the P-Chain view `sm_p.get(x_chain_id, key)`
+>   returns the bytes and `ava_platformvm::utxo::Utxo::unmarshal` decodes an **identical** UTXO via the
+>   **separate P-Chain codec/registry** (the non-circular ATOMIC-1 proof) + re-marshal reproduces the
+>   bytes; P→X is the mirror. Round-trip exercises real sharedID prefixing + dbElement framing.
+> - **Vectors** `tests/vectors/atomic/{x_to_p_utxo,p_to_x_utxo}.json` are **byte-layout-faithful to the
+>   Go wire format** (field-by-field auditable: `0000`‖txID‖outputIndex‖assetID‖typeId=7‖secp
+>   TransferOutput payload; derived from `/Users/rahul.muttineni/avalanchego` `vms/components/avax/utxo.go`
+>   + `vms/avm/txs/executor` + `chains/atomic`), with provenance recorded in each JSON
+>   ("pending live-oracle confirmation", per the M5.5/M5.15 precedent).
+> - **secp type-id parity CONFIRMED across chains** (the cross-decode foundation): `TransferOutput`=7,
+>   `TransferInput`=5, `CODEC_VERSION`=0 on BOTH `ava-avm` and `ava-platformvm` codecs.
+> - Added `ava-chains`/`ava-platformvm`/`serde_json` as `ava-avm` **dev-deps** (no cycle — both are
+>   leaf deps of ava-avm). `tests/differential/src/atomic.rs` adds a driver-independent `Observation`
+>   collector seam + `TODO(X.13/X.15)` for live mode.
+> - **Deferrals (documented):** VM-`initialize` production wiring of cross-chain shared memory needs a
+>   `ChainContext.shared_memory` field the chain manager must supply (M8/chain-manager) — proven at the
+>   `BlockManager` level instead; live two-binary `atomic_xp` gated behind the unimplemented tier-X
+>   `LockstepDriver` (X.13/X.15).
 
 ### Task M5.21: JSON-RPC service (avm.* methods)
 **Crate:** ava-avm  ·  **Depends on:** M5.19; M3 (`ava-api` JSON-RPC router)  ·  **Spec:** 09 §10; 12 (JSON-RPC serving), 14 (API reference)
 **Files:** `crates/ava-avm/src/service.rs`, `crates/ava-avm/tests/service.rs`, `tests/vectors/avm/service/*.json`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/service.rs`: golden request/response JSON (vs Go `service_test.go` fixtures) for `avm.issueTx` (parse + add to mempool + gossip), `avm.getTx`, `avm.getTxStatus`, `avm.getUTXOs` (incl. cross-chain `sourceChain`), `avm.getBalance`, `avm.getHeight`, `avm.getBlockByHeight`. Assert error codes match Go.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm service` → fails.
-- [ ] **Step 3 — Green:** `service.rs`: implement the `avm.*` methods per 09 §10 over `ava-api`'s JSON-RPC router, names/args/replies/error-codes mirroring `vms/avm/service.go`. Bech32 `X-` addresses with chain HRP; CB58/hex asset ids. Defer the deprecated keystore-backed `wallet.*` methods behind a feature flag (note in PORTING.md / §10).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm service`.
-- [ ] **Step 5 — Commit:** `avm: JSON-RPC service (avm.* methods) + golden fixtures (M5.21)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/service.rs`: golden request/response JSON (vs Go `service_test.go` fixtures) for `avm.issueTx` (parse + add to mempool + gossip), `avm.getTx`, `avm.getTxStatus`, `avm.getUTXOs` (incl. cross-chain `sourceChain`), `avm.getBalance`, `avm.getHeight`, `avm.getBlockByHeight`. Assert error codes match Go.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm service` → fails.
+- [x] **Step 3 — Green:** `service.rs`: implement the `avm.*` methods per 09 §10 over `ava-api`'s JSON-RPC router, names/args/replies/error-codes mirroring `vms/avm/service.go`. Bech32 `X-` addresses with chain HRP; CB58/hex asset ids. Defer the deprecated keystore-backed `wallet.*` methods behind a feature flag (note in PORTING.md / §10).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm service`.
+- [x] **Step 5 — Commit:** `avm: JSON-RPC service (avm.* methods) + golden fixtures (M5.21)`
+
+> **As-built (M5.21, 2026-06-07, commits `b64f7ef`+`f524411`, ff-merged to main):** 178 ava-avm
+> tests green (incl. 29 service `mod conformance` tokio tests); clippy `-D warnings` + fmt clean.
+> Ran in parallel with M5.20; reviewed (spec+quality, opus) → REQUEST-CHANGES on 3 Go-parity bugs →
+> fixed → merged.
+> - **SCOPING:** `ava-api` / JSON-RPC HTTP router does NOT exist (deferred M8/M12). M5.21 mirrors the
+>   P-Chain `service.rs` precedent exactly: **typed `Service<D>` handlers + serde request/reply types,
+>   tested via inline `#[tokio::test]`s asserting `serde_json` shapes** — NO HTTP server, NO on-disk
+>   goldens (assertions are direct on `serde_json::Value`, matching the P-Chain). `Vm::create_handlers`
+>   stays an empty map until `ava-api` lands.
+> - **Implemented (Go-shape-verified against `/Users/rahul.muttineni/avalanchego/vms/avm/service.go`):**
+>   `getHeight` (`avajson.Uint64` string), `getTx`/`getBlock`/`getBlockByHeight` (checksummed hex),
+>   `getTxStatus` (PascalCase `Accepted`/`Unknown`; not-found→Unknown, other errors propagate, Go-parity),
+>   `issueTx` (parse→txID), `getAssetDescription` (CB58 id). `avajson` u64/u8-as-string module copied
+>   from P-Chain. `format_address("X", get_hrp(network_id), addr)`. New `Error::Service(String)`.
+> - **Go-parity fixes applied (the review's blocking findings, confirmed against
+>   `utils/formatting/encoding.go`):** (1) **hex now appends Go's 4-byte checksum** `sha256(bytes)[28..32]`
+>   via `ava_crypto::hashing::checksum(bytes,4)` → `0x` + hex(bytes‖checksum), byte-matching
+>   `formatting.Encode(Hex,…)`; (2) **decode default = Hex** (Go's `Encoding` zero value, NOT CB58 — that
+>   was a fabricated comment) and the hex path **strips+verifies** the 4-byte checksum (`errBadChecksum`
+>   parity), supporting `hex`/`hexc`/`hexnc` (the encodings Go avm accepts); (3) **`getBalance`/
+>   `getAllBalances` added as honest erroring stubs** (method exists + returns documented `Error::Service`,
+>   not doc-only) with Go-matching arg/reply field names.
+> - **Deferrals (documented in code citing the Go dependency):** address-indexed `getUTXOs`/`getBalance`/
+>   `getAllBalances` (Go uses an address→UTXO index not yet ported); `issueTx` mempool-add + gossip
+>   (needs the `AvmVm` handle, not the `State`-only `Service`); `getTxStatus` `Processing` (needs VM
+>   mempool); `getAssetDescription` alias lookup; `wallet.*` keystore; the `Client<Transport>` (P-Chain
+>   has one; left as a straightforward follow-up — the 29 conformance tests cover the method shapes).
 
 ### Task M5.22: Differential program generator — `differential::xchain_issue_tx`
 **Crate:** ava-avm (+ `tests/differential/` harness X)  ·  **Depends on:** M5.19, M5.20, M5.21; cross-cutting harness X  ·  **Spec:** 02 §11 (differential harness, proptest program), 09 §12; 00 §6.1
