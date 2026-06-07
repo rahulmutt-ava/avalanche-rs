@@ -15,10 +15,13 @@
 //! lives in [`ava_secp256k1fx::Fx::verify_credentials`] (specs 07 §4.3); the
 //! adapters are thin and share one recover-cache per fx instance (09 §4.1).
 //!
-//! TODO(M5.7/M5.8): the `nftfx` / `propertyfx` adapters implement the same
-//! [`Fx`] trait. TODO(M5.9): the full `ParsedFx` dispatch table that selects an
-//! adapter by routed fx id.
+//! The nftfx / propertyfx adapters (M5.7/M5.8) expose their own inherent verify
+//! methods over their concrete operation/utxo types. The [`dispatch`] module
+//! (M5.9) holds the three heterogeneous fxs in a [`dispatch::FxKind`] enum and
+//! routes a parsed value to its fx by codec type-id via the `TypeToFxIndex`
+//! table (specs 09 §2.2, §4; FX-AVM-1).
 
+pub mod dispatch;
 pub mod secp;
 
 use ava_secp256k1fx::{Credential, Input, MintOutput, TransferInput, TransferOutput};
