@@ -127,4 +127,14 @@ pub enum Error {
     /// An arithmetic operation overflowed.
     #[error("overflow")]
     Overflow,
+
+    /// `errUnexpectedDiffKeyLength` — a staker weight/pk-diff key was not the
+    /// expected fixed length (`state/disk_staker_diff_iterator.go`, 08 §7.1).
+    #[error("unexpected diff key length")]
+    UnexpectedDiffKeyLength,
+
+    /// `errUnexpectedWeightValueLength` — a staker weight-diff value was not the
+    /// expected fixed length (`state/disk_staker_diff_iterator.go`, 08 §7.1).
+    #[error("unexpected weight value length")]
+    UnexpectedWeightValueLength,
 }
