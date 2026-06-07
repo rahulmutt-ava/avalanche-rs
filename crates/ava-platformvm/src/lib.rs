@@ -30,7 +30,6 @@ use ava_database as _;
 use ava_utils as _;
 use ava_validators as _;
 use parking_lot as _;
-use ruint as _;
 use tokio as _;
 
 // Dev-dependencies not yet exercised by this crate's in-crate tests; each is

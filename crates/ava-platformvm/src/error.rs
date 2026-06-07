@@ -52,6 +52,16 @@ pub enum Error {
     #[error("invalid BLS proof of possession")]
     InvalidProofOfPossession,
 
+    /// `ErrInsufficientCapacity` — `gas.State.ConsumeGas` was asked to consume
+    /// more gas than the remaining block capacity (specs 21 §1).
+    #[error("insufficient capacity")]
+    InsufficientCapacity,
+
+    /// A fee/gas computation overflowed `u64` (`complexity.ToGas` /
+    /// `gas.Cost`; specs 21 §0–§1).
+    #[error("fee computation overflow")]
+    FeeOverflow,
+
     /// A wrapped codec (de)serialization failure.
     #[error("codec: {0}")]
     Codec(#[from] ava_codec::error::CodecError),

@@ -19,6 +19,7 @@ use ava_codec::AvaCodec;
 use crate::error::Error;
 
 pub mod codec;
+pub mod fee;
 pub mod tx;
 
 pub use codec::{Codec, GenesisCodec};
