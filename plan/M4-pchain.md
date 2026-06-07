@@ -444,11 +444,37 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.20: Block executor Verify/Accept/Reject/Options + acceptor
 **Crate:** ava-platformvm  ·  **Depends on:** M4.16, M4.17, M4.18, M4.14  ·  **Spec:** 08 §4.2 (oracle Verify/Accept/Options), §4.1; 19 §2 (bootstrap accept-without-verify)
 **Files:** `crates/ava-platformvm/src/block/executor/mod.rs`, `verify.rs`, `accept.rs`, `reject.rs`, `options.rs`, `acceptor.rs`.
-- [ ] **Step 1 — Red:** Add `conformance::block_oracle` (proposal→commit/abort option generation; selecting the right diff on Accept) and `conformance::accept_writes_diffs` asserting Accept flushes the block's Diff to State, writes weight/pk diffs (M4.14), updates `blockIDDB`/singleton last-accepted/height, and notifies the validator manager.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm block_oracle` → fails.
-- [ ] **Step 3 — Green:** Port `block/executor/`: `Verify` runs the appropriate executor(s) and caches the resulting Diff(s) per block; for `*ProposalBlock`, `Options()` produces `*CommitBlock`+`*AbortBlock` children (same parent) with `on_commit_state`/`on_abort_state` (08 §4.2). `Accept` applies the selected diff down to `State`, commits the DB batch, writes the staker weight/pk diffs at the block height, sets last-accepted, and calls `validators::Manager::on_accepted_block_id`. `Reject` discards. A `non_verifying` acceptor path (for bootstrap, 19 §2) accepts fetched blocks WITHOUT re-running Verify.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm block_oracle accept_writes_diffs` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: block executor (oracle Verify/Accept/Reject/Options) + acceptor`
+- [x] **Step 1 — Red:** Add `conformance::block_oracle` (proposal→commit/abort option generation; selecting the right diff on Accept) and `conformance::accept_writes_diffs` asserting Accept flushes the block's Diff to State, writes weight/pk diffs (M4.14), updates `blockIDDB`/singleton last-accepted/height, and notifies the validator manager.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm block_oracle` → fails.
+- [x] **Step 3 — Green:** Port `block/executor/`: `Verify` runs the appropriate executor(s) and caches the resulting Diff(s) per block; for `*ProposalBlock`, `Options()` produces `*CommitBlock`+`*AbortBlock` children (same parent) with `on_commit_state`/`on_abort_state` (08 §4.2). `Accept` applies the selected diff down to `State`, commits the DB batch, writes the staker weight/pk diffs at the block height, sets last-accepted, and calls `validators::Manager::on_accepted_block_id`. `Reject` discards. A `non_verifying` acceptor path (for bootstrap, 19 §2) accepts fetched blocks WITHOUT re-running Verify.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm block_oracle accept_writes_diffs` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: block executor (oracle Verify/Accept/Reject/Options) + acceptor`
+
+> **As-built (M4.20):** Ported `block/executor/` as an idiomatic `BlockManager<D>` (not a Go-style
+> struct-per-file): `mod.rs` (the manager — owns `State`, a frozen base snapshot for diff parents,
+> the per-block diff cache, codec, last-accepted pointer, notifier; impls `Versions`; `commit_accept`
+> flushes the diff + writes per-height weight/pk diffs + records block/txs + advances singletons +
+> notifies; `reject()` discards the cached diff), `verify.rs` (standard→single diff; proposal→
+> commit/abort pair via M4.17 `ProposalTxExecutor` with the real tx-store-backed `StakerTxResolver`;
+> options bind the parent proposal's chosen diff), `options.rs` (oracle `(commit, abort)` children over
+> the proposal id at height+1, ordered by `prefers_commit`), `acceptor.rs` (`accept`: proposal=note-only,
+> option=apply chosen diff, standard=apply diff; `accept_non_verifying`: bootstrap path, 19 §2),
+> `reject.rs` (design doc; `reject()` is on the manager). 4 conformance tests assert **real** state flush
+> (staker add/remove, supply mint/un-mint, reward UTXO) + the height diff written (verified by reconstructing
+> the prior set via the M4.14 iterator) + block-store/singletons + notifier firing. **Seams added (the
+> convergence M4.20 owned):** (1) **tx store** on `Chain` (impl `State`+`Diff`): `get_tx(&self, Id) ->
+> Result<Vec<u8>>` / `add_tx(&mut self, Id, Vec<u8>)` (signed-tx bytes → `txDB`; tx-*status* not tracked —
+> read-only reward resolver doesn't need it). (2) **block store + singletons** on `State<D>`: `get_block`/
+> `add_block`/`get_block_id_at_height`/`last_accepted`/`set_last_accepted`/`height`/`set_height`/`snapshot`/
+> `current_validator_weights`/`current_validator_public_keys`/`weight_diff_store`/`public_key_diff_store`
+> (the M4.14 `_`-prefixed handles are now live). (3) **validator-notify seam:** in-crate `trait
+> BlockAcceptanceNotifier { fn on_accepted_block_id(&self, Id); }` + `NoopNotifier`, injected as
+> `Arc<dyn …>` — **the `OnAcceptedBlockID` hook M4.21's `PChainValidatorManager` implements** (controller
+> may relocate it to `ava-validators` later). 97 tests green (was 79), clippy `--all-targets --all-features
+> -D warnings` clean, fmt clean. **Deferred:** ApricotAtomic verify path rejected pending real
+> `chains/atomic SharedMemory` (M4.18's seam); standard-block `on_accept`/atomic_requests + mempool re-issue
+> on reject are builder concerns (M4.25); warp re-verify + uptime-driven `prefers_commit` → M4.21/M4.22;
+> byte-exact on-disk migration deferred (08 §3.2). Spec-reviewed ✅ (independent re-run of tests/clippy/fmt).
 
 ---
 
