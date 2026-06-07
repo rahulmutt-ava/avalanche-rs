@@ -337,6 +337,25 @@ impl Chain for Diff {
         Ok(total)
     }
 
+    fn active_l1_validators(&self) -> Vec<L1Validator> {
+        // Overlay-aware active set: take the parent's active validators, drop any
+        // shadowed by an overlay entry, then add the overlay's own active ones.
+        let mut by_id: BTreeMap<Id, L1Validator> = BTreeMap::new();
+        for v in self.parent.active_l1_validators() {
+            by_id.insert(v.validation_id, v);
+        }
+        for (&id, v) in &self.l1_validators {
+            if v.is_active() {
+                by_id.insert(id, v.clone());
+            } else {
+                by_id.remove(&id);
+            }
+        }
+        let mut out: Vec<L1Validator> = by_id.into_values().collect();
+        out.sort_by(L1Validator::compare);
+        out
+    }
+
     fn subnets(&self) -> Vec<Id> {
         let mut out = self.parent.subnets();
         for &s in &self.added_subnets {

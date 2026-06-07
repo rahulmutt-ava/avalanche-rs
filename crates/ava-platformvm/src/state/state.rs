@@ -364,6 +364,17 @@ impl<D: Database> Chain for State<D> {
         Ok(total)
     }
 
+    fn active_l1_validators(&self) -> Vec<L1Validator> {
+        let mut out: Vec<L1Validator> = self
+            .l1_validators
+            .values()
+            .filter(|v| v.is_active())
+            .cloned()
+            .collect();
+        out.sort_by(L1Validator::compare);
+        out
+    }
+
     fn subnets(&self) -> Vec<Id> {
         self.subnet_ids.clone()
     }

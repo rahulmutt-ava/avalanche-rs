@@ -149,6 +149,15 @@ pub trait Chain: Send + Sync {
     /// # Errors
     /// Returns an error if the weight cannot be summed.
     fn weight_of_l1_validators(&self, subnet: Id) -> Result<u64>;
+    /// `GetActiveL1ValidatorsIterator` — every *active* L1 validator
+    /// ([`L1Validator::is_active`](crate::state::l1_validator::L1Validator::is_active)),
+    /// in canonical `(EndAccumulatedFee, ValidationID)` order
+    /// ([`L1Validator::compare`](crate::state::l1_validator::L1Validator::compare)).
+    ///
+    /// This is the order the ACP-77 continuous-fee charging walks
+    /// (`state/state.go` `GetActiveL1ValidatorsIterator`); the length of the
+    /// returned slice is Go's `NumActiveL1Validators`.
+    fn active_l1_validators(&self) -> Vec<L1Validator>;
 
     // ----- subnets / chains / owners / managers -----
 
