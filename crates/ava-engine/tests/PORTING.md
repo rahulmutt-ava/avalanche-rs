@@ -87,8 +87,113 @@ as Go places them.
    `ava-message`. **Plan/spec correction:** spec 06 §4.1 sketches
    `Notify(msg: VmToEngineMessage)`; the realized type is `ava_vm::VmEvent`.
 
-## TDD
+## TDD (M3.9)
 
 - Red→green tests live in `src/lib.rs` `#[cfg(test)]`: `app_error_codes`,
   `handler_is_object_safe` (`fn _o(_: &dyn Handler){}` static-assert + boxed
   form), `noop_handler_drops_statesync`.
+
+---
+
+# ava-engine — networking glue (Task M3.10)
+
+Port of the `snow/networking/{router,handler,timeout,benchlist,tracker}`
+subsystems into `crate::networking` (specs 06 §5.1–5.6, 24 §B.2).
+
+Go reference (pinned `../avalanchego`):
+- `snow/networking/router/chain_router.go` — `ChainRouter`.
+- `snow/networking/handler/handler.go` + `message_queue.go` — the per-chain actor.
+- `utils/timer/adaptive_timeout_manager.go` + `utils/math/continuous_averager.go`
+  — `AdaptiveTimeoutManager` + the EWMA averager.
+- `snow/networking/benchlist/benchlist.go` — `Benchlist`.
+- `snow/networking/tracker/{tracker,targeter}.go` — `ResourceTracker`/`Targeter`.
+
+## Module → Go mapping
+
+| Rust (`networking::`) | Go |
+|---|---|
+| `timeout::AdaptiveTimeoutManager` + `ContinuousAverager` | `adaptiveTimeoutManager` + `continuousAverager` |
+| `timeout::AdaptiveTimeoutConfig` + `verify` | `AdaptiveTimeoutConfig` + `NewAdaptiveTimeoutManager` switch |
+| `router::ChainRouter` (`Router` trait) | `chainRouter` (`Router`) |
+| `handler::ChainHandler` (one tokio task) + `EngineManager` | `handler` goroutine + `EngineManager` |
+| `message_queue::{MessageQueue,MessageClass}` | `messageQueue` sync/async split |
+| `benchlist::Benchlist` | `benchlist` |
+| `tracker::{CumulativeTracker,Targeter}` | `resourceTracker` / `targeter` |
+
+## Deliberate deviations / findings (record for spec/plan)
+
+1. **The router operates on an engine-internal `InboundOp`/`InboundMessage`, not
+   the `ava-message` wire type.** `ava-engine` deliberately carries no
+   `ava-message`/proto dep (same stance as M3.9's `SimplexHandler: &[u8]`). The
+   network layer (05) decodes + tags a message, then calls
+   `Router::handle_inbound(InboundMessage{node, chain, op})`. The `*Failed`
+   synthesis maps a numeric op tag → the matching `InboundOp::*Failed` variant
+   (`router::op` constants). When the full sender/engine wiring lands (M3.11), the
+   decode boundary moves into the `OutboundSender`/network adaptor; `InboundOp`
+   stays the engine-facing projection.
+
+2. **Timer fires over `tokio::time`, time read via `clock.monotonic()`** (specs
+   24 §B.4). The Go manager uses a min-heap keyed by `time.Time` deadlines + a
+   single `Timer`. We keep a `HashMap<RequestId, PendingTimeout>` and a single
+   dispatch task that `sleep_until`s the earliest `tokio::time::Instant` deadline,
+   woken by an unbounded `mpsc` on every `put`/`remove` to recompute. This honors
+   `start_paused` + `tokio::time::advance` with no branching (the §B.2 test
+   `deadline_fires_after_timeout` advances `MockClock` + tokio time in lock-step).
+
+3. **Averager uses `Instant`-relative nanoseconds (float), not Go's
+   `time.Time`.** Behavior-equivalent: `halflife = halflife_ns / ln2`,
+   `weight = exp(-Δ/halflife)`. Float is explicitly acceptable here (06 §5.4 /
+   24 §B.4: timeouts affect liveness only, never which block is accepted). No
+   prometheus metrics ported (no registry in-crate yet) — `current_timeout` /
+   `avg_latency` are internal state, asserted via `timeout_duration()`.
+
+4. **Benchlist is the simpler consecutive-failure model the spec describes
+   (06 §5.5), not Go's EWMA `failureProbability` averager.** Go's `benchlist.go`
+   actually benches on an EWMA of success(0)/failure(1) crossing
+   `benchProbability`, with a single consumer goroutine + event queue. The spec
+   text says "consecutive request failures per peer; once a peer exceeds a failure
+   threshold … benched … for a randomized cooldown" — we implement exactly that
+   (threshold + reset-on-success + randomized `[min,max)` cooldown). The randomized
+   duration is drawn from a **seedable gonum `Mt19937_64`** (off the consensus
+   path) so tests are reproducible; Go uses `rand`. **Finding: spec 06 §5.5
+   under-describes Go** — flag for a follow-up if exact Go bench parity is needed.
+
+5. **`Benchlist` cooldown / `ResourceTracker` use `SystemTime`/`f64`.** Both are
+   off the consensus path (06 §5.5/§5.6). The targeter mirrors Go
+   `targeter.TargetUsage` exactly: `min(max(0, maxNonVdrUsage - totalUsage),
+   maxNonVdrNodeUsage)` + `vdrAlloc * weight/totalWeight`. The single
+   `cast_precision_loss` (weight ratio) is `#[allow]`ed at the site.
+
+6. **The handler actor is one tokio task; async (`App*`) work runs on a bounded
+   `JoinSet` tracked by a `tokio_util::task::TaskTracker`.** Shutdown cancels the
+   `halt` `CancellationToken`, closes the tracker, `shutdown().await`s the pool,
+   and `wait()`s the tracker — the tests (`handler.rs`) assert
+   `tracker.is_empty()` after join (no leaked tasks). `ChainEngine` is a minimal
+   object-safe dispatch trait (`handle`/`gossip`/`notify`); the full `Engine`/
+   `Handler` op family (06 §4.1) composes onto it in M3.11. The `App*` body is a
+   tracked placeholder until the VM `AppHandler` is wired (M3.11).
+   `SYNC_PROCESSING_TIME_WARN_LIMIT = 30s` ported (Go `syncProcessingTimeWarnLimit`).
+
+## Deps / features added (report for workspace promotion)
+
+- `tokio` gains the `time` feature (already pinned with rt-multi-thread/macros/
+  sync/net/time at workspace level — additive at the crate dep line for clarity).
+- **`tokio-util` needs the `time` feature for `DelayQueue`/time utilities** — the
+  workspace pins `tokio-util = ["rt"]`, so the crate dep line adds
+  `features = ["time", "rt"]`. **Promotion candidate:** add `time` to the
+  workspace `tokio-util` features if another crate needs it.
+- dev-dep `assert_matches` (workspace) added for the config-verify sentinel
+  assertions; dev `tokio` gains `test-util` for `start_paused`.
+
+## TDD (M3.10)
+
+- `tests/timeout.rs`: `deadline_fires_after_timeout` (§B.2 lock-step virtual
+  time), `response_shortens_timeout`, `config_verify_rejections` (all four
+  `verify` branches via `assert_matches!`).
+- `tests/router.rs`: `router_routes_to_chain_handler` (route + unknown-chain
+  drop), `timeout_synthesizes_failed` (register → timeout → `GetFailed`).
+- `tests/handler.rs`: `handler_dispatches_and_shuts_down_clean` (sync dispatch +
+  VM notify + gossip tick + clean halt, **no leaked tasks**),
+  `async_op_runs_on_pool_and_drains`.
+- Unit: `benchlist::tests` (threshold/cooldown/reset), `tracker::tests`
+  (accumulation + stake-weighted target).
