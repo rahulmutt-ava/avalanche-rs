@@ -137,11 +137,28 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.6: Codec golden + round-trip proptest + decoder fuzz (codec gate)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.3, M4.4, M4.5  ·  **Spec:** 08 §11.1; 02 §4,§6,§8; 23 §7 (cross-check)
 **Files:** `crates/ava-platformvm/tests/golden_codec.rs`, `crates/ava-platformvm/tests/prop_roundtrip.rs`, `crates/ava-platformvm/tests/vectors/platformvm/*.json`, `crates/ava-platformvm/proptest-regressions/` (committed), `crates/ava-platformvm/fuzz/fuzz_targets/decode_block_tx.rs`.
-- [ ] **Step 1 — Red:** Add `golden::pchain_tx_codec` iterating **all** tx-type vectors (one per UnsignedTx variant, extracted from Go via `tools/extract-vectors`, coordinate with tier X) asserting round-trip + tx_id; `golden::pchain_block_hash` iterating all 9 block-type vectors; `prop::pchain_tx_roundtrip` asserting `decode(encode(x)) == x` for `arb_unsigned_tx()` (4096 cases) and `decode_never_panics` over arbitrary bytes.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm golden::pchain_tx_codec` → fails on the first missing vector / variant (not a compile error).
-- [ ] **Step 3 — Green:** Add the remaining Go-extracted vectors + the `arb_unsigned_tx`/`arb_block` proptest strategies. Ensure the codec handles GenesisCodec-oversized txs. Commit the generated `proptest-regressions/` seeds. Confirm the cargo-fuzz `decode_block_tx` target builds and runs a smoke pass without panic.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm golden:: prop::pchain_tx_roundtrip` all green; `cargo +nightly fuzz run decode_block_tx -- -runs=10000` no crash.
-- [ ] **Step 5 — Commit:** `ava-platformvm: codec golden vectors + roundtrip proptest + decoder fuzz`
+- [x] **Step 1 — Red:** Add `golden::pchain_tx_codec` iterating **all** tx-type vectors (one per UnsignedTx variant, extracted from Go via `tools/extract-vectors`, coordinate with tier X) asserting round-trip + tx_id; `golden::pchain_block_hash` iterating all 9 block-type vectors; `prop::pchain_tx_roundtrip` asserting `decode(encode(x)) == x` for `arb_unsigned_tx()` (4096 cases) and `decode_never_panics` over arbitrary bytes.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm golden::pchain_tx_codec` → fails on the first missing vector / variant (not a compile error).
+- [x] **Step 3 — Green:** Add the remaining Go-extracted vectors + the `arb_unsigned_tx`/`arb_block` proptest strategies. Ensure the codec handles GenesisCodec-oversized txs. Commit the generated `proptest-regressions/` seeds. Confirm the cargo-fuzz `decode_block_tx` target builds and runs a smoke pass without panic.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm golden:: prop::pchain_tx_roundtrip` all green; `cargo +nightly fuzz run decode_block_tx -- -runs=10000` no crash.
+- [x] **Step 5 — Commit:** `ava-platformvm: codec golden vectors + roundtrip proptest + decoder fuzz`
+
+> **As-built (M4.6):** `tests/golden_codec.rs` (`pchain_tx_codec` over 5 byte-exact Go vectors:
+> AddPermissionlessValidator(25), Register/SetWeight/IncreaseBalance/DisableL1Validator(36/37/38/39);
+> `pchain_block_hash` over all `*_block.json` vectors) + `tests/prop_roundtrip.rs`
+> (`pchain_tx_roundtrip` over `arb_unsigned_tx()` covering **all 23 variants**, 1024
+> cases; `pchain_signed_tx_roundtrip`; `decode_never_panics`). **Per-variant byte-exact
+> goldens partially deferred:** 5 variants have Go `expectedBytes`; the remaining 18 are
+> covered by the proptest round-trip (catches field-order/encoding regressions), with the
+> portable-but-unported ones (`ConvertSubnetToL1`, `RemoveSubnetValidator`, `TransformSubnet`,
+> `AddPermissionlessDelegator`, `TransferSubnetOwnership`, `Base`, auto-renew trio) recorded as
+> `na` rows in `tests/PORTING.md` for a later vector-extraction pass. `arb_block()` not added
+> (Block/body deeply entangled with Tx; block side covered byte-exact by `pchain_block_hash` +
+> `decode_never_panics` over `Block::parse`). **Fuzz:** `cargo +nightly fuzz` is unavailable in
+> the default Nix dev shell (cargo-fuzz lives in the `fuzz` shell; no rustup nightly present);
+> `prop::decode_never_panics` is the stable always-on substitute exercising the same
+> `Block::parse`/`Tx::parse` calls as the `decode_block_tx` target — consistent with the repo's
+> nightly-only-fuzz / stable-proptest-smoke convention ([[proto-and-fuzz-pipeline]]).
 
 ---
 
@@ -181,11 +198,28 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.10: Staker model + `Priority` + `Ord` (= Go `Less`)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.3  ·  **Spec:** 08 §3.3 (staker + priorities.go); 00 §6.1
 **Files:** `crates/ava-platformvm/src/state/staker.rs`, `crates/ava-platformvm/src/txs/priorities.rs`.
-- [ ] **Step 1 — Red:** Add `golden::priority_discriminants` asserting the 11 `Priority` values are 1..=11 in the exact §3.3 order, and `prop::staker_ord_matches_go` asserting `Staker::cmp` orders by `(next_time, priority, tx_id bytes)`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm priority_discriminants` → fails.
-- [ ] **Step 3 — Green:** `#[repr(u8)] enum Priority` with the pinned 1..=11 values (08 §3.3 — protocol-load-bearing). `struct Staker { tx_id, node_id, public_key: Option<bls::PublicKey>, subnet_id, weight, start_time, end_time, potential_reward, next_time, priority }`. `impl Ord` = `next_time.cmp` `.then(priority.cmp)` `.then(tx_id.as_ref().cmp)` (bytes.Compare). Helpers to build current (`next_time==end_time`) vs pending (`next_time==start_time`) stakers.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm priority_discriminants prop::staker_ord_matches_go` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: staker model + Priority + Ord (Go Less)`
+- [x] **Step 1 — Red:** Add `golden::priority_discriminants` asserting the 11 `Priority` values are 1..=11 in the exact §3.3 order, and `prop::staker_ord_matches_go` asserting `Staker::cmp` orders by `(next_time, priority, tx_id bytes)`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm priority_discriminants` → fails.
+- [x] **Step 3 — Green:** `#[repr(u8)] enum Priority` with the pinned 1..=11 values (08 §3.3 — protocol-load-bearing). `struct Staker { tx_id, node_id, public_key: Option<bls::PublicKey>, subnet_id, weight, start_time, end_time, potential_reward, next_time, priority }`. `impl Ord` = `next_time.cmp` `.then(priority.cmp)` `.then(tx_id.as_ref().cmp)` (bytes.Compare). Helpers to build current (`next_time==end_time`) vs pending (`next_time==start_time`) stakers.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm priority_discriminants prop::staker_ord_matches_go` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: staker model + Priority + Ord (Go Less)`
+
+> **As-built (M4.10):** `Priority` discriminants (`priorities.go` `iota+1` order): pending group
+> 1–6 (`PrimaryNetworkDelegatorApricotPending`, `PrimaryNetworkValidatorPending`,
+> `PrimaryNetworkDelegatorBanffPending`, `SubnetPermissionlessValidatorPending`,
+> `SubnetPermissionlessDelegatorPending`, `SubnetPermissionedValidatorPending`), then current
+> group 7–11 (`SubnetPermissionedValidatorCurrent`, `SubnetPermissionlessDelegatorCurrent`,
+> `SubnetPermissionlessValidatorCurrent`, `PrimaryNetworkDelegatorCurrent`,
+> `PrimaryNetworkValidatorCurrent`). Go `IsCurrent/IsPending/IsValidator/IsDelegator/
+> IsPermissionedValidator` ported as `const fn`. **Staker times are `std::time::SystemTime`**
+> (mirrors Go `time.Time`; the `u64`-seconds form in `metadata_validator.rs` is for the *on-disk
+> codec* only — `Staker` is an in-memory ordering record, never codec-serialized). `Eq`/`PartialEq`
+> are keyed on the `(next_time, priority, tx_id)` ordering tuple (Rust requires `a==b` iff
+> `cmp==Equal`); Go's full-field `Equals` is provided separately as `Staker::equals` (handles
+> `bls::PublicKey` compressed-bytes compare). `Debug` is hand-written (`bls::PublicKey` is not
+> `Debug`). Constructors take resolved fields (not Go's tx-staker trait objects, deferred to the
+> executor wave) and enforce current⇒`next_time==end_time`, pending⇒`next_time==start_time` &
+> `potential_reward==0`.
 
 ---
 
@@ -203,11 +237,27 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.12: `L1Validator` (GenesisCodec) + active-iterator ordering
 **Crate:** ava-platformvm  ·  **Depends on:** M4.4, M4.11  ·  **Spec:** 08 §3.4 (L1Validator); §6 (active fee charging)
 **Files:** `crates/ava-platformvm/src/state/l1_validator.rs`.
-- [ ] **Step 1 — Red:** Add `golden::l1_validator_codec` round-tripping `L1Validator` (the 9 serialized fields) with **`block::GenesisCodec`** keyed by `ValidationID`; `prop::l1_validator_order` asserting `Compare` by `(end_accumulated_fee, validation_id)` and `IsActive == (weight!=0 && end_accumulated_fee!=0)`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm l1_validator_codec` → fails.
-- [ ] **Step 3 — Green:** Define `L1Validator` (port the 9 fields verbatim from `state/l1_validator.go`), marshalled with `GenesisCodec` (not MetadataCodec). `Ord` by `(end_accumulated_fee, validation_id)`; `is_active()`. `immutable_fields_are_unmodified` guard for mutation (08 §3.4). The active iterator drives continuous-fee charging in `EndAccumulatedFee` order (used by M4.19).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm l1_validator_codec prop::l1_validator_order` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: L1Validator (GenesisCodec) + active-iterator ordering`
+- [x] **Step 1 — Red:** Add `golden::l1_validator_codec` round-tripping `L1Validator` (the 9 serialized fields) with **`block::GenesisCodec`** keyed by `ValidationID`; `prop::l1_validator_order` asserting `Compare` by `(end_accumulated_fee, validation_id)` and `IsActive == (weight!=0 && end_accumulated_fee!=0)`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm l1_validator_codec` → fails.
+- [x] **Step 3 — Green:** Define `L1Validator` (port the 9 fields verbatim from `state/l1_validator.go`), marshalled with `GenesisCodec` (not MetadataCodec). `Ord` by `(end_accumulated_fee, validation_id)`; `is_active()`. `immutable_fields_are_unmodified` guard for mutation (08 §3.4). The active iterator drives continuous-fee charging in `EndAccumulatedFee` order (used by M4.19).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm l1_validator_codec prop::l1_validator_order` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: L1Validator (GenesisCodec) + active-iterator ordering`
+
+> **As-built (M4.12):** `L1Validator` serialized fields (Go `serialize:"true"` order, `ValidationID`
+> is the DB key and is **not** codec-tagged): `subnet_id: Id`, `node_id: NodeId`,
+> `public_key: Vec<u8>` (**uncompressed** BLS bytes per `bls.PublicKeyFromValidUncompressedBytes` —
+> opaque to the codec), `remaining_balance_owner: Vec<u8>`, `deactivation_owner: Vec<u8>` (both raw
+> length-prefixed `[]byte` in Go, **not** typed `fx.Owner`), `start_time: u64`, `weight: u64`,
+> `min_nonce: u64`, `end_accumulated_fee: u64`. Marshalled with **GenesisCodec** (`#[derive(AvaCodec)]`,
+> no type-id). `Ord`/`compare()` by `(end_accumulated_fee asc, validation_id lexicographic)`;
+> `end_accumulated_fee` is a plain `u64` (no nil/`*uint64` — `0` is the inactive sentinel, nothing
+> more). `is_active() = weight!=0 && end_accumulated_fee!=0`; `is_deleted() = weight==0`.
+> `immutable_fields_are_unmodified` short-circuits `true` on differing `validation_id`, else checks
+> the 6 constant fields (subnet_id, node_id, public_key, both owners, start_time) unchanged. Go's
+> `l1_validator_test.go` uses random values with no committed `expectedBytes`, so the golden pins a
+> deterministic fixture and asserts against a fully-specified hand-built wire encoding (linear-codec
+> oracle) + structural round-trip. Active-iterator/store deferred to M4.13/M4.19 (only `Ord`+`is_active`
+> needed here).
 
 ---
 

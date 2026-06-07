@@ -453,8 +453,23 @@ full codec decode. Auto-renewed validators compute effective weight as
 `L1Validator` (`state/l1_validator.go`, ACP-77) is marshalled with **`block::GenesisCodec`** (not
 MetadataCodec) keyed by `ValidationID`; ordering (`Compare`) is by `(end_accumulated_fee,
 validation_id)` — an `IsActive` (`weight!=0 && end_accumulated_fee!=0`) validator participates in
-the active iterator used to charge continuous fees in `EndAccumulatedFee` order. Port the struct
-verbatim (see Go for the 9 serialized fields); `immutable_fields_are_unmodified` guards mutation.
+the active iterator used to charge continuous fees in `EndAccumulatedFee` order.
+
+The **9 serialized fields** (Go `serialize:"true"` order; `ValidationID` is the DB key and is *not*
+codec-tagged) are: `subnet_id: Id`, `node_id: NodeId`, `public_key: Vec<u8>`,
+`remaining_balance_owner: Vec<u8>`, `deactivation_owner: Vec<u8>`, `start_time: u64`, `weight: u64`,
+`min_nonce: u64`, `end_accumulated_fee: u64`. Note (as-built, M4.12):
+
+- `public_key` is the **uncompressed** BLS key bytes (`bls.PublicKeyFromValidUncompressedBytes`),
+  carried as opaque `Vec<u8>` through the codec.
+- `remaining_balance_owner` / `deactivation_owner` are **raw length-prefixed `[]byte`**, *not* typed
+  `fx.Owner`s — they are pre-marshalled owner blobs.
+- `end_accumulated_fee` is a plain `u64`: `0` is the inactive sentinel (no `*uint64`/nil distinction).
+
+`is_active() = weight!=0 && end_accumulated_fee!=0`; `is_deleted() = weight==0`.
+`immutable_fields_are_unmodified` short-circuits `true` on a differing `validation_id`, else guards
+that the 6 constant fields (subnet_id, node_id, public_key, both owners, start_time) are unchanged
+(weight / min_nonce / end_accumulated_fee are the mutable fields).
 
 ### 3.5 Supply & reward state
 
