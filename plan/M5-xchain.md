@@ -381,11 +381,32 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.14: Executor (UTXO state transitions, EXEC-AVM-1, atomic requests)
 **Crate:** ava-avm  ·  **Depends on:** M5.13; M3 (`avax::{consume, produce}`); M4 (`Requests`/`Element`)  ·  **Spec:** 09 §6.3, EXEC-AVM-1, §9 (atomic format), ATOMIC-1
 **Files:** `crates/ava-avm/src/txs/executor/executor.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/executor.rs` table-driven: `base_tx_consume_produce` asserts deleted inputs + produced UTXO ids at `output_index = i`; `create_asset_indexing` asserts asset-id == tx-id and `output_index` continues from `len(outs)` across multiple `InitialState`s in order (EXEC-AVM-1); `operation_tx_outs_indexing`; `import_builds_remove_requests` asserts `AtomicRequests{source_chain:{remove:[input_id..]}}`; `export_builds_put_requests` asserts `Element{key=utxo_input_id, value=marshal(utxo), traits=addresses}` keyed by `destination_chain`, `output_index` continuing from `len(outs)`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm executor` → fails.
-- [ ] **Step 3 — Green:** `Executor` over `UnsignedTx` per 09 §6.3: BaseTx `avax::consume(state,&ins)` + `avax::produce(state, tx_id, &outs)` (index = i). CreateAsset: BaseTx then per-`InitialState` out `add_utxo` with `tx_id=self_tx_id`, `asset.id=self_tx_id`, `output_index` continuing from `len(outs)` monotonically (EXEC-AVM-1). Operation: BaseTx then per op delete input UTXOs + add `op.outs()` (asset=op.asset), index continuing. Import: BaseTx + record imported `input_id`s + build `Requests{remove}`. Export: BaseTx + per exported out build UTXO at continuing index, `marshal(utxo)` with the **avm codec v0** (ATOMIC-1), emit `Element{key=input_id, value, traits=out.addresses()}` in `Requests{put}` keyed by destination chain.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm executor`.
-- [ ] **Step 5 — Commit:** `avm: Executor UTXO transitions + atomic requests (M5.14)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/executor.rs` table-driven: `base_tx_consume_produce` asserts deleted inputs + produced UTXO ids at `output_index = i`; `create_asset_indexing` asserts asset-id == tx-id and `output_index` continues from `len(outs)` across multiple `InitialState`s in order (EXEC-AVM-1); `operation_tx_outs_indexing`; `import_builds_remove_requests` asserts `AtomicRequests{source_chain:{remove:[input_id..]}}`; `export_builds_put_requests` asserts `Element{key=utxo_input_id, value=marshal(utxo), traits=addresses}` keyed by `destination_chain`, `output_index` continuing from `len(outs)`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm executor` → fails.
+- [x] **Step 3 — Green:** `Executor` over `UnsignedTx` per 09 §6.3: BaseTx `avax::consume(state,&ins)` + `avax::produce(state, tx_id, &outs)` (index = i). CreateAsset: BaseTx then per-`InitialState` out `add_utxo` with `tx_id=self_tx_id`, `asset.id=self_tx_id`, `output_index` continuing from `len(outs)` monotonically (EXEC-AVM-1). Operation: BaseTx then per op delete input UTXOs + add `op.outs()` (asset=op.asset), index continuing. Import: BaseTx + record imported `input_id`s + build `Requests{remove}`. Export: BaseTx + per exported out build UTXO at continuing index, `marshal(utxo)` with the **avm codec v0** (ATOMIC-1), emit `Element{key=input_id, value, traits=out.addresses()}` in `Requests{put}` keyed by destination chain.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm executor`.
+- [x] **Step 5 — Commit:** `avm: Executor UTXO transitions + atomic requests (M5.14)`
+
+> **As-built (M5.14, 2026-06-07, commit `e2e486a`):** `txs/executor/exec.rs` (module named
+> `exec` not `executor` to dodge `clippy::module_inception` under `-D warnings`; re-exported as
+> `txs::executor::{Executor, ExecutorOutputs}`). `Executor::execute(unsigned, tx_id, &mut dyn
+> Chain) -> Result<ExecutorOutputs>` mirrors Go `executor.go`'s `(inputs, atomicRequests)` return:
+> `ExecutorOutputs { inputs: BTreeSet<Id>, atomic_requests: BTreeMap<Id, Requests> }` (canonical
+> `ava_vm::components::avax::shared_memory::{Element, Requests}`, NOT the platformvm-local
+> `AtomicRequests` — so M5.16 block-accept passes them straight to `SharedMemory.apply`).
+> avm-local `consume`/`produce` helpers marshal the codec-serializable `Utxo` (reused from
+> `semantic.rs`) through the avm `Codec()` since state stores opaque `UtxoBytes`. All `u32` index
+> math uses `u32::try_from`/`checked_add` (→ `Error::SpendOverflow`, reused). EXEC-AVM-1 index
+> continuation verified byte-exact: `create_asset_indexing` decodes produced UTXOs and asserts
+> `asset_id == tx_id` + monotonic `output_index` across multiple `InitialState`s; export decodes
+> `Element.value`. 5 table tests; combined avm tree **95 green**, clippy `-D warnings` + fmt clean.
+> Two review passes (spec + code-quality) applied before merge.
+> **Deferral (documented, NOT an M5.14 gap):** OperationTx produces op *outputs* via `op.outs()`
+> only once typed `FxOperation` variants exist — the enum currently has only the
+> `FxOperation::Unsupported` placeholder (the M5.5 deferral; concrete secp/nft/property op
+> type-ids 8/12/13/17/18). The executor does everything reachable today (BaseTx consume/produce +
+> per-op input-UTXO deletion); `operation_tx_outs_indexing` asserts exactly that and carries a
+> note that op-output index continuation lands with the typed variants.
 
 ### Task M5.15: StandardBlock type + codec + parser — `golden::xchain_block_hash`
 **Crate:** ava-avm  ·  **Depends on:** M5.5, M5.2  ·  **Spec:** 09 §7 (field order, type id 20); 02 §6 (golden block hashes); M4/ava-genesis (stop-vertex constant)
