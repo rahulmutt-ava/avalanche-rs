@@ -294,11 +294,50 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.11: initialize_chain_state (genesis Snowman block seed) + persistence byte-details
 **Crate:** ava-avm  ·  **Depends on:** M5.10  ·  **Spec:** 09 §1 (stop-vertex parent, height 0), §5.3; 07 (genesis block)
 **Files:** `crates/ava-avm/src/state/init.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/state_init.rs`: `initialize_chain_state(stop_vertex_id, genesis_ts)` on a fresh state seeds a genesis `StandardBlock{parent=stop_vertex_id, height=0, time=genesis_ts, txs=[]}`, sets `lastAccepted` to its id and `initialized=true`; idempotent on second call (no re-seed). Assert height key encoding = 8-byte big-endian (`database::PackUInt64`), timestamp = Unix-seconds codec-packed.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm state_init` → fails (StandardBlock not yet defined — gate this task to run its block-construction via a minimal local stub, then re-point at the real `StandardBlock` from M5.15; note the ordering in PORTING.md).
-- [ ] **Step 3 — Green:** Implement `initialize_chain_state` per 09 §5 / §5.3: if no stored `lastAccepted`, build + persist the genesis block, set singleton flags; height key big-endian (04 `PackUInt64`), `PutTimestamp` Unix-seconds. `is_initialized`/`set_initialized` over `"singleton"` prefix (`0x00 initialized | 0x01 timestamp | 0x02 lastAccepted`).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm state_init`.
-- [ ] **Step 5 — Commit:** `avm: initialize_chain_state genesis seed + persistence byte-details (M5.11)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/state_init.rs`: `initialize_chain_state(stop_vertex_id, genesis_ts)` on a fresh state seeds a genesis `StandardBlock{parent=stop_vertex_id, height=0, time=genesis_ts, txs=[]}`, sets `lastAccepted` to its id and `initialized=true`; idempotent on second call (no re-seed). Assert height key encoding = 8-byte big-endian (`database::PackUInt64`), timestamp = Unix-seconds codec-packed.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm state_init` → fails (StandardBlock not yet defined — gate this task to run its block-construction via a minimal local stub, then re-point at the real `StandardBlock` from M5.15; note the ordering in PORTING.md).
+- [x] **Step 3 — Green:** Implement `initialize_chain_state` per 09 §5 / §5.3: if no stored `lastAccepted`, build + persist the genesis block, set singleton flags; height key big-endian (04 `PackUInt64`), `PutTimestamp` Unix-seconds. `is_initialized`/`set_initialized` over `"singleton"` prefix (`0x00 initialized | 0x01 timestamp | 0x02 lastAccepted`).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm state_init`.
+- [x] **Step 5 — Commit:** `avm: initialize_chain_state genesis seed + persistence byte-details (M5.11)`
+
+> **As-built (M5.11, 2026-06-07, commit `043996a`):** **No stub needed** — M5.15 landed
+> first this session, so `State::initialize_chain_state(stop_vertex_id, genesis_ts, codec)`
+> uses the real `ava_avm::block::{StandardBlock, Block}` directly. Mirrors Go
+> `state.go` `InitializeChainState`: if already initialized → `load()` (restore
+> `last_accepted`/`timestamp`), no re-seed; else build genesis `StandardBlock{parent=
+> stop_vertex_id, height=0, time=genesis_ts (trunc to Unix secs), txs=[]}` via the standard
+> `Codec()`, `set_last_accepted`+`set_timestamp`+`add_block`+`set_initialized`, `commit`.
+> Reused ALL M5.10 `Chain`/`State` methods (no `state.rs`/`error.rs` edits). Height index
+> 8-byte big-endian + Unix-second timestamp were already correct in M5.10's `add_block`/
+> `set_timestamp` (tests assert against the raw `MemDb`, accounting for `PrefixDb` keys =
+> `SHA256(prefix) ‖ key`). 4 tests.
+
+### Task M5.12: SyntacticVerifier (stateless, all 5 tx types)
+**Crate:** ava-avm  ·  **Depends on:** M5.9, M5.5; M3 (`avax::verify_tx` conservation+fee, sort helpers)  ·  **Spec:** 09 §6.1, §3.3 (InitialState rules), TX-AVM-1; 07 §3.1 FlowChecker
+**Files:** `crates/ava-avm/src/txs/executor/backend.rs`, `txs/executor/syntactic.rs`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/syntactic.rs` table-driven over tx types: `base_tx_ok`; `memo_too_long` (>256) → error; `unsorted_outs` → error; `num_creds != num_inputs` → `Error::WrongNumberOfCredentials`; `create_asset_name_bad` (empty/>128/leading-ws/non-ascii) and `symbol_bad` (>4/lowercase) and `denomination_gt_32`; `states_empty`/`states_unsorted`; `operation_tx_empty_ops`; `op_utxo_collides_base_in` → `Error::DoubleSpend`; `import_no_inputs` → `Error::NoImportInputs`; `export_no_outs` → `Error::NoExportOutputs`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm syntactic` → fails.
+- [x] **Step 3 — Green:** `Backend{ctx, config, codec, fee_asset_id, fxs, type_to_fx_index, bootstrapped}`. `SyntacticVerifier` over `UnsignedTx` per 09 §6.1: verify `avax::BaseTx` (network id, memo ≤256, ins/outs sorted+typed), `avax::verify_tx(fee, fee_asset, ins, outs, codec)`, verify every credential, `num_creds == num_inputs` (inputs include op-count / imported-ins). Type-specific: CreateAsset name 1..=128 ASCII letter/digit/space no edge-ws, symbol 1..=4 ASCII upper, denom ≤32, states non-empty sorted-unique by `fx_index`, each `InitialState::verify(codec, num_fxs)` (09 §3.3); Operation ops non-empty sorted-unique-by-bytes, utxo_ids ∩ base ins = ∅; Import `imported_ins` non-empty (fee over `ins ++ imported_ins`); Export `exported_outs` non-empty (fee over `outs ++ exported_outs`). Use `CreateAssetTxFee` for CreateAsset.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm syntactic`.
+- [x] **Step 5 — Commit:** `avm: SyntacticVerifier all tx types (M5.12)`
+
+> **As-built (M5.12, 2026-06-07, commit `b87d207`):** `txs/executor/{mod,backend,syntactic}.rs`.
+> Introduced a minimal `Backend` + `Config` carrying ONLY the stateless-verify fields
+> (`network_id`, `blockchain_id`, `tx_fee`/`create_asset_tx_fee`, `fee_asset_id`, `num_fxs`,
+> `bootstrapped`; codec/routing tables are process-wide singletons, not fields — full VM
+> config = M5.19). Ported `syntactic_verifier.go` per variant: embedded `avax.BaseTx.Verify`
+> (network/chain id, memo ≤256), per-tx conservation+fee via the shared `ava_vm`
+> `FlowChecker` + avm `components` sort predicates, credential verify, `num_creds==num_inputs`
+> (BaseTx/Export=`len(ins)`; Operation=`len(ins)+len(ops)`; Import=`len(ins)+len(imported_ins)`).
+> CreateAsset name 1..=128 ASCII letter/digit/space no edge-ws, symbol 1..=4 ASCII upper,
+> denom ≤32, states non-empty sorted-unique by `fx_index` + `InitialState::verify(num_fxs)`;
+> OperationTx double-spend set-intersection; Import/Export non-empty. Added 2 genuinely-missing
+> err variants `InputsNotSortedUnique` (`avax.ErrInputsNotSortedUnique`) + `MemoTooLarge`
+> (`avax.ErrMemoTooLarge`). 22 table cases. **Note:** OperationTx `op.verify()` covers only the
+> statelessly-reachable structure (utxo-ids sorted-unique); the fx-op typed verify is gated on
+> the `FxOperation::Unsupported` M5.5 deferral (concrete op type-ids 8/12/13/17/18 land with the
+> OperationTx codec wiring) — does not affect the double-spend path. SemanticVerifier (M5.13) +
+> Executor (M5.14) intentionally left out; `executor/mod.rs` documents the slots.
 
 ### Task M5.12: SyntacticVerifier (stateless, all 5 tx types)
 **Crate:** ava-avm  ·  **Depends on:** M5.9, M5.5; M3 (`avax::verify_tx` conservation+fee, sort helpers)  ·  **Spec:** 09 §6.1, §3.3 (InitialState rules), TX-AVM-1; 07 §3.1 FlowChecker
