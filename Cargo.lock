@@ -731,6 +731,7 @@ dependencies = [
  "ava-vm",
  "bytes",
  "hex",
+ "lru 0.12.5",
  "num-bigint",
  "parking_lot",
  "pretty_assertions",

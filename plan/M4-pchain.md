@@ -264,11 +264,34 @@ Wave 7 (differential sync-to-tip + gate)
 ### Task M4.13: `Chain`/`Diff`/`Versions`/`State` flat-KV stores
 **Crate:** ava-platformvm  ·  **Depends on:** M4.10, M4.11, M4.12  ·  **Spec:** 08 §3.1 (interfaces), §3.2 (flat-KV prefixes), §3.5 (supply/reward); 00 §11.1.3 (Database sync trait)
 **Files:** `crates/ava-platformvm/src/state/mod.rs`, `chain.rs`, `diff.rs`, `state.rs`, `stakers.rs`, `prefixes.rs`.
-- [ ] **Step 1 — Red:** Add `prop::diff_apply_equals_direct` — a sequence of stat-mutations applied through a `Diff` then `apply()` to base `State` equals applying them directly to `State` (the overlay-flush oracle); `conformance::state_roundtrip` writing then re-reading UTXOs/stakers/supply across a RocksDB temp dir.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm diff_apply_equals_direct` → fails (no State).
-- [ ] **Step 3 — Green:** Port the trait stack (08 §3.1): `trait Chain` (timestamp, current_supply/set, fee_state/set, l1_validator_excess, accrued_fees, get/add/delete_utxo, current/pending validator+delegator getters/putters/iterators, L1 getters/putters, subnets/chains/reward-utxos/subnet-owners). `trait Versions { get_state(block_id) -> Option<Arc<dyn Chain>> }`. `Diff` overlay on a `parent_id` resolved through `Versions`, with `apply(&self, base)`. `State` = persisted base over `ava-database` prefixdbs: `utxoDB, subnetDB, subnetOwnerDB, subnetManagerDB/subnetToL1ConversionDB, chainDB, txDB, rewardUTXOsDB, blockDB, blockIDDB, current/pending* validator/delegator/subnetValidator lists, l1ValidatorDB, weightDiffDB, pkDiffDB, singletonDB` (08 §3.2), each with an LRU front cache. Stakers in two `BTreeSet<Staker>` (current/pending) + per-(subnet,node) lookup maps mirroring `state/stakers.go`; the base/diff overlay map lives in `Diff`. Per-subnet current supply (singleton, seeded from genesis `InitialSupply`); reward UTXOs keyed by staker tx ID.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm diff_apply_equals_direct conformance::state_roundtrip` green.
-- [ ] **Step 5 — Commit:** `ava-platformvm: Chain/Diff/Versions/State flat-KV stores + stakers`
+- [x] **Step 1 — Red:** Add `prop::diff_apply_equals_direct` — a sequence of stat-mutations applied through a `Diff` then `apply()` to base `State` equals applying them directly to `State` (the overlay-flush oracle); `conformance::state_roundtrip` writing then re-reading UTXOs/stakers/supply across a RocksDB temp dir.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm diff_apply_equals_direct` → fails (no State).
+- [x] **Step 3 — Green:** Port the trait stack (08 §3.1): `trait Chain` (timestamp, current_supply/set, fee_state/set, l1_validator_excess, accrued_fees, get/add/delete_utxo, current/pending validator+delegator getters/putters/iterators, L1 getters/putters, subnets/chains/reward-utxos/subnet-owners). `trait Versions { get_state(block_id) -> Option<Arc<dyn Chain>> }`. `Diff` overlay on a `parent_id` resolved through `Versions`, with `apply(&self, base)`. `State` = persisted base over `ava-database` prefixdbs: `utxoDB, subnetDB, subnetOwnerDB, subnetManagerDB/subnetToL1ConversionDB, chainDB, txDB, rewardUTXOsDB, blockDB, blockIDDB, current/pending* validator/delegator/subnetValidator lists, l1ValidatorDB, weightDiffDB, pkDiffDB, singletonDB` (08 §3.2), each with an LRU front cache. Stakers in two `BTreeSet<Staker>` (current/pending) + per-(subnet,node) lookup maps mirroring `state/stakers.go`; the base/diff overlay map lives in `Diff`. Per-subnet current supply (singleton, seeded from genesis `InitialSupply`); reward UTXOs keyed by staker tx ID.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm diff_apply_equals_direct conformance::state_roundtrip` green.
+- [x] **Step 5 — Commit:** `ava-platformvm: Chain/Diff/Versions/State flat-KV stores + stakers`
+
+> **As-built (M4.13):** Shipped the `Chain` trait (full read+write surface: `timestamp/set_timestamp`,
+> `current_supply/set_current_supply` per-subnet, `fee_state/set_fee_state` over `txs::fee::gas::GasState`,
+> `l1_validator_excess/set_l1_validator_excess`, `accrued_fees/set_accrued_fees`, `get/add/delete_utxo`,
+> current+pending validator/delegator putters+deleters + `current_stakers`/`pending_stakers` iterators,
+> `get_current_validator`, `get/put_l1_validator` + `weight_of_l1_validators`,
+> `subnets/add_subnet`, `get/set_subnet_owner`, `get/set_subnet_manager`, `chains/add_chain`,
+> `get_reward_utxos/add_reward_utxo`), `Versions { get_state -> Option<Arc<dyn Chain>> }`, the `Diff`
+> overlay (per-field `Option`/`BTreeMap` overlays + ordered staker-op vectors mirroring Go `diffStakers`;
+> `apply(&self, base: &mut dyn Chain)` replays scalars→utxos→current→pending→L1→subnets/chains/owners/rewards),
+> and `State<D: Database>` over `ava-database` prefixdbs.
+> **Deviations / choices:** (1) `Chain` is `Send + Sync` (spec sketch said just `Send`) — required because `Diff`
+> holds `Arc<dyn Chain>` and is itself a `Chain`. (2) **UTXOs are stored as opaque codec bytes** (`UtxoBytes = Vec<u8>`),
+> not the typed `avax::Utxo`: `Utxo` carries an `Arc<dyn State>` fx payload that is not codec-serializable in
+> isolation yet (fx-registered handler is M4.15); the byte layout is exactly the cross-chain/shared-memory-relevant
+> form. (3) **Cache choice:** `parking_lot::Mutex<lru::LruCache<Vec<u8>, Vec<u8>>>` front cache (cap 8192) over each
+> byte-valued prefix space; `lru = "0.12"` added to the crate (already used by ava-database/blockdb/merkledb).
+> (4) Byte-valued spaces (UTXOs, reward UTXOs, subnet owners/managers, subnet set, per-subnet chains) write through to
+> RocksDB/MemDb; scalar singletons + stakers/L1-validators are in-memory fields (Go's cached `baseStakers` model) —
+> flushing stakers to the disk sublists is the acceptor's job (M4.20). (5) `RocksDb` reached via a dev-only
+> `ava-database` feature = `["rocksdb"]`; the conformance test uses `RocksDb::open_temp()` + a MemDb mirror.
+> **Deferred to M4.14:** the `weightDiffDB`/`pkDiffDB` prefix *handles* are created in `State::new` (so M4.14 can build
+> on them) but their byte-exact `inverseHeight` iterators are not implemented here.
 
 ---
 
