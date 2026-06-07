@@ -197,7 +197,10 @@ mod tests {
 
         assert!(!bl.register_failure(node, t0));
         bl.register_response(node); // reset
-        assert!(!bl.register_failure(node, t0), "count reset, one failure < threshold");
+        assert!(
+            !bl.register_failure(node, t0),
+            "count reset, one failure < threshold"
+        );
         assert!(!bl.is_benched(node, t0));
     }
 }

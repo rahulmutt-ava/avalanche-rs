@@ -85,7 +85,11 @@ where
 {
     /// Builds a Snowman engine over an already-initialized consensus core.
     pub fn new(cfg: Config<V, S, M>, consensus: Box<dyn SnowmanConsensus + Send>) -> Self {
-        let getter = Getter::new(Arc::clone(&cfg.vm), Arc::clone(&cfg.sender), cfg.token.clone());
+        let getter = Getter::new(
+            Arc::clone(&cfg.vm),
+            Arc::clone(&cfg.sender),
+            cfg.token.clone(),
+        );
         let factory =
             EarlyTermFactory::new(cfg.params.alpha_preference, cfg.params.alpha_confidence);
         Self {
@@ -200,11 +204,7 @@ where
     ///
     /// # Errors
     /// Propagates a fatal VM/consensus error.
-    pub async fn issue_from(
-        &mut self,
-        node: NodeId,
-        blk: Arc<dyn ava_snow::Block>,
-    ) -> Result<()> {
+    pub async fn issue_from(&mut self, node: NodeId, blk: Arc<dyn ava_snow::Block>) -> Result<()> {
         // Walk the ancestry, issuing each block whose parent is already issuable.
         // Collect the chain root-first so we add parents before children.
         let mut chain: Vec<Arc<dyn ava_snow::Block>> = Vec::new();
@@ -258,13 +258,16 @@ where
             if let Some((n, r)) = self.blk_reqs_by_id.remove(&blk_id) {
                 self.blk_reqs.remove(&(n, r));
             }
-            let added = self.add_unverified_block_to_consensus(node, Arc::clone(&block)).await?;
+            let added = self
+                .add_unverified_block_to_consensus(node, Arc::clone(&block))
+                .await?;
             if added {
                 any_added = true;
                 // Update preference and query if the new block is preferred.
                 self.set_vm_preference().await?;
                 if self.consensus.is_preferred(blk_id) {
-                    self.send_query(blk_id, Some(block.bytes().to_vec()), true).await?;
+                    self.send_query(blk_id, Some(block.bytes().to_vec()), true)
+                        .await?;
                 }
             }
         }

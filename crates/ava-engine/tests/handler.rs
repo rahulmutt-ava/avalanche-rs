@@ -5,8 +5,8 @@
 //! VM channel + gossip ticker, dispatches to the active engine, and on `halt`
 //! drains its async worker pool with **no leaked tasks**.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;

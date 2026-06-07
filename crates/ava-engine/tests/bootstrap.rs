@@ -10,9 +10,9 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -72,7 +72,10 @@ fn build_chain(genesis: Id) -> (Vec<Vec<u8>>, Vec<Id>) {
     let b3 = encode_block(id2, 3, b"b3");
     let id3 = block_id(&b3);
     // Ancestors reply: requested block first (tip), then ancestors oldest-last.
-    (vec![b3.clone(), b2.clone(), b1.clone()], vec![id1, id2, id3])
+    (
+        vec![b3.clone(), b2.clone(), b1.clone()],
+        vec![id1, id2, id3],
+    )
 }
 
 /// `bootstrap_fetches_and_executes_range` — a beacon set serving
@@ -115,13 +118,18 @@ async fn bootstrap_fetches_and_executes_range() {
     assert_eq!(**ctx.state.load(), EngineState::Bootstrapping);
     let sent = sender.drain();
     assert!(
-        sent.iter().any(|s| matches!(s, Sent::GetAcceptedFrontier { .. })),
+        sent.iter()
+            .any(|s| matches!(s, Sent::GetAcceptedFrontier { .. })),
         "expected GetAcceptedFrontier, got {sent:?}"
     );
 
     // Both beacons report the tip as their frontier.
-    boot.accepted_frontier(beacon_a, 1, tip).await.expect("af a");
-    boot.accepted_frontier(beacon_b, 1, tip).await.expect("af b");
+    boot.accepted_frontier(beacon_a, 1, tip)
+        .await
+        .expect("af a");
+    boot.accepted_frontier(beacon_b, 1, tip)
+        .await
+        .expect("af b");
     assert_eq!(boot.phase(), Phase::AgreeingFrontier);
     let sent = sender.drain();
     assert!(
@@ -140,16 +148,25 @@ async fn bootstrap_fetches_and_executes_range() {
     let (node, req) = ga_req.expect("expected GetAncestors for the tip");
 
     // Serve the full ancestry: connects back to genesis, so no further fetch.
-    boot.ancestors(node, req, &chain_bytes).await.expect("ancestors");
+    boot.ancestors(node, req, &chain_bytes)
+        .await
+        .expect("ancestors");
 
     // The range executed in height order and the node handed off.
     assert!(boot.is_finished(), "bootstrapper must hand off");
     assert_eq!(boot.phase(), Phase::Finished);
     assert_eq!(**ctx.state.load(), EngineState::NormalOp);
 
-    let accepted = acceptor.accepted.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let accepted = acceptor
+        .accepted
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let accepted_ids: Vec<Id> = accepted.iter().map(|(id, _)| *id).collect();
-    assert_eq!(accepted_ids, ids, "blocks accepted in ascending height order");
+    assert_eq!(
+        accepted_ids, ids,
+        "blocks accepted in ascending height order"
+    );
     assert!(
         accepted.iter().all(|(_, executing)| *executing),
         "executing flag must be set during replay"
@@ -202,10 +219,17 @@ async fn halt_aborts_bootstrap() {
     token.cancel();
     let result = boot.ancestors(node, req, &chain_bytes).await;
     assert!(result.is_err(), "halt must abort execution");
-    assert!(!boot.is_finished(), "a halted bootstrapper does not hand off");
+    assert!(
+        !boot.is_finished(),
+        "a halted bootstrapper does not hand off"
+    );
     // No blocks were accepted.
     assert!(
-        acceptor.accepted.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+        acceptor
+            .accepted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty(),
         "no blocks accepted after halt"
     );
 }

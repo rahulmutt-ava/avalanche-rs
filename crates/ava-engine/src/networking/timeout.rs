@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -224,7 +224,10 @@ impl AdaptiveTimeoutManager {
     ///
     /// # Errors
     /// Returns [`TimeoutError`] if the config fails [`AdaptiveTimeoutConfig::verify`].
-    pub fn new(config: &AdaptiveTimeoutConfig, clock: Arc<dyn Clock>) -> Result<Self, TimeoutError> {
+    pub fn new(
+        config: &AdaptiveTimeoutConfig,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, TimeoutError> {
         config.verify()?;
 
         let now = clock.monotonic();

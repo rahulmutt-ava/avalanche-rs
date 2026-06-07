@@ -85,5 +85,8 @@ async fn liveness_smoke_finalizes_branch() {
     let n = 5;
     let beta = 2;
     let rounds = run_liveness_trial(n, beta).await;
-    assert!(rounds.is_some(), "5-node cluster must finalize a unanimous branch");
+    assert!(
+        rounds.is_some(),
+        "5-node cluster must finalize a unanimous branch"
+    );
 }

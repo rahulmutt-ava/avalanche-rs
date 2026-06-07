@@ -6,13 +6,15 @@
 //! [`MockClock`] (content time) and the tokio scheduler (virtual scheduling
 //! time) advance in lock-step.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use assert_matches::assert_matches;
 
-use ava_engine::networking::{AdaptiveTimeoutConfig, AdaptiveTimeoutManager, RequestId, TimeoutError};
+use ava_engine::networking::{
+    AdaptiveTimeoutConfig, AdaptiveTimeoutManager, RequestId, TimeoutError,
+};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_utils::clock::MockClock;
@@ -63,7 +65,11 @@ async fn deadline_fires_after_timeout() {
     // Let the dispatch task run.
     tokio::task::yield_now().await;
 
-    assert_eq!(fired.load(Ordering::SeqCst), 1, "timeout handler must fire once");
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "timeout handler must fire once"
+    );
 
     // After a timeout the manager observes the full duration as latency, so the
     // current timeout should be >= the minimum and reflect the penalty.
@@ -96,7 +102,10 @@ async fn response_shortens_timeout() {
     mgr.remove(id).await;
 
     let after = mgr.timeout_duration().await;
-    assert!(after < config.initial_timeout, "fast response should shorten timeout: {after:?}");
+    assert!(
+        after < config.initial_timeout,
+        "fast response should shorten timeout: {after:?}"
+    );
 
     mgr.stop();
 }

@@ -248,12 +248,7 @@ where
     ///
     /// # Errors
     /// Propagates a VM error from the fetch that follows.
-    pub async fn accepted(
-        &mut self,
-        node: NodeId,
-        _req: u32,
-        container_ids: &[Id],
-    ) -> Result<()> {
+    pub async fn accepted(&mut self, node: NodeId, _req: u32, container_ids: &[Id]) -> Result<()> {
         if self.phase != Phase::AgreeingFrontier || !self.cfg.beacons.contains_key(&node) {
             return Ok(());
         }
@@ -368,8 +363,7 @@ where
     /// still-missing parent (Go `bootstrapper.process` + `storage.process`).
     fn process_chain(&mut self, chain: &[Arc<dyn VmBlock>]) {
         // Build an ancestors lookup so we can walk parents within the reply.
-        let by_id: BTreeMap<Id, &Arc<dyn VmBlock>> =
-            chain.iter().map(|b| (b.id(), b)).collect();
+        let by_id: BTreeMap<Id, &Arc<dyn VmBlock>> = chain.iter().map(|b| (b.id(), b)).collect();
 
         let mut current = &chain[0];
         loop {

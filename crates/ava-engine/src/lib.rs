@@ -43,9 +43,9 @@ mod tests {
     use ava_types::node_id::NodeId;
     use ava_vm::VmEvent;
 
+    use super::AppError;
     use super::common::handler::Handler;
     use super::common::no_ops::NoOpHandler;
-    use super::AppError;
 
     /// `app_error_codes` — predefined codes and `Is`-by-code semantics.
     #[test]
@@ -89,7 +89,9 @@ mod tests {
         h.get_state_summary_frontier(node, 1).await.unwrap();
         h.state_summary_frontier(node, 1, &[1, 2, 3]).await.unwrap();
         h.get_state_summary_frontier_failed(node, 1).await.unwrap();
-        h.get_accepted_state_summary(node, 2, &[10, 20]).await.unwrap();
+        h.get_accepted_state_summary(node, 2, &[10, 20])
+            .await
+            .unwrap();
         h.accepted_state_summary(node, 2, &[]).await.unwrap();
         h.get_accepted_state_summary_failed(node, 2).await.unwrap();
 

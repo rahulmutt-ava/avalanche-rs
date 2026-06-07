@@ -60,10 +60,7 @@ impl ResourceTracker for CumulativeTracker {
     }
 
     fn total_usage(&self) -> f64 {
-        self.usage
-            .lock()
-            .map(|m| m.values().sum())
-            .unwrap_or(0.0)
+        self.usage.lock().map(|m| m.values().sum()).unwrap_or(0.0)
     }
 }
 

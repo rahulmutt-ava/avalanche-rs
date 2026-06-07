@@ -90,7 +90,11 @@ async fn router_routes_to_chain_handler() {
         })
         .await;
     tokio::task::yield_now().await;
-    assert_eq!(handler.count.load(Ordering::SeqCst), 1, "unknown chain dropped");
+    assert_eq!(
+        handler.count.load(Ordering::SeqCst),
+        1,
+        "unknown chain dropped"
+    );
 }
 
 /// `timeout_synthesizes_failed` — a registered outbound request that times out

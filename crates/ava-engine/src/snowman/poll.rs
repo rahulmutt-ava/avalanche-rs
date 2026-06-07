@@ -206,7 +206,8 @@ impl<F: PollFactory> PollSet<F> {
         if self.polls.contains_key(&request_id) {
             return false;
         }
-        self.polls.insert(request_id, self.factory.new_poll(validators));
+        self.polls
+            .insert(request_id, self.factory.new_poll(validators));
         true
     }
 

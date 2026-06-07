@@ -90,12 +90,7 @@ pub trait FrontierHandler: Send {
     async fn get_accepted_frontier(&mut self, node: NodeId, req: u32) -> Result<()>;
 
     /// `AcceptedFrontier` — response carrying the accepted-frontier container ID.
-    async fn accepted_frontier(
-        &mut self,
-        node: NodeId,
-        req: u32,
-        container_id: Id,
-    ) -> Result<()>;
+    async fn accepted_frontier(&mut self, node: NodeId, req: u32, container_id: Id) -> Result<()>;
 
     /// `GetAcceptedFrontierFailed` — a `GetAcceptedFrontier` we issued will not
     /// receive a response.
@@ -242,12 +237,7 @@ pub trait AppHandler: Send {
 
     /// `AppRequestFailed` — an `AppRequest` we issued failed; `err` carries the
     /// application-level [`AppError`].
-    async fn app_request_failed(
-        &mut self,
-        node: NodeId,
-        req: u32,
-        err: AppError,
-    ) -> Result<()>;
+    async fn app_request_failed(&mut self, node: NodeId, req: u32, err: AppError) -> Result<()>;
 
     /// `AppGossip` — a gossip message from `node`. Not expected in response to
     /// any event and need not be responded to.

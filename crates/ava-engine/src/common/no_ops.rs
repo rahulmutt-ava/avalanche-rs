@@ -86,12 +86,7 @@ impl FrontierHandler for NoOpHandler {
         Ok(())
     }
 
-    async fn accepted_frontier(
-        &mut self,
-        node: NodeId,
-        req: u32,
-        _container_id: Id,
-    ) -> Result<()> {
+    async fn accepted_frontier(&mut self, node: NodeId, req: u32, _container_id: Id) -> Result<()> {
         debug!(op = "accepted_frontier", %node, req, "dropping response");
         Ok(())
     }
@@ -220,12 +215,7 @@ impl AppHandler for NoOpHandler {
         Ok(())
     }
 
-    async fn app_request_failed(
-        &mut self,
-        node: NodeId,
-        req: u32,
-        _err: AppError,
-    ) -> Result<()> {
+    async fn app_request_failed(&mut self, node: NodeId, req: u32, _err: AppError) -> Result<()> {
         debug!(op = "app_request_failed", %node, req, "dropping response");
         Ok(())
     }

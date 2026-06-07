@@ -28,12 +28,37 @@ use ava_vm::testutil::TestVm;
 /// A single recorded outbound message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sent {
-    Get { node: NodeId, req: u32, id: Id },
-    GetAncestors { node: NodeId, req: u32, id: Id },
-    Put { node: NodeId, req: u32 },
-    Ancestors { node: NodeId, req: u32, n: usize },
-    PullQuery { nodes: Vec<NodeId>, req: u32, id: Id, height: u64 },
-    PushQuery { nodes: Vec<NodeId>, req: u32, id: Id, height: u64 },
+    Get {
+        node: NodeId,
+        req: u32,
+        id: Id,
+    },
+    GetAncestors {
+        node: NodeId,
+        req: u32,
+        id: Id,
+    },
+    Put {
+        node: NodeId,
+        req: u32,
+    },
+    Ancestors {
+        node: NodeId,
+        req: u32,
+        n: usize,
+    },
+    PullQuery {
+        nodes: Vec<NodeId>,
+        req: u32,
+        id: Id,
+        height: u64,
+    },
+    PushQuery {
+        nodes: Vec<NodeId>,
+        req: u32,
+        id: Id,
+        height: u64,
+    },
     Chits {
         node: NodeId,
         req: u32,
@@ -42,10 +67,25 @@ pub enum Sent {
         accepted: Id,
         accepted_height: u64,
     },
-    AcceptedFrontier { node: NodeId, req: u32, id: Id },
-    Accepted { node: NodeId, req: u32, ids: Vec<Id> },
-    GetAcceptedFrontier { nodes: Vec<NodeId>, req: u32 },
-    GetAccepted { nodes: Vec<NodeId>, req: u32, ids: Vec<Id> },
+    AcceptedFrontier {
+        node: NodeId,
+        req: u32,
+        id: Id,
+    },
+    Accepted {
+        node: NodeId,
+        req: u32,
+        ids: Vec<Id>,
+    },
+    GetAcceptedFrontier {
+        nodes: Vec<NodeId>,
+        req: u32,
+    },
+    GetAccepted {
+        nodes: Vec<NodeId>,
+        req: u32,
+        ids: Vec<Id>,
+    },
 }
 
 /// A [`Sender`] that records every outbound message for assertions.
@@ -243,7 +283,9 @@ pub fn validators(n: usize) -> (Arc<DefaultManager>, Vec<NodeId>) {
 
 /// An initialized in-memory VM plus its genesis (last-accepted) id.
 pub async fn init_vm(token: &CancellationToken) -> (TestVm, Id) {
-    let vm = ava_vm::testutil::init_test_vm(token).await.expect("init vm");
+    let vm = ava_vm::testutil::init_test_vm(token)
+        .await
+        .expect("init vm");
     let genesis = vm.last_accepted(token).await.expect("genesis");
     (vm, genesis)
 }
@@ -258,8 +300,8 @@ pub fn build_engine(
     genesis: Id,
     token: CancellationToken,
 ) -> SnowmanEngine<TestVm, RecordingSender, DefaultManager> {
-    let consensus = Topological::new_default(SnowballFactory, params, genesis, 0)
-        .expect("topological");
+    let consensus =
+        Topological::new_default(SnowballFactory, params, genesis, 0).expect("topological");
     let cfg = Config {
         subnet_id: Id::EMPTY,
         params,
@@ -336,11 +378,7 @@ impl Cluster {
                 g,
                 token.clone(),
             );
-            nodes.push(Node {
-                id,
-                engine,
-                sender,
-            });
+            nodes.push(Node { id, engine, sender });
         }
         Self {
             nodes,
@@ -410,9 +448,9 @@ impl Cluster {
                         .log
                         .lock()
                         .unwrap_or_else(|e| e.into_inner());
-                    let pos = log.iter().rposition(|s| {
-                        matches!(s, Sent::Chits { req: r, .. } if r == req)
-                    });
+                    let pos = log
+                        .iter()
+                        .rposition(|s| matches!(s, Sent::Chits { req: r, .. } if r == req));
                     pos.map(|p| match log.remove(p) {
                         Sent::Chits {
                             preferred,

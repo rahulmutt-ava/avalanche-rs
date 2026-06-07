@@ -105,7 +105,11 @@ async fn run_preference_trial(n: usize, beta: u32, b_first: bool) -> Result<(), 
             }
         }
 
-        if cluster.nodes.iter().all(|nd| nd.engine.consensus_last_accepted().1 >= 1) {
+        if cluster
+            .nodes
+            .iter()
+            .all(|nd| nd.engine.consensus_last_accepted().1 >= 1)
+        {
             break;
         }
     }
