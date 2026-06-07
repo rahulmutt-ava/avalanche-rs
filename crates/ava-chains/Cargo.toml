@@ -1,0 +1,38 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-chains"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Chain manager: VmManager/Factory/VmRegistry, Aliaser, Subnet, atomic SharedMemory, and the create_snowman_chain pipeline (M3 / specs 07 §8, §3.1)."
+
+[lints]
+workspace = true
+
+# Tier T3 (node services). The chain manager wires the already-built consensus
+# stack (ava-vm middleware, ava-proposervm, ava-engine, ava-snow) into running
+# chains over the storage stack (ava-database), keyed by validator subnet
+# (ava-validators).
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-crypto = { path = "../ava-crypto" }
+ava-database = { path = "../ava-database" }
+ava-snow = { path = "../ava-snow" }
+ava-vm = { path = "../ava-vm" }
+
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+# `register_factory` probes the VM `Version`/`Shutdown` over a CancellationToken.
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
+assert_matches = { workspace = true }
+proptest = { workspace = true }
