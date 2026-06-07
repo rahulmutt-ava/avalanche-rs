@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn initialize_roundtrip_and_prefix() {
         let c = codec::codec().expect("build codec");
-        let mut tx = Tx::new(UnsignedTx::Base(BaseTx));
+        let mut tx = Tx::new(UnsignedTx::Base(BaseTx::default()));
         tx.initialize(&c).expect("initialize");
 
         // tx_id is sha256 of the signed bytes.
@@ -233,9 +233,12 @@ mod tests {
     #[test]
     fn parse_distinct_unsigned_variants() {
         let c = codec::codec().expect("build codec");
-        let mut tx = Tx::new(UnsignedTx::AddValidator(AddValidatorTx));
+        let mut tx = Tx::new(UnsignedTx::AddValidator(AddValidatorTx::default()));
         tx.initialize(&c).expect("initialize");
         let parsed = Tx::parse(&c, tx.bytes()).expect("parse");
-        assert_eq!(parsed.unsigned, UnsignedTx::AddValidator(AddValidatorTx));
+        assert_eq!(
+            parsed.unsigned,
+            UnsignedTx::AddValidator(AddValidatorTx::default())
+        );
     }
 }

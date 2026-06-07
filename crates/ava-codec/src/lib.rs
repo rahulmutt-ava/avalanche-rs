@@ -38,17 +38,12 @@
 // the derive is used *within* this crate (e.g. the `codectest` module).
 extern crate self as ava_codec;
 
-// `ava-types` is a declared dependency for the documented layering (specs/03
-// §0: ava-codec sits directly above ava-types) but the codec engine itself
-// touches no `ava-types` item yet — downstream newtypes implement `Serializable`
-// on their own. Keep the dependency edge without an unused-crate warning.
-use ava_types as _;
-
 pub use ava_codec_derive::AvaCodec;
 
 #[cfg(any(test, feature = "testutil"))]
 pub mod codectest;
 pub mod error;
+pub mod ids;
 pub mod linearcodec;
 pub mod manager;
 pub mod packer;

@@ -457,3 +457,66 @@ pub fn unmarshal_input(bytes: &[u8]) -> Result<Input> {
 pub fn unmarshal_credential(bytes: &[u8]) -> Result<Credential> {
     unmarshal_with(bytes, Credential::unmarshal_fields)
 }
+
+// ---------------------------------------------------------------------------
+// `ava_codec` trait impls — embed fx types directly as codec fields
+// ---------------------------------------------------------------------------
+//
+// The fx types are interface payloads in Go (`verify.State`, `fx.Owner`,
+// `verify.Verifiable`). When a P-Chain / X-Chain tx embeds one through such an
+// interface, the codec prepends the registered typeID; that typeID prefix is
+// emitted by the **embedding** interface enum (e.g. `ava_platformvm::txs::Output`),
+// not here. These `Serializable`/`Deserializable` impls therefore write/read
+// only the `serialize:"true"` fields (byte-identical to `marshal_fields`), with
+// no version prefix and no typeID — the building block the interface enums and
+// the `stakeable` lock wrappers compose. (Promoting these to the public
+// `ava_codec` traits is the M4.3 resolution recorded in specs/08 §2.3, replacing
+// the per-crate byte-exact mirrors.)
+
+/// Bridges a `fn(&mut Packer) -> Result<Self>` field reader into the codec's
+/// in-place [`ava_codec::Deserializable`] contract, surfacing the fx error as a
+/// sticky packer error.
+fn read_fields<F, T>(p: &mut Packer, read: F, dst: &mut T)
+where
+    F: FnOnce(&mut Packer) -> Result<T>,
+{
+    if p.errored() {
+        return;
+    }
+    match read(p) {
+        Ok(v) => *dst = v,
+        Err(_) => p.add_external_error(ava_codec::error::PackerError::InvalidInput),
+    }
+}
+
+macro_rules! impl_codec_traits {
+    ($($t:ty),+ $(,)?) => {$(
+        impl ava_codec::Serializable for $t {
+            fn marshal_into(&self, p: &mut Packer) {
+                <$t>::marshal_fields(self, p);
+            }
+
+            fn size(&self) -> usize {
+                // The exact field byte length: marshal into a sizing packer.
+                let mut sp = Packer::with_max_size(usize::MAX);
+                <$t>::marshal_fields(self, &mut sp);
+                sp.into_bytes().len()
+            }
+        }
+
+        impl ava_codec::Deserializable for $t {
+            fn unmarshal_from(&mut self, p: &mut Packer) {
+                read_fields(p, <$t>::unmarshal_fields, self);
+            }
+        }
+    )+};
+}
+
+impl_codec_traits!(
+    OutputOwners,
+    Input,
+    TransferInput,
+    MintOutput,
+    TransferOutput,
+    Credential,
+);

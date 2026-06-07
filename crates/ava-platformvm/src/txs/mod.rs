@@ -10,20 +10,65 @@
 //! 4 Banff block types at 29–32 — so the tx variants carry explicit
 //! `#[codec(type_id = N)]`s with reserved gaps rather than auto-increment.
 //!
-//! The per-tx structs are **placeholders** for M4.2: empty (unit) structs that
-//! derive the codec traits so the enum compiles and the `type_id`s are
-//! assertable. M4.3/M4.4 flesh out their fields and verification rules.
+//! The per-tx structs carry their real fields and verification rules (M4.3 /
+//! M4.4); each lives in its own module and is re-exported here.
 
 use ava_codec::AvaCodec;
 
 use crate::error::Error;
 
+pub mod add_delegator;
+pub mod add_permissionless_delegator;
+pub mod add_permissionless_validator;
+pub mod add_subnet_validator;
+pub mod add_validator;
+pub mod advance_time;
+pub mod auto_renew;
+pub mod base_tx;
 pub mod codec;
+pub mod components;
+pub mod convert_subnet_to_l1;
+pub mod create_chain;
+pub mod create_subnet;
+pub mod disable_l1_validator;
 pub mod fee;
+pub mod import_export;
+pub mod increase_l1_validator_balance;
+pub mod register_l1_validator;
+pub mod remove_subnet_validator;
+pub mod reward_validator;
+pub mod set_l1_validator_weight;
+pub mod transfer_subnet_ownership;
+pub mod transform_subnet;
 pub mod tx;
+pub mod validator;
 
+pub use add_delegator::AddDelegatorTx;
+pub use add_permissionless_delegator::AddPermissionlessDelegatorTx;
+pub use add_permissionless_validator::AddPermissionlessValidatorTx;
+pub use add_subnet_validator::AddSubnetValidatorTx;
+pub use add_validator::AddValidatorTx;
+pub use advance_time::AdvanceTimeTx;
+pub use auto_renew::{
+    AddAutoRenewedValidatorTx, RewardAutoRenewedValidatorTx, SetAutoRenewedValidatorConfigTx,
+};
+pub use base_tx::BaseTx;
 pub use codec::{Codec, GenesisCodec};
+pub use components::{TransferableInput, TransferableOutput};
+pub use convert_subnet_to_l1::{ConvertSubnetToL1Tx, ConvertSubnetToL1Validator};
+pub use create_chain::CreateChainTx;
+pub use create_subnet::CreateSubnetTx;
+pub use disable_l1_validator::DisableL1ValidatorTx;
+pub use import_export::{ExportTx, ImportTx};
+pub use increase_l1_validator_balance::IncreaseL1ValidatorBalanceTx;
+pub use register_l1_validator::RegisterL1ValidatorTx;
+pub use remove_subnet_validator::RemoveSubnetValidatorTx;
+pub use reward_validator::RewardValidatorTx;
+pub use set_l1_validator_weight::SetL1ValidatorWeightTx;
+pub use transfer_subnet_ownership::TransferSubnetOwnershipTx;
+pub use transform_subnet::TransformSubnetTx;
 pub use tx::{Credential, Tx};
+pub use validator::{SubnetValidator, Validator};
 
 // ---------------------------------------------------------------------------
 // Block type-id constants (shared numbering space; specs 08 §2.1 / §4.1)
@@ -53,91 +98,6 @@ pub const TYPE_ID_BANFF_ABORT_BLOCK: u32 = 30;
 pub const TYPE_ID_BANFF_COMMIT_BLOCK: u32 = 31;
 /// `BanffStandardBlock` — block `type_id` 32.
 pub const TYPE_ID_BANFF_STANDARD_BLOCK: u32 = 32;
-
-// ---------------------------------------------------------------------------
-// UTXO component placeholders
-// ---------------------------------------------------------------------------
-//
-// `UnsignedTx::{inputs,outputs}` return slices of the avax UTXO components. The
-// real `TransferableInput`/`TransferableOutput` live in `ava_vm::components::avax`
-// (not a direct dependency of this crate at M4.2). They are stubbed here as
-// empty placeholder types so the accessor signatures compile and return empty
-// slices.
-// TODO(M4.3): replace with `ava_vm::components::avax::{TransferableInput,
-// TransferableOutput}` once the avax components are wired into this crate.
-
-/// Placeholder for `avax::TransferableInput` (M4.3 will replace).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TransferableInput;
-
-/// Placeholder for `avax::TransferableOutput` (M4.3 will replace).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TransferableOutput;
-
-// ---------------------------------------------------------------------------
-// Per-tx placeholder structs
-// ---------------------------------------------------------------------------
-//
-// Each is a unit struct deriving `AvaCodec` (serializes to zero bytes). M4.3/M4.4
-// flesh out the fields per specs 08 §2.2.
-
-macro_rules! placeholder_txs {
-    ($($(#[$m:meta])* $name:ident),+ $(,)?) => {$(
-        $(#[$m])*
-        // TODO(M4.3/M4.4): flesh out fields (specs 08 §2.2).
-        #[derive(AvaCodec, Debug, Clone, Default, PartialEq, Eq)]
-        pub struct $name;
-    )+};
-}
-
-placeholder_txs!(
-    /// `AddValidatorTx` (deprecated, parse-only).
-    AddValidatorTx,
-    /// `AddSubnetValidatorTx` (deprecated).
-    AddSubnetValidatorTx,
-    /// `AddDelegatorTx` (deprecated).
-    AddDelegatorTx,
-    /// `CreateChainTx`.
-    CreateChainTx,
-    /// `CreateSubnetTx`.
-    CreateSubnetTx,
-    /// `ImportTx`.
-    ImportTx,
-    /// `ExportTx`.
-    ExportTx,
-    /// `AdvanceTimeTx` (proposal; Apricot-only).
-    AdvanceTimeTx,
-    /// `RewardValidatorTx` (proposal).
-    RewardValidatorTx,
-    /// `RemoveSubnetValidatorTx`.
-    RemoveSubnetValidatorTx,
-    /// `TransformSubnetTx` (no-op post-Etna).
-    TransformSubnetTx,
-    /// `AddPermissionlessValidatorTx`.
-    AddPermissionlessValidatorTx,
-    /// `AddPermissionlessDelegatorTx`.
-    AddPermissionlessDelegatorTx,
-    /// `TransferSubnetOwnershipTx`.
-    TransferSubnetOwnershipTx,
-    /// `BaseTx`.
-    BaseTx,
-    /// `ConvertSubnetToL1Tx` (ACP-77).
-    ConvertSubnetToL1Tx,
-    /// `RegisterL1ValidatorTx`.
-    RegisterL1ValidatorTx,
-    /// `SetL1ValidatorWeightTx`.
-    SetL1ValidatorWeightTx,
-    /// `IncreaseL1ValidatorBalanceTx`.
-    IncreaseL1ValidatorBalanceTx,
-    /// `DisableL1ValidatorTx`.
-    DisableL1ValidatorTx,
-    /// `AddAutoRenewedValidatorTx` (Helicon).
-    AddAutoRenewedValidatorTx,
-    /// `SetAutoRenewedValidatorConfigTx` (Helicon).
-    SetAutoRenewedValidatorConfigTx,
-    /// `RewardAutoRenewedValidatorTx` (Helicon).
-    RewardAutoRenewedValidatorTx,
-);
 
 // ---------------------------------------------------------------------------
 // UnsignedTx interface enum
@@ -225,35 +185,73 @@ pub enum UnsignedTx {
 
 impl Default for UnsignedTx {
     fn default() -> Self {
-        UnsignedTx::Base(BaseTx)
+        UnsignedTx::Base(BaseTx::default())
     }
 }
 
 impl UnsignedTx {
-    /// The avax `TransferableInput`s this tx consumes (the `BaseTx.ins` plus any
-    /// tx-specific inputs, e.g. `ImportTx.imported_inputs`).
-    ///
-    /// Stubbed at M4.2; returns an empty slice until the per-tx structs carry
-    /// their fields (M4.3).
+    /// The embedded `avax.BaseTx`, if this tx has one (every tx except the two
+    /// Apricot proposal txs and `RewardAutoRenewedValidatorTx`).
+    #[must_use]
+    pub fn base(&self) -> Option<&components::BaseTx> {
+        match self {
+            UnsignedTx::AddValidator(tx) => Some(&tx.base.base),
+            UnsignedTx::AddSubnetValidator(tx) => Some(&tx.base.base),
+            UnsignedTx::AddDelegator(tx) => Some(&tx.base.base),
+            UnsignedTx::CreateChain(tx) => Some(&tx.base.base),
+            UnsignedTx::CreateSubnet(tx) => Some(&tx.base.base),
+            UnsignedTx::Import(tx) => Some(&tx.base.base),
+            UnsignedTx::Export(tx) => Some(&tx.base.base),
+            UnsignedTx::RemoveSubnetValidator(tx) => Some(&tx.base.base),
+            UnsignedTx::TransformSubnet(tx) => Some(&tx.base.base),
+            UnsignedTx::AddPermissionlessValidator(tx) => Some(&tx.base.base),
+            UnsignedTx::AddPermissionlessDelegator(tx) => Some(&tx.base.base),
+            UnsignedTx::TransferSubnetOwnership(tx) => Some(&tx.base.base),
+            UnsignedTx::Base(tx) => Some(&tx.base),
+            UnsignedTx::ConvertSubnetToL1(tx) => Some(&tx.base.base),
+            UnsignedTx::RegisterL1Validator(tx) => Some(&tx.base.base),
+            UnsignedTx::SetL1ValidatorWeight(tx) => Some(&tx.base.base),
+            UnsignedTx::IncreaseL1ValidatorBalance(tx) => Some(&tx.base.base),
+            UnsignedTx::DisableL1Validator(tx) => Some(&tx.base.base),
+            UnsignedTx::AddAutoRenewedValidator(tx) => Some(&tx.base.base),
+            UnsignedTx::SetAutoRenewedValidatorConfig(tx) => Some(&tx.base.base),
+            UnsignedTx::AdvanceTime(_)
+            | UnsignedTx::RewardValidator(_)
+            | UnsignedTx::RewardAutoRenewedValidator(_) => None,
+        }
+    }
+
+    /// The `avax.TransferableInput`s this tx consumes from the embedded
+    /// `BaseTx` (the `BaseTx.ins`). Tx-specific extra inputs (e.g.
+    /// `ImportTx.imported_inputs`) are surfaced through [`UnsignedTx::input_ids`].
     #[must_use]
     pub fn inputs(&self) -> &[TransferableInput] {
-        &[]
+        self.base().map_or(&[], |b| b.ins.as_slice())
     }
 
-    /// The avax `TransferableOutput`s this tx produces.
-    ///
-    /// Stubbed at M4.2 (see [`UnsignedTx::inputs`]).
+    /// The `avax.TransferableOutput`s this tx's embedded `BaseTx` produces.
     #[must_use]
     pub fn outputs(&self) -> &[TransferableOutput] {
-        &[]
+        self.base().map_or(&[], |b| b.outs.as_slice())
     }
 
-    /// The set of UTXO IDs this tx consumes (`Tx.InputIDs`).
-    ///
-    /// Stubbed at M4.2; returns an empty set until inputs carry UTXO IDs (M4.3).
+    /// The set of UTXO IDs this tx consumes (`Tx.InputIDs`) — the `BaseTx.ins`
+    /// plus the `ImportTx.imported_inputs`.
     #[must_use]
     pub fn input_ids(&self) -> std::collections::BTreeSet<ava_types::id::Id> {
-        std::collections::BTreeSet::new()
+        let mut ids: std::collections::BTreeSet<ava_types::id::Id> = self
+            .inputs()
+            .iter()
+            .map(components::TransferableInput::input_id)
+            .collect();
+        if let UnsignedTx::Import(tx) = self {
+            ids.extend(
+                tx.imported_inputs
+                    .iter()
+                    .map(components::TransferableInput::input_id),
+            );
+        }
+        ids
     }
 
     /// Dispatches to the matching [`Visitor`] method for this variant
@@ -494,56 +492,79 @@ mod golden {
         assert_eq!(lookup("RewardAutoRenewedValidatorTx"), 42);
 
         // --- UnsignedTx enum discriminants (the derive-generated codec_type_id) ---
-        let cases: &[(UnsignedTx, u32)] = &[
-            (UnsignedTx::AddValidator(AddValidatorTx), 12),
-            (UnsignedTx::AddSubnetValidator(AddSubnetValidatorTx), 13),
-            (UnsignedTx::AddDelegator(AddDelegatorTx), 14),
-            (UnsignedTx::CreateChain(CreateChainTx), 15),
-            (UnsignedTx::CreateSubnet(CreateSubnetTx), 16),
-            (UnsignedTx::Import(ImportTx), 17),
-            (UnsignedTx::Export(ExportTx), 18),
-            (UnsignedTx::AdvanceTime(AdvanceTimeTx), 19),
-            (UnsignedTx::RewardValidator(RewardValidatorTx), 20),
+        let cases: Vec<(UnsignedTx, u32)> = vec![
+            (UnsignedTx::AddValidator(AddValidatorTx::default()), 12),
             (
-                UnsignedTx::RemoveSubnetValidator(RemoveSubnetValidatorTx),
+                UnsignedTx::AddSubnetValidator(AddSubnetValidatorTx::default()),
+                13,
+            ),
+            (UnsignedTx::AddDelegator(AddDelegatorTx::default()), 14),
+            (UnsignedTx::CreateChain(CreateChainTx::default()), 15),
+            (UnsignedTx::CreateSubnet(CreateSubnetTx::default()), 16),
+            (UnsignedTx::Import(ImportTx::default()), 17),
+            (UnsignedTx::Export(ExportTx::default()), 18),
+            (UnsignedTx::AdvanceTime(AdvanceTimeTx::default()), 19),
+            (
+                UnsignedTx::RewardValidator(RewardValidatorTx::default()),
+                20,
+            ),
+            (
+                UnsignedTx::RemoveSubnetValidator(RemoveSubnetValidatorTx::default()),
                 23,
             ),
-            (UnsignedTx::TransformSubnet(TransformSubnetTx), 24),
             (
-                UnsignedTx::AddPermissionlessValidator(AddPermissionlessValidatorTx),
+                UnsignedTx::TransformSubnet(TransformSubnetTx::default()),
+                24,
+            ),
+            (
+                UnsignedTx::AddPermissionlessValidator(AddPermissionlessValidatorTx::default()),
                 25,
             ),
             (
-                UnsignedTx::AddPermissionlessDelegator(AddPermissionlessDelegatorTx),
+                UnsignedTx::AddPermissionlessDelegator(AddPermissionlessDelegatorTx::default()),
                 26,
             ),
             (
-                UnsignedTx::TransferSubnetOwnership(TransferSubnetOwnershipTx),
+                UnsignedTx::TransferSubnetOwnership(TransferSubnetOwnershipTx::default()),
                 33,
             ),
-            (UnsignedTx::Base(BaseTx), 34),
-            (UnsignedTx::ConvertSubnetToL1(ConvertSubnetToL1Tx), 35),
-            (UnsignedTx::RegisterL1Validator(RegisterL1ValidatorTx), 36),
-            (UnsignedTx::SetL1ValidatorWeight(SetL1ValidatorWeightTx), 37),
+            (UnsignedTx::Base(BaseTx::default()), 34),
             (
-                UnsignedTx::IncreaseL1ValidatorBalance(IncreaseL1ValidatorBalanceTx),
+                UnsignedTx::ConvertSubnetToL1(ConvertSubnetToL1Tx::default()),
+                35,
+            ),
+            (
+                UnsignedTx::RegisterL1Validator(RegisterL1ValidatorTx::default()),
+                36,
+            ),
+            (
+                UnsignedTx::SetL1ValidatorWeight(SetL1ValidatorWeightTx::default()),
+                37,
+            ),
+            (
+                UnsignedTx::IncreaseL1ValidatorBalance(IncreaseL1ValidatorBalanceTx::default()),
                 38,
             ),
-            (UnsignedTx::DisableL1Validator(DisableL1ValidatorTx), 39),
             (
-                UnsignedTx::AddAutoRenewedValidator(AddAutoRenewedValidatorTx),
+                UnsignedTx::DisableL1Validator(DisableL1ValidatorTx::default()),
+                39,
+            ),
+            (
+                UnsignedTx::AddAutoRenewedValidator(AddAutoRenewedValidatorTx::default()),
                 40,
             ),
             (
-                UnsignedTx::SetAutoRenewedValidatorConfig(SetAutoRenewedValidatorConfigTx),
+                UnsignedTx::SetAutoRenewedValidatorConfig(
+                    SetAutoRenewedValidatorConfigTx::default(),
+                ),
                 41,
             ),
             (
-                UnsignedTx::RewardAutoRenewedValidator(RewardAutoRenewedValidatorTx),
+                UnsignedTx::RewardAutoRenewedValidator(RewardAutoRenewedValidatorTx::default()),
                 42,
             ),
         ];
-        for (variant, want) in cases {
+        for (variant, want) in &cases {
             assert_eq!(
                 variant.codec_type_id(),
                 *want,
@@ -560,5 +581,328 @@ mod golden {
                 "wire typeID prefix"
             );
         }
+    }
+
+    use ava_secp256k1fx::{OutputOwners, TransferInput, TransferOutput};
+    use ava_types::id::Id;
+    use ava_types::node_id::NodeId;
+    use ava_types::short_id::ShortId;
+
+    use crate::signer::{ProofOfPossession, Signer};
+    use crate::stakeable::{LockIn, LockOut};
+    use crate::txs::components::{
+        self, BaseTx as AvaxBaseTx, Input, Output, Owner, TransferableInput, TransferableOutput,
+    };
+
+    /// The Mainnet AVAX asset id used throughout the Go serialization vectors.
+    const AVAX_ASSET_ID: [u8; 32] = [
+        0x21, 0xe6, 0x73, 0x17, 0xcb, 0xc4, 0xbe, 0x2a, 0xeb, 0x00, 0x67, 0x7a, 0xd6, 0x46, 0x27,
+        0x78, 0xa8, 0xf5, 0x22, 0x74, 0xb9, 0xd6, 0x05, 0xdf, 0x25, 0x91, 0xb2, 0x30, 0x27, 0xa8,
+        0x7d, 0xff,
+    ];
+    const CUSTOM_ASSET_ID: [u8; 32] = [
+        0x99, 0x77, 0x55, 0x77, 0x11, 0x33, 0x55, 0x31, 0x99, 0x77, 0x55, 0x77, 0x11, 0x33, 0x55,
+        0x31, 0x99, 0x77, 0x55, 0x77, 0x11, 0x33, 0x55, 0x31, 0x99, 0x77, 0x55, 0x77, 0x11, 0x33,
+        0x55, 0x31,
+    ];
+    const TX_ID: [u8; 32] = [
+        0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99,
+        0x88, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa,
+        0x99, 0x88,
+    ];
+    const ADDR: [u8; 20] = [
+        0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa,
+        0xbb, 0x44, 0x55, 0x66, 0x77,
+    ];
+    /// The BLS compressed public key from the Go vectors (`localsigner.FromBytes`
+    /// of the fixed test secret key).
+    const BLS_PUBKEY: [u8; 48] = [
+        0xaf, 0xf4, 0xac, 0xb4, 0xc5, 0x43, 0x9b, 0x5d, 0x42, 0x6c, 0xad, 0xf9, 0xe9, 0x46, 0xd3,
+        0xa4, 0x52, 0xf7, 0xde, 0x34, 0x14, 0xd1, 0xad, 0x27, 0x33, 0x61, 0x33, 0x21, 0x1d, 0x8b,
+        0x90, 0xcf, 0x49, 0xfb, 0x97, 0xee, 0xbc, 0xde, 0xee, 0xf7, 0x14, 0xdc, 0x20, 0xf5, 0x4e,
+        0xd0, 0xd4, 0xd1,
+    ];
+    /// The BLS proof-of-possession signature from the Go vectors.
+    const BLS_SIG: [u8; 96] = [
+        0x8c, 0xfd, 0x79, 0x09, 0xd1, 0x53, 0xb9, 0x60, 0x4b, 0x62, 0xb1, 0x43, 0xba, 0x36, 0x20,
+        0x7b, 0xb7, 0xe6, 0x48, 0x67, 0x42, 0x44, 0x80, 0x20, 0x2a, 0x67, 0xdc, 0x68, 0x76, 0x83,
+        0x46, 0xd9, 0x5c, 0x90, 0x98, 0x3c, 0x2d, 0x27, 0x9c, 0x64, 0xc4, 0x3c, 0x51, 0x13, 0x6b,
+        0x2a, 0x05, 0xe0, 0x16, 0x02, 0xd5, 0x2a, 0xa6, 0x37, 0x6f, 0xda, 0x17, 0xfa, 0x6e, 0x2a,
+        0x18, 0xa0, 0x83, 0xe4, 0x9d, 0x9c, 0x45, 0x0e, 0xab, 0x7b, 0x89, 0xb1, 0xd5, 0x55, 0x5d,
+        0xa5, 0xc4, 0x89, 0x87, 0x2e, 0x02, 0xb7, 0xe5, 0x22, 0x7b, 0x77, 0x55, 0x0a, 0xf1, 0x33,
+        0x0e, 0x5a, 0x71, 0xf8, 0xc3, 0x68,
+    ];
+
+    fn id(bytes: [u8; 32]) -> Id {
+        Id::from(bytes)
+    }
+
+    fn owners_one_addr() -> OutputOwners {
+        OutputOwners::new(0, 1, vec![ShortId::from(ADDR)])
+    }
+
+    /// TDD ENTRY POINT (M4.3). Reproduces the Go
+    /// `TestAddPermissionlessPrimaryValidator` "simple" serialization vector
+    /// (`vms/platformvm/txs/add_permissionless_validator_tx_test.go`,
+    /// `expectedUnsignedSimpleAddPrimaryTxBytes`): a Primary-Network
+    /// `AddPermissionlessValidatorTx` with a BLS PoP signer, one input, one
+    /// stake output, and reward owners. Asserts byte-exact `Codec.Marshal`,
+    /// round-trip decode, and that `syntactic_verify` passes.
+    #[test]
+    fn pchain_tx_codec_app_validator() {
+        const KILO_AVAX: u64 = 2_000 * 1_000_000_000; // 2k AVAX in nAVAX.
+
+        let tx = AddPermissionlessValidatorTx {
+            base: BaseTx::new(AvaxBaseTx {
+                network_id: 1, // Mainnet.
+                blockchain_id: Id::EMPTY,
+                outs: vec![],
+                ins: vec![TransferableInput {
+                    tx_id: id(TX_ID),
+                    output_index: 1,
+                    asset_id: id(AVAX_ASSET_ID),
+                    r#in: Input::Transfer(TransferInput::new(KILO_AVAX, vec![1])),
+                }],
+                memo: vec![],
+            }),
+            validator: Validator {
+                node_id: NodeId::from([
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x11, 0x22, 0x33, 0x44, 0x55,
+                    0x66, 0x77, 0x88, 0x11, 0x22, 0x33, 0x44,
+                ]),
+                start: 12345,
+                end: 12345 + 200 * 24 * 60 * 60,
+                wght: KILO_AVAX,
+            },
+            subnet: Id::EMPTY, // Primary Network.
+            signer: Signer::ProofOfPossession(ProofOfPossession::new(BLS_PUBKEY, BLS_SIG)),
+            stake_outs: vec![TransferableOutput {
+                asset_id: id(AVAX_ASSET_ID),
+                out: Output::Transfer(TransferOutput::new(KILO_AVAX, owners_one_addr())),
+            }],
+            validator_rewards_owner: Owner::Secp256k1(owners_one_addr()),
+            delegator_rewards_owner: Owner::Secp256k1(owners_one_addr()),
+            delegation_shares: 1_000_000, // reward.PercentDenominator
+            verified: std::cell::OnceCell::new(),
+        };
+
+        // Syntactic verification passes for a well-formed primary validator.
+        tx.syntactic_verify().expect("syntactic verify");
+
+        let unsigned = UnsignedTx::AddPermissionlessValidator(tx);
+        let c = codec::codec().expect("codec");
+        let got = c.marshal(crate::CODEC_VERSION, &unsigned).expect("marshal");
+
+        let expected = expected_app_validator_bytes();
+        assert_eq!(got, expected, "byte-exact Codec.Marshal");
+
+        // encode(decode(bytes)) == bytes.
+        let mut decoded = UnsignedTx::default();
+        c.unmarshal(&got, &mut decoded).expect("unmarshal");
+        assert_eq!(decoded, unsigned, "round-trip equality");
+        let reencoded = c
+            .marshal(crate::CODEC_VERSION, &decoded)
+            .expect("re-marshal");
+        assert_eq!(reencoded, expected, "encode(decode(bytes)) == bytes");
+    }
+
+    /// TDD ENTRY POINT (M4.4). Reproduces the Go
+    /// `TestRegisterL1ValidatorTxSerialization` vector
+    /// (`vms/platformvm/txs/register_l1_validator_tx_test.go`, `expectedBytes`):
+    /// a `RegisterL1ValidatorTx` exercising `stakeable.LockOut` (22),
+    /// `stakeable.LockIn` (21), multiple inputs/outputs, a memo, a BLS PoP, and
+    /// a Warp message. Asserts byte-exact `Codec.Marshal` + round-trip.
+    #[test]
+    fn pchain_tx_codec_l1() {
+        let out0 = TransferableOutput {
+            asset_id: id(AVAX_ASSET_ID),
+            out: Output::StakeableLock(LockOut::new(
+                87_654_321,
+                Output::Transfer(TransferOutput::new(
+                    1,
+                    OutputOwners::new(12_345_678, 0, vec![]),
+                )),
+            )),
+        };
+        let out1 = TransferableOutput {
+            asset_id: id(CUSTOM_ASSET_ID),
+            out: Output::StakeableLock(LockOut::new(
+                876_543_210,
+                Output::Transfer(TransferOutput::new(
+                    0xffff_ffff_ffff_ffff,
+                    owners_one_addr(),
+                )),
+            )),
+        };
+        let in0 = TransferableInput {
+            tx_id: id(TX_ID),
+            output_index: 1,
+            asset_id: id(AVAX_ASSET_ID),
+            r#in: Input::Transfer(TransferInput::new(1_000_000_000, vec![2, 5])),
+        };
+        let in1 = TransferableInput {
+            tx_id: id(TX_ID),
+            output_index: 2,
+            asset_id: id(CUSTOM_ASSET_ID),
+            r#in: Input::StakeableLock(LockIn::new(
+                876_543_210,
+                Input::Transfer(TransferInput::new(0xefff_ffff_ffff_ffff, vec![0])),
+            )),
+        };
+        let in2 = TransferableInput {
+            tx_id: id(TX_ID),
+            output_index: 3,
+            asset_id: id(CUSTOM_ASSET_ID),
+            r#in: Input::Transfer(TransferInput::new(0x1000_0000_0000_0000, vec![])),
+        };
+
+        let tx = RegisterL1ValidatorTx {
+            base: BaseTx::new(AvaxBaseTx {
+                network_id: 10, // constants.UnitTestID
+                blockchain_id: Id::EMPTY,
+                outs: vec![out0, out1],
+                ins: vec![in0, in1, in2],
+                memo: "😅\nwell that's\x01\x23\x45!".as_bytes().to_vec(),
+            }),
+            balance: 1_000_000_000, // units.Avax
+            proof_of_possession: BLS_SIG,
+            message: b"message".to_vec(),
+        };
+
+        let unsigned = UnsignedTx::RegisterL1Validator(tx);
+        let c = codec::codec().expect("codec");
+        let got = c.marshal(crate::CODEC_VERSION, &unsigned).expect("marshal");
+
+        let expected = expected_register_l1_bytes();
+        assert_eq!(got, expected, "byte-exact Codec.Marshal");
+
+        let mut decoded = UnsignedTx::default();
+        c.unmarshal(&got, &mut decoded).expect("unmarshal");
+        assert_eq!(decoded, unsigned, "round-trip equality");
+
+        // The components helpers see the stakeable wrappers as the registered
+        // interface types (sanity check on the type-id dispatch).
+        let _ = components::is_sorted_transferable_outputs(unsigned.outputs());
+    }
+
+    /// `expectedUnsignedSimpleAddPrimaryTxBytes` from the Go test (verbatim).
+    fn expected_app_validator_bytes() -> Vec<u8> {
+        let mut v = vec![
+            0x00, 0x00, // codec version
+            0x00, 0x00, 0x00, 0x19, // AddPermissionlessValidatorTx type id (25)
+            0x00, 0x00, 0x00, 0x01, // network id = 1
+        ];
+        v.extend_from_slice(&[0u8; 32]); // blockchain id (P-Chain)
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // num outputs
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // num inputs
+        v.extend_from_slice(&TX_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // output index
+        v.extend_from_slice(&AVAX_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x05]); // TransferInput type id
+        v.extend_from_slice(&[0x00, 0x00, 0x01, 0xd1, 0xa9, 0x4a, 0x20, 0x00]); // amount
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // num sig indices
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // sig index
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // memo len
+        v.extend_from_slice(&[
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+            0x77, 0x88, 0x11, 0x22, 0x33, 0x44,
+        ]); // node id
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x39]); // start
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0xdc, 0x39]); // end
+        v.extend_from_slice(&[0x00, 0x00, 0x01, 0xd1, 0xa9, 0x4a, 0x20, 0x00]); // weight
+        v.extend_from_slice(&[0u8; 32]); // primary network subnet id
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x1c]); // BLS PoP type id (28)
+        v.extend_from_slice(&BLS_PUBKEY);
+        v.extend_from_slice(&BLS_SIG);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // num stake outs
+        v.extend_from_slice(&AVAX_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x07]); // TransferOutput type id
+        v.extend_from_slice(&[0x00, 0x00, 0x01, 0xd1, 0xa9, 0x4a, 0x20, 0x00]); // amount
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // locktime
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // threshold
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // num addrs
+        v.extend_from_slice(&ADDR);
+        // validator rewards owner (OutputOwners, type id 11)
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x0b]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&ADDR);
+        // delegator rewards owner (OutputOwners, type id 11)
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x0b]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&ADDR);
+        v.extend_from_slice(&[0x00, 0x0f, 0x42, 0x40]); // delegation shares = 1_000_000
+        v
+    }
+
+    /// `expectedBytes` from `TestRegisterL1ValidatorTxSerialization` (verbatim).
+    fn expected_register_l1_bytes() -> Vec<u8> {
+        let mut v = vec![
+            0x00, 0x00, // codec version
+            0x00, 0x00, 0x00, 0x24, // RegisterL1ValidatorTx type id (36)
+            0x00, 0x00, 0x00, 0x0a, // network id = 10
+        ];
+        v.extend_from_slice(&[0u8; 32]); // blockchain id
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]); // num outputs
+        // outputs[0]
+        v.extend_from_slice(&AVAX_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x16]); // LockOut type id (22)
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x05, 0x39, 0x7f, 0xb1]); // lock locktime
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x07]); // TransferOutput type id
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]); // amount
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0xbc, 0x61, 0x4e]); // owner locktime
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // threshold
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // num addrs
+        // outputs[1]
+        v.extend_from_slice(&CUSTOM_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x16]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x34, 0x3e, 0xfc, 0xea]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x07]);
+        v.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&ADDR);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x03]); // num inputs
+        // inputs[0]
+        v.extend_from_slice(&TX_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&AVAX_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x05]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x3b, 0x9a, 0xca, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x05]);
+        // inputs[1]
+        v.extend_from_slice(&TX_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x02]);
+        v.extend_from_slice(&CUSTOM_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x15]); // LockIn type id (21)
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x34, 0x3e, 0xfc, 0xea]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x05]);
+        v.extend_from_slice(&[0xef, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        // inputs[2]
+        v.extend_from_slice(&TX_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x03]);
+        v.extend_from_slice(&CUSTOM_ASSET_ID);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x05]);
+        v.extend_from_slice(&[0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        // memo
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x14]); // len 20
+        v.extend_from_slice(&[
+            0xf0, 0x9f, 0x98, 0x85, 0x0a, 0x77, 0x65, 0x6c, 0x6c, 0x20, 0x74, 0x68, 0x61, 0x74,
+            0x27, 0x73, 0x01, 0x23, 0x45, 0x21,
+        ]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x3b, 0x9a, 0xca, 0x00]); // balance
+        v.extend_from_slice(&BLS_SIG); // proof of possession
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x07]); // message len
+        v.extend_from_slice(b"message");
+        v
     }
 }

@@ -65,4 +65,60 @@ pub enum Error {
     /// A wrapped codec (de)serialization failure.
     #[error("codec: {0}")]
     Codec(#[from] ava_codec::error::CodecError),
+
+    /// A tx/UTXO component (`avax`/`secp256k1fx`) failed verification.
+    #[error("invalid component")]
+    InvalidComponent,
+
+    /// `errOutputsNotSorted` — a tx's outputs are not in canonical order.
+    #[error("outputs not sorted")]
+    OutputsNotSorted,
+
+    /// `errInputsNotSortedUnique` — a tx's inputs are not sorted and unique.
+    #[error("inputs not sorted and unique")]
+    InputsNotSortedUnique,
+
+    /// `errInvalidLocktime` — a `stakeable` lock has a zero locktime.
+    #[error("invalid locktime")]
+    InvalidLocktime,
+
+    /// `errNestedStakeableLocks` — a `stakeable` lock wraps another.
+    #[error("shouldn't nest stakeable locks")]
+    NestedStakeableLock,
+
+    /// `errEmptyNodeID` — a validator's node id is empty.
+    #[error("validator nodeID cannot be empty")]
+    EmptyNodeId,
+
+    /// `errNoStake` — a staking tx provided no stake outputs.
+    #[error("no stake")]
+    NoStake,
+
+    /// `errTooManyShares` — `DelegationShares > reward::PERCENT_DENOMINATOR`.
+    #[error("too many shares")]
+    TooManyShares,
+
+    /// `errInvalidSigner` — BLS key presence does not match the Primary Network.
+    #[error("invalid signer")]
+    InvalidSigner,
+
+    /// `errMultipleStakedAssets` — stake outputs span more than one asset.
+    #[error("multiple staked assets")]
+    MultipleStakedAssets,
+
+    /// `errValidatorWeightMismatch` — stake total != `Validator.Wght`.
+    #[error("validator weight mismatch")]
+    ValidatorWeightMismatch,
+
+    /// `ErrWeightTooSmall` — a validator's weight is zero.
+    #[error("weight of this validator is too low")]
+    WeightTooSmall,
+
+    /// `errBadSubnetID` — a subnet validator's subnet is the Primary Network.
+    #[error("subnet ID can't be primary network ID")]
+    BadSubnetId,
+
+    /// An arithmetic operation overflowed.
+    #[error("overflow")]
+    Overflow,
 }

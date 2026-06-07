@@ -27,10 +27,8 @@ use arc_swap as _;
 use async_trait as _;
 use ava_codec_derive as _;
 use ava_database as _;
-use ava_vm as _;
-use bytes as _;
-use ava_utils as _;
 use ava_validators as _;
+use bytes as _;
 use parking_lot as _;
 use tokio as _;
 
@@ -54,6 +52,8 @@ use serde_json as _;
 
 pub mod error;
 pub mod reward;
+pub mod signer;
+pub mod stakeable;
 pub mod txs;
 
 pub use error::{Error, Result};
