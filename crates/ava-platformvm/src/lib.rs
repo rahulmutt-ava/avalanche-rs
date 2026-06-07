@@ -43,11 +43,13 @@ use rstest as _;
 
 pub mod block;
 pub mod error;
+pub mod fx;
 pub mod reward;
 pub mod signer;
 pub mod stakeable;
 pub mod state;
 pub mod txs;
+pub mod utxo;
 pub mod validators;
 
 pub use error::{Error, Result};
