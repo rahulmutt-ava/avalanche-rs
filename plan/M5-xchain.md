@@ -245,11 +245,25 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.9: fx dispatch table (ParsedFx + TypeToFxIndex routing)
 **Crate:** ava-avm  ·  **Depends on:** M5.5, M5.6, M5.7, M5.8  ·  **Spec:** 09 §2.2, §4, FX-AVM-1
 **Files:** `crates/ava-avm/src/fx/dispatch.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/fx_dispatch.rs`: given the `TypeToFxIndex` map and a value of each concrete output/credential/operation type, assert `resolve_fx_index(value)` returns the right `FxIndex` (secp out → 0, nft out → 1, property out → 2; credentials id 9/14/19 → 0/1/2); unknown type → `Error::UnknownFx`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm fx_dispatch` → fails.
-- [ ] **Step 3 — Green:** `dispatch.rs`: `struct ParsedFx { id: Id, fx: Box<dyn Fx> }`; `fxs: Vec<ParsedFx>` indexed by `FxIndex`. `resolve_fx_index(value: &dyn Any) -> Result<FxIndex>` looks up the value's `TypeId` in `TypeToFxIndex` (built in M5.5's single pass). Routing helpers `route_transfer`/`route_operation`/`route_output` call the resolved fx (09 §4, FX-AVM-1).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm fx_dispatch`.
-- [ ] **Step 5 — Commit:** `avm: fx dispatch table + TypeToFxIndex routing (M5.9)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/fx_dispatch.rs`: given the `TypeToFxIndex` map and a value of each concrete output/credential/operation type, assert `resolve_fx_index(value)` returns the right `FxIndex` (secp out → 0, nft out → 1, property out → 2; credentials id 9/14/19 → 0/1/2); unknown type → `Error::UnknownFx`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm fx_dispatch` → fails.
+- [x] **Step 3 — Green:** `dispatch.rs`: `struct ParsedFx { id: Id, fx: Box<dyn Fx> }`; `fxs: Vec<ParsedFx>` indexed by `FxIndex`. `resolve_fx_index(value: &dyn Any) -> Result<FxIndex>` looks up the value's `TypeId` in `TypeToFxIndex` (built in M5.5's single pass). Routing helpers `route_transfer`/`route_operation`/`route_output` call the resolved fx (09 §4, FX-AVM-1).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm fx_dispatch`.
+- [x] **Step 5 — Commit:** `avm: fx dispatch table + TypeToFxIndex routing (M5.9)`
+
+> **As-built (M5.9, 2026-06-07, commit `111b339`):** `fx/dispatch.rs`. `resolve_fx_index(type_id:
+> u32) -> Result<FxIndex>` looks the codec type-id up in a process-wide `OnceLock` of M5.5's
+> `type_to_fx_index()` (`Error::UnknownFx` on miss — Go `getFx`/`errUnknownFx`). **Design
+> deviation from the plan's `Box<dyn Fx>`/`&dyn Any` text (deliberate, noted):** the three fxs
+> are heterogeneous — `SecpFx` impls the secp-typed `fx::Fx` trait while `nftfx::Fx`/
+> `propertyfx::Fx` expose inherent methods over their own concrete types — so a single
+> object-safe `dyn Fx` is not achievable. Realized as `ParsedFx { id, fx: FxKind }` where
+> `enum FxKind { Secp(SecpFx), Nft(nftfx::Fx), Property(propertyfx::Fx) }`, dispatched by
+> `match` (the codebase's enum-over-trait-object preference, cf. `components::Output`). Added a
+> small `trait FxValue { fn fx_type_id(&self) -> u32 }` (impl'd for the secp interface enums via
+> `.codec_type_id()` + the nft/property concrete types) + `resolve_fx_index_of(value)`.
+> `Dispatch { fxs: Vec<ParsedFx> }` indexed by `FxIndex` in VM-registration order, with
+> `route_transfer`/`route_{secp,nft,property}_operation`/`route_output`. 6 tests.
 
 ### Task M5.10: UTXO state stores + Diff layer
 **Crate:** ava-avm  ·  **Depends on:** M5.5; M3 (`ava_database::{VersionDb, PrefixDb}`, `avax::UTXOState`), M0  ·  **Spec:** 09 §5, §5.1, §5.2; 00 §6.1 (BTreeMap on flush)
@@ -316,11 +330,29 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.15: StandardBlock type + codec + parser — `golden::xchain_block_hash`
 **Crate:** ava-avm  ·  **Depends on:** M5.5, M5.2  ·  **Spec:** 09 §7 (field order, type id 20); 02 §6 (golden block hashes); M4/ava-genesis (stop-vertex constant)
 **Files:** `crates/ava-avm/src/block/mod.rs`, `block/standard_block.rs`, `block/parser.rs`, `crates/ava-avm/tests/golden_block_hash.rs`, `tests/vectors/avm/block/*.json`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/golden_block_hash.rs` with `mod golden { #[test] fn xchain_block_hash() {...} }`: parse a committed Go-produced `StandardBlock` hex from `tests/vectors/avm/block/standard_block.json`, assert `block_id == sha256(bytes)` matches the committed id; assert the **Mainnet & Fuji X-Chain genesis block id** and the **stop-vertex parent** match the `ava-genesis` constants (09 §1, §5.3); round-trip `marshal(0, &(block as &dyn Block)) == bytes`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm golden::xchain_block_hash` → fails.
-- [ ] **Step 3 — Green:** `StandardBlock{parent_id, height, time, merkle_root(zero/unused), txs}` per 09 §7 field order; register as type id 20 in M5.5's registry (replace the placeholder). Serialize as the `Block` interface (typeid-prefix 20): `cm.marshal(0, &(blk as &dyn Block))`; `block_id = sha256(bytes)`. `parser.rs`: `parse(bytes)` → recompute id + `initialize` every contained tx (re-derive each `tx_id`). `timestamp() = Unix(time)`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm golden::xchain_block_hash`.
-- [ ] **Step 5 — Commit:** `avm: StandardBlock + parser + block-hash golden vectors (M5.15)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/golden_block_hash.rs` with `mod golden { #[test] fn xchain_block_hash() {...} }`: parse a committed Go-produced `StandardBlock` hex from `tests/vectors/avm/block/standard_block.json`, assert `block_id == sha256(bytes)` matches the committed id; assert the **Mainnet & Fuji X-Chain genesis block id** and the **stop-vertex parent** match the `ava-genesis` constants (09 §1, §5.3); round-trip `marshal(0, &(block as &dyn Block)) == bytes`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm golden::xchain_block_hash` → fails.
+- [x] **Step 3 — Green:** `StandardBlock{parent_id, height, time, merkle_root(zero/unused), txs}` per 09 §7 field order; register as type id 20 in M5.5's registry (replace the placeholder). Serialize as the `Block` interface (typeid-prefix 20): `cm.marshal(0, &(blk as &dyn Block))`; `block_id = sha256(bytes)`. `parser.rs`: `parse(bytes)` → recompute id + `initialize` every contained tx (re-derive each `tx_id`). `timestamp() = Unix(time)`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm golden::xchain_block_hash`.
+- [x] **Step 5 — Commit:** `avm: StandardBlock + parser + block-hash golden vectors (M5.15)`
+
+> **As-built (M5.15, 2026-06-07, commit `f574249`):** `block/{mod,standard_block,parser}.rs`
+> mirroring the P-Chain block precedent. `BlockBody` enum `#[codec(type_registry)]` with
+> `Standard(StandardBlock)` at `#[codec(type_id = 20)]` (the actual encoding id; the M5.5
+> registry's name-only `block.StandardBlock`(20) placeholder is kept unchanged as the assertion
+> table). `StandardBlock` byte-exact field order from `standard_block.go`: `parent_id`→`height`
+> →`time`→`root`(zero/unused)→`transactions`. `Block` envelope: derived non-serialized
+> `block_id = sha256(codec_bytes)` + cached `bytes`; `initialize`/`parse` re-derive each
+> contained tx's `tx_id`; `timestamp()` = Unix secs. `parser::parse` notes ordinary→`Codec`,
+> genesis→`GenesisCodec`. No `error.rs` change (reuses `CodecError`). **Golden** =
+> SELF-CONSISTENT (Go `block_test.go` builds blocks programmatically — NO hardcoded
+> `expectedBytes` const to copy): reuses the M5.5 `golden_tx_codec` BaseTx as the single
+> contained tx, asserts on-wire field order, type-id 20, `block_id==sha256(bytes)`, and full
+> parse→re-marshal round-trip (incl. the byte detail that the embedded tx shares the block's
+> single 2-byte version prefix). 3 tests (+`empty_block_roundtrip`, `standard_block_type_id_is_20`).
+> **DEFERRED (ava-genesis = M8, not built):** mainnet/fuji X-Chain genesis block id + stop-vertex
+> parent assertion — `// TODO(M8/ava-genesis)` in the test. Full Go-byte-exact differential is
+> M5.22 (needs a live Go oracle).
 
 ### Task M5.16: Block verify/accept/reject over Diff; Snowman Block trait
 **Crate:** ava-avm  ·  **Depends on:** M5.14, M5.15, M5.10; M4 (`SharedMemory.apply`), M3 (`ava_vm::block::Block`)  ·  **Spec:** 09 §7 (accept = commit diff + apply atomic requests), §6; 07 §2.3 Block trait
