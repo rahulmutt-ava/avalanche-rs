@@ -10,7 +10,10 @@
 //! `secp256k1fx`'s [`Input`] and [`OutputOwners`] are embedded here and
 //! re-exported for convenience.
 
+pub mod fx;
 pub mod types;
+
+pub use fx::{Fx, NftOperation, NftOutput};
 
 pub use types::{
     CODEC_VERSION, Credential, FxMarshal, MAX_PAYLOAD_SIZE, MintOperation, MintOutput,

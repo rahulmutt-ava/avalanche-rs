@@ -101,6 +101,24 @@ pub enum Error {
     #[error("nftfx payload exceeds maximum size")]
     PayloadTooLarge,
 
+    // ---- nftfx operation verification (M5.7, vms/nftfx/fx.go) ------------
+    /// `nftfx.errCantTransfer` — the nft fx cannot authorize a plain transfer
+    /// spend (`VerifyTransfer` is unsupported).
+    #[error("cant transfer with this fx")]
+    CantTransfer,
+    /// `nftfx.errWrongUniqueID` — the operation's `group_id` differs from the
+    /// consumed nft UTXO's `group_id`.
+    #[error("wrong unique ID provided")]
+    WrongUniqueId,
+    /// `nftfx.errWrongBytes` — a transfer operation's output `payload` differs
+    /// from the consumed `TransferOutput` UTXO's `payload`.
+    #[error("wrong bytes provided")]
+    WrongBytes,
+    /// `nftfx.errWrongUTXOType` / `propertyfx.errWrongUTXOType` — the consumed
+    /// UTXO's type does not match the operation being applied.
+    #[error("wrong utxo type")]
+    WrongUtxoType,
+
     // ---- CreateAssetTx name / symbol / denomination ----------------------
     /// `errNameTooLong`.
     #[error("asset name is too long")]
