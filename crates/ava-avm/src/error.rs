@@ -81,6 +81,12 @@ pub enum Error {
     /// `errOutputsNotSorted` — `outs` are not in canonical sorted order.
     #[error("outputs not sorted")]
     OutputsNotSorted,
+    /// `avax.ErrInputsNotSortedUnique` — `ins` are not sorted and unique.
+    #[error("inputs not sorted and unique")]
+    InputsNotSortedUnique,
+    /// `avax.ErrMemoTooLarge` — the memo field exceeds `MaxMemoSize` (256).
+    #[error("memo exceeds maximum length")]
+    MemoTooLarge,
     /// `errNotSortedAndUniqueUTXOIDs` — operation utxo ids not sorted-unique.
     #[error("utxo IDs not sorted and unique")]
     NotSortedAndUniqueUtxoIds,

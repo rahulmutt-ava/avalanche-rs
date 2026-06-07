@@ -23,6 +23,7 @@ pub mod codec;
 pub mod components;
 pub mod create_asset;
 pub mod credential;
+pub mod executor;
 pub mod export;
 pub mod import;
 pub mod initial_state;
