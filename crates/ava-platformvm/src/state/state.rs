@@ -395,6 +395,59 @@ impl<D: Database> State<D> {
         }
         out
     }
+
+    /// The current validator set per subnet — the in-memory base view the
+    /// [`PChainValidatorManager`](crate::validators::manager::PChainValidatorManager)
+    /// un-applies diffs over (M4.21, Go `cfg.Validators.GetMap`). Keyed
+    /// subnet → node, each entry carries the node's **total** current weight
+    /// (its validator weight plus all of its current delegators' weights) and
+    /// the validator's uncompressed BLS public-key bytes (`None` if it has no
+    /// key). Only nodes that have a current *validator* are included; a lone
+    /// current delegator does not constitute a validator.
+    ///
+    /// The returned maps are `BTreeMap`s, so iteration is canonically subnet-
+    /// then-`NodeId`-ascending (the windower/Warp determinism contract).
+    #[must_use]
+    pub fn current_validator_sets(
+        &self,
+    ) -> BTreeMap<Id, BTreeMap<NodeId, super::diff_iterators::DiffValidator>> {
+        use super::diff_iterators::DiffValidator;
+
+        // Sum total weight per (subnet, node) across all current stakers
+        // (validators + delegators), matching `current_validator_weights`.
+        let weights = self.current_validator_weights();
+        // The validators' uncompressed public-key bytes.
+        let keys = self.current_validator_public_keys();
+
+        let mut out: BTreeMap<Id, BTreeMap<NodeId, DiffValidator>> = BTreeMap::new();
+        for s in self.current.iter() {
+            if !s.priority.is_current_validator() {
+                continue;
+            }
+            let key = (s.subnet_id, s.node_id);
+            let weight = weights.get(&key).copied().unwrap_or(s.weight);
+            let public_key = keys.get(&key).cloned();
+            out.entry(s.subnet_id)
+                .or_default()
+                .insert(s.node_id, DiffValidator { weight, public_key });
+        }
+        out
+    }
+
+    /// The accepted-block `height → id` index (`blockIDDB` mirror), used by the
+    /// validator manager's `get_minimum_height` to recover the height of a
+    /// recently-accepted block (M4.21).
+    #[must_use]
+    pub fn block_id_index(&self) -> &BTreeMap<u64, Id> {
+        &self.block_id_index
+    }
+
+    /// A clone of the base [`Database`] handle, for building read-only stores
+    /// (e.g. the staker diff stores) that outlive a borrow of `self`.
+    #[must_use]
+    pub fn base(&self) -> Arc<D> {
+        Arc::clone(&self.base)
+    }
 }
 
 impl<D: Database> Chain for State<D> {

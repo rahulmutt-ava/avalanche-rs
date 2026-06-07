@@ -107,6 +107,23 @@ impl PublicKey {
         Ok(Self { inner })
     }
 
+    /// `PublicKeyFromValidUncompressedBytes` — parse the 96-byte uncompressed
+    /// serialization (the form [`serialize`](Self::serialize) produces and the
+    /// P-Chain stores in its public-key-diff sublists).
+    ///
+    /// Unlike [`from_compressed`](Self::from_compressed) this is the
+    /// trusted-bytes path: `blst`'s `key_validate` accepts both the 48-byte
+    /// compressed and 96-byte uncompressed encodings, so a key recovered with
+    /// this method round-trips `serialize` → `from_uncompressed`.
+    ///
+    /// # Errors
+    /// [`Error::InvalidBls`] if the bytes are not a valid subgroup point.
+    pub fn from_uncompressed(b: &[u8]) -> Result<Self> {
+        let inner =
+            BlstPublicKey::key_validate(b).map_err(|e| Error::InvalidBls(format!("{e:?}")))?;
+        Ok(Self { inner })
+    }
+
     /// Internal: wrap a validated `blst` public key.
     pub(super) fn from_blst(inner: BlstPublicKey) -> Self {
         Self { inner }

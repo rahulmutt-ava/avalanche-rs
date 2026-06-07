@@ -55,6 +55,23 @@ pub enum Error {
         /// Number of validators requested.
         requested: usize,
     },
+
+    /// A [`ValidatorState`](crate::state::ValidatorState) query targeted a
+    /// height that is not yet finalized (the current P-Chain height is below the
+    /// requested height). Go `errUnfinalizedHeight`; returned, never panicked.
+    #[error("failed to fetch validator set at unfinalized height")]
+    UnfinalizedHeight,
+
+    /// A [`ValidatorState`](crate::state::ValidatorState) implementation failed
+    /// while reading its backing state (e.g. a missing block / tx / diff, or a
+    /// reconstruction-arithmetic overflow). The message preserves the
+    /// implementation-specific failure for diagnostics; callers needing the
+    /// precise sentinel match on the implementation's own error type.
+    #[error("validator state error: {message}")]
+    State {
+        /// The backing-state failure, rendered.
+        message: String,
+    },
 }
 
 impl From<ava_utils::error::Error> for Error {
