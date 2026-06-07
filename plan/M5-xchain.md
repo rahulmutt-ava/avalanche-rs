@@ -66,38 +66,83 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.1: Crate skeleton, error model, FxIndex scaffolding
 **Crate:** ava-avm  ·  **Depends on:** M3 (ava-vm, ava-secp256k1fx, ava-codec, ava-types), M0  ·  **Spec:** 09 §0, §2.2, §11 (Error model); 00 §7.1
 **Files:** `crates/ava-avm/Cargo.toml`, `crates/ava-avm/src/lib.rs`, `crates/ava-avm/src/error.rs`, `crates/ava-avm/src/fx_index.rs`
-- [ ] **Step 1 — Red:** Add `crates/ava-avm/tests/error_variants.rs` with `#[test] fn error_variants_exist_and_match_go_sentinels()` asserting `matches!(Error::AssetIdMismatch, Error::AssetIdMismatch)` for every Go sentinel named in 09 §11 (`AssetIdMismatch`, `NotAnAsset`, `IncompatibleFx`, `UnknownFx`, `WrongNumberOfCredentials`, `DoubleSpend`, `NoImportInputs`, `NoExportOutputs`, name/symbol/denomination errors) and a `#[test] fn fx_index_repr()` asserting `FxIndex::Secp256k1 as u32 == 0 && FxIndex::Nft as u32 == 1 && FxIndex::Property as u32 == 2`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-avm --test error_variants` → fails to compile (crate/types absent).
-- [ ] **Step 3 — Green:** Create `Cargo.toml` (deps: `ava-vm`, `ava-secp256k1fx`, `ava-codec`, `ava-types`, `ava-database`, `ava-network`, `ava-api`, `thiserror`, `bytes`; dev: `proptest`, `rstest`, `assert_matches`, `hex`, `insta`, `pretty_assertions`). `lib.rs`: license header, `#![forbid(unsafe_code)]`, module decls + `pub mod nftfx; pub mod propertyfx;`. `error.rs`: `#[derive(thiserror::Error)] pub enum Error` with all sentinels (re-export fx errors from `ava_secp256k1fx`). `fx_index.rs`: `#[repr(u32)] pub enum FxIndex { Secp256k1 = 0, Nft = 1, Property = 2 }` per 09 §2.2.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-avm --test error_variants` passes; `cargo build -p ava-avm`.
-- [ ] **Step 5 — Commit:** `avm: crate skeleton, error model, FxIndex (M5.1)`
+- [x] **Step 1 — Red:** Add `crates/ava-avm/tests/error_variants.rs` with `#[test] fn error_variants_exist_and_match_go_sentinels()` asserting `matches!(Error::AssetIdMismatch, Error::AssetIdMismatch)` for every Go sentinel named in 09 §11 (`AssetIdMismatch`, `NotAnAsset`, `IncompatibleFx`, `UnknownFx`, `WrongNumberOfCredentials`, `DoubleSpend`, `NoImportInputs`, `NoExportOutputs`, name/symbol/denomination errors) and a `#[test] fn fx_index_repr()` asserting `FxIndex::Secp256k1 as u32 == 0 && FxIndex::Nft as u32 == 1 && FxIndex::Property as u32 == 2`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-avm --test error_variants` → fails to compile (crate/types absent).
+- [x] **Step 3 — Green:** Create `Cargo.toml` (deps: `ava-vm`, `ava-secp256k1fx`, `ava-codec`, `ava-types`, `ava-database`, `ava-network`, `ava-api`, `thiserror`, `bytes`; dev: `proptest`, `rstest`, `assert_matches`, `hex`, `insta`, `pretty_assertions`). `lib.rs`: license header, `#![forbid(unsafe_code)]`, module decls + `pub mod nftfx; pub mod propertyfx;`. `error.rs`: `#[derive(thiserror::Error)] pub enum Error` with all sentinels (re-export fx errors from `ava_secp256k1fx`). `fx_index.rs`: `#[repr(u32)] pub enum FxIndex { Secp256k1 = 0, Nft = 1, Property = 2 }` per 09 §2.2.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-avm --test error_variants` passes; `cargo build -p ava-avm`.
+- [x] **Step 5 — Commit:** `avm: crate skeleton, error model, FxIndex (M5.1)`
 
 ### Task M5.2: Tx model types (BaseTx, CreateAssetTx, OperationTx, Import/ExportTx, Tx envelope, InitialState, Operation)
 **Crate:** ava-avm  ·  **Depends on:** M5.1; M3 (`avax::{BaseTx, TransferableInput, TransferableOutput, Asset, UtxoId}`, `verify::State`)  ·  **Spec:** 09 §3 (all subsections), TX-AVM-1 field-order invariant; 07 §3.1 `avax` types
 **Files:** `crates/ava-avm/src/txs/mod.rs`, `txs/base_tx.rs`, `txs/create_asset.rs`, `txs/operation_tx.rs`, `txs/import.rs`, `txs/export.rs`, `txs/tx.rs`, `txs/initial_state.rs`, `txs/operation.rs`, `txs/credential.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/tx_types.rs`: `#[test] fn unsigned_tx_enum_variants()` constructs each `UnsignedTx::{Base, CreateAsset, Operation, Import, Export}` with minimal fields and asserts field accessors return the embedded `BaseTx`; `#[test] fn fx_credential_fx_id_not_serialized()` asserts `FxCredential` exposes `fx_id` but the struct's `#[codec(skip)]`/serialize-false marker is present (compile-level check via a const assertion on serialized field count).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-avm --test tx_types` → fails to compile.
-- [ ] **Step 3 — Green:** Define `pub enum UnsignedTx { Base(BaseTx), CreateAsset(CreateAssetTx), Operation(OperationTx), Import(ImportTx), Export(ExportTx) }` and the structs exactly per 09 §3.2–3.4 with field order = serialization order (TX-AVM-1): `BaseTx{network_id,blockchain_id,outs,ins,memo}`, `CreateAssetTx{base,name,symbol,denomination,states}`, `OperationTx{base,ops}`, `ImportTx{base,source_chain,imported_ins}`, `ExportTx{base,destination_chain,exported_outs}`. `Tx{unsigned, creds, tx_id(derived), bytes(derived)}`; `FxCredential{fx_id(serialize:false), credential}`; `InitialState{fx_index, fx_id(serialize:false), outs}`; `Operation{asset, utxo_ids, fx_id(serialize:false), op}`. Embedded `BaseTx` serializes inline (no extra prefix). Derive `ava_codec` Serialize/Deserialize with the `serialize:false` annotations on `fx_id`/`tx_id`/`bytes`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-avm --test tx_types`; `cargo build -p ava-avm`.
-- [ ] **Step 5 — Commit:** `avm: tx model types — BaseTx/CreateAsset/Operation/Import/Export/Tx (M5.2)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/tx_types.rs`: `#[test] fn unsigned_tx_enum_variants()` constructs each `UnsignedTx::{Base, CreateAsset, Operation, Import, Export}` with minimal fields and asserts field accessors return the embedded `BaseTx`; `#[test] fn fx_credential_fx_id_not_serialized()` asserts `FxCredential` exposes `fx_id` but the struct's `#[codec(skip)]`/serialize-false marker is present (compile-level check via a const assertion on serialized field count).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-avm --test tx_types` → fails to compile.
+- [x] **Step 3 — Green:** Define `pub enum UnsignedTx { Base(BaseTx), CreateAsset(CreateAssetTx), Operation(OperationTx), Import(ImportTx), Export(ExportTx) }` and the structs exactly per 09 §3.2–3.4 with field order = serialization order (TX-AVM-1): `BaseTx{network_id,blockchain_id,outs,ins,memo}`, `CreateAssetTx{base,name,symbol,denomination,states}`, `OperationTx{base,ops}`, `ImportTx{base,source_chain,imported_ins}`, `ExportTx{base,destination_chain,exported_outs}`. `Tx{unsigned, creds, tx_id(derived), bytes(derived)}`; `FxCredential{fx_id(serialize:false), credential}`; `InitialState{fx_index, fx_id(serialize:false), outs}`; `Operation{asset, utxo_ids, fx_id(serialize:false), op}`. Embedded `BaseTx` serializes inline (no extra prefix). Derive `ava_codec` Serialize/Deserialize with the `serialize:false` annotations on `fx_id`/`tx_id`/`bytes`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-avm --test tx_types`; `cargo build -p ava-avm`.
+- [x] **Step 5 — Commit:** `avm: tx model types — BaseTx/CreateAsset/Operation/Import/Export/Tx (M5.2)`
 
 ### Task M5.3: nftfx types + codec
 **Crate:** ava-avm (`ava_avm::nftfx`)  ·  **Depends on:** M5.1; M3 (`ava_secp256k1fx::{Input, OutputOwners, Credential}`)  ·  **Spec:** 09 §4.2 (field order = serialization order)
 **Files:** `crates/ava-avm/src/nftfx/mod.rs`, `nftfx/types.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/nftfx_types.rs`: round-trip a `nftfx::TransferOutput{group_id, payload, owners}` through `ava_codec` (without registry type-id prefix; raw struct) and `assert_eq!`; assert `MintOperation::outs()` synthesizes one `TransferOutput` per owner sharing `group_id`/`payload`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-avm --test nftfx_types` → fails to compile.
-- [ ] **Step 3 — Green:** Define per 09 §4.2: `MintOutput{group_id:u32, owners}`, `TransferOutput{group_id:u32, payload:Vec<u8> (<=1KiB), owners}`, `MintOperation{mint_input:secp::Input, group_id:u32, payload, outputs:Vec<OutputOwners>}` with `outs()`, `TransferOperation{input:secp::Input, output:TransferOutput}` with `outs()=[output]`, `Credential(secp::Credential)` newtype. `payload` length cap (1 KiB) enforced in `verify()`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-avm --test nftfx_types`.
-- [ ] **Step 5 — Commit:** `avm: nftfx types + codec (M5.3)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/nftfx_types.rs`: round-trip a `nftfx::TransferOutput{group_id, payload, owners}` through `ava_codec` (without registry type-id prefix; raw struct) and `assert_eq!`; assert `MintOperation::outs()` synthesizes one `TransferOutput` per owner sharing `group_id`/`payload`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-avm --test nftfx_types` → fails to compile.
+- [x] **Step 3 — Green:** Define per 09 §4.2: `MintOutput{group_id:u32, owners}`, `TransferOutput{group_id:u32, payload:Vec<u8> (<=1KiB), owners}`, `MintOperation{mint_input:secp::Input, group_id:u32, payload, outputs:Vec<OutputOwners>}` with `outs()`, `TransferOperation{input:secp::Input, output:TransferOutput}` with `outs()=[output]`, `Credential(secp::Credential)` newtype. `payload` length cap (1 KiB) enforced in `verify()`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-avm --test nftfx_types`.
+- [x] **Step 5 — Commit:** `avm: nftfx types + codec (M5.3)`
 
 ### Task M5.4: propertyfx types + codec
 **Crate:** ava-avm (`ava_avm::propertyfx`)  ·  **Depends on:** M5.1; M3 (`ava_secp256k1fx`)  ·  **Spec:** 09 §4.3
 **Files:** `crates/ava-avm/src/propertyfx/mod.rs`, `propertyfx/types.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/propertyfx_types.rs`: round-trip `MintOutput{owners}` and `OwnedOutput{owners}` (structurally identical) and assert `MintOperation::outs() == [mint_output, owned_output]` and `BurnOperation::outs() == []`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-avm --test propertyfx_types` → fails to compile.
-- [ ] **Step 3 — Green:** Define per 09 §4.3: `MintOutput{owners}`, `OwnedOutput{owners}`, `MintOperation{mint_input:secp::Input, mint_output:MintOutput, owned_output:OwnedOutput}` with `outs()`, `BurnOperation{input:secp::Input}` with `outs()=[]`, `Credential(secp::Credential)`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-avm --test propertyfx_types`.
-- [ ] **Step 5 — Commit:** `avm: propertyfx types + codec (M5.4)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/propertyfx_types.rs`: round-trip `MintOutput{owners}` and `OwnedOutput{owners}` (structurally identical) and assert `MintOperation::outs() == [mint_output, owned_output]` and `BurnOperation::outs() == []`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-avm --test propertyfx_types` → fails to compile.
+- [x] **Step 3 — Green:** Define per 09 §4.3: `MintOutput{owners}`, `OwnedOutput{owners}`, `MintOperation{mint_input:secp::Input, mint_output:MintOutput, owned_output:OwnedOutput}` with `outs()`, `BurnOperation{input:secp::Input}` with `outs()=[]`, `Credential(secp::Credential)`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-avm --test propertyfx_types`.
+- [x] **Step 5 — Commit:** `avm: propertyfx types + codec (M5.4)`
+
+> **As-built (Wave 0 — M5.1+M5.2+M5.3+M5.4, 2026-06-07):** crate `ava-avm` created;
+> 20 tests green; `clippy --all-targets --all-features -D warnings` clean; fmt clean;
+> workspace + binary build. Commits: M5.1 = `9fcc1e0`; M5.2+M5.3+M5.4 = `50cfcf6`
+> (the three implementer agents ran concurrently in the SAME working tree — the
+> intended per-task isolated worktrees were not used — so their output converged
+> into one commit; functionally complete & verified, history granularity is the
+> only cost).
+> - **M5.1:** `Cargo.toml` pre-declares the Wave-0 dep set (`ava-types`/`ava-codec`/
+>   `ava-codec-derive`/`ava-crypto`/`ava-vm`/`ava-secp256k1fx`/`bytes`/`thiserror`;
+>   dev `proptest`/`rstest`/`assert_matches`/`pretty_assertions`/`hex`). **Deviations from
+>   the M5.1 task text:** `ava-database` (Wave 2) / `ava-network` (Wave 5) are deferred to
+>   their owning tasks to keep the Wave-0 build lean; **`ava-api` does not exist yet**
+>   (served via M8/M12) so it is omitted; **`insta` is not a workspace dep** so golden
+>   tests use plain asserts / `pretty_assertions` / `hex` (matches the M4 precedent).
+>   `error.rs` carries the §11 sentinel set as a `#[non_exhaustive]` enum + `#[from]`
+>   `ava_codec::error::CodecError` and `ava_vm::error::Error` (the fx errors are
+>   re-exported on the latter); the enum grows per later wave task (M5.3 added
+>   `PayloadTooLarge`). lib.rs uses the `use X as _;` unused-dep silencer pattern; every
+>   `tests/*.rs` integration file opens with `#![allow(unused_crate_dependencies)]`.
+> - **M5.2:** `txs/{mod,components,base_tx,create_asset,operation_tx,import,export,
+>   initial_state,operation,credential,tx}.rs`. `UnsignedTx` enum (Base=0…Export=4) +
+>   accessors; `Tx` envelope with the sha256 prefix-length byte derivation
+>   (`ava_crypto::hashing::sha256`, mirrors the P-Chain `txs/tx.rs`). `components.rs`
+>   mirrors `ava_vm::components::avax` as codec-serializable types: `Output`/`Input`/
+>   `Credential` are `#[derive(AvaCodec)] #[codec(type_registry)]` interface enums
+>   embedding the **public** `ava_secp256k1fx` `Serializable`/`Deserializable` impls
+>   (secp type-ids: TransferInput=5, MintOutput=6, TransferOutput=7, Credential=9 — the
+>   M4.3 promotion is reused). `AvaxBaseTx` field order verified network_id→blockchain_id
+>   →outs→ins→memo. `FxCredential.fx_id`/`InitialState.fx_id`/`Operation.fx_id` carry NO
+>   `#[codec]` tag (Go `serialize:"false"`). **Deferrals to M5.5:** the 21-entry
+>   standard/genesis `CodecRegistry` pair + `TypeToFxIndex` + Go-extracted byte goldens are
+>   NOT built (a bare default-max `LinearCodec` `Manager` + the inline type_registry prefixes
+>   suffice for the round-trip); the `Output`/`Input`/`Credential` enums define only secp
+>   variants (nft/property routing is the documented `TODO(M5.5)` extension point); `Operation`
+>   has a placeholder `FxOperation` (concrete secp/nft/property op type-ids 8/12/13/17/18 are
+>   M5.5's domain — OperationTx round-trip is out of Wave-0 scope).
+> - **M5.3:** `nftfx/{mod,types}.rs` — `MintOutput`(10)/`TransferOutput`(11, ≤1 KiB payload,
+>   `verify()`→`Error::PayloadTooLarge`)/`MintOperation`(12, `outs()` synthesizes one
+>   `TransferOutput` per owner)/`TransferOperation`(13)/`Credential`(14). Codec hand-routes
+>   through `Serializable::marshal_into`/`Deserializable::unmarshal_from` (secp's
+>   `marshal_fields` are `pub(crate)`).
+> - **M5.4:** `propertyfx/{mod,types}.rs` — `MintOutput`(15)/`OwnedOutput`(16)/`MintOperation`
+>   (17, `outs()=[mint,owned]`)/`BurnOperation`(18, `outs()=[]`)/`Credential`(19), with a
+>   `PropertyOutput` enum unifying the two output types for the `outs()` return.
 
 ### Task M5.5: Codec & type-ID registry (21-entry table, standard + genesis) — `golden::xchain_tx_codec`
 **Crate:** ava-avm  ·  **Depends on:** M5.2, M5.3, M5.4; M3 (`ava_codec::{TypeId, CodecRegistry}`)  ·  **Spec:** 09 §2.1 (the table), §2.2, CODEC-AVM-1; 02 §6 (golden)
