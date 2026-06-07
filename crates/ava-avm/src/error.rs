@@ -67,6 +67,14 @@ pub enum Error {
     /// is unsupported by the nft and property fxs (specs 09 §4.2/§4.3, FX-AVM-1).
     #[error("cant transfer with this fx")]
     CantTransfer,
+    /// `verify.ErrSameChainID` — an import/export references this very chain
+    /// (the `SameSubnet` gate; specs 09 §6.2).
+    #[error("same chainID")]
+    SameChainId,
+    /// `verify.ErrMismatchedSubnetIDs` — the import/export peer chain is in a
+    /// different subnet (the `SameSubnet` gate; specs 09 §6.2).
+    #[error("mismatched subnetIDs")]
+    MismatchedSubnetIds,
 
     // ---- input / output / operation structure (syntactic verify) ---------
     /// `errDoubleSpend` — an input id appears more than once.
