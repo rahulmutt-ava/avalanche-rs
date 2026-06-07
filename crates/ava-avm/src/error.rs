@@ -54,6 +54,19 @@ pub enum Error {
     /// output whose owners differ from the consumed `MintOutput` UTXO's.
     #[error("wrong mint output created from the operation")]
     WrongMintCreated,
+    /// `propertyfx.errWrongMintOutput` — a propertyfx mint operation's produced
+    /// mint output owners differ from the consumed `MintOutput` UTXO's
+    /// (specs 09 §4.3, FX-AVM-1).
+    #[error("wrong mint output provided")]
+    WrongMintOutput,
+    /// `nftfx`/`propertyfx` `errWrongUTXOType` — the consumed UTXO is not the
+    /// output type the operation requires (specs 09 §4.2/§4.3).
+    #[error("wrong utxo type")]
+    WrongUtxoType,
+    /// `nftfx.errCantTransfer` / `propertyfx.errCantTransfer` — `VerifyTransfer`
+    /// is unsupported by the nft and property fxs (specs 09 §4.2/§4.3, FX-AVM-1).
+    #[error("cant transfer with this fx")]
+    CantTransfer,
 
     // ---- input / output / operation structure (syntactic verify) ---------
     /// `errDoubleSpend` — an input id appears more than once.
@@ -102,10 +115,6 @@ pub enum Error {
     PayloadTooLarge,
 
     // ---- nftfx operation verification (M5.7, vms/nftfx/fx.go) ------------
-    /// `nftfx.errCantTransfer` — the nft fx cannot authorize a plain transfer
-    /// spend (`VerifyTransfer` is unsupported).
-    #[error("cant transfer with this fx")]
-    CantTransfer,
     /// `nftfx.errWrongUniqueID` — the operation's `group_id` differs from the
     /// consumed nft UTXO's `group_id`.
     #[error("wrong unique ID provided")]
@@ -114,10 +123,6 @@ pub enum Error {
     /// from the consumed `TransferOutput` UTXO's `payload`.
     #[error("wrong bytes provided")]
     WrongBytes,
-    /// `nftfx.errWrongUTXOType` / `propertyfx.errWrongUTXOType` — the consumed
-    /// UTXO's type does not match the operation being applied.
-    #[error("wrong utxo type")]
-    WrongUtxoType,
 
     // ---- CreateAssetTx name / symbol / denomination ----------------------
     /// `errNameTooLong`.

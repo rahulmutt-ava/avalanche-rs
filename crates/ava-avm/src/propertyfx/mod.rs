@@ -12,8 +12,10 @@
 //! prefix.  The free [`marshal`] / `unmarshal_*` helpers wrap a type with the
 //! standard `0x0000` codec-version prefix for standalone round-trip testing.
 
+pub mod fx;
 mod types;
 
+pub use fx::{Fx, PropertyOperation, PropertyUtxo};
 pub use types::{
     BurnOperation, Credential, MintOperation, MintOutput, OwnedOutput, PropFxMarshal,
     PropertyOutput, marshal, unmarshal_burn_operation, unmarshal_credential,
