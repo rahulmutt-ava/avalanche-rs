@@ -215,6 +215,23 @@ impl AvmVm {
         mgr.seed_state(seed)
     }
 
+    /// **Test helper** — run `read` against the persisted [`State`] read surface.
+    ///
+    /// The differential harness (M5.22 `differential::xchain_issue_tx`) collects
+    /// a normalized observation over the post-accept UTXO set; the `Chain` trait
+    /// exposes no enumeration, so the harness reads back the UTXO ids it knows it
+    /// touched via this read-only seam (the read-side mirror of
+    /// [`seed_genesis_state`](Self::seed_genesis_state)).
+    ///
+    /// # Errors
+    /// Returns [`Error::NotInitialized`] before `initialize`.
+    #[doc(hidden)]
+    pub fn with_state<R>(&self, read: impl FnOnce(&State<DynDb>) -> R) -> Result<R> {
+        let shared = self.shared()?;
+        let mgr = shared.manager.lock();
+        Ok(read(mgr.state()))
+    }
+
     /// **Test helper** — admit `tx` to the shared mempool.
     ///
     /// Production admission flows through the gossip handler ([`Self::app_gossip`])

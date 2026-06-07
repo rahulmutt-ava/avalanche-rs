@@ -19,6 +19,21 @@ interop = []
 
 [dependencies]
 arbitrary = { workspace = true }
+# The `xchain` collector (M5.22) drives the REAL X-Chain VM/block pipeline to
+# produce a normalized `Observation`, so the lib links the `ava-avm` VM + its
+# tx/state/fx types and the engine-facing VM-framework traits. `ava-avm` does NOT
+# depend on `ava-differential` (verified — no dependency cycle).
+ava-avm = { path = "../../crates/ava-avm" }
+ava-vm = { path = "../../crates/ava-vm" }
+ava-secp256k1fx = { path = "../../crates/ava-secp256k1fx" }
+ava-snow = { path = "../../crates/ava-snow" }
+ava-database = { path = "../../crates/ava-database" }
+ava-types = { path = "../../crates/ava-types" }
+ava-version = { path = "../../crates/ava-version" }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 # The recorded-fallback arm of `differential_interop_handshake` (M2.22) drives the
@@ -27,10 +42,9 @@ arbitrary = { workspace = true }
 ava-network = { path = "../../crates/ava-network" }
 ava-message = { path = "../../crates/ava-message" }
 ava-crypto = { path = "../../crates/ava-crypto" }
-ava-types = { path = "../../crates/ava-types" }
-ava-version = { path = "../../crates/ava-version" }
-tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
-tokio-util = { workspace = true }
+# The M5.22 `differential::xchain_issue_tx` determinism gate is a proptest dev
+# consumer of the `xchain` collector.
+proptest = { workspace = true }
 
 [lints]
 workspace = true

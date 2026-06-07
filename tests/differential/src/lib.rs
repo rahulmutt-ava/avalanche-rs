@@ -26,25 +26,28 @@ pub mod driver;
 pub mod network;
 pub mod observation;
 pub mod program;
+pub mod xchain;
 
 pub use atomic::exported_utxo_observation;
 pub use driver::LockstepDriver;
 pub use network::{Binary, NetworkConfig};
 pub use observation::Observation;
 pub use program::{Action, Program};
+pub use xchain::run_program;
 
-// The networking dev-deps are consumed only by the `interop_handshake`
-// integration target (M2.22), but the crate's lib-test build links every
-// dev-dependency, so `unused_crate_dependencies` would flag them here. Reference
-// them in a test-only block to satisfy the lint (the established idiom across the
-// workspace).
+// The networking deps are consumed only by the `interop_handshake` integration
+// target (M2.22), and `proptest` only by the `xchain_issue_tx` target (M5.22),
+// but the crate's lib-test build links every dev-dependency, so
+// `unused_crate_dependencies` would flag them here. Reference them in a test-only
+// block to satisfy the lint (the established idiom across the workspace).
+//
+// (`ava-avm` / `ava-vm` / `ava-secp256k1fx` / `ava-snow` / `ava-database` /
+// `ava-types` / `ava-version` / `async-trait` / `serde_json` / `tokio` /
+// `tokio-util` are genuine lib deps used by `xchain`, so they are NOT listed.)
 #[cfg(test)]
 mod dev_dep_uses {
     use ava_crypto as _;
     use ava_message as _;
     use ava_network as _;
-    use ava_types as _;
-    use ava_version as _;
-    use tokio as _;
-    use tokio_util as _;
+    use proptest as _;
 }
