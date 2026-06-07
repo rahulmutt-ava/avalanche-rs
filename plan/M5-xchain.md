@@ -339,23 +339,44 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 > OperationTx codec wiring) — does not affect the double-spend path. SemanticVerifier (M5.13) +
 > Executor (M5.14) intentionally left out; `executor/mod.rs` documents the slots.
 
-### Task M5.12: SyntacticVerifier (stateless, all 5 tx types)
-**Crate:** ava-avm  ·  **Depends on:** M5.9, M5.5; M3 (`avax::verify_tx` conservation+fee, sort helpers)  ·  **Spec:** 09 §6.1, §3.3 (InitialState rules), TX-AVM-1; 07 §3.1 FlowChecker
-**Files:** `crates/ava-avm/src/txs/executor/backend.rs`, `txs/executor/syntactic.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/syntactic.rs` table-driven over tx types: `base_tx_ok`; `memo_too_long` (>256) → error; `unsorted_outs` → error; `num_creds != num_inputs` → `Error::WrongNumberOfCredentials`; `create_asset_name_bad` (empty/>128/leading-ws/non-ascii) and `symbol_bad` (>4/lowercase) and `denomination_gt_32`; `states_empty`/`states_unsorted`; `operation_tx_empty_ops`; `op_utxo_collides_base_in` → `Error::DoubleSpend`; `import_no_inputs` → `Error::NoImportInputs`; `export_no_outs` → `Error::NoExportOutputs`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm syntactic` → fails.
-- [ ] **Step 3 — Green:** `Backend{ctx, config, codec, fee_asset_id, fxs, type_to_fx_index, bootstrapped}`. `SyntacticVerifier` over `UnsignedTx` per 09 §6.1: verify `avax::BaseTx` (network id, memo ≤256, ins/outs sorted+typed), `avax::verify_tx(fee, fee_asset, ins, outs, codec)`, verify every credential, `num_creds == num_inputs` (inputs include op-count / imported-ins). Type-specific: CreateAsset name 1..=128 ASCII letter/digit/space no edge-ws, symbol 1..=4 ASCII upper, denom ≤32, states non-empty sorted-unique by `fx_index`, each `InitialState::verify(codec, num_fxs)` (09 §3.3); Operation ops non-empty sorted-unique-by-bytes, utxo_ids ∩ base ins = ∅; Import `imported_ins` non-empty (fee over `ins ++ imported_ins`); Export `exported_outs` non-empty (fee over `outs ++ exported_outs`). Use `CreateAssetTxFee` for CreateAsset.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm syntactic`.
-- [ ] **Step 5 — Commit:** `avm: SyntacticVerifier all tx types (M5.12)`
+> **Plan-maintenance note (2026-06-07):** a duplicate, unchecked copy of the M5.12
+> task block previously sat here (an editing artifact). It has been removed — the
+> real, completed M5.12 is the entry above (commit `b87d207`); the next task is M5.13.
 
 ### Task M5.13: SemanticVerifier (stateful) + verify_fx_usage + grandfather quirk
 **Crate:** ava-avm  ·  **Depends on:** M5.12, M5.10; M4 (`SharedMemory` for ImportTx)  ·  **Spec:** 09 §6.2 (incl. GRANDFATHERED_OPERATION_TX, SameSubnet); 07 §3.1 (SharedMemory)
 **Files:** `crates/ava-avm/src/txs/executor/semantic.rs`, `txs/executor/consts.rs`
-- [ ] **Step 1 — Red:** `crates/ava-avm/tests/semantic.rs`: `base_tx_spends_known_utxo`; `asset_id_mismatch` → `Error::AssetIdMismatch`; `incompatible_fx` (asset doesn't enable fx) → `Error::IncompatibleFx`; `not_an_asset` → `Error::NotAnAsset`; `operation_tx_cred_index` (cred index = `len(ins)+op_index`); `grandfathered_op_skips_verification` asserts the const tx-id `"MkvpJS13eCnEYeYi9B5zuWrU9goG9RBj7nr83U7BjrFV22a12"` bypasses op verification exactly as Go; `import_fetches_shared_memory` (uses a fake `SharedMemory` returning UTXO bytes); `not_bootstrapped_skips_op_verify`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm semantic` → fails.
-- [ ] **Step 3 — Green:** `consts.rs`: `pub const GRANDFATHERED_OPERATION_TX: &str = "MkvpJS13eCnEYeYi9B5zuWrU9goG9RBj7nr83U7BjrFV22a12";`. `SemanticVerifier` per 09 §6.2: BaseTx fetch each input UTXO (`asset==in.asset` else `AssetIdMismatch`), resolve fx by credential type, `verify_fx_usage(fx_index, asset_id)` (load asset's CreateAssetTx; `NotAnAsset`/`IncompatibleFx`), `fx.verify_transfer`. CreateAsset = BaseTx. Operation: BaseTx then per op (skip when `!bootstrapped` **or** `tx.id == GRANDFATHERED_OPERATION_TX`) fetch input UTXOs, `verify_fx_usage`, `fx.verify_operation`, cred index `len(ins)+op_index`. Import: BaseTx, `verify.SameSubnet(source_chain)` (if bootstrapped), `SharedMemory.get(source_chain, ids)` → unmarshal `avax::UTXO` → verify_transfer, cred index `len(ins)+i`. Export: BaseTx, `SameSubnet(destination_chain)`, `verify_fx_usage` per exported out.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm semantic`.
-- [ ] **Step 5 — Commit:** `avm: SemanticVerifier + verify_fx_usage + grandfather quirk (M5.13)`
+- [x] **Step 1 — Red:** `crates/ava-avm/tests/semantic.rs`: `base_tx_spends_known_utxo`; `asset_id_mismatch` → `Error::AssetIdMismatch`; `incompatible_fx` (asset doesn't enable fx) → `Error::IncompatibleFx`; `not_an_asset` → `Error::NotAnAsset`; `operation_tx_cred_index` (cred index = `len(ins)+op_index`); `grandfathered_op_skips_verification` asserts the const tx-id `"MkvpJS13eCnEYeYi9B5zuWrU9goG9RBj7nr83U7BjrFV22a12"` bypasses op verification exactly as Go; `import_fetches_shared_memory` (uses a fake `SharedMemory` returning UTXO bytes); `not_bootstrapped_skips_op_verify`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-avm semantic` → fails.
+- [x] **Step 3 — Green:** `consts.rs`: `pub const GRANDFATHERED_OPERATION_TX: &str = "MkvpJS13eCnEYeYi9B5zuWrU9goG9RBj7nr83U7BjrFV22a12";`. `SemanticVerifier` per 09 §6.2: BaseTx fetch each input UTXO (`asset==in.asset` else `AssetIdMismatch`), resolve fx by credential type, `verify_fx_usage(fx_index, asset_id)` (load asset's CreateAssetTx; `NotAnAsset`/`IncompatibleFx`), `fx.verify_transfer`. CreateAsset = BaseTx. Operation: BaseTx then per op (skip when `!bootstrapped` **or** `tx.id == GRANDFATHERED_OPERATION_TX`) fetch input UTXOs, `verify_fx_usage`, `fx.verify_operation`, cred index `len(ins)+op_index`. Import: BaseTx, `verify.SameSubnet(source_chain)` (if bootstrapped), `SharedMemory.get(source_chain, ids)` → unmarshal `avax::UTXO` → verify_transfer, cred index `len(ins)+i`. Export: BaseTx, `SameSubnet(destination_chain)`, `verify_fx_usage` per exported out.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-avm semantic`.
+- [x] **Step 5 — Commit:** `avm: SemanticVerifier + verify_fx_usage + grandfather quirk (M5.13)`
+
+> **As-built (M5.13, 2026-06-07, commit `1520a93`):** `txs/executor/{semantic,consts}.rs` +
+> `tests/semantic.rs` (9 tests; combined ava-avm tree = 90 green, clippy + fmt clean).
+> `SemanticVerifier` ports `semantic_verifier.go`: per-input UTXO fetch with
+> `utxo.asset == in.asset` (`AssetIdMismatch`), `verify_fx_usage(fx_index, asset_id)`
+> (loads the asset's `CreateAssetTx` → `NotAnAsset`/`IncompatibleFx`), then `fx.verify_*`;
+> Operation cred index `len(ins)+op_index` is computed and exercised; Import fetches via
+> `SharedMemory` then unmarshals UTXO bytes; Export checks `verify_fx_usage` per exported out.
+> Added a byte-exact codec-serializable `Utxo` (mirrors `ava_platformvm::utxo::Utxo`) in
+> `semantic.rs` (`pub`, round-trips through the avm `Codec()` — ATOMIC-1), since state stores
+> opaque `UtxoBytes`. Two genuinely-new Go sentinels added to `error.rs` from
+> `vms/components/verify/subnet.go`: `Error::SameChainId` (`verify.ErrSameChainID`) +
+> `Error::MismatchedSubnetIds` (`verify.ErrMismatchedSubnetIDs`).
+> **Deferrals (documented, do NOT count as M5.13 gaps — they belong to later tasks):**
+> (1) **Typed `fx.verify_operation` for OperationTx** is gated on the M5.5
+> `FxOperation::Unsupported` placeholder (no routable op codec type-id yet): the verifier
+> does the real parts that exist (fetch each op-input UTXO, enforce `utxo.asset==op.asset`)
+> then routes the op, which returns `Error::UnknownFx` — exactly where Go types the op through
+> `typeToFxIndex`. The typed dispatch lands with the OperationTx codec wiring (the M5.5
+> deferral / M5.7+M5.8 op wiring). (2) **`verify.SameSubnet`** is a per-verifier `SubnetResolver`
+> seam (builder `with_same_subnet`) rather than a `Backend`/`Ctx` field — the node-wide
+> validator-state service isn't wired into the avm verifier yet; when absent, `SameSubnet` is
+> skipped (parity with the `!bootstrapped` skip). Chain-manager validator-state wiring is the
+> remaining hookup (M5.19). (3) **`SharedMemory`** supplied via builder `with_shared_memory`
+> (canonical `ava_vm::components::avax::shared_memory::SharedMemory`); an `ImportTx` with no
+> handle returns `Error::MissingParentState` rather than panicking.
 
 ### Task M5.14: Executor (UTXO state transitions, EXEC-AVM-1, atomic requests)
 **Crate:** ava-avm  ·  **Depends on:** M5.13; M3 (`avax::{consume, produce}`); M4 (`Requests`/`Element`)  ·  **Spec:** 09 §6.3, EXEC-AVM-1, §9 (atomic format), ATOMIC-1
@@ -459,11 +480,37 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 ### Task M5.23: cargo-fuzz target for block/tx/op decoder
 **Crate:** ava-avm  ·  **Depends on:** M5.15, M5.5  ·  **Spec:** 02 §8 (fuzzing, block parsers), 02 §13.5
 **Files:** `crates/ava-avm/fuzz/Cargo.toml`, `crates/ava-avm/fuzz/fuzz_targets/decode_block.rs`, `fuzz/corpus/decode_block/` (committed seeds)
-- [ ] **Step 1 — Red:** Add `fuzz/fuzz_targets/decode_block.rs`: `fuzz_target!(|data: &[u8]| { if let Ok(b) = parse_block(data) { let re = marshal(&b); let back = parse_block(&re).unwrap(); assert_eq!(b.bytes(), back.bytes()); } })`; seed corpus with the M5.15 golden block bytes + a Tx + an Operation.
-- [ ] **Step 2 — Confirm red:** `cargo fuzz run decode_block -- -runs=0` → fails to build until the target compiles against the parser.
-- [ ] **Step 3 — Green:** Implement the fuzz crate (`libfuzzer-sys` + `arbitrary`), targeting the block/tx/operation decoder; must never panic / over-read on arbitrary bytes (02 §8). Wire `cargo xtask test-fuzz` smoke (short run).
-- [ ] **Step 4 — Confirm green:** `cargo xtask test-fuzz` (smoke) runs the target briefly with no crash; commit corpus seeds.
-- [ ] **Step 5 — Commit:** `avm: cargo-fuzz block/tx/op decoder target (M5.23)`
+- [x] **Step 1 — Red:** Add `fuzz/fuzz_targets/decode_block.rs`: `fuzz_target!(|data: &[u8]| { if let Ok(b) = parse_block(data) { let re = marshal(&b); let back = parse_block(&re).unwrap(); assert_eq!(b.bytes(), back.bytes()); } })`; seed corpus with the M5.15 golden block bytes + a Tx + an Operation.
+- [x] **Step 2 — Confirm red:** `cargo fuzz run decode_block -- -runs=0` → fails to build until the target compiles against the parser.
+- [x] **Step 3 — Green:** Implement the fuzz crate (`libfuzzer-sys` + `arbitrary`), targeting the block/tx/operation decoder; must never panic / over-read on arbitrary bytes (02 §8). Wire `cargo xtask test-fuzz` smoke (short run).
+- [x] **Step 4 — Confirm green:** `cargo xtask test-fuzz` (smoke) runs the target briefly with no crash; commit corpus seeds.
+- [x] **Step 5 — Commit:** `avm: cargo-fuzz block/tx/op decoder target (M5.23)`
+
+> **As-built (M5.23, 2026-06-07, fuzz crate commit `0dd19f9`; OOM fix + integration in a
+> follow-up commit):** `crates/ava-avm/fuzz/` — a workspace-detached cargo-fuzz crate
+> (`ava-avm-fuzz`, own empty `[workspace]`, `libfuzzer-sys` + `ava-avm` path dep) mirroring the
+> proven `ava-platformvm/fuzz` precedent exactly. Target `decode_block.rs` drives
+> `ava_avm::block::Block::parse` **and** `ava_avm::txs::Tx::parse` over arbitrary bytes under
+> both `Codec()` and `GenesisCodec()`, asserting decode-never-panics + a guarded
+> `parse → bytes` round-trip. **No `src/` changes were needed** — the parser API + codec
+> singletons are already public. The smoke is auto-discovered by `xtask test-fuzz`
+> (`discover_fuzz_crates` globs `crates/*/fuzz`), so **no `xtask/`/`Taskfile.yml` edits**.
+> Committed seeds: `corpus/decode_block/{golden_block,golden_tx}` (the M5.15 golden block + a
+> tx); `Cargo.lock` and libFuzzer-discovered corpus entries are intentionally NOT committed
+> (matches platformvm). **No stable `prop_fuzz_smoke.rs`** added — platformvm has none to
+> mirror (it has `prop_roundtrip.rs`); the stable round-trip gate already lives in the M5.5/M5.15
+> golden tests.
+> - **REAL BUG FOUND + FIXED (the fuzz target did its job):** the first smoke run OOM'd inside
+>   `ava_secp256k1fx` `unmarshal_fields`. The three hand-written decoders
+>   (`OutputOwners`/`Input`/`Credential` in `crates/ava-secp256k1fx/src/types.rs`) read an
+>   attacker-controlled `u32` count `n` and looped `0..n` `push`-ing **without checking
+>   `p.errored()`** — so a truncated buffer with a huge `n` (e.g. `0x28000001`) drove unbounded
+>   `Vec` growth → OOM/DoS (the equivalent P-Chain decoders already guard with
+>   `if p.errored() { return; }`). Fixed by adding the same guard after reading the count and
+>   inside each loop iteration, bailing with `Error::InvalidComponent` (mirrors `check_space`
+>   setting `PackerError::InsufficientLength`). After the fix the smoke runs **134,006 runs in
+>   11 s, RSS peak 257 MB, exit 0, no crash**. Regression-checked: ava-secp256k1fx + ava-avm =
+>   101 tests green, ava-platformvm = 121 green, clippy `-D warnings` + fmt clean across all.
 
 ### Task M5.24: Milestone exit gate
 **Crate:** ava-avm (+ workspace)  ·  **Depends on:** all prior M5 tasks  ·  **Spec:** 09 (full), 02 §13 (per-crate contract), 00 (buildable-&-green invariant)

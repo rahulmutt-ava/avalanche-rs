@@ -77,9 +77,18 @@ impl OutputOwners {
         let locktime = p.unpack_u64();
         let threshold = p.unpack_u32();
         let n = p.unpack_u32() as usize;
+        // Guard against a truncated/oversized count: bail before allocating per
+        // element so an attacker-controlled `n` cannot drive unbounded `Vec`
+        // growth (decode-never-OOMs, specs 02 §8; mirrors the P-Chain decoders).
+        if p.errored() {
+            return Err(Error::InvalidComponent("truncated output owners"));
+        }
         let mut addrs = Vec::with_capacity(n.min(ava_codec::INITIAL_SLICE_CAP));
         for _ in 0..n {
             let b = p.unpack_fixed_bytes(SHORT_ID_LEN);
+            if p.errored() {
+                return Err(Error::InvalidComponent("truncated output owners"));
+            }
             let addr = ShortId::from_slice(&b)
                 .map_err(|_| Error::InvalidComponent("invalid short id length"))?;
             addrs.push(addr);
@@ -148,9 +157,18 @@ impl Input {
 
     pub(crate) fn unmarshal_fields(p: &mut Packer) -> Result<Self> {
         let n = p.unpack_u32() as usize;
+        // Bail on a truncated count before allocating per element (decode-never-
+        // OOMs, specs 02 §8; mirrors the P-Chain decoders).
+        if p.errored() {
+            return Err(Error::InvalidComponent("truncated input"));
+        }
         let mut sig_indices = Vec::with_capacity(n.min(ava_codec::INITIAL_SLICE_CAP));
         for _ in 0..n {
-            sig_indices.push(p.unpack_u32());
+            let idx = p.unpack_u32();
+            if p.errored() {
+                return Err(Error::InvalidComponent("truncated input"));
+            }
+            sig_indices.push(idx);
         }
         Ok(Self { sig_indices })
     }
@@ -324,9 +342,17 @@ impl Credential {
 
     pub(crate) fn unmarshal_fields(p: &mut Packer) -> Result<Self> {
         let n = p.unpack_u32() as usize;
+        // Bail on a truncated count before allocating per element (decode-never-
+        // OOMs, specs 02 §8; mirrors the P-Chain decoders).
+        if p.errored() {
+            return Err(Error::InvalidComponent("truncated credential"));
+        }
         let mut sigs = Vec::with_capacity(n.min(ava_codec::INITIAL_SLICE_CAP));
         for _ in 0..n {
             let b = p.unpack_fixed_bytes(SIGNATURE_LEN);
+            if p.errored() {
+                return Err(Error::InvalidComponent("truncated credential"));
+            }
             let mut sig = [0u8; SIGNATURE_LEN];
             sig.copy_from_slice(&b);
             sigs.push(sig);
