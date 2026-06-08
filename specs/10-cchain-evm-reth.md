@@ -773,6 +773,14 @@ discipline, gated by fork:
 (`56e81f17…b421`) when `ExtData` is empty. (This resolves the M6.6 finding that the
 coreth header is not plain-`alloy::Header`-decodable — the extras above are why.)
 
+> **Genesis-header subtlety (M6.8).** The **genesis** header's `ExtDataHash` is the
+> **zero hash** (`0x0000…0000`), **NOT** `EmptyExtDataHash` — coreth's `Genesis.toBlock`
+> leaves the field at its zero value (genesis carries no `ExtData`, so the hash is never
+> computed). For Mainnet/Fuji genesis (timestamp 0) the header carries **no optional tail**
+> beyond the always-present `ExtDataHash`, and `baseFee = nil`. Mainnet and Fuji share the
+> identical genesis state root (`0xd65eb1b8…29cc`) and block ID (`0x31ced5b9…a96b`) — the
+> chainId difference (43114 vs 43113) is not a header field.
+
 ---
 
 ## 10. State sync (C8)

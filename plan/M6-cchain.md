@@ -213,14 +213,31 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > rlp_length_of_length` (alloy-rlp). **GOTCHA:** after editing the facade, `touch crates/ava-evm-reth/src/lib.rs`
 > to bust a stale-rlib cache before rebuilding `ava-evm` in the same Nix shell.
 
-### Task M6.8: C-Chain genesis parse + `golden::cchain_genesis_root`
+### Task M6.8: C-Chain genesis parse + `golden::cchain_genesis_root` ✅ DONE (59b1321)
 **Crate:** ava-evm  ·  **Depends on:** M6.4, M6.5  ·  **Spec:** 10 §11.1, §8.3; 02 §6
 **Files:** `crates/ava-evm/src/chainspec.rs` (genesis parse), `crates/ava-evm/tests/genesis_root.rs`, `crates/ava-evm/tests/vectors/cchain/genesis/{mainnet,fuji}.json`
-- [ ] **Step 1 — Red:** `tests/genesis_root.rs` `#[test] fn cchain_genesis_root()` (exit-gate name): parse the embedded Mainnet (and Fuji) C-Chain genesis JSON (`config` chain id, fork timestamps, `feeConfig`, precompile configs, `alloc`), materialize the alloc into Firewood-ethhash, and assert the computed genesis **state root** and **genesis block ID** equal the committed Go values for both networks.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm cchain_genesis_root` → fails.
-- [ ] **Step 3 — Green:** Implement genesis JSON parsing into `AvaChainSpec` + upgrade schedule (timestamp-keyed `precompileUpgrades`, §8.3), alloc → `BatchOp`s → propose/commit, genesis header construction for ID parity. Commit Mainnet/Fuji genesis vectors with provenance to Go `genesis/`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm cchain_genesis_root` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: C-Chain genesis parse + state-root/ID parity (golden::cchain_genesis_root)`
+- [x] **Step 1 — Red:** `tests/genesis_root.rs` `#[test] fn cchain_genesis_root()` (exit-gate name): parse the embedded Mainnet (and Fuji) C-Chain genesis JSON (`config` chain id, fork timestamps, `feeConfig`, precompile configs, `alloc`), materialize the alloc into Firewood-ethhash, and assert the computed genesis **state root** and **genesis block ID** equal the committed Go values for both networks.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm cchain_genesis_root` → fails.
+- [x] **Step 3 — Green:** Implement genesis JSON parsing into `AvaChainSpec` + upgrade schedule (timestamp-keyed `precompileUpgrades`, §8.3), alloc → `BatchOp`s → propose/commit, genesis header construction for ID parity. Commit Mainnet/Fuji genesis vectors with provenance to Go `genesis/`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm cchain_genesis_root` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: C-Chain genesis parse + state-root/ID parity (golden::cchain_genesis_root)`
+
+> **AS-BUILT (M6.8).** `CChainGenesis` parser (serde over the genesis JSON: `config` chain id +
+> `precompileUpgrades` §8.3, header scalars, `alloc`); alloc materialized via the **5-field `rlp_account`**
+> path (M6.30) → `BundleState` → Firewood propose/commit; `genesis_header(state_root)` builds the coreth
+> genesis header for ID parity. **Mainnet AND Fuji both pass** state-root + block-ID parity — they share
+> identical Go-authoritative values (state root `0xd65eb1b8…29cc`, block ID `0x31ced5b9…a96b`); the only
+> config diff (chainId 43114 vs 43113) is not a header field and the alloc/header fields are identical.
+> **Paris-at-genesis fix (M6.6 finding #2 RESOLVED):** `build_chain_hardforks` now keys Paris + Dao/
+> ArrowGlacier/GrayGlacier + all pre-merge Eth forks at `ForkCondition::Block(0)` with
+> `final_paris_total_difficulty == 0`; the temporary `evmconfig.rs::AvaExecutorSpec` force-activation
+> (`is_forced_genesis_fork`) was REMOVED — `ethereum_fork_activation` now delegates straight to the inner
+> `AvaChainSpec`. `cchain_state_root` (M6.6) still green after the chainspec change. Deps: `serde`/`serde_json`/
+> `hex` promoted to regular (genesis parse is lib code); `Error::GenesisParse(String)` added. Facade
+> re-exports: `EMPTY_OMMER_ROOT_HASH` (alloy-consensus), `StorageKeyMap` (revm). **SPEC FINDINGS:** (1) the
+> genesis header's `ExtDataHash` is the **ZERO hash, NOT `EmptyExtDataHash`** (`56e81f17…b421`) — coreth's
+> `toBlock` leaves it zero (genesis has no ExtData, hash never computed). (2) Mainnet/Fuji genesis (timestamp
+> 0) carries **no optional header tail** beyond the always-present `ExtDataHash`; `baseFee = nil`.
 
 ### Task M6.9: `EvmBlock` verify/accept/reject — pre-commit root, commit/discard, `CanonicalStore` (G6)
 **Crate:** ava-evm  ·  **Depends on:** M6.6, M6.7, M3 (06 Block trait)  ·  **Spec:** 10 §3.1, §3.2, §17.7 (G6); 06 (linear acceptance); 04 §4.2
@@ -278,14 +295,32 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > `consume_gas` maps `gas.ErrInsufficientCapacity` → `Error::FeeOverflow` (consistent with §11.2's fee-fault
 > sentinel; flag for future refinement if a dedicated variant is wanted).
 
-### Task M6.13: `next_evm_env` fee override wiring + `prop::evm_fee_schedule_per_fork`
+### Task M6.13: `next_evm_env` fee override wiring + `prop::evm_fee_schedule_per_fork` ✅ DONE (b584d5c)
 **Crate:** ava-evm  ·  **Depends on:** M6.11, M6.12, M6.6  ·  **Spec:** 10 §7.2, §17.3 (G2); 21 §7; 02 §4
 **Files:** `crates/ava-evm/src/evmconfig.rs`, `crates/ava-evm/src/feerules/mod.rs`, `crates/ava-evm/tests/fee_schedule.rs`, `crates/ava-evm/tests/proptest-regressions/fee_schedule.txt`
-- [ ] **Step 1 — Red:** `tests/fee_schedule.rs` `proptest! fn evm_fee_schedule_per_fork()` (exit-gate name): over random `(parent header, AvaNextBlockCtx, fork timestamp)`, assert `next_evm_env` selects the correct regime — pre-AP3 basefee absent (nil/`errNilBaseFee` parity), AP3..Fortuna→window, Fortuna+→ACP-176 — and that `feerules::base_fee`/`gas_limit` match the per-fork dispatch; invariants from 21 §9 (off-target moves ≥1; AP4 cost ∈[0,1e6]; ACP-176 price continuous across `UpdateTargetExcess`).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm evm_fee_schedule_per_fork` → fails.
-- [ ] **Step 3 — Green:** Implement `AvaNextBlockCtx` (timestamp/timestamp_ms/recipient/gas_limit_hint/pchain_height/parent_fee_state), `feerules::{base_fee, gas_limit}` fork dispatch (window vs acp176), and `ConfigureEvm::next_evm_env` override setting `block_env.{basefee,gas_limit}` + pre-AP3 nil handling. Also `atomic_gas`/`atomic_fee` helpers (TxBytesGas/EVMOutputGas/EVMInputGas/CostPerSignature, `ErrFeeOverflow` guard) for §17.3 — counted against block budget in M6.15/M6.20. Commit proptest regressions.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm evm_fee_schedule_per_fork` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: next_evm_env fee override + per-fork schedule proptest (G2)`
+- [x] **Step 1 — Red:** `tests/fee_schedule.rs` `proptest! fn evm_fee_schedule_per_fork()` (exit-gate name): over random `(parent header, AvaNextBlockCtx, fork timestamp)`, assert `next_evm_env` selects the correct regime — pre-AP3 basefee absent (nil/`errNilBaseFee` parity), AP3..Fortuna→window, Fortuna+→ACP-176 — and that `feerules::base_fee`/`gas_limit` match the per-fork dispatch; invariants from 21 §9 (off-target moves ≥1; AP4 cost ∈[0,1e6]; ACP-176 price continuous across `UpdateTargetExcess`).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm evm_fee_schedule_per_fork` → fails.
+- [x] **Step 3 — Green:** Implement `AvaNextBlockCtx` (timestamp/timestamp_ms/recipient/gas_limit_hint/pchain_height/parent_fee_state), `feerules::{base_fee, gas_limit}` fork dispatch (window vs acp176), and `ConfigureEvm::next_evm_env` override setting `block_env.{basefee,gas_limit}` + pre-AP3 nil handling. Also `atomic_gas`/`atomic_fee` helpers (TxBytesGas/EVMOutputGas/EVMInputGas/CostPerSignature, `ErrFeeOverflow` guard) for §17.3 — counted against block budget in M6.15/M6.20. Commit proptest regressions.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm evm_fee_schedule_per_fork` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: next_evm_env fee override + per-fork schedule proptest (G2)`
+
+> **AS-BUILT (M6.13).** `feerules::mod` gained `FeeRegime`/`regime_for_phase`/`window_params_for_phase`/
+> `base_fee`/`gas_limit`/`atomic_gas`/`atomic_fee`; `evmconfig.rs` gained the canonical `AvaNextBlockCtx`
+> (all §17.3 fields + `atomic_gas_limit`), `AvaFeeState` enum, and the inherent `AvaEvmConfig::next_evm_env`
+> override (additive — M6.6's executor/`AvaExecutorSpec` + M6.21's precompile methods untouched). **M6.16 stub
+> reconciled:** `atomic/mempool.rs` dropped its local `AvaNextBlockCtx { atomic_gas_limit }` and now
+> `pub use crate::evmconfig::AvaNextBlockCtx` (with `::with_atomic_gas_limit` kept so existing mempool callers
+> compile). `AvaNextBlockCtx` (build/fee ctx) is kept DISTINCT from M6.21's `AvaBlockCtx` (revm chain-slot ext).
+> No facade re-exports (`NextBlockEnvAttributes` already present). 95→ tests green. **DEFERRED (M6.6 finding #3,
+> per scope guard):** the base-fee-**RECIPIENT** override (Avalanche credits AP3+ base fee to coinbase; revm
+> burns it) needs a custom revm handler / `EvmFactory` — the SAME live-handler install M6.21 deferred — so it is
+> folded into **M6.22** (build the `EvmFactory` once, install precompiles + base-fee-recipient + `AvaCtxExt`
+> together). The M6.6 `cchain_state_root` fixture was deliberately NOT re-pointed (stays at M6.30's burn-model
+> 5-field root). **SPEC FINDINGS:** (1) spec 21 doesn't pin the **EVM block gas-limit constants** — used coreth
+> `ApricotPhase1GasLimit = 8_000_000` / `CortinaGasLimit = 15_000_000` with a `gas_limit_hint` override (header
+> `GasLimit`, separate from the ACP-176 dynamic capacity gate, left as a `Result`-returning seam); worth pinning
+> in spec 21. (2) `AvaFeeState` is the agreed hand-off type carrying the AP3 window + parent base fee + the
+> ACP-176 24-byte state extracted from the parent header extra-data (the M6.7 block-wire ↔ builder/verifier seam).
 
 ### Task M6.14: Atomic tx types + byte-exact codec ✅ DONE (dfd7e53)
 **Crate:** ava-evm  ·  **Depends on:** M6.2, M3 (ATOMIC-1 codec/types)  ·  **Spec:** 10 §6.1, §6.2; 02 §6

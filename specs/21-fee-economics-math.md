@@ -549,6 +549,13 @@ Constants: `TargetBlockRate = 2 s`, `MinBlockGasCost = 0`, `MaxBlockGasCost = 1_
 `BlockGasCostStep = 50 000` (AP4) → `200 000` (AP5). `ap5.AtomicGasLimit = 100 000`,
 `ap5.AtomicTxIntrinsicGas = 10 000`.
 
+> **EVM block gas-LIMIT constants (M6.8/M6.13 as-built, coreth `params`).** Distinct from the
+> dynamic AP3/AP4 fee window above, the header `GasLimit` itself is a fork-keyed constant:
+> `ApricotPhase1GasLimit = 8_000_000` (Launch/AP1+) → `CortinaGasLimit = 15_000_000` (Cortina+).
+> Post-Fortuna, the ACP-176 dynamic max-capacity gate supersedes this fixed limit (§5);
+> `feerules::gas_limit` returns the fork-appropriate value (with an optional builder `gas_limit_hint`
+> override), kept separate from the ACP-176 capacity computation.
+
 `VerifyBlockFee` (block_gas_cost.go): the block's total effective tips, divided by
 `baseFee`, must purchase ≥ `requiredBlockGasCost` units of gas:
 `Σ_i tipPremium_i · gasUsed_i (+ extraContribution)) / baseFee ≥ requiredBlockGasCost`.
