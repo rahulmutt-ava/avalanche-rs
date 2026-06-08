@@ -10,8 +10,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "SAE proxy-unit clock Time<D: ProxyUnit> (tick/fast_forward/set_rate/compare; specs/11 §2.1). M7.1 scaffold."
+description = "SAE proxy-unit clock Time<D: ProxyUnit> (tick/fast_forward/set_rate/compare; specs/11 §2.1)."
 
 [dependencies]
+ava-saevm-cmputils = { path = "../cmputils" }
+ava-saevm-intmath = { path = "../intmath" }
 
 [dev-dependencies]
+proptest = { workspace = true }
