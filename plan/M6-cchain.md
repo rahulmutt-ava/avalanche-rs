@@ -492,14 +492,28 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > **AS-BUILT (M6.18).** `atomic/verify.rs`: `input_utxos(&AtomicTx)->BTreeSet<Id>` (coreth `InputUTXOs`: Import → `input_id()`=`tx_id.prefix(output_index)`; Export → raw 32-byte `nonce(8 BE) ++ 0x00000014 ++ address(20)`, NOT hashed); `verify_no_conflicts(&[AtomicTx], &BTreeSet<Id>)` (intra-block overlap = coreth `verifyTxs` + processing-ancestry overlap = coreth `conflicts`); `mainnet_bonus_blocks()->&BTreeMap<u64,Id>` + `is_bonus_block`. Hooked into `EvmBlock::verify` BEFORE EVM execution; added `EvmBlockContext::processing_ancestor_inputs()`. `Error::ConflictingAtomicInputs` already existed. **116 ava-evm tests green.**
 > **FINDINGS (folded below):** (1) **bonusBlocks = 57 entries** (102972→103633), Mainnet-only (`readMainnetBonusBlocks`); Fuji/local empty. (2) **Processing-ancestry conflict is a no-op on the linear-accept path** (correct — coreth's `conflicts` stops at last-accepted) — the non-linear sibling/processing-fork ancestry walk needs the verified-block tree owned by the `ChainVm` adapter (M6.10); `verify_no_conflicts` already takes the ancestry input-union, so the follow-up is just threading it from the adapter → **new follow-up M6.18a** (wire ancestry inputs from `EvmVm`'s `verified` map into `verify`). (3) **bonusBlocks skip applies at shared-memory *apply* time, not at trie-index time** — blocks are still indexed in the atomic trie; `AtomicBackend::accept` (M6.17) does NOT yet consult `is_bonus_block` before `SharedMemory::apply` → **fold into M6.18a / M6.27 recovery** (wire `is_bonus_block` into the apply path).
 
-### Task M6.19: `differential::atomic_xc` X↔C import/export parity
+### Task M6.19: `differential::atomic_xc` X↔C import/export parity ✅ DONE (e7aca95)
 **Crate:** ava-evm  ·  **Depends on:** M6.15, M6.17, M6.18  ·  **Spec:** 10 §6, §14 #3; 02 §11; 07
 **Files:** `crates/ava-evm/tests/atomic_xc.rs`, `crates/ava-evm/tests/vectors/cchain/atomic_xc/*.json`
-- [ ] **Step 1 — Red:** `tests/atomic_xc.rs` `#[test] fn atomic_xc()` (exit-gate name) in recorded-oracle mode: for a Go corpus of ImportTx/ExportTx, assert byte-identical tx serialization, identical `atomic.Requests`, identical post-`EVMStateTransfer` balances/nonces, and identical atomic-trie roots vs Go; shared-memory effects checked against the M3/07 harness stub (so M6 stays independent of M5). Tag the live-mode variant `#[ignore]`/CI-gated (coordinate with cross-cutting harness X).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_xc` → fails.
-- [ ] **Step 3 — Green:** Wire the corpus fixtures + comparison; close any parity gaps surfaced (serialization, requests, balances, trie root). Commit atomic_xc vectors + manifest with provenance.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_xc` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: X↔C atomic import/export parity (differential::atomic_xc)`
+- [x] **Step 1 — Red:** `tests/atomic_xc.rs` `#[test] fn atomic_xc()` (exit-gate name) in recorded-oracle mode: for a Go corpus of ImportTx/ExportTx, assert byte-identical tx serialization, identical `atomic.Requests`, identical post-`EVMStateTransfer` balances/nonces, and identical atomic-trie roots vs Go; shared-memory effects checked against the M3/07 harness stub (so M6 stays independent of M5). Tag the live-mode variant `#[ignore]`/CI-gated (coordinate with cross-cutting harness X).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_xc` → fails.
+- [x] **Step 3 — Green:** Wire the corpus fixtures + comparison; close any parity gaps surfaced (serialization, requests, balances, trie root). Commit atomic_xc vectors + manifest with provenance.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_xc` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: X↔C atomic import/export parity (differential::atomic_xc)`
+
+> **AS-BUILT (M6.19).** A single composite exit-gate test `atomic_xc()` asserts all four parity facets in one
+> pass over one Go-executed Import+Export corpus: (a) byte-identical serialization (bare-struct + interface
+> u32-type-id 0/1 forms + export signed-tx id), (b) atomic `Requests` (Import→`RemoveRequests` on source,
+> Export→`PutRequests`/`Element` on dest), (c) post-`EVMStateTransfer` balances/nonces via the REAL
+> `execute_batch` + `AtomicStateHook` path over a Firewood `State` overlay (import credit `amount·X2C_RATE`,
+> nonce untouched; export debit + `nonce→input.nonce+1`), (d) atomic-trie root advance to the Go-golden
+> `15211e79…6056` + cross-chain Put/Remove applied to the in-memory `ava_vm` `SharedMemory` harness (keeps M6
+> **independent of M5**). **REUSED existing Go-EXECUTED vectors** (`vectors/cchain/atomic/atomic_txs.json` +
+> `vectors/cchain/atomic_trie/atomic_trie_root.json` — they already cover the round-trip), so NO new Go bytes
+> generated; added `vectors/cchain/atomic_xc/{manifest.json,_provenance.md}` documenting the composite +
+> transitive provenance (coreth `fb174e8…`, go1.25.10). **No parity gaps surfaced** — every facet matched on
+> first wiring (the underlying M6.14/15/17/18 impls were each already golden-tested; M6.19 is the composite
+> gate). No new deps, no facade/`rpc/mod.rs` touch. avalanchego tree left git-clean.
 
 ### Task M6.20: `BlockBuilderDriver` on-demand build + precomputed-root finish (G5) ✅ DONE (dd81e6e)
 **Crate:** ava-evm  ·  **Depends on:** M6.10, M6.13, M6.15, M6.16  ·  **Spec:** 10 §4, §17.6 (G5); 21 §4b (budget)
@@ -559,14 +573,33 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > **STATUS NOTES:** (1) **`eth_getProof`** account fields (balance/nonce/codeHash) correct today from direct Firewood reads; `accountProof`/`storageProof[].proof` arrays read the `StateProofProvider::proof` seam — populated once M6.25 lands, NO RPC-layer change needed. The golden test `eth_get_proof_account_fields_match_golden` asserts ACCOUNT FIELDS ONLY (stays green regardless of proof-array population). (2) **`debug_traceTransaction` DEFERRED** (returns a documented error naming the method) — the prestate tracer needs a revm inspector not reachable behind the facade without a heavy dep → fold into M6.24 or a follow-up. (3) **No reth `TransactionPool`** in ava-evm yet (same gap M6.20 flagged); `eth_sendRawTransaction`/`best_transactions` land with the EVM txpool task.
 > **⚠️ WAVE GOTCHA (parallel facade-touchers + shared `CARGO_TARGET_DIR`):** two worktrees both building `ava-evm-reth v0.1.0` (same name+version, different source paths) with DIFFERENT facade additions intermittently clobber each other's `.rlib` in the shared target dir → phantom "unresolved import" errors. Mitigation confirmed: build/test facade-touching agents in an ISOLATED target dir (`CARGO_TARGET_DIR=…/target-mNNN`), OR don't run two facade-touchers concurrently. The orchestrator's per-merge `touch crates/ava-evm-reth/src/lib.rs` + sequential green-gate is the reconcile step.
 
-### Task M6.24: `avax.*` namespace + admin/health (G8)
+### Task M6.24: `avax.*` namespace + admin/health (G8) ✅ DONE (9952cae)
 **Crate:** ava-evm  ·  **Depends on:** M6.16, M6.17, M6.23  ·  **Spec:** 10 §9.2, §17.9 (G8)
 **Files:** `crates/ava-evm/src/rpc/avax.rs`, `crates/ava-evm/src/rpc/admin.rs`, `crates/ava-evm/tests/rpc_avax.rs`
-- [ ] **Step 1 — Red:** `tests/rpc_avax.rs` golden: `avax.issueTx` accepts an atomic tx into the mempool; `avax.getAtomicTx`/`getAtomicTxStatus`/`getUTXOs`/`getBlockByHeight` return Go-parity JSON; admin + health endpoints respond.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm rpc_avax` → fails.
-- [ ] **Step 3 — Green:** Implement the `avax.*` jsonrpsee module (methods per §9.2) + admin/health, mounted alongside the `eth_*` modules (`merge_configured`); defer the jsonrpsee-vs-axum mount decision to 12-node (note in code). Commit avax golden vectors.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm rpc_avax` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: avax.* RPC namespace + admin/health (G8)`
+- [x] **Step 1 — Red:** `tests/rpc_avax.rs` golden: `avax.issueTx` accepts an atomic tx into the mempool; `avax.getAtomicTx`/`getAtomicTxStatus`/`getUTXOs`/`getBlockByHeight` return Go-parity JSON; admin + health endpoints respond.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm rpc_avax` → fails.
+- [x] **Step 3 — Green:** Implement the `avax.*` module (methods per §9.2) + admin/health as DIRECT handlers (NOT jsonrpsee — see deviation), mounted alongside the `eth_*` handlers; defer the jsonrpsee-vs-axum mount decision to 12-node (note in code). Commit avax golden vectors.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm rpc_avax` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: avax.* RPC namespace + admin/health (G8)`
+
+> **AS-BUILT (M6.24).** Followed the **M6.23 DIRECT-handler precedent** (plain structs returning
+> `serde_json::Value`, NOT reth `EthApi`/jsonrpsee — the plan's "jsonrpsee module" wording predates the M6.23
+> decision; no `jsonrpsee`/`reth-rpc` pulled in). `rpc/avax.rs` `AvaxRpc` over `AtomicMempool` + `CanonicalStore`
+> + a new in-memory `AcceptedAtomicTxIndex`: `avax.issueTx` (checksummed-hex decode → `Tx::parse` →
+> `mempool.add_local` → CB58 txID), `getAtomicTxStatus` (`{status, blockHeight?}`, precedence Accepted >
+> Processing/Dropped > Unknown, `json.Uint64` quoted-decimal height), `getAtomicTx` (`{tx, encoding, blockHeight?}`),
+> `getUTXOs` (`{numFetched, utxos, endIndex, encoding}` paginated envelope — **fetch DEFERRED**, see below),
+> `getBlockByHeight` (over `CanonicalStore` body bytes), `health_check` (`{healthy, lastAcceptedHeight}`).
+> `rpc/admin.rs` `AdminRpc`: `startCPUProfiler`/`stopCPUProfiler`/`memoryProfile`/`lockProfile`/`setLogLevel`
+> returning coreth's `api.EmptyReply` (`{}`); profiler/logger no-ops (node-assembly concern, §12-node). JSON
+> shapes match coreth `plugin/evm/atomic/vm/api.go` + `admin.go`/`health.go`. **rpc/mod.rs:** added `pub mod admin;`
+> + `pub mod avax;` + a doc note that the jsonrpsee-vs-axum mount is deferred to 12-node. Small supporting
+> accessors added (no facade touch): `AtomicMempool::get_tx_bytes`, `CanonicalStore::body_at`. **9 integ + 6 unit
+> tests; 158 ava-evm tests green at merge (162 combined with the wave).** No new Cargo deps, no facade touch.
+> **DEFERRALS / SEAMS:** (1) `avax.getUTXOs` returns the parity-correct empty envelope — `ava-vm`'s `SharedMemory`
+> exposes no address-indexed `GetAtomicUTXOs` iterator yet (the seam for coreth's indexed fetch). (2) accepted-tx
+> lookups read an in-memory `AcceptedAtomicTxIndex` (the seam for coreth's durable `AtomicRepository`) until
+> `EvmVm` wires acceptance into it. (3) admin profiler/logger are no-ops. All documented in code + provenance.
 
 ### Task M6.25: EVM + atomic-trie state sync over Firewood proofs (G8) ✅ DONE (7c6f87b)
 **Crate:** ava-evm  ·  **Depends on:** M6.4, M6.17  ·  **Spec:** 10 §10, §17.9 (G8); 04 §4.2/§4.3
@@ -590,23 +623,54 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm reuse_surface` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: expose reusable executor + Firewood state APIs for SAE (§16/§17.10)`
 
-### Task M6.27: G1/G9 invariant — reth never writes state/trie tables (CI)
+### Task M6.27: G1/G9 invariant — reth never writes state/trie tables (CI) ✅ DONE (c4f0c54)
 **Crate:** ava-evm  ·  **Depends on:** M6.9, M6.20  ·  **Spec:** 10 §17.2 (G1 invariant), §17.7, §17.11 (G9)
 **Files:** `crates/ava-evm/tests/g1_invariant.rs`
-- [ ] **Step 1 — Red:** `tests/g1_invariant.rs` `fn state_trie_tables_stay_empty_after_block()`: build+accept a block, then open the MDBX env and assert `PlainState`/`HashedState`/`Trie` (and any Storage-V2/`SparseTrieCache` state tables, G9) are empty while `Headers`/`Bodies`/`Receipts`/`CanonicalHeaders` grew.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm g1_invariant` → fails (or correctly proves the invariant if already held; ensure it would fail if a `StateWriter` path were introduced).
-- [ ] **Step 3 — Green:** Confirm no code path constructs reth `BlockchainProvider`/`UnifiedStorageWriter`/`StateWriter::write_state` for state/trie tables; only the bare `BlockExecutor`/`BlockBuilder` flow + `FirewoodStateCommitter` + `CanonicalStore` are used. Add the assertion as a standing CI guard.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm g1_invariant` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: CI invariant — Firewood is state-of-record, reth trie tables empty (G1/G9)`
+> **WORDING CORRECTION (folded in from M6.9 as-built):** the original "open the MDBX env and assert `PlainState`/
+> `HashedState`/`Trie` tables are empty" wording is **stale** — `CanonicalStore` is over the **`ava-database`
+> prefixed-KV backend, NOT reth-db MDBX** (M6.9 DEVIATION 2), so there is no MDBX env and those tables don't
+> exist. The invariant is proved against the real architecture (KV namespaces + Firewood tip + a structural
+> source-guard), per the steps below.
+- [x] **Step 1 — Red:** `tests/g1_invariant.rs` `fn state_trie_tables_stay_empty_after_block()`: build+accept a block, then assert the `CanonicalStore` KV namespaces (HEADER/CANONICAL/NUMBER/BODY/RECEIPTS/TIP) grew to reflect the accepted block AND EVM state advanced only in Firewood (tip moved); plus a structural guard that no `BlockchainProvider`/`UnifiedStorageWriter`/`StateWriter` symbol appears in `crates/ava-evm/src` (non-comment lines) — G1/G9.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm g1_invariant` → fails (and crucially WOULD fail if a `StateWriter` path were introduced into `ava-evm/src`).
+- [x] **Step 3 — Green:** Confirm no code path constructs reth `BlockchainProvider`/`UnifiedStorageWriter`/`StateWriter::write_state` for state/trie tables; only the bare `BlockExecutor`/`BlockBuilder` flow + `FirewoodStateCommitter` + `CanonicalStore` are used. Add the assertion as a standing CI guard.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm g1_invariant` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: CI invariant — Firewood is state-of-record, reth trie tables empty (G1/G9)`
 
-### Task M6.28: Fuzz targets + PORTING.md + proptest corpus completeness
+> **AS-BUILT (M6.27).** Three tests in `tests/g1_invariant.rs` (438 lines): (1) **runtime** —
+> `state_trie_tables_stay_empty_after_block`: before accept `CanonicalStore` tip is `None` + Firewood tip ==
+> genesis; after `verify` Firewood tip is STILL genesis (proposal only stashed, not committed — G1); after
+> `accept` Firewood tip advanced to the pre-commit root AND all `CanonicalStore` KV namespaces reflect block 1
+> via `last_canonical()`/`canonical_hash()`/`header_at()`/`height_of()`. (2) **G1 trick** —
+> `state_root_with_updates_returns_empty_trie_updates`: asserts `FirewoodStateView::state_root_with_updates`
+> returns a real Firewood root AND empty `TrieUpdates` (reth never persists trie nodes). (3) **structural guard** —
+> `no_reth_state_writer_in_ava_evm_src`: walks every `.rs` under `crates/ava-evm/src/` and asserts no non-comment
+> line names `BlockchainProvider`/`UnifiedStorageWriter`/`StateWriter` (the facade `ava-evm-reth` is exempt — it's
+> allowed to name reth types). Standing CI gate: introducing those symbols breaks the test. No new pub accessors,
+> no new deps, no facade/`rpc/mod.rs` touch. **→ spec 10 §17.2 invariant wording updated to match (see SPEC FIX).**
+
+### Task M6.28: Fuzz targets + PORTING.md + proptest corpus completeness ✅ DONE (86ababc)
 **Crate:** ava-evm  ·  **Depends on:** M6.7, M6.14  ·  **Spec:** 02 §8, §10.1, §13
 **Files:** `crates/ava-evm/fuzz/fuzz_targets/decode_block.rs`, `crates/ava-evm/fuzz/fuzz_targets/decode_atomic_tx.rs`, `crates/ava-evm/fuzz/Cargo.toml`, `crates/ava-evm/tests/PORTING.md`
-- [ ] **Step 1 — Red:** Add `cargo-fuzz` targets `decode_block` and `decode_atomic_tx` (must never panic/over-read on arbitrary bytes; round-trip stable for anything that decoded). Create `tests/PORTING.md` seeded from `go test -list` of coreth `plugin/evm`/`atomic`/`customheader` + the `na`-with-reason rows for Engine-API-only Go plumbing.
-- [ ] **Step 2 — Confirm red:** `cargo +nightly fuzz run decode_block -- -runs=1000` and `decode_atomic_tx` smoke → build/run; `PORTING.md` has `wip` rows.
-- [ ] **Step 3 — Green:** Commit seed corpus under `fuzz/corpus/<target>/`; fill PORTING.md mapping every relevant Go test to its Rust counterpart (M6.x test names) until no `wip` rows remain for shipped scope.
-- [ ] **Step 4 — Confirm green:** `cargo xtask test-fuzz` (smoke) green; `cargo xtask porting-report` shows ava-evm with no `wip` rows.
-- [ ] **Step 5 — Commit:** `ava-evm: fuzz targets (block/atomic-tx) + PORTING.md coverage matrix`
+- [x] **Step 1 — Red:** Add `cargo-fuzz` targets `decode_block` and `decode_atomic_tx` (must never panic/over-read on arbitrary bytes; round-trip stable for anything that decoded). Create `tests/PORTING.md` seeded from `go test -list` of coreth `plugin/evm`/`atomic`/`customheader` + the `na`-with-reason rows for Engine-API-only Go plumbing.
+- [x] **Step 2 — Confirm red:** `cargo +nightly fuzz run decode_block -- -runs=1000` and `decode_atomic_tx` smoke → build/run; `PORTING.md` has `wip` rows.
+- [x] **Step 3 — Green:** Commit seed corpus under `fuzz/corpus/<target>/`; fill PORTING.md mapping every relevant Go test to its Rust counterpart (M6.x test names) until no `wip` rows remain for shipped scope.
+- [x] **Step 4 — Confirm green:** `cargo xtask test-fuzz` (smoke) green; `cargo xtask porting-report` shows ava-evm with no `wip` rows.
+- [x] **Step 5 — Commit:** `ava-evm: fuzz targets (block/atomic-tx) + PORTING.md coverage matrix`
+
+> **AS-BUILT (M6.28).** `crates/ava-evm/fuzz/` detached cargo-fuzz crate (own `[workspace]` table, `edition 2024`,
+> `cargo-fuzz=true`; deps `libfuzzer-sys 0.4` + `ava-evm` path + `ava-evm-reth` path [for `Chain::from_id`]) —
+> ignored by `cargo build --workspace`. **`decode_block`** fuzzes `decode_ava_evm_block` with an all-phases-active
+> `AvaChainSpec`; **`decode_atomic_tx`** fuzzes `Tx::parse`. Both follow the no-panic discipline: every decode path
+> returns `Result`, target only `if let Ok(_)` then asserts the byte-identity round-trip (`assemble_ava_block(..).
+> encoded_bytes() == data` / `tx.bytes() == data` — the coreth `Tx.Initialize` invariant). **Seed corpus** (copied
+> from committed golden vectors): `decode_block/{golden_plain_block(739B),golden_atomic_block(862B)}`,
+> `decode_atomic_tx/{golden_import_tx,golden_export_tx}(234B each)`. **`tests/PORTING.md`:** 131 rows / 6 sections
+> (plugin/evm root, atomic root + txpool/state/vm/sync, customheader, fuzz) — **55 ✅ / 8 🟡 / 0 ⬜ / 30 n/a / 3 wip**;
+> the 3 `wip` are warp-predicate bytes (M6.22, unshipped); unshipped (warp/gossip/bootstrapper/migration) are `na`
+> with reasons. **NIGHTLY NOTE:** `rust-toolchain.toml` pins stable 1.96.0 only; `cargo +nightly fuzz build` needs
+> the `NIX_DEV_SHELL=fuzz` nightly shell (`cargo xtask test-fuzz`). Verified the crate is well-formed via stable
+> `cargo check` (passes); the nightly fuzz build is the CI smoke entry. No existing src/facade/`rpc/mod.rs` touched.
 
 ### Task M6.29: Milestone exit gate
 **Crate:** ava-evm (+ avalanchers binary)  ·  **Depends on:** all M6.1–M6.28  ·  **Spec:** 10 (all), 04 §4, 20 §7, 21; 02 §10.5/§11; BUILDABLE-&-GREEN INVARIANT

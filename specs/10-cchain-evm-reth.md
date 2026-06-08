@@ -1340,12 +1340,20 @@ impl FirewoodStateProvider {
 
 **The G1 invariant (must hold in CI).** No code path may call reth
 `StateWriter::write_state` / `UnifiedStorageWriter::write_to_storage` for *state /
-trie / hashed* tables. We assert it two ways: (1) we only ever use the bare
-`BlockExecutor`/`BlockBuilder` flow and our own committer — we never construct
-reth's `BlockchainProvider`/`UnifiedStorageWriter` for state; (2) a unit test
-opens the MDBX env after a block and asserts the `PlainState`/`HashedState`/`Trie`
-tables stay empty (only `Headers`/`Bodies`/`Receipts`/`CanonicalHeaders` grow,
-§17.7).
+trie / hashed* tables. We assert it two ways (test `g1_invariant.rs`, M6.27):
+(1) a **structural source-guard** test walks `crates/ava-evm/src/` and asserts no
+non-comment line names `BlockchainProvider`/`UnifiedStorageWriter`/`StateWriter`
+(the facade `ava-evm-reth` is exempt — it is allowed to name reth types) — we only
+ever use the bare `BlockExecutor`/`BlockBuilder` flow + our own committer; (2) a
+**runtime** test builds+accepts a block and asserts EVM state advanced only in
+Firewood (the tip moved; `state_root_with_updates` returns empty `TrieUpdates`),
+while the block-metadata store grew.
+> **AS-BUILT (M6.27 + M6.9 DEVIATION 2):** there is **no reth MDBX env** in `ava-evm` to open — the block-metadata
+> `CanonicalStore` is over the **`ava-database` prefixed-KV backend, NOT reth-db MDBX** (§17.7), so the original
+> "open the MDBX env and assert `PlainState`/`HashedState`/`Trie` tables stay empty" check is moot (those tables
+> never exist). The runtime assertion instead checks that the `CanonicalStore` KV namespaces
+> (HEADER/CANONICAL/NUMBER/BODY/RECEIPTS/TIP) grew and the Firewood tip advanced; reth's state/trie persistence
+> pipeline is bypassed at the architecture level, which the structural guard pins.
 
 **Effort/risk.** Effort: **high** (the conversion + proof serving + parity gate).
 Risk: **medium** — the seam exists and is stable-ish; the empty-`TrieUpdates`
