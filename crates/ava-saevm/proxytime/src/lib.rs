@@ -54,6 +54,15 @@ use ava_saevm_intmath::mul_div_ceil;
 /// Mirrors Go's `type Duration interface { ~uint64 }`.
 pub trait ProxyUnit: Copy + Ord + Into<u128> + From<u64> {}
 
+/// The canonical SAE proxy unit is raw gas, counted as `u64`.
+///
+/// Provided here (where the `ProxyUnit` trait is local) so downstream SAE
+/// crates can use `Time<u64>` directly without tripping the orphan rule:
+/// `gastime` wraps `Time<u64>` and `types` persists a `Time<u64>` gas clock,
+/// both converting to/from `ava_vm::Gas` at their public boundaries. Matches
+/// the `proxytime.go` `Time[Gas]` instantiation (Go `Gas` is `~uint64`).
+impl ProxyUnit for u64 {}
+
 // ---------------------------------------------------------------------------
 // FractionalSecond
 // ---------------------------------------------------------------------------

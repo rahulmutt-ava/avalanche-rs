@@ -178,6 +178,20 @@ fn serialization_roundtrip() {
     assert_eq!(decoded.rate(), original.rate());
 }
 
+/// `u64` is a `ProxyUnit`, so `Time<u64>` (the canonical SAE gas clock used by
+/// `gastime`/`types`) works without a newtype wrapper or orphan-rule dance.
+#[test]
+fn time_over_u64_is_usable() {
+    let mut t: Time<u64> = Time::new(5, 3, 10);
+    t.tick(8); // 3 + 8 = 11 -> carry to 6 + 1/10
+    assert_eq!(t.unix_seconds(), 6);
+    assert_eq!(t.fraction().numerator, 1);
+    assert_eq!(t.rate(), 10);
+    let encoded = t.encode();
+    let decoded = Time::<u64>::decode(&encoded).expect("decode failed");
+    assert_eq!(decoded.compare(&t), Ordering::Equal);
+}
+
 // ---------------------------------------------------------------------------
 // Property tests
 // ---------------------------------------------------------------------------
