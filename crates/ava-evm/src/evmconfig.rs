@@ -39,11 +39,11 @@ use std::sync::Arc;
 
 use ava_evm_reth::{
     Address, AvaEvmEnv, AvaEvmError, B256, BaseFeeParams, BlobParams, BlockExecutor,
-    BundleRetention, Chain, ConfigureEvm, Database, DepositContract, EthBlockExecutionCtx,
-    EthChainSpec, EthEvmConfig, EthExecutorSpec, EthereumHardfork, EthereumHardforks, ExecOutcome,
+    BundleRetention, Chain, ConfigureEvm, DepositContract, EthBlockExecutionCtx, EthChainSpec,
+    EthEvmConfig, EthExecutorSpec, EthereumHardfork, EthereumHardforks, ExecOutcome,
     ExternalConsensusExecutor, ForkCondition, ForkFilter, ForkFilterKey, ForkHash, ForkId, Genesis,
     Hardfork, Hardforks, Head, Header, NextBlockEnvAttributes, NodeRecord, PreExecutionHook,
-    RecoveredTx, State, StateDbError, StateProviderDatabase, U256,
+    RecoveredTx, State, StateDb, StateProviderDatabase, U256,
 };
 use ruint::aliases::U256 as RuintU256;
 
@@ -150,7 +150,7 @@ impl AvaNextBlockCtx {
 pub struct NoopPreHook;
 
 impl PreExecutionHook for NoopPreHook {
-    fn apply(&self, _db: &mut dyn Database<Error = StateDbError>) -> Result<(), AvaEvmError> {
+    fn apply(&self, _db: &mut dyn StateDb) -> Result<(), AvaEvmError> {
         Ok(())
     }
 }
