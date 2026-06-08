@@ -745,6 +745,34 @@ fork's rules). This is consensus-critical (block IDs must match across Go/Rust
 nodes — overview compatibility table). `decode_ava_evm_block`/`assemble_ava_block`
 are golden-tested against Go-produced bytes (§12 test plan).
 
+**As-built byte layout (M6.7, verified against coreth `block_ext.go`/`customtypes`,
+avalanchego rev `fb174e8…`).** The block is:
+
+```
+block = RLP([ Header, Txs, Uncles, Version(u32), ExtData(bytes) ])
+```
+
+i.e. coreth REPLACES geth's `Withdrawals` slot with two trailing fields `Version`
+(a `u32`) + `ExtData` (opaque bytes). **Block ID = `keccak256(RLP(Header))`** (the
+header only, not the whole block). The header is the 15 standard Ethereum fields,
+then **`ExtDataHash` is ALWAYS present (field 16)**, then an RLP-**optional** tail
+governed by the usual "if any later field is present, all earlier ones must be"
+discipline, gated by fork:
+
+| Header tail field(s) | Activated by |
+|---|---|
+| `BaseFee` | AP3 |
+| `ExtDataGasUsed`, `BlockGasCost` | AP4 |
+| `BlobGasUsed`, `ExcessBlobGas` | Cancun/EIP-4844 |
+| `ParentBeaconRoot` | EIP-4788 |
+| `TimeMilliseconds`, `MinDelayExcess` | Granite |
+
+`ExtData` carries the **atomic txs**: post-AP5 it is the atomic **batch**
+(`atomic.Codec.Marshal(0, []*Tx)`); pre-AP5 it is a single atomic tx. `ExtDataHash`
+= `keccak256(RLP(ExtData))`, or the empty-bytes hash `EmptyExtDataHash`
+(`56e81f17…b421`) when `ExtData` is empty. (This resolves the M6.6 finding that the
+coreth header is not plain-`alloy::Header`-decodable — the extras above are why.)
+
 ---
 
 ## 10. State sync (C8)
@@ -1206,6 +1234,19 @@ differential gate). reth gives us either a `BundleState` (raw revm delta) or a
 > tracked as plan task **M6.30**, a prerequisite for the real recorded-mainnet reexecute
 > gate (M6.29). The 4-field encoding below is correct for the *shape* of the conversion;
 > add the trailing `Extra` field when M6.30 lands.
+>
+> **✅ RESOLVED (M6.30, commit `a753201`).** The 5th field is RLP `false` (`0x80`) — it is
+> libevm's `isMultiCoin` boolean, **empty/`false` for ordinary C-Chain EOAs and contracts**
+> (multi-coin was an Apricot-era feature long disabled on mainnet, so `Extra` is uniformly
+> the `false` bool). `rlp_account` now emits 5-field by byte-patching the alloy 4-field
+> output (increment the list length prefix `+1`, append `0x80`); `decode_rlp_account` parses
+> the `[0xf8,L]` list header, decodes the 4 required fields, and ignores any trailing payload
+> (forward-compatible). **Caveat for the M6.29 exit gate:** the 5-field encoding closes the
+> *account-encoding* half of coreth parity, but the M6.6 fixture's `expected_post_state_root`
+> remains over the revm **base-fee-BURN** model (sender+recipient only); coreth's
+> `dummy.NewCoinbaseFaker` CREDITS the base fee to the coinbase (a 3rd account), so its
+> on-chain root differs. The base-fee-to-coinbase override is **M6.13** (`next_evm_env`); both
+> M6.30 *and* M6.13 must land for full real-mainnet `differential::cchain_state_root` parity.
 
 ```rust
 /// HashedPostState is { accounts: B256(=keccak(addr)) -> Option<Account>,
@@ -1563,6 +1604,28 @@ pub trait StatefulPrecompile: Send + Sync {
         -> Result<InterpreterResult, PrecompileError>;
 }
 ```
+
+> **✅ AS-BUILT API CORRECTIONS (M6.21, commit `c4dc2e8`; pinned revm `revm-handler` 18.1).**
+> The `PrecompileProvider` sketch above used pre-pin signatures; the real trait differs and the
+> facade now exports the extra revm surface (`Cfg`, `ContextTr`, `EthPrecompiles`,
+> `precompile_output_to_interpreter_result`, `CallInputs`, `InterpreterResult`, `PrecompileError`,
+> `PrecompileOutput`, `PrecompileSpecId`, `Precompiles`):
+> - **`set_spec(&mut self, spec: <CTX::Cfg as Cfg>::Spec) -> bool`** — generic over the context's
+>   spec type (bounded `Into<SpecId>`), **NOT** `set_spec(spec: SpecId)`. Delegating to the base needs
+>   the fully-qualified `<EthPrecompiles as PrecompileProvider<CTX>>::set_spec(...)`.
+> - **`warm_addresses(&self) -> Box<impl Iterator<Item = Address>>`** — a boxed iterator, **NOT**
+>   `&HashSet<Address, FbBuildHasher<20>>`.
+> - **`run`** dispatches on `inputs.bytecode_address` and reads `inputs.caller` / `inputs.call_value()`
+>   / `inputs.input.bytes(ctx)` (the sketch's `target_address`/`caller_address` do not exist).
+> - **No `ctx.ext()` accessor (G10).** The typed extension `AvaCtxExt` rides on **`ContextTr::Chain`**
+>   (read via `ctx.chain()`), not a separate `ext` slot. M6.21 ships the `AvaCtxExt`/`PredicateResults`/
+>   `AvaBlockCtx` plumbing; M6.22 builds the custom `EvmFactory` that installs it on the Chain slot.
+> - **`PrecompileError`** has only `Fatal(String)` / `FatalAny(AnyError)` — no `Other` variant.
+>
+> M6.21 implements **registry + height-gated provider + `EthPrecompiles` fall-through ONLY**; the actual
+> warp/allowlist/feemanager/nativeminter/rewardmanager bodies and the live-handler `EvmFactory` install
+> are **M6.22**. The integration seam on `AvaEvmConfig` (M6.6-owned `evmconfig.rs`, additive) is
+> `with_precompiles(registry)` + `precompiles_for_header(header)` + `ctx_ext_for_header(header)`.
 
 The **predicate pass** that *populates* `AvaCtxExt::predicates` runs in
 `AvaBlockExecutor::apply_pre_execution_changes` (§17.4), driven by the proposervm

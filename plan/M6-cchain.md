@@ -189,14 +189,29 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 >    burn); revm default LONDON burns it (tip=0). Sender pays identically; only coinbase differs. Fixture's
 >    expected root uses the revm burn model. The base-fee-recipient override is **M6.13** scope (`next_evm_env`).
 
-### Task M6.7: Block wire format `decode_ava_evm_block`/`assemble_ava_block` → `golden::cchain_block_wire`
+### Task M6.7: Block wire format `decode_ava_evm_block`/`assemble_ava_block` → `golden::cchain_block_wire` ✅ DONE (c28e1e5)
 **Crate:** ava-evm  ·  **Depends on:** M6.5, M6.6  ·  **Spec:** 10 §9.3, §6.2; 02 §6
 **Files:** `crates/ava-evm/src/block.rs`, `crates/ava-evm/tests/block_wire.rs`, `crates/ava-evm/tests/vectors/cchain/block_wire/*.json`
-- [ ] **Step 1 — Red:** `crates/ava-evm/tests/block_wire.rs` `#[test] fn cchain_block_wire()` (exit-gate name): for committed Go-produced block bytes (incl. one block carrying atomic txs in ExtraData/body), assert `decode_ava_evm_block(bytes, &spec)` round-trips and `assemble_ava_block(...)` re-encodes byte-identically, and the recovered block **ID matches** the golden ID (consensus-critical).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm cchain_block_wire` → fails.
-- [ ] **Step 3 — Green:** Implement `block.rs`: `decode_ava_evm_block` (alloy RLP Ethereum block + atomic-tx extraction from ExtraData/body, fork-gated per §6.2), `assemble_ava_block`, sender recovery, `EvmBlock` enum states (`unverified`/`built`). Block ID = Go encoding hash. Commit block-wire golden vectors (incl. atomic-bearing block) with provenance.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm cchain_block_wire` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: block wire decode/assemble + ID parity (golden::cchain_block_wire)`
+- [x] **Step 1 — Red:** `crates/ava-evm/tests/block_wire.rs` `#[test] fn cchain_block_wire()` (exit-gate name): for committed Go-produced block bytes (incl. one block carrying atomic txs in ExtraData/body), assert `decode_ava_evm_block(bytes, &spec)` round-trips and `assemble_ava_block(...)` re-encodes byte-identically, and the recovered block **ID matches** the golden ID (consensus-critical).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm cchain_block_wire` → fails.
+- [x] **Step 3 — Green:** Implement `block.rs`: `decode_ava_evm_block` (alloy RLP Ethereum block + atomic-tx extraction from ExtraData/body, fork-gated per §6.2), `assemble_ava_block`, sender recovery, `EvmBlock` enum states (`unverified`/`built`). Block ID = Go encoding hash. Commit block-wire golden vectors (incl. atomic-bearing block) with provenance.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm cchain_block_wire` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: block wire decode/assemble + ID parity (golden::cchain_block_wire)`
+
+> **AS-BUILT (M6.7).** **Resolves the M6.6 "coreth header not alloy-decodable" finding.** coreth block bytes =
+> `RLP([Header, Txs, Uncles, Version(u32), ExtData(bytes)])` — geth's `Withdrawals` slot is REPLACED by
+> `Version`+`ExtData` (coreth `block_ext.go`); **block ID = `keccak256(header RLP)`**. The header (`AvaHeader`) =
+> 15 standard eth fields + **`ExtDataHash` (ALWAYS present, field 16)** + an RLP-optional tail with the standard
+> "any later field present ⇒ all earlier present" discipline: `BaseFee`(AP3), `ExtDataGasUsed`+`BlockGasCost`(AP4),
+> `BlobGasUsed`+`ExcessBlobGas`(4844), `ParentBeaconRoot`(4788), `TimeMilliseconds`+`MinDelayExcess`(Granite).
+> `ExtData` carries the AP5 atomic **batch** (`atomic.Codec.Marshal(0, []*Tx)`) post-AP5 / a single tx pre-AP5;
+> `ExtDataHash = keccak256(rlp(ExtData))` or `EmptyExtDataHash` (`56e81f17…b421`) when empty. `EvmBlock` enum
+> states `Unverified`/`Built`; added `AvaBlockParts`, `recover_senders`, `empty_ext_data_hash`. **Both golden
+> vectors are real coreth output** (avalanchego rev `fb174e8…`, go1.25.10): a plain AP3 block (reused from the
+> M6.6 fixture's `block1_rlp`) and an AP4+ block carrying one signed atomic Import tx in `ExtData`; round-trip
+> byte-identical + hash-stable. Facade re-exports added: `RLP_EMPTY_STRING_CODE, RlpError, RlpListHeader,
+> rlp_length_of_length` (alloy-rlp). **GOTCHA:** after editing the facade, `touch crates/ava-evm-reth/src/lib.rs`
+> to bust a stale-rlib cache before rebuilding `ava-evm` in the same Nix shell.
 
 ### Task M6.8: C-Chain genesis parse + `golden::cchain_genesis_root`
 **Crate:** ava-evm  ·  **Depends on:** M6.4, M6.5  ·  **Spec:** 10 §11.1, §8.3; 02 §6
@@ -246,14 +261,22 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > `dynamic_fee_windower.go` / `ap4/cost.go`: AbsDiff, `defaultCost` on overflow/underflow, clamp order
 > faithful). No facade re-exports; only dep added is `ruint`. No spec corrections needed.
 
-### Task M6.12: `feerules::acp176` Fortuna/ACP-176 + ACP-226 (G2)
+### Task M6.12: `feerules::acp176` Fortuna/ACP-176 + ACP-226 (G2) ✅ DONE (5d33835)
 **Crate:** ava-evm  ·  **Depends on:** M6.11  ·  **Spec:** 21 §5; 10 §7.1, §17.3 (G2)
 **Files:** `crates/ava-evm/src/feerules/acp176.rs`, `crates/ava-evm/src/feerules/acp226.rs`, `crates/ava-evm/tests/vectors/cchain/fees/acp176/*.json`
-- [ ] **Step 1 — Red:** Golden tests from 21 §5: `Acp176::{target, gas_price, advance_seconds, advance_milliseconds, update_target_excess (±Q clamp + scaleExcess floor), consume_gas}` at `excess ∈ {0,K}`, the `K=T·87` doubling identity, 24-byte big-endian state serialization, and ACP-226 min-delay-excess. Note **scaleExcess rounds DOWN** (vs SAE ceil) — do not share routine.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm feerules::acp176` → fails.
-- [ ] **Step 3 — Green:** Implement `Acp176 { gas: GasState, target_excess }` per 21 §5 (constants P/D/M/Q/T2MAX/FILL/T2PRICE/maxTargetExcess), `mul_ub`, `scale_excess` (U256 floor), `AvaFeeState` (canoto-blob header-extra serialization), and ACP-226. Reuse `GasState` + `calculate_price`. Commit ACP-176 golden vectors.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm feerules::acp176 feerules::acp226` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: Fortuna/ACP-176 + ACP-226 dynamic fee (G2, 21 §5)`
+- [x] **Step 1 — Red:** Golden tests from 21 §5: `Acp176::{target, gas_price, advance_seconds, advance_milliseconds, update_target_excess (±Q clamp + scaleExcess floor), consume_gas}` at `excess ∈ {0,K}`, the `K=T·87` doubling identity, 24-byte big-endian state serialization, and ACP-226 min-delay-excess. Note **scaleExcess rounds DOWN** (vs SAE ceil) — do not share routine.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm feerules::acp176` → fails.
+- [x] **Step 3 — Green:** Implement `Acp176 { gas: GasState, target_excess }` per 21 §5 (constants P/D/M/Q/T2MAX/FILL/T2PRICE/maxTargetExcess), `mul_ub`, `scale_excess` (U256 floor), `AvaFeeState` (canoto-blob header-extra serialization), and ACP-226. Reuse `GasState` + `calculate_price`. Commit ACP-176 golden vectors.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm feerules::acp176 feerules::acp226` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: Fortuna/ACP-176 + ACP-226 dynamic fee (G2, 21 §5)`
+
+> **AS-BUILT (M6.12).** `Acp176State` + `acp226::DelayExcess` per spec 21 §5; reuses
+> `ava_vm::components::gas::{GasState, calculate_price}` (NOT re-derived). `scale_excess` is **U256 floor**
+> (rounds DOWN — deliberately NOT shared with any SAE ceil routine). `mul_ub` = `saturating_mul` (Go
+> `safemath.Mul` with `MaxUint64` fallback). 38 new tests (89 total `ava-evm`), all green; no facade edits.
+> **FINDING:** `ava-evm::Error` has no `InsufficientCapacity` variant (unlike `ava-vm::Error`), so
+> `consume_gas` maps `gas.ErrInsufficientCapacity` → `Error::FeeOverflow` (consistent with §11.2's fee-fault
+> sentinel; flag for future refinement if a dedicated variant is wanted).
 
 ### Task M6.13: `next_evm_env` fee override wiring + `prop::evm_fee_schedule_per_fork`
 **Crate:** ava-evm  ·  **Depends on:** M6.11, M6.12, M6.6  ·  **Spec:** 10 §7.2, §17.3 (G2); 21 §7; 02 §4
@@ -359,14 +382,28 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm build` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: on-demand BlockBuilderDriver + precomputed-root finish (G5)`
 
-### Task M6.21: `AvaPrecompiles` `PrecompileProvider` + registry (G4/G10)
+### Task M6.21: `AvaPrecompiles` `PrecompileProvider` + registry (G4/G10) ✅ DONE (c4dc2e8)
 **Crate:** ava-evm  ·  **Depends on:** M6.6  ·  **Spec:** 10 §8, §17.5 (G4), §17.11 (G10)
 **Files:** `crates/ava-evm/src/precompile/mod.rs`, `crates/ava-evm/src/precompile/registry.rs`, `crates/ava-evm/tests/precompile_dispatch.rs`
-- [ ] **Step 1 — Red:** `fn dispatch_falls_through_and_gates_by_height()`: `AvaPrecompiles` runs a registered stateful precompile when its address is in the activated (fork+upgrade-gated) `warm` set, else falls through to `EthPrecompiles`; `for_height(t)` computes the activated set from the timestamp-keyed upgrade schedule; `contains`/`warm_addresses` correct.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm precompile_dispatch` → fails.
-- [ ] **Step 3 — Green:** Implement `AvaCtxExt { predicates, block_ctx }` (revm context extension, G4/G10), `StatefulPrecompile` trait, `PrecompileRegistry`, `AvaPrecompiles { base, modules, warm }` impl facade `PrecompileProvider` (`set_spec`/`run`/`warm_addresses`/`contains`) per §17.5, `for_height`. Wire `AvaBlockExecutorFactory::create_executor` to install `AvaPrecompiles::for_height` + `AvaCtxExt` into the revm handler. Keep all revm-shape spelling behind the facade (G0/G10).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm precompile_dispatch` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: AvaPrecompiles PrecompileProvider + registry (G4/G10)`
+- [x] **Step 1 — Red:** `fn dispatch_falls_through_and_gates_by_height()`: `AvaPrecompiles` runs a registered stateful precompile when its address is in the activated (fork+upgrade-gated) `warm` set, else falls through to `EthPrecompiles`; `for_height(t)` computes the activated set from the timestamp-keyed upgrade schedule; `contains`/`warm_addresses` correct.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm precompile_dispatch` → fails.
+- [x] **Step 3 — Green:** Implement `AvaCtxExt { predicates, block_ctx }` (revm context extension, G4/G10), `StatefulPrecompile` trait, `PrecompileRegistry`, `AvaPrecompiles { base, modules, warm }` impl facade `PrecompileProvider` (`set_spec`/`run`/`warm_addresses`/`contains`) per §17.5, `for_height`. Wire `AvaBlockExecutorFactory::create_executor` to install `AvaPrecompiles::for_height` + `AvaCtxExt` into the revm handler. Keep all revm-shape spelling behind the facade (G0/G10).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm precompile_dispatch` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: AvaPrecompiles PrecompileProvider + registry (G4/G10)`
+
+> **AS-BUILT (M6.21).** `registry.rs`: `AvaPrecompiles` (impl facade `PrecompileProvider`), `PrecompileRegistry`,
+> `PrecompileModule`, `StatefulPrecompile` trait, `AvaCtxExt`/`PredicateResults`/`AvaBlockCtx` (G10 context-ext
+> plumbing — fields reserved for M6.22's warp predicate results), `PrecompileCtx`, `for_height`/`contains_stateful`/
+> `dispatch_stateful`/`warm_addresses_vec`. **Registry + provider + height-gating + EthPrecompiles fall-through
+> ONLY; actual warp/allowlist/feemanager bodies are M6.22.** Integration is a **clean seam, NOT invasive wiring**:
+> `evmconfig.rs` (M6.6-owned) gained additive `chain_spec`/`precompiles` fields + `with_precompiles(registry)`
+> (M6.22 registration), `precompiles_for_header(header)` (height-gated §17.5 create-executor seam),
+> `ctx_ext_for_header(header)` (G10). Installing `AvaPrecompiles` into the live revm handler needs a custom
+> `EvmFactory`/`ConfigureEvm` (would churn the M6.6 bare-executor path) → **deferred to M6.22**, which builds the
+> factory that drops `AvaPrecompiles` + `AvaCtxExt` onto the `ContextTr::Chain` slot. Facade re-exports added:
+> `Cfg, ContextTr` (context_interface), `EthPrecompiles, precompile_output_to_interpreter_result` (handler),
+> `CallInputs, InterpreterResult` (interpreter), `PrecompileError, PrecompileOutput, PrecompileSpecId, Precompiles`
+> (precompile). **SPEC FIXes vs §17.5/§17.11 (real revm `revm-handler` 18.1 / pinned rev):** (1) `PrecompileProvider::set_spec(&mut self, spec: <CTX::Cfg as Cfg>::Spec) -> bool` (generic over context spec, `Into<SpecId>`), NOT `set_spec(spec: SpecId)`. (2) `warm_addresses` returns `Box<impl Iterator<Item=Address>>`, NOT `&HashSet<…>`. (3) `run` dispatch uses `inputs.bytecode_address`/`inputs.caller`/`inputs.call_value()`/`inputs.input.bytes(ctx)` (no `target_address`/`caller_address`). (4) **No `ctx.ext()` accessor** — the typed extension rides on `ContextTr::Chain` via `ctx.chain()`. (5) `PrecompileError` has only `Fatal(String)`/`FatalAny(AnyError)` — no `Other`.
 
 ### Task M6.22: Predicate pass + Warp precompile over `ava-warp` (G4/C10)
 **Crate:** ava-evm  ·  **Depends on:** M6.21, M6.15  ·  **Spec:** 20 §7 (precompile ABI, predicate, gas), 10 §6.5, §8.2, §17.5 (G4)
@@ -446,7 +483,7 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** All commands above exit 0; exit tests pass; differential::cchain_state_root green in recorded mode.
 - [ ] **Step 5 — Commit:** `ava-evm: M6 exit gate — C-Chain on reth green; avalanchers runs C-Chain`
 
-### Task M6.30: 5-field account-RLP state-encoding parity (libevm `StateAccount.Extra`)  ⟸ NEW (surfaced by M6.6)
+### Task M6.30: 5-field account-RLP state-encoding parity (libevm `StateAccount.Extra`)  ✅ DONE (a753201) ⟸ NEW (surfaced by M6.6)
 **Crate:** ava-evm  ·  **Depends on:** M6.3/M6.4 (state.rs)  ·  **Blocks:** real-mainnet `differential::cchain_state_root` (M6.29)  ·  **Spec:** 10 §5/§17.2; 04 §4
 **Files:** `crates/ava-evm/src/state.rs` (`rlp_account`/`decode_rlp_account`), `crates/ava-evm/tests/vectors/cchain/account_rlp/*.json`
 **Why:** M6.6 found coreth's libevm `types.StateAccount` serializes a **5th `Extra` field** (empty `0x80` for an
@@ -455,16 +492,30 @@ Firewood-ethhash) yields a DIFFERENT trie root than coreth's real StateDB (`0x32
 coreth). The M6.6 fixture's `expected_root` is over the 4-field encoding, so today `cchain_state_root` proves
 Rust↔Go internal consistency, NOT parity with the on-chain coreth root. **Real recorded-mainnet reexecute
 parity requires matching libevm's account encoding byte-for-byte.**
-- [ ] **Step 1 — Red:** Characterize libevm's `StateAccount` encoding exactly (what `Extra` carries for C-Chain
+- [x] **Step 1 — Red:** Characterize libevm's `StateAccount` encoding exactly (what `Extra` carries for C-Chain
   EOAs vs contracts; whether it is ever non-empty on mainnet). Add a golden vector with the coreth-StateDB
   5-field root (Go-authoritative) and a failing assertion that `state.rs` produces it.
-- [ ] **Step 2 — Confirm red:** root mismatch (4-field vs 5-field).
-- [ ] **Step 3 — Green:** Emit/decode the 5th field in `rlp_account`/`decode_rlp_account` (and anywhere account
+- [x] **Step 2 — Confirm red:** root mismatch (4-field vs 5-field).
+- [x] **Step 3 — Green:** Emit/decode the 5th field in `rlp_account`/`decode_rlp_account` (and anywhere account
   RLP is materialized: genesis alloc M6.8, atomic hook M6.15). Re-point the M6.6 fixture `expected_root` to the
   5-field (coreth) root.
-- [ ] **Step 4 — Confirm green:** `cchain_state_root` passes against the coreth StateDB root; genesis-root
+- [x] **Step 4 — Confirm green:** `cchain_state_root` passes against the coreth StateDB root; genesis-root
   parity (M6.8) holds against real Mainnet/Fuji C-Chain genesis roots.
-- [ ] **Step 5 — Commit:** `ava-evm: 5-field libevm StateAccount RLP for coreth state-root parity`
+- [x] **Step 5 — Commit:** `ava-evm: 5-field libevm StateAccount RLP for coreth state-root parity`
+
+> **AS-BUILT (M6.30).** libevm `StateAccount` 5th field = RLP `false` (`0x80`, the libevm `isMultiCoin`
+> bool) for C-Chain EOAs — **empty for ordinary accounts**; coreth uses the standard 4 fields plus this one
+> boolean extra. `rlp_account` now emits 5-field by byte-patching the alloy 4-field output (bump the list
+> length byte +1, append `0x80`); `decode_rlp_account` parses the `[0xf8,L]` list header, decodes the 4
+> required fields, ignores the rest (forward-compatible). Vectors updated to 5-field: `account_rlp/eoa_one_ether.json`
+> (`0xf84c…` → `0xf84d…80`) and the M6.6 reexecute fixture (`genesis_state_root` `0x3292…`→`0x9cb21ede…`,
+> `expected_post_state_root` `0x5784…`→`0x4027f3ed…`). **IMPORTANT scope note:** the re-pointed
+> `expected_post_state_root` is the 5-field root **over the revm BURN fee model** (2 accounts: sender+recipient),
+> Go-verified via a standard-MPT scratch test — it is NOT yet coreth's 3-account on-chain root
+> (`0x8b0bf834…`, retained as `coreth_post_state_root_5field` doc) because coreth's `dummy.NewCoinbaseFaker`
+> CREDITS the base fee to the coinbase. So M6.30 closes the **encoding** half of coreth state-root parity; the
+> **base-fee-to-coinbase** half remains **M6.13** (`next_evm_env` recipient override). Both must land for the
+> real-mainnet `differential::cchain_state_root` exit gate (M6.29). 51 `ava-evm` tests green; no facade edits.
 
 ---
 
