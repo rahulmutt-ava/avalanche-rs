@@ -459,6 +459,16 @@ The Go `runtime.AddCleanup` GC-leak counter (`InMemoryBlockCount`) maps to a
 
 ## 5. Adaptor — exposing SAE as a Snowman `ChainVM` (cross-ref 06/07)
 
+> **AS-BUILT (M7.10) — crate-name mapping.** The M3 VM framework is entirely in
+> the **`ava-vm`** crate (not `ava-engine`). The sketch below names
+> `ava_vm::CommonVm`, `ava_engine::block::ChainVm`, and `block::Context`; the
+> implementation maps these to **`ava_vm::Vm`** (the base VM trait),
+> **`ava_vm::ChainVm`** (`= ava_vm::block::ChainVm`), and **`ava_vm::BlockContext`**
+> respectively, and the wrapper `Block` implements **`ava_vm::Block`** (re-export
+> of `ava_snow::Block`). `ava_vm::Error` is mapped to
+> `ava_snow::Error::ParametersInvalid(..)` at the block verify/accept/reject
+> boundary (no built-in conversion exists).
+
 `ava-saevm-adaptor` (Go `adaptor/`) is a **generic bridge**: it converts a
 `ChainVm<BP>` (a VM that returns *plain block-property* objects and takes the
 state-changing methods on the VM itself) into the `block::ChainVm` +

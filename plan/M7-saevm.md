@@ -82,14 +82,15 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-cmputils` passes.
 - [ ] **Step 5 — Commit:** `sae(cmputils): 128-bit-widening fraction comparison helper`
 
-### Task M7.5: `ava-saevm-proxytime` — `Time<D: ProxyUnit>` (tick/fast_forward/set_rate/compare)
+### Task M7.5: `ava-saevm-proxytime` — `Time<D: ProxyUnit>` (tick/fast_forward/set_rate/compare) ✅ DONE (67b6e8d merge; 8c5ec2a u64-impl)
 **Sub-crate:** ava-saevm-proxytime  ·  **Depends on:** M7.3  ·  **Spec:** `11` §2.1, `21` §6
-**Files:** `crates/ava-saevm/proxytime/src/lib.rs`, `crates/ava-saevm/proxytime/tests/proxytime_prop.rs`, `crates/ava-saevm/proxytime/proptest-regressions/`
-- [ ] **Step 1 — Red:** `tests/proxytime_prop.rs`: proptest `tick_monotone` (never goes backward), `fraction_invariant` (`fraction < hertz` always holds), `set_rate_rounds_up` (rescale rounds up for monotonicity), `fast_forward_only_forward` (returns 0 if `to` not in future), `compare_consistent_across_rates` (two instants at different `hertz` compare identically to a widening reference, using M7.4 `compare_fractions`).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-proxytime` → missing `Time`.
-- [ ] **Step 3 — Green:** Implement `pub trait ProxyUnit: Copy + Ord + Into<u128>` and `pub struct Time<D: ProxyUnit> { seconds: u64, fraction: D, hertz: D }` with `tick(d)`, `rate()`, `fraction() -> FractionalSecond<D>`, `fast_forward_to(to, to_frac) -> (u64, FractionalSecond<D>)`, `set_rate(hertz)` (round up), `compare(&self,&Self) -> Ordering` (cross-multiply via M7.4), `as_time() -> SystemTime` (metrics only). Mirror `proxytime.go`. Persisted form is canoto-compatible (`ava-codec`); add a round-trip test.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-proxytime` passes; commit regressions.
-- [ ] **Step 5 — Commit:** `sae(proxytime): newtype-parameterised Time<D> with checked tick/fast-forward/set-rate`
+**Files:** `crates/ava-saevm/proxytime/src/lib.rs`, `crates/ava-saevm/proxytime/tests/proxytime_prop.rs`
+> **AS-BUILT (M7.5).** `ProxyUnit: Copy + Ord + Into<u128> + From<u64>` (the extra `From<u64>` supertrait lets `Time<D>` convert `u128` remainders back to `D` without a forbidden `as` cast; all `D` are `~u64`). `Time<D> { seconds: u64, fraction: D, hertz: D }` with `tick`/`rate`/`fraction`/`fast_forward_to`/`set_rate`/`compare`/`unix_seconds`/`as_time` + `encode()->[u8;24]`/`decode`. **`compare` cross-multiplies INLINE in `u128`** (not via `cmputils::compare_fractions`, which is `u64`-only) — `D: Into<u128>`, so narrowing to u64 could truncate; the algorithm is byte-identical to cmputils/Go `bits.Mul64`. `cmputils` is therefore a **dev-dependency only**, used as the test oracle in `compare_consistent_across_rates`. **`impl ProxyUnit for u64` lives in proxytime itself** (where the trait is local → orphan-rule-legal): the canonical SAE gas-clock unit, so `gastime` wraps `Time<u64>` and `types` persists `Time<u64>`, both converting to/from `ava_vm::Gas`/`Price` at their boundaries — **neither depends on the other** (the orphan rule blocks `impl ProxyUnit for ava_vm::Gas` outside proxytime/ava-vm, and adding `ava-vm` to leaf `proxytime` was rejected). Serialised form = big-endian `[seconds, fraction, hertz]` (24 bytes); exact Go-canoto parity deferred to M7.8/M7.29. 17 tests; `lint_saevm.sh` exit 0.
+- [x] **Step 1 — Red:** `tests/proxytime_prop.rs`: `tick_monotone`, `fraction_invariant_after_{tick,set_rate}`, `set_rate_rounds_up_prop`, `fast_forward_only_forward_{advance,no_advance}`, `compare_consistent_across_rates` (now cross-checked against `cmputils::compare_fractions` as the u64 oracle) + golden + `serialization_roundtrip` + `time_over_u64_is_usable`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-saevm-proxytime` → missing `Time`.
+- [x] **Step 3 — Green:** Implemented `ProxyUnit` (+ `impl for u64`) and `Time<D>` per the AS-BUILT note. Mirrors `proxytime.go`.
+- [x] **Step 4 — Confirm green:** 17 tests pass; `lint_saevm.sh` exit 0; rustfmt clean.
+- [x] **Step 5 — Commit:** `sae(proxytime): newtype-parameterised Time<D> with checked tick/fast-forward/set-rate`
 
 ### Task M7.6: `ava-saevm-gastime` — the SAE gas clock (Tau-pinned rate, excess, before/tick/after_block)
 **Sub-crate:** ava-saevm-gastime  ·  **Depends on:** M7.2, M7.3, M7.5, M6 (`ava-types::{Gas,GasPrice}`, `ava-gas::calculate_price`)  ·  **Spec:** `11` §2.2, `21` §6 (gastime/acp176/config)
@@ -127,14 +128,15 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-hook` passes.
 - [ ] **Step 5 — Commit:** `sae(hook): Points/PointsG trait seam + Op (mint/burn) + Settled gas-clock`
 
-### Task M7.10: `ava-saevm-adaptor` — generic `ChainVm<BP>` → Snowman `block::ChainVm`
-**Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.1, M3 (`ava-engine::block`, `ava-vm::CommonVm`)  ·  **Spec:** `11` §5
+### Task M7.10: `ava-saevm-adaptor` — generic `ChainVm<BP>` → Snowman `block::ChainVm` ✅ DONE (55eb060)
+**Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.1, M3 (`ava-vm`)  ·  **Spec:** `11` §5
 **Files:** `crates/ava-saevm/adaptor/src/lib.rs`, `crates/ava-saevm/adaptor/tests/adaptor_conformance.rs`
-- [ ] **Step 1 — Red:** `tests/adaptor_conformance.rs`: implement a tiny in-memory `FakeChainVm` returning `FakeBlockProperties`; `convert()` it and assert the resulting `block::ChainVm` forwards `verify/accept/reject` back to the VM (`AcceptBlock` called once), returns `ShouldVerifyWithContext == true`, and threads `block::Context`. (`06`/`07` conformance.)
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-adaptor` → missing `ChainVm`/`convert`.
-- [ ] **Step 3 — Green:** Define `trait BlockProperties` (`id/parent/bytes/height/timestamp`) and `#[async_trait] trait ChainVm<BP: BlockProperties>: CommonVm` (state-changing methods on the VM: `verify_block/accept_block/reject_block/set_preference/build_block/get_block/parse_block/last_accepted/get_block_id_at_height`). Implement `pub fn convert<BP,V>(vm: Arc<V>) -> impl block::ChainVm` with a wrapper `Block` that forwards `snowman::Block` calls to its owning VM (block does not know the VM). Cite `adaptor/`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-adaptor` passes.
-- [ ] **Step 5 — Commit:** `sae(adaptor): generic ChainVm<BP> → Snowman block::ChainVm bridge`
+> **AS-BUILT (M7.10). Spec→Rust crate-name mapping (the M3 framework is entirely in `ava-vm`, not `ava-engine`):** `ava_vm::CommonVm` → **`ava_vm::Vm`**; `ava_engine::block::ChainVm` → **`ava_vm::ChainVm`** (= `ava_vm::block::ChainVm`); `block::Context` → **`ava_vm::BlockContext`**; the Snowman block trait the wrapper implements → **`ava_vm::Block`** (re-export of `ava_snow::Block`). The local generic trait is `crate::ChainVm<BP>`; the consensus trait is referenced by full path to disambiguate. `convert<BP,V>(Arc<V>) -> impl ava_vm::ChainVm` wraps the VM in an `Adaptor` whose `AdaptorBlock` forwards `verify/accept/reject` to the owning VM (block does not know the VM); advertises `ShouldVerifyWithContext = true`. **Error mapping:** `ava_vm::Error` → `ava_snow::Error::ParametersInvalid(e.to_string())` at the block boundary (no built-in conversion; `ava_snow::Error` has no generic "other"). **Path-dep depth = `../../../ava-vm`** (3 levels: `crates/ava-saevm/adaptor/` → `crates/`). 9 conformance tests. **NOTE — see the `lint_saevm.sh` `--no-deps` fix (commit 4fb7c2a):** the adaptor is the first SAE crate to depend on the heavy workspace (ava-vm→ava-snow→ava-utils); the old script's `-- -D` flags leaked the SAE arithmetic/cast bar onto those non-SAE deps → 46 spurious ava-utils failures. Fixed by `--no-deps`; the adaptor's own 4 test-only violations (`as u8` casts + a pedantic struct-field lint) were then fixed.
+- [x] **Step 1 — Red:** `tests/adaptor_conformance.rs`: in-memory `FakeChainVm`/`FakeBlockProperties`; `convert()` + assert `verify/accept/reject` forward to the VM (counters), `ShouldVerifyWithContext == true`, `BlockContext` threads through.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-saevm-adaptor` → missing `ChainVm`/`convert`.
+- [x] **Step 3 — Green:** `BlockProperties` + generic `ChainVm<BP>: ava_vm::Vm` + `convert()` wrapper `AdaptorBlock` forwarding to its owning VM. Per the AS-BUILT mapping above.
+- [x] **Step 4 — Confirm green:** 9 tests pass; `lint_saevm.sh` (--no-deps) exit 0; rustfmt clean.
+- [x] **Step 5 — Commit:** `sae(adaptor): generic ChainVm<BP> → Snowman block::ChainVm bridge`
 
 ### Task M7.11: `ava-saevm-blocks` — byte-exact SAE block + lifecycle state machine
 **Sub-crate:** ava-saevm-blocks  ·  **Depends on:** M7.6, M7.5, M7.2, M7.8, M7.9, M7.10, M6 (`reth_primitives::SealedBlock`, alloy_rlp)  ·  **Spec:** `11` §4, §1.2/§1.3, §10 (invariants 3/5/8)
