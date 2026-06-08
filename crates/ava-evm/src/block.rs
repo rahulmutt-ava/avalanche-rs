@@ -31,14 +31,20 @@
 //! (`RlpListHeader` = `alloy_rlp::Header`, the list-framing primitive) so the
 //! crate never names `alloy_rlp` directly (G0).
 
+use std::sync::Arc;
+
 use ava_evm_reth::{
-    Address, B256, Bytes, Decodable2718, RLP_EMPTY_STRING_CODE, RecoveredTx, RlpDecodable,
-    RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, TransactionSigned, U256, keccak256,
+    Address, B256, Bytes, Decodable2718, ExternalConsensusExecutor, Header, RLP_EMPTY_STRING_CODE,
+    RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, State,
+    StateBuilder, StateProviderDatabase, TransactionSigned, U256, keccak256,
 };
 
 use crate::atomic::tx::{Tx as AtomicTx, codec as atomic_codec};
+use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::{Error, Result};
+use crate::evmconfig::{AvaEvmConfig, NoopPreHook};
+use crate::state::{FirewoodStateProvider, FirewoodStateView};
 
 /// `customtypes.EmptyExtDataHash` = `keccak256(rlp(nil))` — the `ExtDataHash` of
 /// a block with no atomic txs (coreth `hashes_ext.go`).
@@ -328,6 +334,35 @@ impl EvmBlock {
         &self.inner().parts.header
     }
 
+    /// The header's declared state root (`header.Root`) — the value `verify`
+    /// asserts the Firewood pre-commit root equals (spec 10 §3.2).
+    #[must_use]
+    pub fn header_state_root(&self) -> &B256 {
+        &self.inner().parts.header.state_root
+    }
+
+    /// The header's parent hash (`header.ParentHash`).
+    #[must_use]
+    pub fn parent_hash(&self) -> &B256 {
+        &self.inner().parts.header.parent_hash
+    }
+
+    /// The decoded block parts (header, txs, atomic txs, ext data, version).
+    #[must_use]
+    pub fn parts(&self) -> &AvaBlockParts {
+        &self.inner().parts
+    }
+
+    /// Consumes the block, returning its parts (header + body). Used by the
+    /// builder / re-assembly paths and tests that need to adjust a field and
+    /// re-assemble (e.g. patch `header.state_root` to the executor's root).
+    #[must_use]
+    pub fn into_parts(self) -> AvaBlockParts {
+        match self {
+            EvmBlock::Unverified(i) | EvmBlock::Built(i) => i.parts,
+        }
+    }
+
     /// The signed EVM transactions (block body).
     #[must_use]
     pub fn transactions(&self) -> &[TransactionSigned] {
@@ -369,6 +404,193 @@ impl EvmBlock {
             .iter()
             .map(|tx| tx.clone().try_into_recovered().map_err(|_| Error::NilTx))
             .collect()
+    }
+
+    /// Builds the reth [`Header`] this block executes as (the env header for
+    /// `evm_env_for_header`). Maps the consensus-relevant fields of the coreth
+    /// [`AvaHeader`] (parent hash, number, timestamp, gas limit, base fee,
+    /// coinbase, extra data) onto reth's standard header; the coreth-specific
+    /// extras (`ext_data_hash`, AP4 fields, …) are not part of the EVM execution
+    /// env. The base fee is narrowed to `u64` (a header base fee never exceeds
+    /// `u64::MAX` wei on the C-Chain; an out-of-range value is a malformed header).
+    fn eth_env_header(&self) -> Result<Header> {
+        let h = self.header();
+        let base_fee_per_gas = match h.base_fee {
+            Some(bf) => Some(u64::try_from(bf).map_err(|_| Error::NilBaseFee)?),
+            None => None,
+        };
+        Ok(Header {
+            parent_hash: h.parent_hash,
+            number: h.number,
+            timestamp: h.time,
+            gas_limit: h.gas_limit,
+            gas_used: h.gas_used,
+            base_fee_per_gas,
+            beneficiary: h.coinbase,
+            extra_data: h.extra.clone(),
+            ..Default::default()
+        })
+    }
+}
+
+/// The dependencies the [`EvmBlock`] lifecycle (§3.1) needs: the Firewood
+/// state-of-record provider, the EVM config (executor), and the canonical
+/// block-metadata store (G6). Held by the `ChainVm` adapter (M6.10) and passed by
+/// reference into `verify`/`accept`/`reject`.
+///
+/// The synchronous spec-06 `Block` trait (`ava_snow::snowman::Block`) is `&self`
+/// with no VM handle, so the lifecycle is exposed here as inherent methods that
+/// take this context explicitly; the trait `impl` (which bundles a block with its
+/// context) lands with the adapter in M6.10.
+pub struct EvmBlockContext {
+    state: Arc<FirewoodStateProvider>,
+    evm_config: AvaEvmConfig,
+    canonical: Arc<CanonicalStore>,
+}
+
+impl EvmBlockContext {
+    /// Builds a lifecycle context from its three collaborators.
+    #[must_use]
+    pub fn new(
+        state: Arc<FirewoodStateProvider>,
+        evm_config: AvaEvmConfig,
+        canonical: Arc<CanonicalStore>,
+    ) -> Self {
+        Self {
+            state,
+            evm_config,
+            canonical,
+        }
+    }
+
+    /// The Firewood state-of-record provider.
+    #[must_use]
+    pub fn state(&self) -> &Arc<FirewoodStateProvider> {
+        &self.state
+    }
+
+    /// The canonical (non-state) block-metadata store (G6).
+    #[must_use]
+    pub fn canonical(&self) -> &Arc<CanonicalStore> {
+        &self.canonical
+    }
+
+    /// The chain spec backing the EVM config (used to decode block bytes).
+    #[must_use]
+    pub fn chain_spec(&self) -> &AvaChainSpec {
+        self.evm_config.chain_spec().as_ref()
+    }
+
+    /// The EVM config (executor) backing this context.
+    #[must_use]
+    pub fn evm_config(&self) -> &AvaEvmConfig {
+        &self.evm_config
+    }
+}
+
+impl EvmBlock {
+    /// **Verify** (spec 10 §3.1/§3.2, 06 linear acceptance): semantic-execute this
+    /// block against its parent state and compute the Firewood **pre-commit root**
+    /// without committing.
+    ///
+    /// Steps:
+    /// 1. Recover EVM tx senders.
+    /// 2. Open a Firewood read view at `parent_state_root` and an in-memory revm
+    ///    overlay over it.
+    /// 3. Drive [`AvaEvmConfig::execute_batch`] (the bare reth `BlockExecutor`)
+    ///    over the recovered txs.
+    /// 4. Convert the returned `BundleState` to a Firewood proposal via
+    ///    [`FirewoodStateProvider::propose_from_bundle`] — this computes the
+    ///    pre-commit root **and stashes** the proposal ops keyed by that root, so
+    ///    [`EvmBlock::accept`] can commit exactly it.
+    /// 5. Assert the pre-commit root equals `header.state_root` and that the
+    ///    executed gas matches `header.gas_used`.
+    ///
+    /// Returns the verified pre-commit root (== `header.state_root`). The EVM tip
+    /// is **not** advanced (the proposal is only committed on accept).
+    ///
+    /// # Errors
+    /// Returns [`Error`] if the parent view is unavailable, execution fails, the
+    /// computed root disagrees with the header, or gas usage disagrees.
+    pub fn verify(&self, ctx: &EvmBlockContext, parent_state_root: B256) -> Result<B256> {
+        let txs = self.recover_senders()?;
+
+        // Parent state view + revm overlay (the verify path, spec 10 §3.2).
+        let view = ctx.state.history_by_state_root(parent_state_root)?;
+        let mut state: State<StateProviderDatabase<FirewoodStateView>> = StateBuilder::new()
+            .with_database(StateProviderDatabase::new(view))
+            .with_bundle_update()
+            .build();
+
+        // Semantic execute the EVM txs (atomic pre-hook is NoopPreHook here; the
+        // atomic Import/Export pre-hook is wired with the atomic backend, M6.15).
+        let env = ctx.evm_config.evm_env_for_header(&self.eth_env_header()?);
+        let outcome = ctx
+            .evm_config
+            .execute_batch(env, &mut state, &NoopPreHook, &txs)?;
+
+        // Pre-commit root via Firewood propose (NOT committed); stashes by root.
+        let precommit = ctx.state.propose_from_bundle(&outcome.bundle)?;
+
+        // The load-bearing semantic check (spec 10 §3.2): the computed pre-commit
+        // root must equal the header's declared state root.
+        let declared = self.header().state_root;
+        if precommit != declared {
+            // Drop the just-stashed proposal: this block is invalid, nothing should
+            // remain commit-able for this root.
+            ctx.state.discard(precommit);
+            return Err(Error::MissingProposal(declared));
+        }
+        // Gas accounting must agree with the header.
+        if outcome.result.gas_used != self.header().gas_used {
+            ctx.state.discard(precommit);
+            return Err(Error::NoGasUsed);
+        }
+
+        Ok(precommit)
+    }
+
+    /// **Accept** (spec 10 §3.1, 06 `accept_preferred_child`): linear accept —
+    /// the parent IS `last_accepted`. Commits the stashed Firewood proposal for
+    /// `precommit_root` (durably advancing the EVM tip), then appends this block to
+    /// the canonical store and advances the tip pointer. No reorgs.
+    ///
+    /// `precommit_root` is the value [`EvmBlock::verify`] returned for this block.
+    ///
+    /// # Errors
+    /// Returns [`Error::MissingProposal`] if no proposal is stashed for
+    /// `precommit_root` (verify was not run, or it was rejected), or a store error.
+    pub fn accept(&self, ctx: &EvmBlockContext, precommit_root: B256) -> Result<()> {
+        // 1. Commit the Firewood proposal -> durably advances the EVM state tip.
+        ctx.state.commit(precommit_root)?;
+
+        // 2. Append non-state block metadata + advance the canonical tip (G6,
+        //    §17.7). AtomicBackend indexing (§6) and precompile-accept callbacks
+        //    (§8) are wired by M6.15/M6.22; the canonical append is this task.
+        ctx.canonical.append_canonical(
+            self.number(),
+            self.hash(),
+            self.header().state_root,
+            self.ext_data(),
+            // Receipts bytes are persisted once the receipt encoding is wired
+            // (RPC/history task); the canonical index contract is satisfied by the
+            // header/hash/number rows + tip pointer here.
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// **Reject** (spec 10 §3.1): drop the uncommitted Firewood proposal for
+    /// `precommit_root`. No state was committed, so reject is cheap and writes
+    /// nothing to the canonical store. Siblings hold independent proposals
+    /// (proposal-on-proposal, 04 §4.2), so dropping one never disturbs another.
+    ///
+    /// # Errors
+    /// Infallible today (returns [`Result`] to match the lifecycle signature and
+    /// the spec-06 trait shape).
+    pub fn reject(&self, ctx: &EvmBlockContext, precommit_root: B256) -> Result<()> {
+        ctx.state.discard(precommit_root);
+        Ok(())
     }
 }
 

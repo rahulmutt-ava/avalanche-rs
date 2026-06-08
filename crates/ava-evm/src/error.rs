@@ -12,7 +12,7 @@
 //! error, never silent wrap — overview §6.1); [`Error::FeeOverflow`] is the
 //! sentinel that surfaces such a failure.
 
-use ava_evm_reth::{B256, BlockExecutionError, ProviderError};
+use ava_evm_reth::{AvaEvmError, B256, BlockExecutionError, ProviderError};
 
 /// C-Chain VM error. Sentinel variants mirror coreth's `errors.Is` targets so
 /// callers can `assert_matches!` / `matches!` on them exactly as Go does.
@@ -75,6 +75,26 @@ pub enum Error {
 
 /// C-Chain VM result alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Folds a facade [`AvaEvmError`] (the executor boundary error) into the C-Chain
+/// [`Error`] model: block-execution / provider errors map to their existing
+/// sentinel-carrying variants; fee overflow and fork-incompatibility map to
+/// [`Error::FeeOverflow`] / a provider error so the lifecycle (`verify`) can use
+/// `?` directly (spec 10 §11.2).
+impl From<AvaEvmError> for Error {
+    fn from(err: AvaEvmError) -> Self {
+        match err {
+            AvaEvmError::BlockExecution(e) => Error::Execution(e),
+            AvaEvmError::Provider(e) => Error::Provider(e),
+            AvaEvmError::FeeOverflow => Error::FeeOverflow,
+            AvaEvmError::IncompatibleFork { fork } => {
+                Error::Provider(ProviderError::Database(ava_evm_reth::DatabaseError::Other(
+                    format!("incompatible fork: {fork} already activated"),
+                )))
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
