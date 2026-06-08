@@ -86,11 +86,26 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+# M6.10 `EvmVm` ChainVm adapter (spec 10 §3). The adapter implements the
+# engine-facing `ava_vm::block::ChainVm` (+ its `Vm` supertrait) and returns
+# `ava_snow::Block`s; `ava-snow` supplies `EngineState` + `ChainContext` directly
+# (the avm/platformvm precedent imports both crates the same way).
+ava-snow = { path = "../ava-snow" }
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+# `verified: DashMap<Id, _>` (the processing/verified block tree) + the
+# `preferred` / `last_accepted` atomic pointers (spec 10 §3 / §17.2.2). DashMap
+# is already in the workspace lock (via reth's graph); arc-swap is a workspace dep.
+dashmap = "6"
+arc-swap = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }
+# The `tests/chainvm.rs` engine harness drives the async `ChainVm`/`Vm` surface.
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio-util = { workspace = true }
 # Building the secp256k1fx TransferInput/TransferOutput/OutputOwners payloads the
 # atomic-tx golden-vector tests embed in the reused X-Chain fx component enums.
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
