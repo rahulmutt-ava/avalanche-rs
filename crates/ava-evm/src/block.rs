@@ -39,6 +39,7 @@ use ava_evm_reth::{
     StateBuilder, StateProviderDatabase, TransactionSigned, U256, keccak256,
 };
 
+use crate::atomic::backend::AtomicBackend;
 use crate::atomic::tx::{Tx as AtomicTx, codec as atomic_codec};
 use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
@@ -446,10 +447,16 @@ pub struct EvmBlockContext {
     state: Arc<FirewoodStateProvider>,
     evm_config: AvaEvmConfig,
     canonical: Arc<CanonicalStore>,
+    /// The atomic backend (atomic trie + shared-memory apply), wired in via
+    /// [`EvmBlockContext::with_atomic_backend`] (M6.17, §6.4/§17.4). `None` until
+    /// configured — `accept` skips atomic indexing when absent (e.g. a chain with
+    /// no cross-chain activity, or tests that exercise only EVM state).
+    atomic_backend: Option<Arc<AtomicBackend>>,
 }
 
 impl EvmBlockContext {
-    /// Builds a lifecycle context from its three collaborators.
+    /// Builds a lifecycle context from its three collaborators (no atomic
+    /// backend; see [`EvmBlockContext::with_atomic_backend`] to add one).
     #[must_use]
     pub fn new(
         state: Arc<FirewoodStateProvider>,
@@ -460,7 +467,23 @@ impl EvmBlockContext {
             state,
             evm_config,
             canonical,
+            atomic_backend: None,
         }
+    }
+
+    /// Attaches an [`AtomicBackend`] so [`EvmBlock::accept`] indexes the block's
+    /// atomic txs into the atomic trie and applies the cross-chain shared-memory
+    /// batch (§17.4). Additive — existing callers keep the no-atomic behavior.
+    #[must_use]
+    pub fn with_atomic_backend(mut self, atomic_backend: Arc<AtomicBackend>) -> Self {
+        self.atomic_backend = Some(atomic_backend);
+        self
+    }
+
+    /// The attached atomic backend, if any.
+    #[must_use]
+    pub fn atomic_backend(&self) -> Option<&Arc<AtomicBackend>> {
+        self.atomic_backend.as_ref()
     }
 
     /// The Firewood state-of-record provider.
@@ -564,9 +587,17 @@ impl EvmBlock {
         // 1. Commit the Firewood proposal -> durably advances the EVM state tip.
         ctx.state.commit(precommit_root)?;
 
-        // 2. Append non-state block metadata + advance the canonical tip (G6,
-        //    §17.7). AtomicBackend indexing (§6) and precompile-accept callbacks
-        //    (§8) are wired by M6.15/M6.22; the canonical append is this task.
+        // 2. AtomicBackend indexing (§6.4/§17.4): AFTER the EVM state commit,
+        //    index this block's atomic txs into the atomic trie and apply the
+        //    cross-chain shared-memory batch (Import → Remove on source, Export →
+        //    Put on dest). Skipped when no backend is attached (M6.17).
+        if let Some(backend) = ctx.atomic_backend.as_ref() {
+            backend.accept(self.number(), self.atomic_txs())?;
+        }
+
+        // 3. Append non-state block metadata + advance the canonical tip (G6,
+        //    §17.7). precompile-accept callbacks (§8) are wired by M6.22; the
+        //    canonical append is this task.
         ctx.canonical.append_canonical(
             self.number(),
             self.hash(),

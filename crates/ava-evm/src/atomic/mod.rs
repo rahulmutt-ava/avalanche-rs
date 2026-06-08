@@ -5,6 +5,8 @@
 //! `EVMStateTransfer` state hook, semantic verify (G3, spec 10 §6).
 //! Populated by M6.14..M6.18.
 
+pub mod backend;
 pub mod hook;
 pub mod mempool;
+pub mod trie;
 pub mod tx;
