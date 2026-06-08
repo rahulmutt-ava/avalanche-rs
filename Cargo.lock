@@ -1466,6 +1466,9 @@ version = "0.1.0"
 [[package]]
 name = "ava-saevm-intmath"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+]
 
 [[package]]
 name = "ava-saevm-params"

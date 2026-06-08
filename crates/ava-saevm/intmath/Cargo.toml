@@ -10,8 +10,9 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "SAE checked integer math (mul_div/mul_div_ceil/ceil_div/bounded_{add,sub,mul} via U256 intermediate; specs/21 §6/§8). M7.1 scaffold."
+description = "SAE checked integer math (mul_div/mul_div_ceil/ceil_div/bounded_{add,sub,mul} via u128 intermediate; specs/21 §6/§8)."
 
 [dependencies]
 
 [dev-dependencies]
+proptest = { workspace = true }
