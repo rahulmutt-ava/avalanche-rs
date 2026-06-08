@@ -15,3 +15,4 @@ description = "SAE (ACP-194) protocol parameters: the Tau discipline (BlockInsta
 [dependencies]
 
 [dev-dependencies]
+trybuild = "1"

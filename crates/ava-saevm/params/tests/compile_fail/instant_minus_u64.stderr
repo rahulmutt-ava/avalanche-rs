@@ -1,0 +1,13 @@
+error[E0369]: cannot subtract `u64` from `BlockInstant`
+ --> tests/compile_fail/instant_minus_u64.rs:9:60
+  |
+9 |     let _ = ava_saevm_params::BlockInstant::from_unix(100) - 5u64;
+  |             ---------------------------------------------- ^ ---- u64
+  |             |
+  |             BlockInstant
+  |
+note: `BlockInstant` does not implement `Sub<u64>`
+ --> src/lib.rs
+  |
+  | pub struct BlockInstant(SystemTime);
+  | ^^^^^^^^^^^^^^^^^^^^^^^ `BlockInstant` is defined in another crate
