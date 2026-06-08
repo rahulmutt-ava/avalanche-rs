@@ -54,6 +54,18 @@ ava-vm = { path = "../ava-vm" }
 ava-avm = { path = "../ava-avm" }
 # sha256 of the signed bytes -> tx id (coreth `atomic/metadata.go` `Initialize`).
 ava-crypto = { path = "../ava-crypto" }
+# M6.22 warp precompile + predicate pass (spec 10 §8, spec 20 §7, G4): the
+# generic Warp/ICM envelope/payload/verifier primitives live in `ava-warp`
+# (extracted from ava-platformvm). The C-Chain warp precompile parses
+# `Message`/`AddressedCall` and runs the BLS-aggregate `verify_bit_set_signature`
+# against the source subnet's `WarpSet`.
+ava-warp = { path = "../ava-warp" }
+# The predicate pass resolves the source subnet + height-pinned `WarpSet` from a
+# `ValidatorState` (spec 20 §6.1); `ava-validators` owns those types.
+ava-validators = { path = "../ava-validators" }
+# `Bits` (the warp signer bit-set) is used when computing the per-signer
+# predicate gas (NumSigners = popcount of the signer bit-set, spec 20 §7.3).
+ava-utils = { path = "../ava-utils" }
 # R3-pinned Firewood (spec 04 §4, 00 §11.2): the ethhash (Keccak/Eth-MPT/RLP)
 # state-of-record backend. Pinned to the SAME git tag the rest of the workspace
 # (ava-merkledb) uses so the graph resolves to one firewood. We depend directly

@@ -73,6 +73,22 @@ pub struct UnsignedMessage {
 }
 
 impl UnsignedMessage {
+    /// `warp.ParseUnsignedMessage` — decode a standalone unsigned message from its
+    /// version-prefixed wire bytes (`vms/platformvm/warp/unsigned_message.go`).
+    ///
+    /// Used by the C-Chain warp precompile's `handlePrecompileAccept` (specs 20
+    /// §3.1/§7), which reconstructs the unsigned message from a `SendWarpMessage`
+    /// log's data.
+    ///
+    /// # Errors
+    /// Returns a [`CodecError`](ava_codec::error::CodecError) on an unknown
+    /// version, trailing bytes, or a short read.
+    pub fn parse(bytes: &[u8]) -> CodecResult<Self> {
+        let mut m = Self::default();
+        warp_codec().unmarshal(bytes, &mut m)?;
+        Ok(m)
+    }
+
     /// `UnsignedMessage.Bytes()` — the marshaled wire bytes (version-prefixed).
     ///
     /// # Errors
