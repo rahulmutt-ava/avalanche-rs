@@ -46,6 +46,7 @@ use ava_evm_reth::{
 };
 
 use crate::chainspec::AvaChainSpec;
+use crate::precompile::registry::{AvaCtxExt, AvaPrecompiles, PrecompileRegistry};
 use crate::state::FirewoodStateView;
 
 /// A pre-execution hook that does nothing — the reexecute / pure-EVM path, where
@@ -251,16 +252,72 @@ impl Hardforks for AvaExecutorSpec {
 pub struct AvaEvmConfig {
     /// reth's Ethereum `ConfigureEvm`, parameterised on the Avalanche exec spec.
     inner: EthEvmConfig<AvaExecutorSpec>,
+    /// The Avalanche chain spec (fork schedule) — owned here so the precompile
+    /// height-gating (`precompiles_for_header`) can read the per-block timestamp.
+    chain_spec: Arc<AvaChainSpec>,
+    /// The Avalanche stateful-precompile registry (G4, §8). `for_height` reads it
+    /// to build the activated `warm` set per block (M6.21). Defaults to empty;
+    /// M6.22 registers the warp/allowlist/feemanager/… modules from genesis +
+    /// upgrade config (§8.3) via [`AvaEvmConfig::with_precompiles`].
+    precompiles: Arc<PrecompileRegistry>,
 }
 
 impl AvaEvmConfig {
-    /// Builds the config from an [`AvaChainSpec`].
+    /// Builds the config from an [`AvaChainSpec`], with an empty precompile
+    /// registry (no Avalanche stateful precompiles active). M6.22 supplies the
+    /// populated registry via [`AvaEvmConfig::with_precompiles`].
     #[must_use]
     pub fn new(chain_spec: AvaChainSpec) -> Self {
-        let spec = AvaExecutorSpec(Arc::new(chain_spec));
+        let chain_spec = Arc::new(chain_spec);
+        let spec = AvaExecutorSpec(chain_spec.clone());
         Self {
             inner: EthEvmConfig::new(Arc::new(spec)),
+            chain_spec,
+            precompiles: Arc::new(PrecompileRegistry::new()),
         }
+    }
+
+    /// Returns a copy of this config with the given Avalanche stateful-precompile
+    /// registry installed (G4, §8). The integration seam M6.22 uses to register
+    /// the warp/allowlist/feemanager/nativeminter/rewardmanager modules.
+    #[must_use]
+    pub fn with_precompiles(mut self, precompiles: Arc<PrecompileRegistry>) -> Self {
+        self.precompiles = precompiles;
+        self
+    }
+
+    /// Builds the Avalanche [`AvaPrecompiles`] revm precompile provider for the
+    /// block described by `header`: the activated `warm` set is the registry
+    /// modules whose upgrade timestamp is `<= header.timestamp` (G4, §8.3, M6.21).
+    ///
+    /// This is the integration seam (`AvaBlockExecutorFactory::create_executor` in
+    /// §17.5): a custom `EvmFactory` (M6.22) installs this provider — together
+    /// with the [`AvaCtxExt`] returned by [`AvaEvmConfig::ctx_ext_for_header`] on
+    /// the revm context `Chain` slot (G10) — into the revm handler.
+    #[must_use]
+    pub fn precompiles_for_header(&self, header: &Header) -> AvaPrecompiles {
+        AvaPrecompiles::for_height(self.precompiles.clone(), header.timestamp)
+    }
+
+    /// Builds the revm context extension ([`AvaCtxExt`], G10/§17.5) for the block
+    /// described by `header`. M6.21 reserves the fields (empty predicate results);
+    /// M6.22's pre-execution predicate pass fills them and threads this onto the
+    /// revm context `Chain` slot.
+    #[must_use]
+    pub fn ctx_ext_for_header(&self, header: &Header) -> AvaCtxExt {
+        AvaCtxExt {
+            block_ctx: crate::precompile::registry::AvaBlockCtx {
+                timestamp: header.timestamp,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// The Avalanche chain spec (fork schedule) backing this config.
+    #[must_use]
+    pub fn chain_spec(&self) -> &Arc<AvaChainSpec> {
+        &self.chain_spec
     }
 
     /// The wrapped reth `ConfigureEvm` (the `EthEvmConfig` driving the executor).
