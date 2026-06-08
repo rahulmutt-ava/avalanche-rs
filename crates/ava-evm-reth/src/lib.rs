@@ -80,6 +80,18 @@ pub use alloy_primitives::{StorageKey, StorageValue, keccak256};
 // Minimal `alloy-rlp` surface for encoding/decoding account-leaf and slot RLP
 // values crossing into Firewood (G1, §17.2.1).
 pub use alloy_rlp::{Decodable as RlpDecodable, Encodable as RlpEncodable, encode as rlp_encode};
+// Low-level `alloy-rlp` list primitives `ava-evm::block` needs to hand-roll the
+// coreth C-Chain header/block RLP — the libevm header-extra layout (`ExtDataHash`
+// + the AP3/AP4/EIP-4844/Granite optional tail) that alloy's stock `Header`
+// decoder rejects (spec 10 §9.3 / §6.2). `RlpListHeader` is the RLP
+// `{list, payload_length}` framing struct (decode/encode a list prefix);
+// `RlpError` its decode error; `RLP_EMPTY_STRING_CODE` (=0x80) the empty-string
+// byte; `rlp_length_of_length` sizes a length-prefix when hand-encoding the
+// outer block list.
+pub use alloy_rlp::{
+    EMPTY_STRING_CODE as RLP_EMPTY_STRING_CODE, Error as RlpError, Header as RlpListHeader,
+    length_of_length as rlp_length_of_length,
+};
 
 // --- reth chain spec + fork schedule (G7, §17.8) -------------------------
 // `reth_chainspec` re-exports the whole `reth_ethereum_forks` hardfork set
