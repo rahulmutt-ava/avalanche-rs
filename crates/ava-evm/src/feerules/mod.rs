@@ -9,6 +9,8 @@
 //! `ava-vm`'s ACP-103 gas primitive; it is the same algorithm AP3/Fortuna
 //! route through, so it is re-exported here rather than re-derived.
 
+pub mod acp176;
+pub mod acp226;
 pub mod blockgas;
 pub mod window;
 
