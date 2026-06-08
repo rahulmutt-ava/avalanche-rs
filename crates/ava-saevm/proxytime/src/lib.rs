@@ -24,7 +24,7 @@
 //! # Type-bridging decision for `compare`
 //!
 //! `D: Into<u128>` (not `D: Into<u64>`), so we **cannot** call
-//! [`ava_saevm_cmputils::compare_fractions`] directly (that takes `u64`
+//! `ava_saevm_cmputils::compare_fractions` directly (that takes `u64`
 //! operands). Instead we replicate the identical algorithm inline in `u128`,
 //! which is safe because the cross-products of two values that each originally
 //! fit in `u64` always fit in `u128` (`(2^64 − 1)^2 < 2^128`). This mirrors
@@ -284,12 +284,10 @@ impl<D: ProxyUnit> Time<D> {
 
         // Extract as u64 (D: Into<u128> and all practical D are ~u64, so
         // try_from succeeds for valid values; panic if the invariant is broken).
-        let old_frac = u64::try_from(self.fraction.into())
-            .expect("broken invariant: fraction exceeds u64");
-        let old_hz = u64::try_from(self.hertz.into())
-            .expect("broken invariant: hertz exceeds u64");
-        let new_hz =
-            u64::try_from(hertz.into()).expect("new hertz exceeds u64");
+        let old_frac =
+            u64::try_from(self.fraction.into()).expect("broken invariant: fraction exceeds u64");
+        let old_hz = u64::try_from(self.hertz.into()).expect("broken invariant: hertz exceeds u64");
+        let new_hz = u64::try_from(hertz.into()).expect("new hertz exceeds u64");
 
         let new_frac = mul_div_ceil(old_frac, new_hz, old_hz)
             .expect("broken invariant: set_rate overflow (fraction < hertz must hold)");
@@ -319,7 +317,7 @@ impl<D: ProxyUnit> Time<D> {
     ///
     /// # Why inline u128 rather than `cmputils::compare_fractions`
     ///
-    /// [`ava_saevm_cmputils::compare_fractions`] takes `u64` operands, but
+    /// `ava_saevm_cmputils::compare_fractions` takes `u64` operands, but
     /// `D: Into<u128>` (not `Into<u64>`), so calling it would require a
     /// narrowing `try_from` cast that could silently truncate an unusual `D`.
     /// We replicate the identical algorithm directly in `u128`. The result is

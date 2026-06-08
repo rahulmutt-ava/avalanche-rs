@@ -43,34 +43,27 @@ fn hertz() -> impl Strategy<Value = U> {
 /// A seconds/fraction pair compatible with a given hertz (fraction < hertz).
 fn valid_time(hz: U) -> impl Strategy<Value = (u64, U)> {
     let denom = hz.0;
-    (
-        any::<u64>(),
-        (0..denom).prop_map(U),
-    )
+    (any::<u64>(), (0..denom).prop_map(U))
 }
 
 /// A valid `Time<U>` with unconstrained seconds and fraction.
 fn arb_time() -> impl Strategy<Value = Time<U>> {
-    hertz().prop_flat_map(|hz| {
-        valid_time(hz).prop_map(move |(sec, frac)| Time::new(sec, frac, hz))
-    })
+    hertz().prop_flat_map(|hz| valid_time(hz).prop_map(move |(sec, frac)| Time::new(sec, frac, hz)))
 }
 
 /// Two `Time<U>` values with the same hertz.
 fn arb_two_times_same_rate() -> impl Strategy<Value = (Time<U>, Time<U>)> {
     hertz().prop_flat_map(|hz| {
-        (valid_time(hz), valid_time(hz)).prop_map(move |((s1, f1), (s2, f2))| {
-            (Time::new(s1, f1, hz), Time::new(s2, f2, hz))
-        })
+        (valid_time(hz), valid_time(hz))
+            .prop_map(move |((s1, f1), (s2, f2))| (Time::new(s1, f1, hz), Time::new(s2, f2, hz)))
     })
 }
 
 /// Two `Time<U>` values with potentially different hertz.
 fn arb_two_times_diff_rate() -> impl Strategy<Value = (Time<U>, Time<U>)> {
     (hertz(), hertz()).prop_flat_map(|(hz1, hz2)| {
-        (valid_time(hz1), valid_time(hz2)).prop_map(move |((s1, f1), (s2, f2))| {
-            (Time::new(s1, f1, hz1), Time::new(s2, f2, hz2))
-        })
+        (valid_time(hz1), valid_time(hz2))
+            .prop_map(move |((s1, f1), (s2, f2))| (Time::new(s1, f1, hz1), Time::new(s2, f2, hz2)))
     })
 }
 
@@ -320,5 +313,21 @@ proptest! {
         };
 
         prop_assert_eq!(result, expected);
+
+        // Independent oracle: for the same-seconds case, `Time::compare` must
+        // also agree with `cmputils::compare_fractions` (the u64 widening
+        // helper), since our `U` ProxyUnit is u64-backed. This pins the
+        // documented relationship to the inline implementation (specs/11 §2.1).
+        if s1 == s2 {
+            let f1 = t1.fraction();
+            let f2 = t2.fraction();
+            let oracle = ava_saevm_cmputils::compare_fractions(
+                f1.numerator.0,
+                f1.denominator.0,
+                f2.numerator.0,
+                f2.denominator.0,
+            );
+            prop_assert_eq!(result, oracle);
+        }
     }
 }
