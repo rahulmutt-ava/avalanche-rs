@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# state::tests::prop_state_root_order_independent (spec 10 §17.2.1 / 04 §4.2):
+# the Firewood ethhash root is insertion-order independent. No failing seeds
+# recorded yet; this file is committed per plan M6.4 so future regressions are
+# shared across the team.
