@@ -1,0 +1,20 @@
+{
+  "network": "mainnet",
+  "rows": [
+    { "phase": "Launch",            "activation_unix": 0,          "spec_id": "ISTANBUL" },
+    { "phase": "ApricotPhase1",     "activation_unix": 1617199200, "spec_id": "ISTANBUL" },
+    { "phase": "ApricotPhase2",     "activation_unix": 1620644400, "spec_id": "BERLIN" },
+    { "phase": "ApricotPhase3",     "activation_unix": 1629813600, "spec_id": "LONDON" },
+    { "phase": "ApricotPhase4",     "activation_unix": 1632344400, "spec_id": "LONDON" },
+    { "phase": "ApricotPhase5",     "activation_unix": 1638468000, "spec_id": "LONDON" },
+    { "phase": "ApricotPhasePre6",  "activation_unix": 1662341400, "spec_id": "LONDON" },
+    { "phase": "ApricotPhase6",     "activation_unix": 1662494400, "spec_id": "LONDON" },
+    { "phase": "ApricotPhasePost6", "activation_unix": 1662519600, "spec_id": "LONDON" },
+    { "phase": "Banff",             "activation_unix": 1666108800, "spec_id": "LONDON" },
+    { "phase": "Cortina",           "activation_unix": 1682434800, "spec_id": "LONDON" },
+    { "phase": "Durango",           "activation_unix": 1709740800, "spec_id": "SHANGHAI" },
+    { "phase": "Etna",              "activation_unix": 1734368400, "spec_id": "CANCUN" },
+    { "phase": "Fortuna",           "activation_unix": 1744124400, "spec_id": "CANCUN" },
+    { "phase": "Granite",           "activation_unix": 1763568000, "spec_id": "CANCUN" }
+  ]
+}

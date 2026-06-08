@@ -70,9 +70,19 @@ pub use alloy_rlp::{Decodable as RlpDecodable, Encodable as RlpEncodable, encode
 // (EthereumHardfork / EthereumHardforks / ChainHardforks / ForkCondition /
 // the `Hardfork` trait). `AvaChainSpec`/`AvaHardfork` are built on top.
 pub use reth_chainspec::{
-    Chain, ChainHardforks, ChainSpec, EthChainSpec, EthereumHardfork, EthereumHardforks,
-    ForkCondition, Hardfork,
+    Chain, ChainHardforks, ChainSpec, ChainSpecBuilder, DepositContract, EthChainSpec,
+    EthereumHardfork, EthereumHardforks, ForkCondition, Hardfork,
 };
+// `BaseFeeParams` is the EIP-1559 base-fee tuple `EthChainSpec::base_fee_params_at_timestamp`
+// returns; reth-chainspec re-exports it from `alloy_eips::eip1559`.
+pub use reth_chainspec::BaseFeeParams;
+// The remaining `EthChainSpec` return types reth-chainspec does NOT re-export
+// publicly, so `AvaChainSpec` names them from their source crates (G7, §17.8):
+// the genesis block spec, the blob-fee schedule, and the (empty for Avalanche)
+// bootnode list.
+pub use alloy_eips::eip7840::BlobParams;
+pub use alloy_genesis::Genesis;
+pub use reth_network_peers::NodeRecord;
 
 // --- revm fork/spec id (G7) ----------------------------------------------
 // The Ethereum `SpecId` each Avalanche phase maps onto (revm_spec_id, §17.8).
@@ -84,7 +94,7 @@ pub use revm::handler::PrecompileProvider;
 pub use revm::state::{Account as RevmAccount, AccountInfo, Bytecode};
 
 // --- alloy primitives / consensus types crossing the facade boundary -----
-pub use alloy_consensus::{Receipt, TxEnvelope};
+pub use alloy_consensus::{Header, Receipt, TxEnvelope};
 pub use alloy_primitives::map::B256Map;
 pub use alloy_primitives::{Address, B256, Bytes, U256};
 
@@ -162,4 +172,13 @@ pub enum AvaEvmError {
     /// Checked-arithmetic / fee overflow on the atomic or fee path.
     #[error("fee overflow")]
     FeeOverflow,
+
+    /// A network-upgrade fork that has already activated was rescheduled to a
+    /// different timestamp (coreth `network_upgrades.go:checkCompatible` parity,
+    /// spec 10 §7.4 / §17.8, G7).
+    #[error("incompatible fork: {fork} has already activated and cannot be rescheduled")]
+    IncompatibleFork {
+        /// The stable name of the offending fork.
+        fork: &'static str,
+    },
 }
