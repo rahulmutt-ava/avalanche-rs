@@ -1,0 +1,40 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-evm-reth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "G0 facade: the ONLY crate allowed to name reth_*/revm/alloy_* directly. Pins one reth revision and re-exports a minimal, stable internal API surface for ava-evm / ava-saevm-exec (specs 10 §17.1, 00 §11.1.6)."
+
+# ---------------------------------------------------------------------------
+# THE PINNED RETH REVISION (G0 / R3 mitigation, spec 10 §17.1).
+#
+# Every reth-* crate is pinned to ONE git revision; revm / alloy-* are pinned to
+# the exact crates.io versions that reth's own workspace selects at that revision
+# (reth pins them by version, not git — see reth/Cargo.toml @ the rev below), so
+# the whole graph resolves to a single coherent set and the facade types unify.
+#
+#   reth      = paradigmxyz/reth   v2.2.0   88505c7fcbfdebfd3b56d88c86b62e950043c6c4
+#   revm      = 38.0.0   alloy-primitives = 1.5.6   alloy-consensus = 2.0.4
+#   alloy-evm = 0.34.0   alloy-rlp = 0.3.13
+#
+# Bump checklist: see UPGRADING.md. Move the rev, fix facade compile errors only,
+# re-run the §14 differential gate.
+# ---------------------------------------------------------------------------
+[dependencies]
+reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
+
+revm = { version = "38.0.0", default-features = false, features = ["std"] }
+alloy-primitives = { version = "1.5.6", default-features = false, features = ["map-foldhash"] }
+alloy-consensus = { version = "2.0.4", default-features = false }
+alloy-evm = { version = "0.34.0", default-features = false }
+alloy-rlp = { version = "0.3.13", default-features = false }
+
+thiserror = { workspace = true }
