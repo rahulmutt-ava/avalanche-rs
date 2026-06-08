@@ -1,0 +1,4 @@
+{
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "eth_getCode", "params": ["0x2222222222222222222222222222222222222222", "latest"] },
+  "result": "0x602a60005260206000f3"
+}

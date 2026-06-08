@@ -130,6 +130,17 @@ pub use revm::database::{BundleState, State, StateBuilder};
 pub use revm::handler::PrecompileProvider;
 pub use revm::primitives::StorageKeyMap;
 pub use revm::state::{Account as RevmAccount, AccountInfo, Bytecode};
+// M6.23: the revm single-transaction `eth_call`/`eth_estimateGas` surface
+// (spec 10 §9.1/§17.9, G8). `TxEnv` is the revm transaction environment the
+// `Evm::transact` path consumes (built from the JSON-RPC `CallRequest`); `TxKind`
+// distinguishes a `Call(to)` from a contract `Create`. `ExecutionResult`/`Output`
+// are the `transact` outcome the RPC handler decodes into the returned call data
+// + gas used. These let `ava-evm::rpc::eth` run a read-only call against a
+// Firewood-backed revm `Evm` (`AvaEvmConfig::inner().evm_with_env`) without
+// naming a `revm_*` type directly.
+pub use revm::context::TxEnv;
+pub use revm::context::result::{ExecutionResult, Output};
+pub use revm::primitives::TxKind;
 // `Database` (revm's state-data trait) — the bound `State<DB>` requires and the
 // type `PreExecutionHook::apply` operates on. `StateProviderDatabase<DB>` is
 // reth's adapter turning a reth `StateProvider` (our `FirewoodStateView`) into a
