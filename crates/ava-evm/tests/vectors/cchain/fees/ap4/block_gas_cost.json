@@ -1,0 +1,77 @@
+{
+  "_provenance": "Worked examples transcribed from specs/21-fee-economics-math.md §4b/§4 (AP4 block gas cost). The Go reference is coreth plugin/evm/upgrade/ap4/cost.go (ap4.BlockGasCost) + plugin/evm/customheader/block_gas_cost.go (BlockGasCostWithStep). No Go node required. parent_cost null = AP3/AP4 boundary (returns MinBlockGasCost=0). step is BlockGasCostStep (50000 AP4, 200000 AP5). granite=true retires the mechanism (returns 0). TargetBlockRate=2; clamp [0, 1_000_000].",
+  "cases": [
+    {
+      "name": "on_target_unchanged",
+      "parent_cost": 100000,
+      "step": 50000,
+      "time_elapsed": 2,
+      "granite": false,
+      "expected": 100000
+    },
+    {
+      "name": "faster_dt1_increase",
+      "parent_cost": 100000,
+      "step": 50000,
+      "time_elapsed": 1,
+      "granite": false,
+      "expected": 150000
+    },
+    {
+      "name": "faster_dt0_increase_double",
+      "parent_cost": 100000,
+      "step": 50000,
+      "time_elapsed": 0,
+      "granite": false,
+      "expected": 200000
+    },
+    {
+      "name": "slower_dt10_clamp_to_zero",
+      "parent_cost": 100000,
+      "step": 50000,
+      "time_elapsed": 10,
+      "granite": false,
+      "expected": 0
+    },
+    {
+      "name": "slower_dt5_underflow_to_zero",
+      "parent_cost": 100000,
+      "step": 50000,
+      "time_elapsed": 5,
+      "granite": false,
+      "expected": 0
+    },
+    {
+      "name": "upper_clamp_to_max",
+      "parent_cost": 900000,
+      "step": 50000,
+      "time_elapsed": 0,
+      "granite": false,
+      "expected": 1000000
+    },
+    {
+      "name": "parent_none_is_zero",
+      "parent_cost": null,
+      "step": 50000,
+      "time_elapsed": 1,
+      "granite": false,
+      "expected": 0
+    },
+    {
+      "name": "ap5_step_dt1",
+      "parent_cost": 100000,
+      "step": 200000,
+      "time_elapsed": 1,
+      "granite": false,
+      "expected": 300000
+    },
+    {
+      "name": "granite_returns_zero",
+      "parent_cost": 100000,
+      "step": 50000,
+      "time_elapsed": 1,
+      "granite": true,
+      "expected": 0
+    }
+  ]
+}
