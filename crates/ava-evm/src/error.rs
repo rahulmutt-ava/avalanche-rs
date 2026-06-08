@@ -96,6 +96,38 @@ impl From<AvaEvmError> for Error {
     }
 }
 
+// The `EvmVm` `ChainVm` adapter (M6.10) returns the engine-facing `ava_vm` /
+// `ava_snow` error types from the block lifecycle + the VM surface; map the
+// C-Chain `Error` onto those crates' (closed, non-exhaustive) enums. The orphan
+// rule permits these impls because the source type is local. Mirrors the
+// ava-avm / ava-platformvm precedent (their `error.rs`).
+//
+// Neither `ava_vm::Error` nor `ava_snow::Error` exposes a free-form `Other`
+// variant. A lookup miss is the only error with an exact engine analogue, so
+// `MissingProposal` (the "block not in the processing tree" case the adapter
+// surfaces from `get_block`/`accept`) round-trips to `ava_vm::Error::NotFound`;
+// every other C-Chain error collapses onto the nearest carrying variant.
+impl From<Error> for ava_vm::error::Error {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::MissingProposal(_) => ava_vm::error::Error::NotFound,
+            // No generic string variant exists on `ava_vm::Error`; surface a
+            // stable, descriptive static message (the detailed message stays on
+            // the C-Chain log path, not the engine-facing error).
+            _ => ava_vm::error::Error::InvalidComponent("evm vm/block error"),
+        }
+    }
+}
+
+impl From<Error> for ava_snow::error::Error {
+    fn from(e: Error) -> Self {
+        // `ava_snow::Error::ParametersInvalid(String)` is the only string-carrying
+        // variant; reuse it to preserve the C-Chain error message on the critical
+        // verify/accept path (a returned `Err` halts the chain).
+        ava_snow::error::Error::ParametersInvalid(format!("evm: {e}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
