@@ -1214,7 +1214,16 @@ name = "ava-evm"
 version = "0.1.0"
 dependencies = [
  "assert_matches",
+ "ava-database",
  "ava-evm-reth",
+ "firewood",
+ "firewood-storage",
+ "hex",
+ "parking_lot",
+ "pretty_assertions",
+ "proptest",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
