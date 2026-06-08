@@ -762,6 +762,18 @@ Constants (`config.go`, `gastime.go`):
   `intmath.MulDiv(g, R-T, R)` (overflow-free since `(R−T)/R < 1`), bounded-add.
   With `R = 2T`, `(R−T)/R = 1/2`, so excess grows by `⌊g/2⌋` per consumed gas
   unit above none — i.e. half of consumed gas accrues to excess.
+
+> **AS-BUILT (M7.3 `ava-saevm-intmath`): `u128` intermediate, not `U256`.** Go's
+> `intmath.MulDiv`/`MulDivCeil` use 128-bit `bits.Mul64`; the Rust port uses a
+> `u128` intermediate, **not** `ruint::U256`. The product of two `u64` always fits
+> in `u128` exactly (`(2^64−1)² = 2^128 − 2^65 + 1 < 2^128`), and the ceil
+> adjustment `prod + (den−1) < 2^128` also fits — so `u128` is provably sufficient
+> for u64 `mul_div`/`mul_div_ceil`. Implemented as `u128::from(a).wrapping_mul(
+> u128::from(b))` (exact, lint-clean, panic-free) → `checked_div`/`div_ceil` →
+> `u64::try_from`. `mul_div_floor/ceil -> Result<u64, Overflow>` (faithful to Go's
+> `ErrOverflow`; both `Err(Overflow)` on `den==0`). `ceil_div -> u64` panics on
+> `den==0` (mirrors `bits.Div64`). Only the §0 `calculate_price` exp-loop and the
+> `scaleExcess` rescale (`excess·newK` can exceed 2^128) still need true `U256`.
 - **`FastForwardTo(s, f)`** (time passes, `s` seconds + `f` fractional rate units):
   reduce excess by `s·T + ⌊f·T/R⌋`, each bounded at 0 (matches ACP's `−T·dt`).
 - **`AfterBlock(used, target, c)`**: `Tick(used)`; if not static, **rescale excess**
@@ -847,7 +859,7 @@ window + linear block cost). #1, #2b, #5, #6 all call `gas::calculate_price`.
 | `safemath.AbsDiff` | `a.abs_diff(b)` |
 | `Gas.AddOverTime/SubOverTime` (saturating) | `saturating_*` / `checked_*().unwrap_or(MAX/0)` |
 | `intmath.BoundedAdd/Multiply/Subtract` | `checked_*().unwrap_or(ceil)` / `.min/.max` |
-| `intmath.MulDiv/MulDivCeil` | `mul_div_floor/ceil` (U256 intermediate) |
+| `intmath.MulDiv/MulDivCeil` | `mul_div_floor/ceil` (`u128` intermediate — see note) |
 | `time.Duration` (ns, reward) | `u64` nanoseconds (keep ns, do not convert to f64) |
 
 > Newtype `Gas`/`Price` improve safety but make the §0 U256 conversions noisier;

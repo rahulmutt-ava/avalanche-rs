@@ -220,6 +220,12 @@ impl<D: ProxyUnit> Time<D> {
 > **Cross-multiplication compare** (`FractionalSecond::compare`) uses 128-bit
 > widening (`u64::widening_mul` / `u128`) exactly like Go's `bits.Mul64` so two
 > instants at different rates compare identically to Go.
+>
+> **AS-BUILT (M7.4):** this lives in `ava-saevm-cmputils::compare_fractions(n1,d1,
+> n2,d2) -> Ordering` (cross-multiply `n1*d2` vs `n2*d1`, each via
+> `u128::from(n).wrapping_mul(...)` — exact for u64×u64 in u128, panic-free, since
+> `u64::widening_mul` is still nightly-only). It is a **runtime** helper (proxytime
+> calls it), **not** dev/test-only — see the §3 crate-layout note.
 
 ### 2.2 `gastime` — the SAE gas clock (Tau-discipline newtype)
 
@@ -349,7 +355,7 @@ strictly downward:
 ```
 ava-saevm-params      (Tau, Lambda, BlockInstant, queue limits — leaf)
 ava-saevm-intmath     (mul_div, mul_div_ceil, ceil_div, bounded_{add,sub,mul} — leaf, no_std-able)
-ava-saevm-cmputils    (test/cmp helpers; dev only)
+ava-saevm-cmputils    (compare_fractions — 128-bit cross-mul; RUNTIME, used by proxytime — NOT dev-only)
 ava-saevm-proxytime   → intmath
 ava-saevm-gastime     → proxytime, intmath, ava-types(Gas/GasPrice), gas (price fn)
 ava-saevm-gasprice    → gastime, blocks  (eth_gasPrice/feeHistory estimator)
