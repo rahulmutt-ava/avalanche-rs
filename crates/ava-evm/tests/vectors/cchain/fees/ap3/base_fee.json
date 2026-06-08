@@ -1,0 +1,77 @@
+{
+  "_provenance": "Worked examples transcribed from specs/21-fee-economics-math.md §4a/§4 (AP3 base-fee window). The Go reference is coreth plugin/evm/customheader/dynamic_fee_windower.go (baseFeeFromWindow) + plugin/evm/upgrade/{ap3,ap4,ap5,etna}. No Go node required — these are the documented worked examples plus the per-phase bound clamps. baseFee values are wei; gwei = 1e9 wei. The 'phase' selects (target_gas, change_denominator, min_base_fee_wei, max_base_fee_wei) per spec 21 §4a table.",
+  "cases": [
+    {
+      "name": "exact_target_unchanged_ap5",
+      "phase": "ap5",
+      "window_sum": 15000000,
+      "parent_base_fee_wei": "100000000000",
+      "time_elapsed": 2,
+      "expected_base_fee_wei": "100000000000"
+    },
+    {
+      "name": "exact_target_unchanged_unclamped_below_min",
+      "phase": "ap5",
+      "window_sum": 15000000,
+      "parent_base_fee_wei": "1",
+      "time_elapsed": 2,
+      "expected_base_fee_wei": "1"
+    },
+    {
+      "name": "increase_two_times_target_ap5",
+      "phase": "ap5",
+      "window_sum": 30000000,
+      "parent_base_fee_wei": "100000000000",
+      "time_elapsed": 2,
+      "expected_base_fee_wei": "102777777777"
+    },
+    {
+      "name": "decrease_zero_window_two_windows_elapsed_ap5",
+      "phase": "ap5",
+      "window_sum": 0,
+      "parent_base_fee_wei": "100000000000",
+      "time_elapsed": 25,
+      "expected_base_fee_wei": "94444444446"
+    },
+    {
+      "name": "increase_not_scaled_by_windows_elapsed_ap5",
+      "phase": "ap5",
+      "window_sum": 30000000,
+      "parent_base_fee_wei": "100000000000",
+      "time_elapsed": 25,
+      "expected_base_fee_wei": "102777777777"
+    },
+    {
+      "name": "delta_floored_one_under_target_ap5",
+      "phase": "ap5",
+      "window_sum": 14999999,
+      "parent_base_fee_wei": "100000000000",
+      "time_elapsed": 2,
+      "expected_base_fee_wei": "99999999815"
+    },
+    {
+      "name": "etna_min_clamp_one_gwei",
+      "phase": "etna",
+      "window_sum": 0,
+      "parent_base_fee_wei": "1000000000",
+      "time_elapsed": 0,
+      "expected_base_fee_wei": "1000000000"
+    },
+    {
+      "name": "ap3_min_clamp_75_gwei",
+      "phase": "ap3",
+      "window_sum": 0,
+      "parent_base_fee_wei": "76000000000",
+      "time_elapsed": 0,
+      "expected_base_fee_wei": "75000000000"
+    },
+    {
+      "name": "ap3_max_clamp_225_gwei",
+      "phase": "ap3",
+      "window_sum": 20000000,
+      "parent_base_fee_wei": "224000000000",
+      "time_elapsed": 2,
+      "expected_base_fee_wei": "225000000000"
+    }
+  ]
+}

@@ -1231,6 +1231,7 @@ dependencies = [
  "parking_lot",
  "pretty_assertions",
  "proptest",
+ "ruint",
  "serde",
  "serde_json",
  "tempfile",
