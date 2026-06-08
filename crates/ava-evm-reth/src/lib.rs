@@ -76,6 +76,10 @@ pub use alloy_consensus::TrieAccount;
 // Account/code-hash sentinels and the keccak hasher used by `account_key` /
 // `storage_key` / `hashed_post_state` (must match Firewood-ethhash derivation).
 pub use alloy_consensus::constants::KECCAK_EMPTY;
+// The empty-ommers (uncle) list hash `keccak256(rlp([]))` — a header field on
+// every Avalanche block (no uncles). Used by `ava-evm::chainspec` to construct
+// the genesis header for block-ID parity (spec 10 §9.3 / §11.1, M6.8).
+pub use alloy_consensus::constants::EMPTY_OMMER_ROOT_HASH;
 pub use alloy_primitives::{StorageKey, StorageValue, keccak256};
 // Minimal `alloy-rlp` surface for encoding/decoding account-leaf and slot RLP
 // values crossing into Firewood (G1, §17.2.1).
@@ -117,9 +121,14 @@ pub use reth_network_peers::NodeRecord;
 pub use revm::primitives::hardfork::SpecId;
 
 // --- revm (state overlay + precompile dispatch) --------------------------
+// `StorageKeyMap<V>` (= revm's `U256Map<V>`, a U256-keyed map) is the storage-slot
+// map type `BundleBuilder::state_storage` consumes; `ava-evm::chainspec` builds it
+// to materialize a genesis `alloc`'s storage slots into a `BundleState` (spec 10
+// §11.1, M6.8). Re-exported from revm-primitives (its canonical home).
 pub use revm::database::states::bundle_state::{BundleBuilder, BundleRetention};
 pub use revm::database::{BundleState, State, StateBuilder};
 pub use revm::handler::PrecompileProvider;
+pub use revm::primitives::StorageKeyMap;
 pub use revm::state::{Account as RevmAccount, AccountInfo, Bytecode};
 // `Database` (revm's state-data trait) — the bound `State<DB>` requires and the
 // type `PreExecutionHook::apply` operates on. `StateProviderDatabase<DB>` is

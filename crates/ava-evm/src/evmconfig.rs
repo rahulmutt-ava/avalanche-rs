@@ -18,12 +18,13 @@
 //! schedule does not encode**:
 //!
 //! - Avalanche is **always post-merge** (no PoW block reward): `AvaChainSpec`
-//!   reports `final_paris_total_difficulty == 0`, but does not list Paris in its
-//!   timestamp schedule, so reth's `base_block_reward` (keyed on
-//!   `is_paris_active_at_block`) would otherwise mint a spurious 5-ETH reward.
-//!   `AvaExecutorSpec` forces Paris + all pre-merge Ethereum forks active at
-//!   genesis (block 0) so the executor applies **no** block reward, matching
-//!   coreth (SPEC FINDING M6.6 — see report).
+//!   reports `final_paris_total_difficulty == 0` and (since M6.8) activates
+//!   Paris + every pre-merge Ethereum fork at `ForkCondition::Block(0)`, so
+//!   reth's `base_block_reward` (keyed on `is_paris_active_at_block`) resolves
+//!   post-merge from block 0 and applies **no** block reward, matching coreth.
+//!   `AvaExecutorSpec` is now a thin pass-through that delegates the fork view
+//!   straight to [`AvaChainSpec`] (the M6.6 force-activation override was lifted
+//!   once the chainspec keyed those forks by block — M6.8).
 //!
 //! `execute_batch` then drives the inner config's bare [`BlockExecutor`]
 //! directly: build the per-block `EthBlockExecutionCtx` from the env header, run
@@ -159,38 +160,14 @@ impl PreExecutionHook for NoopPreHook {
 pub type AvaState = State<StateProviderDatabase<FirewoodStateView>>;
 
 /// Adapter over [`AvaChainSpec`] that satisfies the `EthEvmConfig` `ConfigureEvm`
-/// bound (`EthChainSpec + EthExecutorSpec + Hardforks`) and pins the Avalanche
-/// executor fork semantics (always post-merge; no PoW block reward — see module
-/// docs / M6.6 SPEC FINDING). All `EthChainSpec` reads delegate to the inner
-/// spec; only the Ethereum fork-activation view is adjusted.
+/// bound (`EthChainSpec + EthExecutorSpec + Hardforks`). Since M6.8 it is a thin
+/// pass-through: the Avalanche post-merge fork semantics reth's executor needs
+/// (Paris + pre-merge forks active at `Block(0)`, `final_paris_total_difficulty
+/// == 0`) are pinned in [`AvaChainSpec`] itself, so this adapter just forwards
+/// every method (it exists only to bridge the `EthExecutorSpec` super-trait,
+/// which `AvaChainSpec` does not implement directly).
 #[derive(Clone, Debug)]
 pub struct AvaExecutorSpec(Arc<AvaChainSpec>);
-
-impl AvaExecutorSpec {
-    /// The Ethereum forks Avalanche treats as active from genesis (block 0):
-    /// every pre-merge fork **plus Paris/MergeNetsplit** (Avalanche is never
-    /// PoW). Shanghai and later follow the inner timestamp schedule.
-    fn is_forced_genesis_fork(fork: EthereumHardfork) -> bool {
-        matches!(
-            fork,
-            EthereumHardfork::Frontier
-                | EthereumHardfork::Homestead
-                | EthereumHardfork::Dao
-                | EthereumHardfork::Tangerine
-                | EthereumHardfork::SpuriousDragon
-                | EthereumHardfork::Byzantium
-                | EthereumHardfork::Constantinople
-                | EthereumHardfork::Petersburg
-                | EthereumHardfork::Istanbul
-                | EthereumHardfork::MuirGlacier
-                | EthereumHardfork::Berlin
-                | EthereumHardfork::London
-                | EthereumHardfork::ArrowGlacier
-                | EthereumHardfork::GrayGlacier
-                | EthereumHardfork::Paris
-        )
-    }
-}
 
 impl EthChainSpec for AvaExecutorSpec {
     type Header = Header;
@@ -242,14 +219,10 @@ impl EthChainSpec for AvaExecutorSpec {
 
 impl EthereumHardforks for AvaExecutorSpec {
     fn ethereum_fork_activation(&self, fork: EthereumHardfork) -> ForkCondition {
-        if Self::is_forced_genesis_fork(fork) {
-            // Active from genesis: Avalanche is post-merge from block 0, so reth's
-            // block-reward / merge checks (keyed on `_at_block`) resolve correctly.
-            ForkCondition::Block(0)
-        } else {
-            // Shanghai+ follow the inner Avalanche timestamp schedule.
-            self.0.ethereum_fork_activation(fork)
-        }
+        // Delegate straight to the chain spec: M6.8 keys Paris + pre-merge forks
+        // by `Block(0)` and Berlin/London/Shanghai/Cancun by Avalanche-phase
+        // timestamp, so reth's block-reward / merge checks resolve correctly.
+        self.0.ethereum_fork_activation(fork)
     }
 }
 
