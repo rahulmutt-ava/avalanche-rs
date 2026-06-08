@@ -454,6 +454,19 @@ ImportTx → `RemoveRequests = utxoIDs` on the source chain; ExportTx →
 `PutRequests = elems` on the destination chain. These feed the shared-memory
 atomic batch on accept (07).
 
+> **PARITY HAZARD — interface vs concrete codec framing (M6.14 as-built).** The Go
+> `codec.Manager.Marshal` emits the leading `u32` **type-id prefix only when the static type
+> is the `UnsignedAtomicTx` interface** (as inside `Tx.Sign`/the signed-`Tx` body); marshaling
+> a *concrete* `*UnsignedImportTx` emits NO type-id prefix. So `AtomicTx`-as-interface bytes =
+> `[version:2B][typeid:4B][fields…]` while a bare unsigned-struct = `[version:2B][fields…]`.
+> The `ava-evm` `AtomicTx` enum reproduces the **interface** framing (type-ids `0=Import,
+> 1=Export`). Golden vectors capture BOTH forms. The atomic codec is its OWN type-id registry
+> (`0/1=Import/Export, 5=TransferInput, 7=TransferOutput, 9=Credential, 10=Input,
+> 11=OutputOwners`) that happens to share the secp fx ids (5/7/9) with the X-Chain registry, so
+> the avax/fx component encodings are byte-identical and `ava_avm::txs::components` are reused
+> directly — but future fx additions (nft/property, ids 10–19) would DIVERGE from the atomic
+> registry's 10/11 and must not be reused blindly.
+
 ### 6.2 Where atomic txs live in a block
 
 coreth packs atomic txs into the block (encoded in the EVM block's `ExtraData` /
@@ -1738,12 +1751,18 @@ impl AvaChainSpec {
     pub fn is_apricot_phase3(&self, t: u64) -> bool { self.fork_at(t) >= AvaFork::ApricotPhase3 }
     pub fn is_fortuna(&self, t: u64) -> bool { self.fork_at(t) >= AvaFork::Fortuna }
     /// revm SpecId for a block: the Ethereum spec coreth pins for this Avalanche phase.
+    /// AS-BUILT (M6.5, verified vs coreth `params/config_extra.go:SetEthUpgrades` @ the pinned
+    /// avalanchego rev): Etna→CANCUN; Durango→SHANGHAI; AP3..Cortina→LONDON; AP2→BERLIN;
+    /// Launch/AP1→ISTANBUL. coreth pins NO `PragueTime` at the pinned rev, so **Fortuna and
+    /// Granite stay CANCUN** — there is no PRAGUE mapping yet (the earlier `Granite→PRAGUE` /
+    /// `Durango→PRAGUE` example was wrong; corrected here).
     pub fn revm_spec_id(&self, t: u64) -> SpecId {
         match self.fork_at(t) {
-            f if f >= AvaFork::Granite  => SpecId::PRAGUE,    // (example mapping; cite extras)
+            f if f >= AvaFork::Etna     => SpecId::CANCUN,   // Fortuna/Granite also CANCUN (no PragueTime pinned)
             f if f >= AvaFork::Durango  => SpecId::SHANGHAI,
-            f if f >= AvaFork::Cortina  => SpecId::LONDON,
-            _                           => SpecId::BERLIN,
+            f if f >= AvaFork::ApricotPhase3 => SpecId::LONDON,
+            f if f >= AvaFork::ApricotPhase2 => SpecId::BERLIN,
+            _                           => SpecId::ISTANBUL,
         }
     }
     /// network_upgrades.checkCompatible parity (incompatibility on activated forks).

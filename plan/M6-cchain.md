@@ -34,50 +34,105 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 
 ## Tasks
 
-### Task M6.1: Vendored reth pin + `ava-evm-reth` facade seam (G0)
+### Task M6.1: Vendored reth pin + `ava-evm-reth` facade seam (G0) ✅ DONE (9c98689)
 **Crate:** ava-evm-reth  ·  **Depends on:** —  ·  **Spec:** 10 §1, §17.1 (G0), 00 §11.1.6
 **Files:** `crates/ava-evm-reth/Cargo.toml`, `crates/ava-evm-reth/src/lib.rs`, `crates/ava-evm-reth/UPGRADING.md`, workspace `Cargo.toml`
-- [ ] **Step 1 — Red:** Add `crates/ava-evm-reth/tests/facade_pins.rs` with `fn facade_reexports_compile()` that names the re-exported facade types (`ConfigureEvm`, `BlockExecutor`, `BlockExecutorFactory`, `BlockBuilder`, `StateProvider`, `StateRootProvider`, `PrecompileProvider`, `State`, `BundleState`) through `ava_evm_reth::*` only, and a `#[test] fn pinned_rev_is_single_sha()` reading the `rev=` from a `const RETH_REV: &str` and asserting it is a 40-char hex SHA (not a version range).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-evm-reth facade_pins` → fails to compile (crate/items absent).
-- [ ] **Step 3 — Green:** Create `ava-evm-reth/Cargo.toml` pinning EVERY `reth-*`/`revm`/`alloy-*` dep to ONE git `rev=<PINNED_SHA>` (spec 10 §17.1 toml). In `src/lib.rs` re-export only the items the rest of ava-evm may see, under our names (spec 10 §17.1 list), plus `pub const RETH_REV`. Define the `ExternalConsensusExecutor` trait + `ExecOutcome` struct (signatures verbatim from §17.1) — the "external consensus executor reth doesn't ship". `#![forbid(unsafe_code)]` is **lifted only here** (this is the binding-wrapper crate). Write `UPGRADING.md` with the reth-bump checklist (move SHA → fix facade compile errors only → re-run §14 differential gate).
-- [ ] **Step 4 — Confirm green:** `cargo build -p ava-evm-reth && cargo test -p ava-evm-reth facade_pins` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: pin vendored reth + add ava-evm-reth facade seam (G0)`
+- [x] **Step 1 — Red:** Add `crates/ava-evm-reth/tests/facade_pins.rs` with `fn facade_reexports_compile()` that names the re-exported facade types (`ConfigureEvm`, `BlockExecutor`, `BlockExecutorFactory`, `BlockBuilder`, `StateProvider`, `StateRootProvider`, `PrecompileProvider`, `State`, `BundleState`) through `ava_evm_reth::*` only, and a `#[test] fn pinned_rev_is_single_sha()` reading the `rev=` from a `const RETH_REV: &str` and asserting it is a 40-char hex SHA (not a version range).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-evm-reth facade_pins` → fails to compile (crate/items absent).
+- [x] **Step 3 — Green:** Create `ava-evm-reth/Cargo.toml` pinning EVERY `reth-*`/`revm`/`alloy-*` dep to ONE git `rev=<PINNED_SHA>` (spec 10 §17.1 toml). In `src/lib.rs` re-export only the items the rest of ava-evm may see, under our names (spec 10 §17.1 list), plus `pub const RETH_REV`. Define the `ExternalConsensusExecutor` trait + `ExecOutcome` struct (signatures verbatim from §17.1) — the "external consensus executor reth doesn't ship". `#![forbid(unsafe_code)]` is **lifted only here** (this is the binding-wrapper crate). Write `UPGRADING.md` with the reth-bump checklist (move SHA → fix facade compile errors only → re-run §14 differential gate).
+- [x] **Step 4 — Confirm green:** `cargo build -p ava-evm-reth && cargo test -p ava-evm-reth facade_pins` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: pin vendored reth + add ava-evm-reth facade seam (G0)`
 
-### Task M6.2: `ava-evm` crate skeleton + error model
+> **AS-BUILT (M6.1).** PINNED SET (mirrors reth v2.2.0's own workspace pins): reth-* @ git rev
+> `88505c7fcbfdebfd3b56d88c86b62e950043c6c4` (v2.2.0); `revm 38.0.0`, `alloy-primitives 1.5.6`,
+> `alloy-consensus 2.0.4`, `alloy-evm 0.34.0`, `alloy-rlp 0.3.13` (crates.io — reth pins revm/alloy
+> by version, not git, so we mirror exactly). Facade depends only on `reth-evm` + `reth-storage-api`
+> (NOT the full node); revm/alloy come from crates.io. **Path corrections vs §17.1 (reth v2.2.0):**
+> `ConfigureEvmFor` does not exist (dropped; `EvmEnvFor`/`ExecutionCtxFor` do); `PrecompileProvider`
+> is at `revm::handler::` (not `revm::context::`); `BlockExecutionResult<T>` is private in
+> `reth_evm::execute` → re-exported from `alloy_evm::block::BlockExecutionResult` (it IS generic).
+> `BlockExecutor`/`BlockBuilder`/`PrecompileProvider` are NOT dyn-compatible (generic methods) — the
+> facade_pins surface test proves them via `use` + generic bounds, not `dyn`. reth's whole tree
+> compiles+clippy-clean in the Nix shell (rust 1.96); R3 validated as contained.
+
+### Task M6.2: `ava-evm` crate skeleton + error model ✅ DONE (466357c)
 **Crate:** ava-evm  ·  **Depends on:** M6.1  ·  **Spec:** 10 §11.2, §13, 00 §7.1, §8
 **Files:** `crates/ava-evm/Cargo.toml`, `crates/ava-evm/src/lib.rs`, `crates/ava-evm/src/error.rs`
-- [ ] **Step 1 — Red:** `crates/ava-evm/src/error.rs` test module `mod tests` with `fn sentinels_match_via_matches()` asserting `assert_matches!` against `Error::WrongNetworkId`, `Error::NilTx`, `Error::NilBaseFee`, `Error::FeeOverflow`, `Error::ConflictingAtomicInputs`, `Error::MissingProposal(_)`, and a `#[from]` wrap of a facade `BlockExecutionError`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-evm error::tests` → fails (no such enum).
-- [ ] **Step 3 — Green:** Add `Cargo.toml` (deps: `ava-evm-reth`, `ava-database`, `ava-types`, `ava-codec`, `ava-crypto`, `ava-warp`, `ava-network`, `firewood` features=["ethhash"], `ruint`, `alloy-*` via facade, `thiserror`, `tokio`, `async-trait`, `dashmap`, `arc-swap`, `parking_lot`). `#![forbid(unsafe_code)]` in `lib.rs` with the module tree from spec 10 §13 (`vm`,`block`,`builder`,`evmconfig`,`feerules`,`chainspec`,`state`,`atomic`,`precompile`,`rpc`,`sync`,`error`). Define `Error` (thiserror) preserving coreth/atomic sentinels as variants (§11.2 list) + `#[from]` for facade/firewood errors; all balance/fee arithmetic checked (00 §6.1). License header on every file.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-evm error::tests` → pass.
+- [x] **Step 1 — Red:** `crates/ava-evm/src/error.rs` test module `mod tests` with `fn sentinels_match_via_matches()` asserting `assert_matches!` against `Error::WrongNetworkId`, `Error::NilTx`, `Error::NilBaseFee`, `Error::FeeOverflow`, `Error::ConflictingAtomicInputs`, `Error::MissingProposal(_)`, and a `#[from]` wrap of a facade `BlockExecutionError`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-evm error::tests` → fails (no such enum).
+- [x] **Step 3 — Green:** Add `Cargo.toml` (deps: `ava-evm-reth`, `ava-database`, `ava-types`, `ava-codec`, `ava-crypto`, `ava-warp`, `ava-network`, `firewood` features=["ethhash"], `ruint`, `alloy-*` via facade, `thiserror`, `tokio`, `async-trait`, `dashmap`, `arc-swap`, `parking_lot`). `#![forbid(unsafe_code)]` in `lib.rs` with the module tree from spec 10 §13 (`vm`,`block`,`builder`,`evmconfig`,`feerules`,`chainspec`,`state`,`atomic`,`precompile`,`rpc`,`sync`,`error`). Define `Error` (thiserror) preserving coreth/atomic sentinels as variants (§11.2 list) + `#[from]` for facade/firewood errors; all balance/fee arithmetic checked (00 §6.1). License header on every file.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-evm error::tests` → pass.
+
+> **AS-BUILT (M6.2).** Module tree created as **stub files** (license header + module doc only) so the
+> M6 parallel waves fill stub files without contending on `lib.rs`: `state`, `chainspec`, `feerules/`,
+> `evmconfig`, `block`, `canonical` (pre-created for M6.9, not in §13 list), `builder`, `vm`, `atomic/`,
+> `precompile/`, `rpc/`, `sync/`, `error`. **Deps deferred:** only `ava-evm-reth` + `thiserror` added now
+> (workspace denies `unused_crate_dependencies`, so `ava-database`/`firewood`/`ruint`/`tokio`/etc. are
+> added by the task that first uses them). `Error` carries `#[from]` for the facade's `BlockExecutionError`
+> + `ProviderError` (firewood errors fold in through `ProviderError`/per-task variants later). Reusable
+> sentinel construction via `BlockExecutionError::msg(...)`.
 - [ ] **Step 5 — Commit:** `ava-evm: crate skeleton + Error sentinel model (§11.2)`
 
-### Task M6.3: `FirewoodStateProvider` reads — accounts/storage/code/blockhash (G1)
+### Task M6.3: `FirewoodStateProvider` reads — accounts/storage/code/blockhash (G1) ✅ DONE (e4cfc3f)
 **Crate:** ava-evm  ·  **Depends on:** M6.2, M1 (firewood ethhash)  ·  **Spec:** 10 §5, §17.2 (G1); 04 §4.2/§4.3
 **Files:** `crates/ava-evm/src/state.rs`, `crates/ava-evm/tests/vectors/cchain/account_rlp/*.json`
-- [ ] **Step 1 — Red:** In `state.rs` `mod tests`, `fn read_account_and_storage_roundtrip()` opens an ethhash `firewood::db::Db` in a `t.TempDir()`-equivalent (`tempfile::tempdir`), proposes+commits an RLP account at `account_key(addr)` and an RLP-U256 slot at `storage_key(addr,slot)`, opens a `FirewoodStateView`, and asserts `basic_account`/`storage`/`bytecode_by_hash` return the decoded values; `decode_rlp_account` round-trips a golden RLP blob.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-evm state::tests::read_account_and_storage_roundtrip` → fails (types absent).
-- [ ] **Step 3 — Green:** Implement `FirewoodStateProvider { db, bytecode, block_hashes }` and `FirewoodStateView { rev, provider }` (§17.2). Impl facade `AccountReader::basic_account` (keccak(addr) → RLP `{nonce,balance,code_hash,storage_root}`), `StateProvider::storage` (RLP-U256), `BytecodeReader::bytecode_by_hash` (ava-database code KV), `BlockHashReader` (number→hash KV for BLOCKHASH window). Helpers `account_key`/`storage_key`/`decode_rlp_account`/`decode_rlp_u256`. `map_fw_err` maps firewood errors → `ProviderError`. Commit a golden account-RLP vector with provenance to Go ethhash bindings (02 §6).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-evm state::tests` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: FirewoodStateProvider reads over ethhash (G1, §5)`
+- [x] **Step 1 — Red:** In `state.rs` `mod tests`, `fn read_account_and_storage_roundtrip()` opens an ethhash `firewood::db::Db` in a `t.TempDir()`-equivalent (`tempfile::tempdir`), proposes+commits an RLP account at `account_key(addr)` and an RLP-U256 slot at `storage_key(addr,slot)`, opens a `FirewoodStateView`, and asserts `basic_account`/`storage`/`bytecode_by_hash` return the decoded values; `decode_rlp_account` round-trips a golden RLP blob.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-evm state::tests::read_account_and_storage_roundtrip` → fails (types absent).
+- [x] **Step 3 — Green:** Implement `FirewoodStateProvider { db, bytecode, block_hashes }` and `FirewoodStateView { rev, provider }` (§17.2). Impl facade `AccountReader::basic_account` (keccak(addr) → RLP `{nonce,balance,code_hash,storage_root}`), `StateProvider::storage` (RLP-U256), `BytecodeReader::bytecode_by_hash` (ava-database code KV), `BlockHashReader` (number→hash KV for BLOCKHASH window). Helpers `account_key`/`storage_key`/`decode_rlp_account`/`decode_rlp_u256`. `map_fw_err` maps firewood errors → `ProviderError`. Commit a golden account-RLP vector with provenance to Go ethhash bindings (02 §6).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-evm state::tests` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: FirewoodStateProvider reads over ethhash (G1, §5)`
 
-### Task M6.4: `BundleState`→Firewood `BatchOp` conversion + `state_root*` provider (G1)
+> **AS-BUILT (M6.3).** Account RLP via facade `TrieAccount` (= alloy = coreth `types.StateAccount`); the
+> reth `BytecodeReader` returns `reth_primitives_traits::Bytecode` (a newtype, re-exported as facade
+> `RethBytecode`, **distinct** from revm `Bytecode`). bytecode + block-hash side KVs live in `ava-database`
+> (NOT Firewood — Firewood is account/storage-of-record only). ava-evm depends on `firewood`+`firewood-storage`
+> directly (git tag v0.5.0, `features=["ethhash"]`), not via ava-merkledb (needs the raw `Db`/`Revision`/
+> `Proposal`/proof API). **Firewood ethhash is a GLOBAL compile-time Keccak switch** → `cargo build --workspace`
+> default-features is fine (ava-merkledb's firewood is off by default), but `--all-features` would conflict
+> ava-evm ethhash with ava-merkledb SHA — flagged as an M6.29 exit-gate / X cross-cutting concern. Facade
+> re-exports added: `DatabaseError, RethBytecode, AccountProof, EMPTY_ROOT_HASH, HashedStorage, KeccakKeyHasher,
+> KeyHasher, MultiProof(+Targets), StorageMultiProof, StorageProof, TrieAccount, KECCAK_EMPTY, keccak256,
+> StorageKey, StorageValue, RlpEncodable/Decodable, rlp_encode, B256Map, Bytes`.
+
+### Task M6.4: `BundleState`→Firewood `BatchOp` conversion + `state_root*` provider (G1) ✅ DONE (5ce602e)
 **Crate:** ava-evm  ·  **Depends on:** M6.3  ·  **Spec:** 10 §5, §17.2.1, §17.2.2 (G1); 04 §4.2
 **Files:** `crates/ava-evm/src/state.rs`, `crates/ava-evm/tests/proptest-regressions/state.txt`
-- [ ] **Step 1 — Red:** Add `fn hashed_post_state_to_batchops_is_deterministic()` (sorted-order, storage-before-accounts, zero-slot→Delete, None-account→Delete per §17.2.1) and a `proptest!` `prop_state_root_order_independent`: same K/V set in any insertion order → same Firewood root (02 §4.2 merkledb invariant, applied to ethhash). Add `fn stash_then_commit_advances_tip()` asserting `state_root_with_updates` stashes a proposal keyed by root and returns `TrieUpdates::default()`, and `commit(root)` advances the tip.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-evm state::tests::hashed_post_state` → fails.
-- [ ] **Step 3 — Green:** Implement `hashed_post_state_to_batchops` (storage first via `iter_sorted()`, `wiped`→`DeleteRange`, accounts after, RLP account/U256 encoders), `HashedPostStateProvider::hashed_post_state` (`KeccakKeyHasher`), `StateRootProvider::{state_root, state_root_with_updates, state_root_from_nodes, state_root_from_nodes_with_updates}` (the **empty-`TrieUpdates` G1 trick**), `FirewoodStateProvider::{stash_proposal, take_stashed, commit, discard, history_by_state_root (G2 window→`StateForHashNotFound`), propose_from_bundle, view_tip}`, `StorageRootProvider`/`StateProofProvider` over Firewood sub-trie/range proofs. Commit the proptest regression file.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-evm state::tests` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: BundleState→Firewood BatchOps + state_root commit (G1)`
+- [x] **Step 1 — Red:** Add `fn hashed_post_state_to_batchops_is_deterministic()` (sorted-order, storage-before-accounts, zero-slot→Delete, None-account→Delete per §17.2.1) and a `proptest!` `prop_state_root_order_independent`: same K/V set in any insertion order → same Firewood root (02 §4.2 merkledb invariant, applied to ethhash). Add `fn stash_then_commit_advances_tip()` asserting `state_root_with_updates` stashes a proposal keyed by root and returns `TrieUpdates::default()`, and `commit(root)` advances the tip.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-evm state::tests::hashed_post_state` → fails.
+- [x] **Step 3 — Green:** Implement `hashed_post_state_to_batchops` (storage first via `iter_sorted()`, `wiped`→`DeleteRange`, accounts after, RLP account/U256 encoders), `HashedPostStateProvider::hashed_post_state` (`KeccakKeyHasher`), `StateRootProvider::{state_root, state_root_with_updates, state_root_from_nodes, state_root_from_nodes_with_updates}` (the **empty-`TrieUpdates` G1 trick**), `FirewoodStateProvider::{stash_proposal, take_stashed, commit, discard, history_by_state_root (G2 window→`StateForHashNotFound`), propose_from_bundle, view_tip}`, `StorageRootProvider`/`StateProofProvider` over Firewood sub-trie/range proofs. Commit the proptest regression file.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-evm state::tests` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: BundleState→Firewood BatchOps + state_root commit (G1)`
 
-### Task M6.5: `AvaChainSpec` / `AvaHardfork` / `revm_spec_id` (G7)
+> **AS-BUILT (M6.4).** **§17.2.2 deviation:** firewood `Proposal<'db>` borrows the owning `Db`, a
+> self-referential borrow safe Rust forbids — so instead of stashing a live `Proposal`, we stash the
+> deterministic **`BatchOp` list keyed by root** (`parking_lot::Mutex<HashMap<B256, FirewoodOps>>`) and
+> re-propose+commit at `commit(root)`. Determinism makes the recomputed root bit-identical, so the
+> verify→accept contract holds (cost: one in-memory re-propose). reth signature realities: `TrieInput`
+> has a public `state: HashedPostState` field (used directly, no `into_sorted`); `HashedPostState`
+> storage field is `.storage` (not `.slots`) and maps are unordered `B256Map` (sorted manually).
+> `StorageRootProvider`/`StateProofProvider` are MINIMAL STUBS (full impl is M6.25 state-sync scope).
+
+### Task M6.5: `AvaChainSpec` / `AvaHardfork` / `revm_spec_id` (G7) ✅ DONE (c2274b5)
 **Crate:** ava-evm  ·  **Depends on:** M6.2  ·  **Spec:** 10 §7.4, §17.8 (G7); 21 §7; 00 §5
 **Files:** `crates/ava-evm/src/chainspec.rs`, `crates/ava-evm/tests/vectors/cchain/fork_schedule/*.json`
-- [ ] **Step 1 — Red:** `mod tests` `fn fork_at_and_spec_id_match_coreth()` table test: for mainnet fork timestamps (re-exported from `ava-version`/`network_upgrades`), assert `fork_at(t)` selects the highest active `AvaHardfork` and `revm_spec_id(t)` maps each Avalanche phase to coreth's pinned Ethereum `SpecId` (golden vector); plus `fn check_compatible_rejects_activated_fork_change()`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-evm chainspec::tests` → fails.
-- [ ] **Step 3 — Green:** Implement `AvaHardfork` (Eth(EthereumHardfork) + Apricot1..PhasePost6, Banff, Cortina, Durango, Etna, Fortuna, Granite), `AvaChainSpec { inner: ChainHardforks, eth_genesis_header, genesis, fee_config: FeeConfig, network_upgrades, is_subnet, chain }`, `impl EthChainSpec`/`EthereumHardforks` (facade), `fork_at`, per-phase `is_*` predicates, `revm_spec_id`, `check_compatible` (network_upgrades parity). Embed Mainnet/Fuji fork timestamps as protocol constants (00 §5). Commit fork-schedule golden vector.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-evm chainspec::tests` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: AvaChainSpec + AvaHardfork + revm_spec_id (G7)`
+- [x] **Step 1 — Red:** `mod tests` `fn fork_at_and_spec_id_match_coreth()` table test: for mainnet fork timestamps (re-exported from `ava-version`/`network_upgrades`), assert `fork_at(t)` selects the highest active `AvaHardfork` and `revm_spec_id(t)` maps each Avalanche phase to coreth's pinned Ethereum `SpecId` (golden vector); plus `fn check_compatible_rejects_activated_fork_change()`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-evm chainspec::tests` → fails.
+- [x] **Step 3 — Green:** Implement `AvaHardfork` (Eth(EthereumHardfork) + Apricot1..PhasePost6, Banff, Cortina, Durango, Etna, Fortuna, Granite), `AvaChainSpec { inner: ChainHardforks, eth_genesis_header, genesis, fee_config: FeeConfig, network_upgrades, is_subnet, chain }`, `impl EthChainSpec`/`EthereumHardforks` (facade), `fork_at`, per-phase `is_*` predicates, `revm_spec_id`, `check_compatible` (network_upgrades parity). Embed Mainnet/Fuji fork timestamps as protocol constants (00 §5). Commit fork-schedule golden vector.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-evm chainspec::tests` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: AvaChainSpec + AvaHardfork + revm_spec_id (G7)`
+
+> **AS-BUILT (M6.5).** `fork_at` returns an ordered **`AvaPhase`** enum (Launch, ApricotPhase1..PhasePost6,
+> Banff, Cortina, Durango, Etna, Fortuna, Granite) — NOT `AvaHardfork` (whose `Eth(_)` variant can't be
+> totally ordered). `AvaHardfork = Eth(EthereumHardfork) | Phase(AvaPhase)` is the `Hardfork`-trait/
+> `ChainHardforks` unit; `AvaPhase` is the "current fork" type. **revm_spec_id mapping (coreth
+> `params/config_extra.go:SetEthUpgrades`, verbatim):** Launch/AP1→ISTANBUL, AP2→BERLIN, AP3..Cortina→LONDON,
+> Durango→SHANGHAI, Etna/Fortuna/Granite→CANCUN. coreth pins **no PragueTime** at the pinned rev, so
+> Fortuna/Granite stay CANCUN (NB: §17.8's "Granite→PRAGUE/Durango→PRAGUE" example is wrong — see SPEC FIX
+> below). Fork **timestamps reused from `ava-version`** (`upgrade.rs`, the verbatim `upgrade.go` schedule),
+> converted chrono→u64 unix; no magic numbers duplicated. ChainHardforks keys Eth forks by *timestamp* (not
+> block) — observationally identical for revm_spec_id. `FeeConfig`/`genesis` are minimal stubs (full forms
+> land M6.8/M6.11–13). Facade re-exports added: `ChainSpecBuilder, DepositContract, BaseFeeParams, BlobParams,
+> Genesis, NodeRecord, Header` + new `AvaEvmError::IncompatibleFork`. Deps added: `ava-version`, `chrono`.
 
 ### Task M6.6: `ExternalConsensusExecutor::execute_batch` + 1-block reexecute → `differential::cchain_state_root` (TDD ENTRY POINT)
 **Crate:** ava-evm  ·  **Depends on:** M6.1, M6.3, M6.4, M6.5  ·  **Spec:** 10 §3.2, §17.1, §17.4 (executor drive); 02 §10.5, §11.1 (recorded-oracle); 04 §4.2
@@ -151,14 +206,29 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm evm_fee_schedule_per_fork` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: next_evm_env fee override + per-fork schedule proptest (G2)`
 
-### Task M6.14: Atomic tx types + byte-exact codec
+### Task M6.14: Atomic tx types + byte-exact codec ✅ DONE (dfd7e53)
 **Crate:** ava-evm  ·  **Depends on:** M6.2, M3 (ATOMIC-1 codec/types)  ·  **Spec:** 10 §6.1, §6.2; 02 §6
 **Files:** `crates/ava-evm/src/atomic/mod.rs`, `crates/ava-evm/src/atomic/tx.rs`, `crates/ava-evm/tests/vectors/cchain/atomic/*.json`
-- [ ] **Step 1 — Red:** `atomic::tx` `mod tests`: `fn import_export_serialize_byte_exact()` asserts `EvmOutput`/`EvmInput`/`UnsignedImportTx`/`UnsignedExportTx` linear-codec (ava-codec, NOT RLP) bytes equal Go golden hex, field order verbatim (addr, amount, asset[, nonce]); `fn atomic_ops_requests_match_go()` asserts Import→`RemoveRequests=utxoIDs` on source, Export→`PutRequests=elems` on dest; verify constants `X2CRate=1_000_000_000`, `TxBytesGas`, `EVMOutputGas`, `EVMInputGas`, `CostPerSignature`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic::tx::tests` → fails.
-- [ ] **Step 3 — Green:** Implement `EvmOutput`/`EvmInput`/`UnsignedImportTx`/`UnsignedExportTx`/`AtomicTx` + `SignedTx<_>` with `#[derive(AvaCodec)]`, `atomic_ops() -> (Id, atomic::Requests)`, and the constants (cite Go paths in doc-comments). Reuse `TransferableInput`/`TransferableOutput`/`atomic::Requests` from M3. Commit atomic golden vectors.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic::tx::tests` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: atomic Import/Export tx types + byte-exact codec (§6.1)`
+- [x] **Step 1 — Red:** `atomic::tx` `mod tests`: `fn import_export_serialize_byte_exact()` asserts `EvmOutput`/`EvmInput`/`UnsignedImportTx`/`UnsignedExportTx` linear-codec (ava-codec, NOT RLP) bytes equal Go golden hex, field order verbatim (addr, amount, asset[, nonce]); `fn atomic_ops_requests_match_go()` asserts Import→`RemoveRequests=utxoIDs` on source, Export→`PutRequests=elems` on dest; verify constants `X2CRate=1_000_000_000`, `TxBytesGas`, `EVMOutputGas`, `EVMInputGas`, `CostPerSignature`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic::tx::tests` → fails.
+- [x] **Step 3 — Green:** Implement `EvmOutput`/`EvmInput`/`UnsignedImportTx`/`UnsignedExportTx`/`AtomicTx` + `SignedTx<_>` with `#[derive(AvaCodec)]`, `atomic_ops() -> (Id, atomic::Requests)`, and the constants (cite Go paths in doc-comments). Reuse `TransferableInput`/`TransferableOutput`/`atomic::Requests` from M3. Commit atomic golden vectors.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic::tx::tests` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: atomic Import/Export tx types + byte-exact codec (§6.1)`
+
+> **AS-BUILT (M6.14).** Golden vectors are **Go-EXECUTED** (scratch `package atomic` test on go1.25.10 against
+> `coreth/plugin/evm/atomic`, `Codec.Marshal` + `AtomicOps`, then deleted) — not hand-derived. Reused
+> `ava_vm::components::avax::shared_memory::{Requests, Element}` (canonical X↔P payloads) and the
+> codec-serializable `ava_avm::txs::components::{TransferableInput, TransferableOutput}` + `credential::FxCredential`
+> (the `ava_vm::components::avax` versions are `Arc<dyn>` trait objects that can't derive `AvaCodec`; the
+> X-Chain mirrors are byte-identical and secp fx type-ids 5/7/9 coincide). `EvmOutput.address` stored as
+> `[u8;20]` (codec-native, no facade `Address` needed). **Codec type-id registry (atomic, DISTINCT from
+> X-Chain):** 0=Import, 1=Export, 5=TransferInput, 7=TransferOutput, 9=Credential, 10=Input, 11=OutputOwners.
+> **PARITY HAZARD (see SPEC FIX):** Go emits the interface `u32` type_id prefix ONLY when the static type is
+> the `UnsignedAtomicTx` interface (inside `Tx.Sign`); a concrete `*UnsignedImportTx` marshals with NO prefix.
+> Both `struct_codec_hex` + `interface_codec_hex` captured; the `AtomicTx` enum produces the interface form.
+> Constants: X2C_RATE=1e9, TX_BYTES_GAS=1, EVM_OUTPUT_GAS=60, EVM_INPUT_GAS=1068, COST_PER_SIGNATURE=1000.
+> Signing/recovery deferred to M6.18. Deps added: `ava-codec(-derive)`, `ava-types`, `ava-vm`, `ava-avm`,
+> `ava-crypto`, dev `ava-secp256k1fx`.
 
 ### Task M6.15: `AtomicStateHook` EVMStateTransfer pre-hook + atomic gas (G3)
 **Crate:** ava-evm  ·  **Depends on:** M6.14, M6.6, M6.13  ·  **Spec:** 10 §6.3, §17.4 (G3); 21 §4b (atomic gas budget)
