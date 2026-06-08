@@ -10,8 +10,13 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The SAE gas clock: Tau-pinned rate, excess scaling, ACP-176 price (specs/11 §2.2, 21 §6). M7.1 scaffold."
+description = "The SAE gas clock: Tau-pinned rate, excess scaling, ACP-176 price (specs/11 §2.2, 21 §6)."
 
 [dependencies]
+ava-saevm-proxytime = { path = "../proxytime" }
+ava-saevm-intmath = { path = "../intmath" }
+ava-vm = { path = "../../ava-vm" }
+ruint = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }

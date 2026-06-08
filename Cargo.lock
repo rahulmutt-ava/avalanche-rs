@@ -1470,6 +1470,13 @@ version = "0.1.0"
 [[package]]
 name = "ava-saevm-gastime"
 version = "0.1.0"
+dependencies = [
+ "ava-saevm-intmath",
+ "ava-saevm-proxytime",
+ "ava-vm",
+ "proptest",
+ "ruint",
+]
 
 [[package]]
 name = "ava-saevm-hook"
