@@ -1,0 +1,24 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-evm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Avalanche C-Chain VM: reth/revm as a library executor behind Avalanche adapters, Firewood-ethhash state-of-record, atomic X<->C txs, per-fork dynamic fees, warp precompiles, eth_*/avax.* RPC (M6 / specs 10)."
+
+# Deps are added per-task as modules land (the workspace denies
+# `unused_crate_dependencies`). M6.2 only needs the facade + thiserror for the
+# Error sentinel model; M6.3+ add firewood/ava-database/alloy/etc.
+[dependencies]
+# The G0 facade — the ONLY way ava-evm names reth/revm/alloy (spec 10 §17.1).
+ava-evm-reth = { path = "../ava-evm-reth" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }

@@ -1129,6 +1129,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-evm"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "ava-evm-reth",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-evm-reth"
 version = "0.1.0"
 dependencies = [
