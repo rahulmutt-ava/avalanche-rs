@@ -60,3 +60,7 @@ pub mod rpc;
 pub mod sync;
 
 pub use error::{Error, Result};
+// Spec 21 §0 gas primitives, re-exported at the crate root for ergonomic use by
+// fee-schedule callers/tests (the canonical owner is `ava_vm::components::gas`,
+// re-exported through `feerules`).
+pub use feerules::{Gas, GasState, Price};
