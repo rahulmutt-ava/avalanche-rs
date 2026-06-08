@@ -151,6 +151,29 @@ pub use alloy_eips::Decodable2718;
 // `ConfigureEvm::context_for_*` consumes; exposed for the block lifecycle.
 pub use reth_primitives_traits::{SealedBlock, SealedHeader};
 
+// --- revm precompile surface (G4/G10, §17.5) -----------------------------
+// The `PrecompileProvider` trait itself is re-exported above (revm::handler).
+// `ava-evm::precompile` implements it for `AvaPrecompiles`, overlaying the
+// Avalanche stateful precompiles (warp/allowlist/feemanager/…) on revm's
+// standard set and gating them by the fork+upgrade-activated `warm` set.
+//
+// `EthPrecompiles` is revm's standard Ethereum `PrecompileProvider` (the
+// fall-through `base` set, keyed on the active `SpecId`). `CallInputs` is the
+// per-call input the provider's `run` receives; `InterpreterResult` is the
+// provider `Output` type. `ContextTr` is the revm execution-context trait the
+// provider is generic over (the G10 churn point — the typed context extension
+// `AvaCtxExt` rides on `ContextTr::Chain`, threaded by M6.22's predicate pass).
+// `Cfg` is the context-config super-trait whose `Spec` (= `SpecId` for the Eth
+// context) `set_spec` consumes. `Precompiles`/`PrecompileSpecId` build the
+// standard set for a spec; `PrecompileError`/`PrecompileOutput` are the
+// stateful-precompile result types; `precompile_output_to_interpreter_result`
+// converts a precompile output into the `InterpreterResult` revm expects.
+pub use revm::context_interface::{Cfg, ContextTr};
+pub use revm::handler::{EthPrecompiles, precompile_output_to_interpreter_result};
+pub use revm::interpreter::{CallInputs, InterpreterResult};
+pub use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileSpecId, Precompiles};
+// revm's `SpecId` is already re-exported above (revm fork/spec id, G7).
+
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the
 /// `UPGRADING.md` checklist.
