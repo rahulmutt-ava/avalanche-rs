@@ -74,6 +74,10 @@ firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.5.0
 # base fee is a 256-bit wei quantity and the delta computation can exceed u64.
 # No floats (spec 00 §6.1); all U256 ops are checked/saturating.
 ruint = { workspace = true }
+# M6.16 atomic mempool: `tokio::sync::Notify` is the wake-on-nonempty signal the
+# block builder (M6.20) parks on (coreth `txpool` `pending chan`). Only the
+# `sync` feature is needed in the library; the workspace tokio already carries it.
+tokio = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
