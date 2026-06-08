@@ -27,10 +27,33 @@ pub use reth_evm::{ConfigureEvm, EvmEnvFor, ExecutionCtxFor};
 pub use alloy_evm::block::BlockExecutionResult;
 
 // --- reth storage/provider traits (reth-storage-api) ---------------------
+pub use reth_storage_api::errors::provider::{ProviderError, ProviderResult};
 pub use reth_storage_api::{
     AccountReader, BlockHashReader, BytecodeReader, HashedPostStateProvider, StateProofProvider,
     StateProvider, StateProviderFactory, StateRootProvider, StorageRootProvider,
 };
+
+// --- reth state/trie value types crossing the facade (G1, §17.2) ---------
+// `Account` is the value `AccountReader::basic_account` returns (nonce,
+// balance, bytecode_hash). The trie types are the inputs/outputs of the
+// `StateRootProvider`/`HashedPostStateProvider` methods FirewoodStateProvider
+// implements (we hand reth EMPTY `TrieUpdates` — the G1 trick).
+pub use reth_primitives_traits::Account;
+pub use reth_trie_common::updates::TrieUpdates;
+pub use reth_trie_common::{HashedPostState, TrieInput};
+
+// --- reth chain spec + fork schedule (G7, §17.8) -------------------------
+// `reth_chainspec` re-exports the whole `reth_ethereum_forks` hardfork set
+// (EthereumHardfork / EthereumHardforks / ChainHardforks / ForkCondition /
+// the `Hardfork` trait). `AvaChainSpec`/`AvaHardfork` are built on top.
+pub use reth_chainspec::{
+    Chain, ChainHardforks, ChainSpec, EthChainSpec, EthereumHardfork, EthereumHardforks,
+    ForkCondition, Hardfork,
+};
+
+// --- revm fork/spec id (G7) ----------------------------------------------
+// The Ethereum `SpecId` each Avalanche phase maps onto (revm_spec_id, §17.8).
+pub use revm::primitives::hardfork::SpecId;
 
 // --- revm (state overlay + precompile dispatch) --------------------------
 pub use revm::database::{BundleState, State, StateBuilder};
@@ -116,7 +139,3 @@ pub enum AvaEvmError {
     #[error("fee overflow")]
     FeeOverflow,
 }
-
-/// Re-export of reth's provider error so the facade error and `PreExecutionHook`
-/// can name the `State<_>` database error type without spelling `reth_*`.
-pub use reth_storage_api::errors::provider::ProviderError;

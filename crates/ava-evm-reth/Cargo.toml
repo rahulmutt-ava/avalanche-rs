@@ -30,6 +30,11 @@ description = "G0 facade: the ONLY crate allowed to name reth_*/revm/alloy_* dir
 [dependencies]
 reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false, features = ["std"] }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
+# reth publishes `reth-primitives-traits` to crates.io (own 0.3.x version line)
+# and consumes it by version even internally — pin the version reth v2.2.0 uses.
+reth-primitives-traits = { version = "0.3.2", default-features = false }
 
 revm = { version = "38.0.0", default-features = false, features = ["std"] }
 alloy-primitives = { version = "1.5.6", default-features = false, features = ["map-foldhash"] }
