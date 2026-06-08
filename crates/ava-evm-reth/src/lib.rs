@@ -141,12 +141,38 @@ pub use revm::Database;
 // on the `State` overlay, so its `dyn Database` bound names this error.
 pub use reth_revm::database::StateProviderDatabase;
 pub use revm::database_interface::bal::EvmDatabaseError;
+// `DatabaseCommit` is the revm write path: `commit(AddressMap<Account>)` folds a
+// set of mutated (touched) accounts into the `State<DB>` overlay's transition
+// set, so they land in the same `BundleState` → Firewood proposal. The atomic
+// `EVMStateTransfer` pre-hook (M6.15, §6.3/§17.4) uses it to credit/debit
+// balances and bump nonces from *outside* the EVM. `AddressMap` is the touched-
+// account map `commit` consumes; `AccountStatus`/`EvmStorage` are the `Account`
+// fields the hook sets (`Touched|LoadedAsNotExisting` status + empty storage).
+pub use alloy_primitives::map::AddressMap;
+pub use revm::DatabaseCommit;
+pub use revm::state::{AccountStatus, EvmStorage};
 
 /// The error a revm `State<StateProviderDatabase<…>>` overlay surfaces: the
 /// Firewood/provider read error (`ProviderError`) wrapped by revm's
 /// `EvmDatabaseError`. This is the `Database::Error` of the overlay
 /// `PreExecutionHook::apply` (and the block executor) operate on.
 pub type StateDbError = EvmDatabaseError<ProviderError>;
+
+/// The combined revm overlay trait the atomic pre-hook (§6.3/§17.4) operates on:
+/// a Firewood-ethhash-backed [`Database`] (read: `basic`/`storage`/…) that is
+/// **also** a [`DatabaseCommit`] (write: fold mutated accounts into the overlay's
+/// transition set). The `State<StateProviderDatabase<FirewoodStateView>>` overlay
+/// `execute_batch` runs against implements both, so the hook can read an
+/// account's current balance/nonce and commit the credited/debited/nonce-bumped
+/// result into the SAME `BundleState` the EVM tx loop builds — exactly coreth's
+/// `EVMStateTransfer` (the atomic effects are part of the post-state root).
+///
+/// The blanket impl makes every such overlay a `dyn StateDb` automatically; the
+/// `PreExecutionHook::apply` parameter is `&mut dyn StateDb` rather than the
+/// read-only `&mut dyn Database` because crediting/debiting requires the write
+/// side.
+pub trait StateDb: Database<Error = StateDbError> + DatabaseCommit {}
+impl<T: Database<Error = StateDbError> + DatabaseCommit> StateDb for T {}
 
 // --- alloy primitives / consensus types crossing the facade boundary -----
 pub use alloy_consensus::{Header, Receipt, TxEnvelope};
@@ -242,10 +268,12 @@ pub struct ExecOutcome {
 /// (spec 10 §17.4). Defined here so the executor trait can name it.
 pub trait PreExecutionHook {
     /// Apply state effects to the journaled overlay before tx execution.
-    /// `db` is the revm `State<_>` overlay the batch executes against; its
-    /// `Database::Error` is [`StateDbError`] (the Firewood `ProviderError`
-    /// wrapped by revm's `EvmDatabaseError`).
-    fn apply(&self, db: &mut dyn revm::Database<Error = StateDbError>) -> Result<(), AvaEvmError>;
+    /// `db` is the revm `State<_>` overlay the batch executes against, exposed as
+    /// a [`StateDb`]: a [`Database`] (`Database::Error == StateDbError`, the
+    /// Firewood `ProviderError` wrapped by revm's `EvmDatabaseError`) that is also
+    /// a [`DatabaseCommit`], so the hook can both read current balances/nonces and
+    /// commit credited/debited results into the same `BundleState` (§6.3/§17.4).
+    fn apply(&self, db: &mut dyn StateDb) -> Result<(), AvaEvmError>;
 }
 
 /// The ONE entrypoint SAE (spec 11) and the sync `ChainVm` (spec 10 §3) both
@@ -294,4 +322,21 @@ pub enum AvaEvmError {
         /// The stable name of the offending fork.
         fork: &'static str,
     },
+}
+
+impl From<StateDbError> for AvaEvmError {
+    /// The revm `State<DB>` overlay surfaces reads as [`StateDbError`] (=
+    /// `EvmDatabaseError<ProviderError>`). The atomic pre-hook ([`PreExecutionHook`])
+    /// reads accounts off the overlay, so `?` on those reads needs this
+    /// conversion: a `Database` read error is the underlying Firewood
+    /// [`ProviderError`]; a `Bal` (block-access-list) error is reported as a
+    /// block-execution failure (BAL is not used on the C-Chain atomic path).
+    fn from(err: StateDbError) -> Self {
+        match err {
+            EvmDatabaseError::Database(e) => AvaEvmError::Provider(e),
+            EvmDatabaseError::Bal(e) => {
+                AvaEvmError::BlockExecution(BlockExecutionError::msg(e.to_string()))
+            }
+        }
+    }
 }
