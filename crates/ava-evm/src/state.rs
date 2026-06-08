@@ -42,18 +42,19 @@
 //! is preserved.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
 use ava_database::{DynDatabase, Error as DbError};
 use ava_evm_reth::{
-    Account, AccountProof, Address, B256, BundleState, DatabaseError, EMPTY_ROOT_HASH,
+    Account, AccountProof, Address, B256, BundleState, Bytes, DatabaseError, EMPTY_ROOT_HASH,
     ExecutionWitnessMode, HashedPostState, HashedStorage, KeccakKeyHasher, MultiProof,
     MultiProofTargets, ProviderError, ProviderResult, RethBytecode, RlpDecodable, StorageKey,
     StorageMultiProof, StorageProof, StorageValue, TrieAccount, TrieInput, TrieUpdates, U256,
     keccak256, rlp_encode,
 };
-use firewood::api::{Db as _, DbView as _, HashKey, Proposal as _};
+use firewood::api::{Db as _, DbView as _, FrozenRangeProof, HashKey, Proposal as _};
 use firewood::db::{BatchOp, Db, DbConfig, Proposal};
 use firewood::manager::RevisionManagerConfig;
 use firewood_storage::NodeHashAlgorithm;
@@ -218,6 +219,30 @@ pub fn decode_rlp_account(bytes: &[u8]) -> ProviderResult<Account> {
         balance,
         bytecode_hash,
     })
+}
+
+/// Decodes the `storage_root` (3rd) field out of a libevm 5-field `StateAccount`
+/// RLP blob (the inverse of the `rlp_account` empty-root sentinel: Firewood-ethhash
+/// rewrites this field to the account's REAL sub-trie root at hash time, so the
+/// committed leaf carries the live storage root — exactly what `eth_getProof`'s
+/// `storageHash` needs). Spec 10 §17.2.1.
+///
+/// # Errors
+/// Returns [`ProviderError`] if the bytes are not a valid account RLP.
+pub fn decode_account_storage_root(bytes: &[u8]) -> ProviderResult<B256> {
+    if bytes.len() < 2 || bytes[0] != 0xf8 {
+        return Err(db_other("malformed account RLP header"));
+    }
+    let payload_len = bytes[1] as usize;
+    let payload_end = payload_len
+        .checked_add(2)
+        .filter(|&end| end <= bytes.len())
+        .ok_or_else(|| db_other("account RLP payload truncated"))?;
+    let mut payload: &[u8] = &bytes[2..payload_end];
+    let _nonce = u64::decode(&mut payload).map_err(db_other)?;
+    let _balance = U256::decode(&mut payload).map_err(db_other)?;
+    let storage_root = B256::decode(&mut payload).map_err(db_other)?;
+    Ok(storage_root)
 }
 
 /// Encodes a storage slot value as `RLP(U256)` with leading zeros trimmed —
@@ -395,8 +420,12 @@ impl FirewoodStateProvider {
 
     /// Builds a proposal over `ops` against the tip, reads its root, stashes the
     /// ops by root, and returns the root. Shared by `state_root_with_updates`
-    /// and `propose_from_bundle`.
-    fn propose_and_stash(&self, ops: FirewoodOps) -> ProviderResult<B256> {
+    /// and `propose_from_bundle`. Public so the state-sync server-side seeding and
+    /// tests (M6.25) can compute+stash a root the same way the lifecycle does.
+    ///
+    /// # Errors
+    /// Returns [`ProviderError`] on a Firewood propose/root failure.
+    pub fn propose_and_stash(&self, ops: FirewoodOps) -> ProviderResult<B256> {
         let proposal = self.db.propose(ops.clone()).map_err(map_fw_err)?;
         let root = proposal_root(&proposal);
         // Drop the borrowed proposal; we stash ops and re-propose at commit.
@@ -477,6 +506,66 @@ impl FirewoodStateView {
     /// Reads a raw value from the pinned revision.
     fn val(&self, key: &[u8]) -> ProviderResult<Option<Vec<u8>>> {
         Ok(self.rev.val(key).map_err(map_fw_err)?.map(|v| v.to_vec()))
+    }
+
+    /// Builds a wire-exact Firewood **inclusion/exclusion proof** for the single
+    /// `key` at this revision, serialized as `FrozenRangeProof` bytes (a
+    /// single-key range `[key, key]`). This is the proof form firewood v0.5
+    /// exposes; it verifies against the revision root via
+    /// [`firewood::merkle::verify_range_proof`] / the Go `firewood/syncer`
+    /// `Verify`. Returns the proof bytes (spec 10 §10/§17.9).
+    ///
+    /// > **Firewood proof shape (M6.25 as-built, spec 10 §17.9).** firewood
+    /// > v0.5.0 does NOT expose raw Ethereum-RLP MPT trie nodes (the
+    /// > `Vec<Bytes>` reth's `AccountProof::verify` consumes); its proof API
+    /// > yields firewood `ProofNode`s serialized by `write_to_vec`. So the
+    /// > `proof: Vec<Bytes>` we return carries a SINGLE element — the firewood
+    /// > `FrozenRangeProof` bytes for `[key, key]` — verifiable against the
+    /// > ethhash root with firewood's verifier (the same bytes the Go node
+    /// > verifies). A reth-RLP-MPT-node proof would need an upstream firewood
+    /// > "eth proof" API (the G8 soft upstream ask) — tracked for §17.9.
+    ///
+    /// # Errors
+    /// Returns [`ProviderError`] on a Firewood proof failure.
+    fn inclusion_proof_bytes(&self, key: &[u8]) -> ProviderResult<Vec<u8>> {
+        let limit = NonZeroUsize::new(1);
+        let proof: FrozenRangeProof = self
+            .rev
+            .range_proof(Some(key.to_vec()), Some(key.to_vec()), limit)
+            .map_err(map_fw_err)?;
+        let mut bytes = Vec::new();
+        proof.write_to_vec(&mut bytes);
+        Ok(bytes)
+    }
+
+    /// Builds a Firewood **range proof** over `[start, end]` (open bounds when
+    /// `None`) limited to `limit` key/value pairs, and returns the wire-exact
+    /// serialized proof bytes plus the proven `(keys, vals)`. This is the leaf
+    /// server's read path (spec 10 §10/§17.9); the bytes are byte-identical to
+    /// the Go `firewood/syncer` (`FrozenRangeProof::write_to_vec`).
+    ///
+    /// # Errors
+    /// Returns [`ProviderError`] on a Firewood proof failure.
+    #[allow(clippy::type_complexity)]
+    pub fn range_proof_bytes(
+        &self,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> ProviderResult<(Vec<u8>, Vec<Vec<u8>>, Vec<Vec<u8>>)> {
+        let proof: FrozenRangeProof = self
+            .rev
+            .range_proof(start.map(<[u8]>::to_vec), end.map(<[u8]>::to_vec), limit)
+            .map_err(map_fw_err)?;
+        let mut keys = Vec::with_capacity(proof.key_values().len());
+        let mut vals = Vec::with_capacity(proof.key_values().len());
+        for (k, v) in proof.key_values() {
+            keys.push(k.to_vec());
+            vals.push(v.to_vec());
+        }
+        let mut bytes = Vec::new();
+        proof.write_to_vec(&mut bytes);
+        Ok((bytes, keys, vals))
     }
 }
 
@@ -585,24 +674,43 @@ impl ava_evm_reth::StateRootProvider for FirewoodStateView {
 impl ava_evm_reth::StorageRootProvider for FirewoodStateView {
     fn storage_root(
         &self,
-        _address: Address,
+        address: Address,
         _hashed_storage: ava_evm_reth::HashedStorage,
     ) -> ProviderResult<B256> {
-        // Firewood-ethhash recomputes per-account storage roots internally at
-        // hash time; a standalone sub-trie root over an ad-hoc HashedStorage is
-        // not exposed by the firewood v0.5 API. eth_getProof / sub-trie roots
-        // are M6.25 (state sync) scope; return the empty-trie sentinel until
-        // then so callers that only need a placeholder are unblocked.
-        Ok(EMPTY_ROOT_HASH)
+        // Returns the `storage_root` field encoded in the account leaf RLP.
+        //
+        // > **As-built (M6.25, spec 10 §17.2.1/§17.9).** Firewood-ethhash derives
+        // > per-account storage roots INTERNALLY at hash time and does NOT expose
+        // > them through the v0.5 read/proof API, nor does it rewrite the stored
+        // > leaf value — the value is exactly the bytes we wrote, whose 3rd field
+        // > is the empty-trie sentinel ([`rlp_account`]). So for an account WITH
+        // > storage this returns the sentinel rather than the live sub-trie root
+        // > (`eth_getProof.storageHash` is correspondingly limited). Surfacing the
+        // > live sub-trie root is the G8 soft upstream firewood ask (§17.9).
+        // > Absent account => the empty-trie root.
+        match self.val(&account_key(&address))? {
+            Some(rlp) => decode_account_storage_root(&rlp),
+            None => Ok(EMPTY_ROOT_HASH),
+        }
     }
 
     fn storage_proof(
         &self,
-        _address: Address,
-        _slot: B256,
+        address: Address,
+        slot: B256,
         _hashed_storage: ava_evm_reth::HashedStorage,
     ) -> ProviderResult<StorageProof> {
-        Err(unsupported("storage_proof"))
+        // The slot value (RLP(U256)), `0` when absent, + a Firewood inclusion
+        // proof for the storage-trie key (`keccak(addr)||keccak(slot)`).
+        let key = storage_key(&address, &slot);
+        let value = match self.val(&key)? {
+            Some(rlp) => decode_rlp_u256(&rlp)?,
+            None => U256::ZERO,
+        };
+        let proof_bytes = self.inclusion_proof_bytes(&key)?;
+        let mut sp = StorageProof::new(slot).with_proof(vec![Bytes::from(proof_bytes)]);
+        sp.value = value;
+        Ok(sp)
     }
 
     fn storage_multiproof(
@@ -611,7 +719,10 @@ impl ava_evm_reth::StorageRootProvider for FirewoodStateView {
         _slots: &[B256],
         _hashed_storage: ava_evm_reth::HashedStorage,
     ) -> ProviderResult<StorageMultiProof> {
-        Err(unsupported("storage_multiproof"))
+        // A multiproof's `account_subtree`/`storages` are reth-RLP-MPT
+        // `ProofNodes`, which firewood v0.5 does not expose (see
+        // `inclusion_proof_bytes`). Use `storage_proof` per slot instead.
+        Err(unsupported_multiproof("storage_multiproof"))
     }
 }
 
@@ -619,10 +730,41 @@ impl ava_evm_reth::StateProofProvider for FirewoodStateView {
     fn proof(
         &self,
         _input: TrieInput,
-        _address: Address,
-        _slots: &[B256],
+        address: Address,
+        slots: &[B256],
     ) -> ProviderResult<AccountProof> {
-        Err(unsupported("proof"))
+        // Read the account (info + its live storage root) and build a Firewood
+        // inclusion proof for the account-trie key, plus a per-slot storage proof
+        // for each requested slot. The `info`/`storage_root`/slot `value` fields
+        // are what `eth_getProof` returns; the proof bytes are firewood-native
+        // (see `inclusion_proof_bytes`).
+        let acct_key = account_key(&address);
+        let (info, storage_root) = match self.val(&acct_key)? {
+            Some(rlp) => (
+                Some(decode_rlp_account(&rlp)?),
+                decode_account_storage_root(&rlp)?,
+            ),
+            None => (None, EMPTY_ROOT_HASH),
+        };
+        let account_proof_bytes = self.inclusion_proof_bytes(&acct_key)?;
+
+        let mut storage_proofs = Vec::with_capacity(slots.len());
+        for slot in slots {
+            storage_proofs.push(<Self as ava_evm_reth::StorageRootProvider>::storage_proof(
+                self,
+                address,
+                *slot,
+                HashedStorage::default(),
+            )?);
+        }
+
+        Ok(AccountProof {
+            address,
+            info,
+            proof: vec![Bytes::from(account_proof_bytes)],
+            storage_root,
+            storage_proofs,
+        })
     }
 
     fn multiproof(
@@ -630,7 +772,9 @@ impl ava_evm_reth::StateProofProvider for FirewoodStateView {
         _input: TrieInput,
         _targets: MultiProofTargets,
     ) -> ProviderResult<MultiProof> {
-        Err(unsupported("multiproof"))
+        // See `storage_multiproof`: reth-RLP-MPT proof nodes are not a firewood
+        // v0.5 export. Callers should use `proof` per account.
+        Err(unsupported_multiproof("multiproof"))
     }
 
     fn witness(
@@ -639,15 +783,21 @@ impl ava_evm_reth::StateProofProvider for FirewoodStateView {
         _target: HashedPostState,
         _mode: ExecutionWitnessMode,
     ) -> ProviderResult<Vec<ava_evm_reth::Bytes>> {
-        Err(unsupported("witness"))
+        // Execution witnesses (stateless validation) require the full set of
+        // reth-RLP-MPT nodes touched by a block — not a firewood v0.5 export and
+        // not on the C-Chain sync/RPC path (spec 10 §10/§17.9).
+        Err(unsupported_multiproof("witness"))
     }
 }
 
-/// A `ProviderError` for proof/witness paths not yet wired to Firewood proofs
-/// (M6.25 state-sync scope, spec 10 §10/§17.9).
-fn unsupported(what: &str) -> ProviderError {
+/// A `ProviderError` for the reth-RLP-MPT multiproof/witness paths firewood v0.5
+/// does not expose (the single-key `proof`/`storage_proof` ARE implemented over
+/// firewood inclusion proofs; the multiproof forms need an upstream firewood
+/// "eth proof" API, the G8 soft upstream ask — spec 10 §10/§17.9).
+fn unsupported_multiproof(what: &str) -> ProviderError {
     db_other(format!(
-        "firewood {what} not yet implemented (M6.25 state-sync scope)"
+        "firewood {what}: reth-RLP-MPT proof nodes are not exposed by firewood v0.5 \
+         (use the single-key proof/storage_proof; see spec 10 §17.9)"
     ))
 }
 
