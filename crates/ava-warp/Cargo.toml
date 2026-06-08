@@ -1,0 +1,25 @@
+[package]
+name = "ava-warp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Avalanche Warp Messaging / Interchain Messaging (ICM): the generic BLS-multisignature cross-chain primitive — UnsignedMessage/Message envelope, BitSetSignature, addressed-call + ACP-77 registry payloads, local signer, and the pure bit-set/quorum verification (port of vms/platformvm/warp/**; specs 20 §1). Reused by P-Chain, the C-Chain EVM warp precompile, and SAE."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-codec-derive = { path = "../ava-codec-derive" }
+ava-crypto = { path = "../ava-crypto" }
+# `bits::Bits` for the signer bit-set parsing / no-padding invariant.
+ava-utils = { path = "../ava-utils" }
+# `state::{ValidatorState, WarpSet}` + `validator::GetValidatorOutput` for the
+# canonical-set-driven `WarpSetVerifier` (specs 20 §1.1).
+ava-validators = { path = "../ava-validators" }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

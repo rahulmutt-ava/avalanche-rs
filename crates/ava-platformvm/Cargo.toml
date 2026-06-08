@@ -16,6 +16,10 @@ ava-codec-derive = { path = "../ava-codec-derive" }
 ava-crypto = { path = "../ava-crypto" }
 ava-database = { path = "../ava-database" }
 ava-validators = { path = "../ava-validators" }
+# Generic Warp / ICM primitives (envelope, payload, registry, signer, pure
+# bit-set/quorum verification) extracted into a standalone crate (specs 20 §1).
+# The P-side `warp` module re-exports these + keeps the L1-lifecycle glue.
+ava-warp = { path = "../ava-warp" }
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
 # The engine-facing `Block` trait (verify/accept/reject) is owned by `ava-snow`
 # and returns `ava_snow::Result`; the M4.25 block wrapper implements it.

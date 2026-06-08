@@ -347,6 +347,37 @@ pub enum Error {
     Service(String),
 }
 
+// Map the generic Warp / ICM error ([`ava_warp::Error`], specs 20 §9) onto the
+// P-Chain sentinels. The variant identities are preserved 1:1 (so call sites /
+// tests can still `assert_matches!` the exact failure mode); the registry
+// payload's structural-`verify()` failure (`ava_warp::Error::InvalidPayload`)
+// collapses onto [`Error::InvalidComponent`], matching the pre-extraction
+// behaviour where the warp `verify()` returned `Error::InvalidComponent`
+// directly. The wrapped `Codec` / `Validators` errors round-trip through the
+// existing `#[from]` variants.
+impl From<ava_warp::Error> for Error {
+    fn from(e: ava_warp::Error) -> Self {
+        match e {
+            ava_warp::Error::WrongSourceChainId => Error::WrongSourceChainId,
+            ava_warp::Error::WrongNetworkId => Error::WrongNetworkId,
+            ava_warp::Error::InvalidBitSet => Error::InvalidBitSet,
+            ava_warp::Error::UnknownValidator => Error::UnknownValidator,
+            ava_warp::Error::InsufficientWeight => Error::InsufficientWeight,
+            ava_warp::Error::ParseSignature => Error::ParseSignature,
+            ava_warp::Error::InvalidSignature => Error::InvalidSignature,
+            ava_warp::Error::Overflow => Error::Overflow,
+            ava_warp::Error::NoValidatorSet => Error::NoValidatorSet,
+            ava_warp::Error::InvalidPayload => Error::InvalidComponent,
+            ava_warp::Error::Codec(c) => Error::Codec(c),
+            ava_warp::Error::Validators(v) => Error::Validators(v),
+            // `ava_warp::Error` is `#[non_exhaustive]`; any future warp-only
+            // sentinel surfaces as a generic component-invalid failure until the
+            // P-Chain grows a dedicated mapping.
+            _ => Error::InvalidComponent,
+        }
+    }
+}
+
 // The `ChainVm`/`Block` trait surfaces return `ava_vm::Error` / `ava_snow::Error`
 // respectively; map the P-Chain error onto those crates' (closed, non-exhaustive)
 // enums. The orphan rule permits these `From` impls because the source type is
