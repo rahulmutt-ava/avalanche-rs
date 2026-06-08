@@ -235,6 +235,13 @@ pub use reth_primitives_traits::{SealedBlock, SealedHeader};
 pub use revm::context_interface::{Cfg, ContextTr};
 pub use revm::handler::{EthPrecompiles, precompile_output_to_interpreter_result};
 pub use revm::interpreter::{CallInputs, InterpreterResult};
+// M6.22: stateful-precompile result construction. `Gas` is revm's gas-accounting
+// type (`new(limit)` + `record_cost`); `InstructionResult` is the discriminant a
+// precompile returns (`Return` on success, `PrecompileError`/`OutOfGas`/`Revert`
+// on failure). The warp precompile builds an `InterpreterResult { result, output,
+// gas }` directly, so it names both behind the facade (G0).
+pub use revm::interpreter::Gas;
+pub use revm::interpreter::InstructionResult;
 pub use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileSpecId, Precompiles};
 // revm's `SpecId` is already re-exported above (revm fork/spec id, G7).
 

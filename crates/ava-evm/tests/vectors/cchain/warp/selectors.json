@@ -1,0 +1,32 @@
+{
+  "address": "0x0200000000000000000000000000000000000005",
+  "selectors": {
+    "getBlockchainID()": "4213cf78",
+    "sendWarpMessage(bytes)": "ee5b48eb",
+    "getVerifiedWarpMessage(uint32)": "6f825350",
+    "getVerifiedWarpBlockHash(uint32)": "ce7f5929"
+  },
+  "event": {
+    "SendWarpMessage(address,bytes32,bytes)": "56600c567728a800c0aa927500f831cb451df66a7af570eb4df4dfbf4674887d"
+  },
+  "gas": {
+    "preGranite": {
+      "getBlockchainID": 2,
+      "getVerifiedWarpMessageBase": 2,
+      "perWarpSigner": 500,
+      "perWarpMessageChunk": 3200,
+      "verifyPredicateBase": 200000,
+      "sendWarpMessageBase": 41500,
+      "perWarpMessageByte": 8
+    },
+    "granite": {
+      "getBlockchainID": 200,
+      "getVerifiedWarpMessageBase": 750,
+      "perWarpSigner": 250,
+      "perWarpMessageChunk": 512,
+      "verifyPredicateBase": 125000,
+      "sendWarpMessageBase": 41500,
+      "perWarpMessageByte": 8
+    }
+  }
+}

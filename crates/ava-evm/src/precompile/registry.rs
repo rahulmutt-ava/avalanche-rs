@@ -67,14 +67,51 @@ pub struct PrecompileCtx {
     pub block: AvaBlockCtx,
 }
 
+/// The verified warp predicates for a single transaction: the raw predicate
+/// chunk-bytes (one `Vec<u8>` per warp message, in access-list order) plus the
+/// boolean verification result the predicate pass produced for each. Indexed by
+/// the warp message's predicate index (spec 20 §7.2/§7.3).
+#[derive(Clone, Debug, Default)]
+pub struct WarpTxPredicates {
+    /// The raw (chunked) predicate bytes per warp message — what
+    /// `getVerifiedWarpMessage` re-parses and charges per-chunk gas over.
+    pub predicates: Vec<Vec<u8>>,
+    /// The verification result per predicate index: `true` iff the BLS-aggregate
+    /// predicate verified against the source subnet's `WarpSet` (spec 20 §7.2).
+    pub valid: Vec<bool>,
+}
+
 /// Verified off-EVM predicate results threaded into the precompile context
-/// (G4, §17.5): `tx_index → precompile_addr → verified bytes`. **Reserved
-/// plumbing** — M6.22's predicate pass populates this; M6.21 carries it empty.
+/// (G4, §17.5). Populated by M6.22's pre-execution predicate pass
+/// ([`crate::precompile::warp::run_predicates`]); read by the warp precompile's
+/// `getVerifiedWarpMessage`/`getVerifiedWarpBlockHash` selectors.
+///
+/// Keyed by the transaction's index within the block, then by the precompile
+/// address (the warp address). `BTreeMap` keeps a deterministic ordering (no
+/// `HashMap` in execution paths, 00 §6.1).
 #[derive(Clone, Debug, Default)]
 pub struct PredicateResults {
-    /// Per-(tx, precompile) verified result bytes. `BTreeMap` keeps a
-    /// deterministic ordering (no `HashMap` in execution paths, 00 §6.1).
-    pub by_tx: BTreeMap<u64, BTreeMap<Address, Vec<u8>>>,
+    /// Per-(tx, precompile-addr) verified warp predicates.
+    pub by_tx: BTreeMap<u64, BTreeMap<Address, WarpTxPredicates>>,
+}
+
+impl PredicateResults {
+    /// Records the warp predicates verified for transaction `tx_index` at the
+    /// warp precompile address (spec 20 §7.2). `predicates` is the per-message
+    /// chunk-bytes in access-list order; `valid[i]` is the verification result
+    /// for `predicates[i]`.
+    pub fn set_warp(&mut self, tx_index: u64, predicates: Vec<Vec<u8>>, valid: Vec<bool>) {
+        self.by_tx.entry(tx_index).or_default().insert(
+            crate::precompile::warp::WARP_PRECOMPILE_ADDRESS,
+            WarpTxPredicates { predicates, valid },
+        );
+    }
+
+    /// The verified warp predicates for `tx_index` at `addr`, if any.
+    #[must_use]
+    pub fn warp_for(&self, tx_index: u64, addr: &Address) -> Option<&WarpTxPredicates> {
+        self.by_tx.get(&tx_index).and_then(|m| m.get(addr))
+    }
 }
 
 /// The proposervm/P-Chain block context a stateful precompile may observe
