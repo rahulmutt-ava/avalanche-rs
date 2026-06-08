@@ -179,14 +179,26 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm chainvm` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: EvmVm ChainVm adapter (§3)`
 
-### Task M6.11: `feerules::window` AP3 base fee + AP4 block gas cost (G2)
+### Task M6.11: `feerules::window` AP3 base fee + AP4 block gas cost (G2) ✅ DONE (71840d5)
 **Crate:** ava-evm  ·  **Depends on:** M6.5  ·  **Spec:** 21 §0, §4a, §4b; 10 §7.1, §17.3 (G2)
 **Files:** `crates/ava-evm/src/feerules/mod.rs`, `crates/ava-evm/src/feerules/window.rs`, `crates/ava-evm/src/feerules/blockgas.rs`, `crates/ava-evm/tests/vectors/cchain/fees/{ap3,ap4}/*.json`, `crates/ava-evm/tests/proptest-regressions/feerules.txt`
-- [ ] **Step 1 — Red:** Golden table tests from 21 §4 worked examples: `Window::{add,shift,sum}` (saturating), `base_fee_from_window` (exact-target no-op & unclamped, increase-vs-decrease windows-elapsed asymmetry, two-divide truncation, per-phase min/max), `ap4_block_gas_cost` (on/fast/slow + clamp-to-0, `parentCost=None`→0, Granite→0). Also reuse `calculate_price` golden 9-row table (21 §0, incl. the `MaxUint64−11` row) — port `ava-gas::calculate_price` or re-export.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm feerules::window` → fails.
-- [ ] **Step 3 — Green:** Implement `Window([u64;10])`, `base_fee_from_window` (per-phase `TargetGas`/denom/bounds keyed on parent vs child timestamp exactly per traps), `ap4_block_gas_cost` (TargetBlockRate=2, step, clamp [0,1e6]). All checked/saturating U256+u64, no floats (00 §6.1). Commit AP3/AP4 golden vectors + proptest regressions.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm feerules::window feerules::blockgas` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: AP3 fee window + AP4 block gas cost (G2, 21 §4)`
+- [x] **Step 1 — Red:** Golden table tests from 21 §4 worked examples: `Window::{add,shift,sum}` (saturating), `base_fee_from_window` (exact-target no-op & unclamped, increase-vs-decrease windows-elapsed asymmetry, two-divide truncation, per-phase min/max), `ap4_block_gas_cost` (on/fast/slow + clamp-to-0, `parentCost=None`→0, Granite→0). Also reuse `calculate_price` golden 9-row table (21 §0, incl. the `MaxUint64−11` row) — port `ava-gas::calculate_price` or re-export.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm feerules::window` → fails.
+- [x] **Step 3 — Green:** Implement `Window([u64;10])`, `base_fee_from_window` (per-phase `TargetGas`/denom/bounds keyed on parent vs child timestamp exactly per traps), `ap4_block_gas_cost` (TargetBlockRate=2, step, clamp [0,1e6]). All checked/saturating U256+u64, no floats (00 §6.1). Commit AP3/AP4 golden vectors + proptest regressions.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm feerules::window feerules::blockgas` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: AP3 fee window + AP4 block gas cost (G2, 21 §4)`
+
+> **AS-BUILT (M6.11).** `base_fee_from_window` replicates all four AP3 traps: exact-target early/unclamped
+> return, delta floored at 1, decrease-only `windowsElapsed` scaling, two SEPARATE truncating divides
+> (`/target` then `/denom`). Per-phase target/denom/min/max carried by `BaseFeeParams::{ap3,ap4,ap5,etna}`,
+> keyed by the caller's resolved phase (mirrors Go's `IsX(parent.Time)` switch). `ap4_block_gas_cost`
+> (`blockgas.rs`): TargetBlockRate=2, step, `abs_diff` deviation, saturating mul, clamp `[0,1e6]`,
+> `parentCost=None`→0; `block_gas_cost` wrapper applies the Granite→0 override. **Reused
+> `ava_vm::components::gas::{calculate_price, GasState, Gas, Price}`** (re-exported from `feerules/mod.rs`,
+> NOT re-derived) for the 9-row CalculatePrice golden table incl. the `MaxUint64−11` row. All three AP3
+> and three AP4 worked examples reproduced EXACTLY vs spec 21 §4 (cross-checked against coreth
+> `dynamic_fee_windower.go` / `ap4/cost.go`: AbsDiff, `defaultCost` on overflow/underflow, clamp order
+> faithful). No facade re-exports; only dep added is `ruint`. No spec corrections needed.
 
 ### Task M6.12: `feerules::acp176` Fortuna/ACP-176 + ACP-226 (G2)
 **Crate:** ava-evm  ·  **Depends on:** M6.11  ·  **Spec:** 21 §5; 10 §7.1, §17.3 (G2)
@@ -239,14 +251,31 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_transfer` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: AtomicStateHook EVMStateTransfer pre-hook + atomic gas (G3)`
 
-### Task M6.16: Atomic mempool
+### Task M6.16: Atomic mempool ✅ DONE (ac1bb8d)
 **Crate:** ava-evm  ·  **Depends on:** M6.14  ·  **Spec:** 10 §6.4, §17.4; 05 (gossip SDK)
 **Files:** `crates/ava-evm/src/atomic/mempool.rs`, `crates/ava-evm/tests/atomic_mempool.rs`
-- [ ] **Step 1 — Red:** `fn mempool_orders_dedups_and_conflict_checks()`: add atomic txs, assert heap ordering, dedup by source UTXO, conflict-reject of txs spending pending UTXOs, `next_batch` returns one gas-limited batch, `discardedTxs`/`issuedTxs` lifecycle, and a `Notify` fires on non-empty.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_mempool` → fails.
-- [ ] **Step 3 — Green:** Implement `AtomicMempool` (heap order, UTXO dedup/conflict set, `next_batch(&AvaNextBlockCtx)` one-batch-per-block, lifecycle maps, `tokio::sync::Notify`) + `gossip::Gossipable` impl for the p2p SDK (05). Reproduce coreth `atomic/txpool` semantics.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_mempool` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: atomic mempool (ordering, dedup, conflicts, gossip) (§6.4)`
+- [x] **Step 1 — Red:** `fn mempool_orders_dedups_and_conflict_checks()`: add atomic txs, assert heap ordering, dedup by source UTXO, conflict-reject of txs spending pending UTXOs, `next_batch` returns one gas-limited batch, `discardedTxs`/`issuedTxs` lifecycle, and a `Notify` fires on non-empty.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_mempool` → fails.
+- [x] **Step 3 — Green:** Implement `AtomicMempool` (heap order, UTXO dedup/conflict set, `next_batch(&AvaNextBlockCtx)` one-batch-per-block, lifecycle maps, `tokio::sync::Notify`) + `gossip::Gossipable` impl for the p2p SDK (05). Reproduce coreth `atomic/txpool` semantics.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_mempool` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: atomic mempool (ordering, dedup, conflicts, gossip) (§6.4)`
+
+> **AS-BUILT (M6.16).** Faithful port of coreth `plugin/evm/atomic/txpool/{mempool,txs,tx_heap}.go`.
+> Ordering by effective gas price (`burned * X2CRate / gasUsed`, rounded down, `u128` product — exact vs
+> coreth's uint256 for all in-range values), highest first, ties broken by tx id for determinism. Dedup by
+> tx id across Pending/Current/Issued(+Discarded for remote). Conflict-reject by source UTXO id unless the
+> newcomer strictly outbids every conflict (then incumbents evicted), matching `checkConflictTx`. Lifecycle
+> maps `current`/`issued`/`discarded` + mempool-full lowest-priced eviction + fee-replacement.
+> `tokio::sync::Notify` via `subscribe()`, `notify_one` on each admission. **Local `Gossipable` seam**
+> (`gossip_id = tx_id`) impl'd for `Tx` (mirrors X-Chain `ava-avm` `network/gossip.rs`). Only dep added:
+> `tokio`. No facade re-exports. **FOLLOW-UPS for later tasks:** (1) `AvaNextBlockCtx` is a minimal local
+> stub `{ atomic_gas_limit: u64 }` here — M6.13 lands the full type (timestamp(ms)/recipient/gas/P-chain
+> height); `next_batch` only needs the atomic gas budget. (2) `ATOMIC_TX_INTRINSIC_GAS = 10_000`
+> (`ap5.AtomicTxIntrinsicGas`) is a local const with `fixedFee=true` (post-AP5 mainnet/Fuji) — source it
+> from AP5 params once the fork-aware fee path lands. (3) Discarded cache is a bounded FIFO (cap 50) vs
+> coreth's LRU — non-consensus (courtesy de-dup; local re-issue bypasses it). **GOTCHA:** nextest `-E
+> 'test(atomic_mempool)'` matches the fn name not the binary → use `-E 'binary(atomic_mempool)'` (or the
+> full `-p ava-evm` run).
 
 ### Task M6.17: `AtomicBackend` + atomic trie (2nd Firewood) + shared-memory batch (G3)
 **Crate:** ava-evm  ·  **Depends on:** M6.14, M6.9, M3 (07 shared memory)  ·  **Spec:** 10 §6.4, §17.4 (G3); 07 (shared-memory contract); 04 §4.2
