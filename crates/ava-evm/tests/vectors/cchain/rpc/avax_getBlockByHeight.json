@@ -1,0 +1,4 @@
+{
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "avax.getBlockByHeight", "params": { "height": "3", "encoding": "hex" } },
+  "result": { "block": "0x626f64792d330129086f", "encoding": "hex" }
+}

@@ -176,6 +176,15 @@ impl CanonicalStore {
         self.read_b256(&num_key(prefix::HEADER, number))
     }
 
+    /// The block body bytes stored at `number`, or `None` (the block bytes
+    /// `avax.getBlockByHeight` returns; reth `BlockBodyIndices` + `Transactions`).
+    ///
+    /// # Errors
+    /// Returns an error if the KV read fails.
+    pub fn body_at(&self, number: u64) -> Result<Option<Vec<u8>>> {
+        self.get(&num_key(prefix::BODY, number))
+    }
+
     /// Reads a 32-byte value at `key`, mapping a non-32-byte value to an error.
     fn read_b256(&self, key: &[u8]) -> Result<Option<B256>> {
         match self.get(key)? {

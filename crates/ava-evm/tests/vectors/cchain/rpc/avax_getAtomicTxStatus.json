@@ -1,0 +1,4 @@
+{
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "avax.getAtomicTxStatus", "params": { "txID": "3zumDKZwsTxzxJmoTduDdipS2Cuz19b5XWCDVbXaZPh9ZwQ98" } },
+  "result": { "status": "Accepted", "blockHeight": "3" }
+}
