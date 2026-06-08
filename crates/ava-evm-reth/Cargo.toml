@@ -41,5 +41,13 @@ alloy-primitives = { version = "1.5.6", default-features = false, features = ["m
 alloy-consensus = { version = "2.0.4", default-features = false }
 alloy-evm = { version = "0.34.0", default-features = false }
 alloy-rlp = { version = "0.3.13", default-features = false }
+# G7 (spec 10 §17.8): the `EthChainSpec` trait `AvaChainSpec` implements names
+# these in its method signatures — `Genesis` (alloy-genesis), `BlobParams`
+# (alloy-eips eip7840), `NodeRecord` (reth-network-peers). reth-chainspec does
+# not re-export them publicly. Pinned to the versions reth v2.2.0 selects at the
+# pinned rev (Cargo.lock) so the facade types unify with reth-chainspec.
+alloy-genesis = { version = "2.0.4", default-features = false }
+alloy-eips = { version = "2.0.4", default-features = false }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
 
 thiserror = { workspace = true }

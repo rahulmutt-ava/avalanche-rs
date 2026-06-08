@@ -22,6 +22,14 @@ ava-evm-reth = { path = "../ava-evm-reth" }
 # bytecode (code_hash -> bytecode) and block-hash (number -> hash) stores live in
 # ava-database, NOT Firewood (Firewood is account/storage-of-record only).
 ava-database = { path = "../ava-database" }
+# G7 (spec 10 §7.4/§17.8): the Avalanche network-upgrade activation schedule
+# (Mainnet/Fuji Apricot→Granite timestamps) is a set of protocol constants owned
+# by ava-version (spec 00 §5) — `AvaChainSpec` re-uses it as the source of truth
+# rather than duplicating magic numbers.
+ava-version = { path = "../ava-version" }
+# ava-version expresses activation times as `chrono::DateTime<Utc>`; the chain
+# spec works in u64 unix timestamps, so we convert at construction with chrono.
+chrono = { workspace = true }
 thiserror = { workspace = true }
 # DashMap-equivalent for the verify()->accept() proposal stash keyed by root
 # (§17.2.2). A simple `Mutex<HashMap<_,_>>` over parking_lot is enough here.
@@ -48,7 +56,10 @@ assert_matches = { workspace = true }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }
 hex = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+# Network-id constants (MAINNET_ID/FUJI_ID) for the fork-schedule table tests.
+ava-types = { path = "../ava-types" }
 # Real on-disk scratch dirs for the Firewood roundtrip tests (Firewood is a
 # disk-backed DB). Already in the workspace lock via ava-merkledb; pinned locally.
 tempfile = "3"
