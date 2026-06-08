@@ -64,3 +64,63 @@ pub use error::{Error, Result};
 // fee-schedule callers/tests (the canonical owner is `ava_vm::components::gas`,
 // re-exported through `feerules`).
 pub use feerules::{Gas, GasState, Price};
+
+// =========================================================================
+// Reusable API surface for SAE — the §16 / §17.10 reuse contract
+// =========================================================================
+//
+// **"One EVM engine, two drivers" (spec 10 §16, §17.10; 00 §11.1.5).** The
+// items below are the *stable, flat* public surface SAE's `ava-saevm-exec`
+// (spec 11 §6) drives the EVM engine through. They are re-exported at the crate
+// ROOT (not only under their owning submodules) so the SAE driver depends on a
+// minimal, stable path set — never on `EvmVm`, `BlockBuilderDriver`, or reth
+// directly. Each maps to a §17.10 table row:
+//
+// | §17.10 item                                  | re-exported below as                |
+// |----------------------------------------------|-------------------------------------|
+// | `AvaEvmConfig` (+ `execute_batch`)           | [`AvaEvmConfig`]                    |
+// | `FirewoodStateProvider`/`…View`/`…Committer` | [`FirewoodStateProvider`] / [`FirewoodStateView`] (the "committer" is the provider's deferred propose/commit handles — see below) |
+// | `hashed_post_state_to_batchops`              | [`hashed_post_state_to_batchops`]   |
+// | `propose_from_bundle` / view-by-root         | [`FirewoodStateProvider::propose_from_bundle`] / [`FirewoodStateProvider::history_by_state_root`] |
+// | `AvaPrecompiles` / `PrecompileRegistry`      | [`AvaPrecompiles`] / [`PrecompileRegistry`] |
+// | `AtomicStateHook`                            | [`AtomicStateHook`]                 |
+// | `AvaChainSpec` / `revm_spec_id`              | [`AvaChainSpec`] (+ `AvaChainSpec::revm_spec_id`) |
+//
+// The facade twins (`ExternalConsensusExecutor`, `ExecOutcome`, `AvaEvmEnv`,
+// `RecoveredTx`, `PreExecutionHook`, the revm `State`/`StateBuilder`/
+// `StateProviderDatabase` overlay types) live in [`ava_evm_reth`] — SAE imports
+// those from the facade, never reth itself (G0).
+//
+// **NOTE on `FirewoodStateCommitter` (§17.10 table name).** There is no separate
+// `FirewoodStateCommitter` type as-built: the "open view by root → propose →
+// defer-commit-on-interval" capability the table attributes to it lives as
+// methods on [`FirewoodStateProvider`]
+// ([`propose_from_bundle`](FirewoodStateProvider::propose_from_bundle),
+// [`propose_and_stash`](FirewoodStateProvider::propose_and_stash),
+// [`stash_proposal`](FirewoodStateProvider::stash_proposal),
+// [`commit`](FirewoodStateProvider::commit),
+// [`discard`](FirewoodStateProvider::discard)). A single owner of both the read
+// view and the commit stash keeps the propose/commit keyed by post-state root in
+// one place; SAE's `Tracker` holds an `Arc<FirewoodStateProvider>` and gets the
+// "committer" role from those methods.
+//
+// **NOT part of this surface — the block lifecycle (spec 10 §17.10):**
+// [`vm::EvmVm`]/[`block::EvmBlock`] (the synchronous `ChainVm`/verify-then-vote
+// driver, §3) and [`builder::BlockBuilderDriver`] (§17.6) are
+// **sync-C-Chain-only**. SAE supplies its *own* streaming lifecycle
+// (order→execute→settle, spec 11 §6) but drives the *same*
+// [`AvaEvmConfig::execute_batch`] + Firewood propose/commit underneath. The
+// reuse contract is *enforced* by `tests/reuse_surface.rs`, which drives a batch
+// end-to-end using only the items below + the facade, never naming `EvmVm` /
+// `EvmBlock` / `BlockBuilderDriver` / reth.
+
+#[doc(inline)]
+pub use atomic::hook::AtomicStateHook;
+#[doc(inline)]
+pub use chainspec::AvaChainSpec;
+#[doc(inline)]
+pub use evmconfig::{AvaEvmConfig, AvaState, NoopPreHook};
+#[doc(inline)]
+pub use precompile::registry::{AvaPrecompiles, PrecompileRegistry};
+#[doc(inline)]
+pub use state::{FirewoodStateProvider, FirewoodStateView, hashed_post_state_to_batchops};
