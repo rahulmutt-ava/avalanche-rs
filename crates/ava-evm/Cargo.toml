@@ -18,7 +18,37 @@ description = "Avalanche C-Chain VM: reth/revm as a library executor behind Aval
 [dependencies]
 # The G0 facade — the ONLY way ava-evm names reth/revm/alloy (spec 10 §17.1).
 ava-evm-reth = { path = "../ava-evm-reth" }
+# Code/blockhash side KVs for the EVM state backend (spec 10 §5/§17.2): the
+# bytecode (code_hash -> bytecode) and block-hash (number -> hash) stores live in
+# ava-database, NOT Firewood (Firewood is account/storage-of-record only).
+ava-database = { path = "../ava-database" }
 thiserror = { workspace = true }
+# DashMap-equivalent for the verify()->accept() proposal stash keyed by root
+# (§17.2.2). A simple `Mutex<HashMap<_,_>>` over parking_lot is enough here.
+parking_lot = { workspace = true }
+# R3-pinned Firewood (spec 04 §4, 00 §11.2): the ethhash (Keccak/Eth-MPT/RLP)
+# state-of-record backend. Pinned to the SAME git tag the rest of the workspace
+# (ava-merkledb) uses so the graph resolves to one firewood. We depend directly
+# (not via ava-merkledb) because M6.3/M6.4 need the raw `Db`/`Revision`/`Proposal`
+# + proof API that ava-merkledb's higher-level wrapper does not surface, and we
+# need the `ethhash` feature unconditionally (ava-evm is always EVM-state mode).
+# NOTE (firewood global compile-time hash switch): `ethhash` flips firewood to
+# Keccak GLOBALLY for the build — see report; per-crate `cargo test -p ava-evm`
+# is the supported test path; an all-features workspace build is an M6-exit-gate
+# cross-cutting concern, not this task's.
+firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.5.0", default-features = false, features = ["ethhash"] }
+# `firewood::db::DbConfig` needs a `NodeHashAlgorithm` (not re-exported by
+# firewood's public API); pull `firewood-storage` from the same rev for
+# `NodeHashAlgorithm::compile_option()`. Its `ethhash` feature must track
+# `firewood/ethhash` (both flip the global hash mode).
+firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.5.0", default-features = false, features = ["ethhash"] }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+# Real on-disk scratch dirs for the Firewood roundtrip tests (Firewood is a
+# disk-backed DB). Already in the workspace lock via ava-merkledb; pinned locally.
+tempfile = "3"

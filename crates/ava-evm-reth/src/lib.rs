@@ -28,6 +28,9 @@ pub use alloy_evm::block::BlockExecutionResult;
 
 // --- reth storage/provider traits (reth-storage-api) ---------------------
 pub use reth_storage_api::errors::provider::{ProviderError, ProviderResult};
+// The low-level reth DB error wrapped by `ProviderError::Database` — used to
+// surface Firewood/side-KV read failures across the facade (G1, §11.2).
+pub use reth_storage_api::errors::db::DatabaseError;
 pub use reth_storage_api::{
     AccountReader, BlockHashReader, BytecodeReader, HashedPostStateProvider, StateProofProvider,
     StateProvider, StateProviderFactory, StateRootProvider, StorageRootProvider,
@@ -39,8 +42,28 @@ pub use reth_storage_api::{
 // `StateRootProvider`/`HashedPostStateProvider` methods FirewoodStateProvider
 // implements (we hand reth EMPTY `TrieUpdates` — the G1 trick).
 pub use reth_primitives_traits::Account;
+// The bytecode type the `BytecodeReader` trait returns — a reth newtype wrapper
+// around `revm::state::Bytecode` (NOT the same type as `Bytecode` below, which
+// is the revm one used on the execution/`AccountInfo` path). Exposed for
+// `FirewoodStateView`'s `bytecode_by_hash` impl (G1, §17.2).
+pub use reth_primitives_traits::Bytecode as RethBytecode;
 pub use reth_trie_common::updates::TrieUpdates;
-pub use reth_trie_common::{HashedPostState, TrieInput};
+pub use reth_trie_common::{
+    AccountProof, EMPTY_ROOT_HASH, ExecutionWitnessMode, HashedPostState, HashedStorage,
+    KeccakKeyHasher, KeyHasher, MultiProof, MultiProofTargets, StorageMultiProof, StorageProof,
+    TrieInput,
+};
+// The standard Ethereum account-leaf RLP `[nonce, balance, storage_root,
+// code_hash]` (G1, §17.2.1) — the value FirewoodStateView reads/encodes at an
+// ethhash account node. `TrieAccount` carries the RLP en/decode derives.
+pub use alloy_consensus::TrieAccount;
+// Account/code-hash sentinels and the keccak hasher used by `account_key` /
+// `storage_key` / `hashed_post_state` (must match Firewood-ethhash derivation).
+pub use alloy_consensus::constants::KECCAK_EMPTY;
+pub use alloy_primitives::{StorageKey, StorageValue, keccak256};
+// Minimal `alloy-rlp` surface for encoding/decoding account-leaf and slot RLP
+// values crossing into Firewood (G1, §17.2.1).
+pub use alloy_rlp::{Decodable as RlpDecodable, Encodable as RlpEncodable, encode as rlp_encode};
 
 // --- reth chain spec + fork schedule (G7, §17.8) -------------------------
 // `reth_chainspec` re-exports the whole `reth_ethereum_forks` hardfork set
@@ -62,7 +85,8 @@ pub use revm::state::{Account as RevmAccount, AccountInfo, Bytecode};
 
 // --- alloy primitives / consensus types crossing the facade boundary -----
 pub use alloy_consensus::{Receipt, TxEnvelope};
-pub use alloy_primitives::{Address, B256, U256};
+pub use alloy_primitives::map::B256Map;
+pub use alloy_primitives::{Address, B256, Bytes, U256};
 
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the
