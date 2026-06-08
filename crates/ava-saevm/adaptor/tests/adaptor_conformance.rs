@@ -5,18 +5,18 @@
 //! `convert()` correctly bridges a `ChainVm<BP>` into `ava_vm::ChainVm`.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use ava_database::DynDatabase;
 use ava_saevm_adaptor::{BlockProperties, ChainVm, convert};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_version::application::Application;
-use ava_database::DynDatabase;
 use ava_vm::block::ChainVm as ConsensusChainVm;
 use ava_vm::{
     AppError, AppHandler, AppSender, BlockContext, ChainContext, Connector, EngineState, Fx,
@@ -113,8 +113,17 @@ impl AppSender for FakeAppSender {
 // FakeChainVm
 // ---------------------------------------------------------------------------
 
+/// Low byte of a height, without a truncating `as` cast (the SAE bar denies
+/// `cast_possible_truncation`, which applies to test code under `--all-targets`).
+fn low_byte(height: u64) -> u8 {
+    u8::try_from(height & 0xFF).expect("masked to a single byte")
+}
+
 /// An in-process `ChainVm<FakeBlockProperties>` that increments an atomic
 /// counter when `accept_block` is called.
+// Fields share the `_count` postfix by design (one counter per lifecycle hook);
+// the pedantic `struct_field_names` lint is not meaningful for this test double.
+#[allow(clippy::struct_field_names)]
 struct FakeChainVm {
     accept_count: Arc<AtomicUsize>,
     verify_count: Arc<AtomicUsize>,
@@ -122,12 +131,7 @@ struct FakeChainVm {
 }
 
 impl FakeChainVm {
-    fn new() -> (
-        Self,
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
-    ) {
+    fn new() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
         let accept = Arc::new(AtomicUsize::new(0));
         let verify = Arc::new(AtomicUsize::new(0));
         let reject = Arc::new(AtomicUsize::new(0));
@@ -145,14 +149,14 @@ impl FakeChainVm {
 
     /// Produce a fake block at the given height.
     fn make_block(height: u64) -> FakeBlockProperties {
-        let id = Id::from([(height as u8).wrapping_add(1); 32]);
-        let parent = Id::from([(height as u8); 32]);
+        let id = Id::from([low_byte(height).wrapping_add(1); 32]);
+        let parent = Id::from([low_byte(height); 32]);
         FakeBlockProperties {
             id,
             parent,
             height,
             timestamp: SystemTime::UNIX_EPOCH,
-            bytes: vec![height as u8],
+            bytes: vec![low_byte(height)],
         }
     }
 }
@@ -206,10 +210,7 @@ impl AppHandler for FakeChainVm {
 
 #[async_trait]
 impl HealthCheck for FakeChainVm {
-    async fn health_check(
-        &self,
-        _token: &CancellationToken,
-    ) -> VmResult<serde_json::Value> {
+    async fn health_check(&self, _token: &CancellationToken) -> VmResult<serde_json::Value> {
         Ok(serde_json::Value::Null)
     }
 }
@@ -227,11 +228,7 @@ impl Connector for FakeChainVm {
         Ok(())
     }
 
-    async fn disconnected(
-        &mut self,
-        _token: &CancellationToken,
-        _node: NodeId,
-    ) -> VmResult<()> {
+    async fn disconnected(&mut self, _token: &CancellationToken, _node: NodeId) -> VmResult<()> {
         Ok(())
     }
 }
@@ -254,11 +251,7 @@ impl Vm for FakeChainVm {
         Ok(())
     }
 
-    async fn set_state(
-        &mut self,
-        _token: &CancellationToken,
-        _state: EngineState,
-    ) -> VmResult<()> {
+    async fn set_state(&mut self, _token: &CancellationToken, _state: EngineState) -> VmResult<()> {
         Ok(())
     }
 
@@ -301,10 +294,7 @@ impl ChainVm<FakeBlockProperties> for FakeChainVm {
         Ok(Self::make_block(1))
     }
 
-    async fn build_block(
-        &self,
-        _ctx: Option<&BlockContext>,
-    ) -> VmResult<FakeBlockProperties> {
+    async fn build_block(&self, _ctx: Option<&BlockContext>) -> VmResult<FakeBlockProperties> {
         Ok(Self::make_block(1))
     }
 
@@ -327,11 +317,7 @@ impl ChainVm<FakeBlockProperties> for FakeChainVm {
         Ok(())
     }
 
-    async fn set_preference(
-        &self,
-        _id: Id,
-        _ctx: Option<&BlockContext>,
-    ) -> VmResult<()> {
+    async fn set_preference(&self, _id: Id, _ctx: Option<&BlockContext>) -> VmResult<()> {
         Ok(())
     }
 
@@ -359,7 +345,11 @@ async fn accept_forwards_to_vm() {
     let block = adaptor.build_block(&token).await.expect("build_block");
     block.accept(&token).await.expect("accept");
 
-    assert_eq!(accept_count.load(Ordering::SeqCst), 1, "accept_block called once");
+    assert_eq!(
+        accept_count.load(Ordering::SeqCst),
+        1,
+        "accept_block called once"
+    );
 }
 
 /// `reject(token)` on the wrapper block forwards to `reject_block`.
@@ -373,7 +363,11 @@ async fn reject_forwards_to_vm() {
     let block = adaptor.build_block(&token).await.expect("build_block");
     block.reject(&token).await.expect("reject");
 
-    assert_eq!(reject_count.load(Ordering::SeqCst), 1, "reject_block called once");
+    assert_eq!(
+        reject_count.load(Ordering::SeqCst),
+        1,
+        "reject_block called once"
+    );
 }
 
 /// `verify(token)` on the wrapper block forwards to `verify_block` (no
@@ -388,7 +382,11 @@ async fn verify_forwards_to_vm() {
     let block = adaptor.build_block(&token).await.expect("build_block");
     block.verify(&token).await.expect("verify");
 
-    assert_eq!(verify_count.load(Ordering::SeqCst), 1, "verify_block called once");
+    assert_eq!(
+        verify_count.load(Ordering::SeqCst),
+        1,
+        "verify_block called once"
+    );
 }
 
 /// `verify_with_context` on the wrapper block forwards to `verify_block` with
@@ -414,7 +412,10 @@ async fn verify_with_context_forwards_to_vm() {
     // Verify the block supports context verification via the adaptor's
     // as_build_with_context() capability.
     let with_ctx = adaptor.as_build_with_context();
-    assert!(with_ctx.is_some(), "adaptor must advertise build_with_context");
+    assert!(
+        with_ctx.is_some(),
+        "adaptor must advertise build_with_context"
+    );
 
     let ctx_block = with_ctx
         .expect("checked above")
@@ -443,7 +444,10 @@ async fn build_block_with_context_available() {
     let ctx = BlockContext::new(100);
 
     let with_ctx = adaptor.as_build_with_context();
-    assert!(with_ctx.is_some(), "adaptor must expose BuildBlockWithContext");
+    assert!(
+        with_ctx.is_some(),
+        "adaptor must expose BuildBlockWithContext"
+    );
 
     let block = with_ctx
         .expect("checked above")

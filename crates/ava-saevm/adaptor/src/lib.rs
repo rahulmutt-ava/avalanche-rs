@@ -49,17 +49,17 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use ava_types::id::Id;
+use ava_vm::block::ChainVm as ConsensusChainVm;
+use ava_vm::block::{Block as VmBlock, WithVerifyContext};
 use ava_vm::{
     AppError, AppHandler, BlockContext, BuildBlockWithContext, ChainContext, Connector,
     EngineState, Fx, HealthCheck, HttpHandler, Result as VmResult, Vm, VmEvent,
 };
-use ava_vm::block::ChainVm as ConsensusChainVm;
-use ava_vm::block::{Block as VmBlock, WithVerifyContext};
 
-use ava_vm::AppSender;
+use ava_database::DynDatabase;
 use ava_types::node_id::NodeId;
 use ava_version::application::Application;
-use ava_database::DynDatabase;
+use ava_vm::AppSender;
 
 // ---- error mapping helpers ------------------------------------------------
 
@@ -215,13 +215,19 @@ where
     async fn accept(&self, token: &CancellationToken) -> ava_snow::error::Result<()> {
         let _ = token;
         let guard = self.vm.lock().await;
-        guard.accept_block(&self.bp).await.map_err(|e| vm_err_to_snow(&e))
+        guard
+            .accept_block(&self.bp)
+            .await
+            .map_err(|e| vm_err_to_snow(&e))
     }
 
     async fn reject(&self, token: &CancellationToken) -> ava_snow::error::Result<()> {
         let _ = token;
         let guard = self.vm.lock().await;
-        guard.reject_block(&self.bp).await.map_err(|e| vm_err_to_snow(&e))
+        guard
+            .reject_block(&self.bp)
+            .await
+            .map_err(|e| vm_err_to_snow(&e))
     }
 }
 
@@ -238,10 +244,7 @@ where
 {
     /// Returns `true` — SAE blocks always require a context when proposervm is
     /// active.
-    async fn should_verify_with_context(
-        &self,
-        _token: &CancellationToken,
-    ) -> ava_vm::Result<bool> {
+    async fn should_verify_with_context(&self, _token: &CancellationToken) -> ava_vm::Result<bool> {
         Ok(true)
     }
 
@@ -441,7 +444,10 @@ where
         self.vm.lock().await.create_handlers(token).await
     }
 
-    async fn new_http_handler(&mut self, token: &CancellationToken) -> VmResult<Option<HttpHandler>> {
+    async fn new_http_handler(
+        &mut self,
+        token: &CancellationToken,
+    ) -> VmResult<Option<HttpHandler>> {
         self.vm.lock().await.new_http_handler(token).await
     }
 
@@ -458,19 +464,12 @@ where
     BP: BlockProperties,
     V: ChainVm<BP> + 'static,
 {
-    async fn build_block(
-        &mut self,
-        _token: &CancellationToken,
-    ) -> VmResult<Arc<dyn VmBlock>> {
+    async fn build_block(&mut self, _token: &CancellationToken) -> VmResult<Arc<dyn VmBlock>> {
         let bp = self.vm.lock().await.build_block(None).await?;
         Ok(self.wrap(bp))
     }
 
-    async fn get_block(
-        &self,
-        _token: &CancellationToken,
-        id: Id,
-    ) -> VmResult<Arc<dyn VmBlock>> {
+    async fn get_block(&self, _token: &CancellationToken, id: Id) -> VmResult<Arc<dyn VmBlock>> {
         let bp = self.vm.lock().await.get_block(id).await?;
         Ok(self.wrap(bp))
     }
@@ -484,11 +483,7 @@ where
         Ok(self.wrap(bp))
     }
 
-    async fn set_preference(
-        &mut self,
-        _token: &CancellationToken,
-        id: Id,
-    ) -> VmResult<()> {
+    async fn set_preference(&mut self, _token: &CancellationToken, id: Id) -> VmResult<()> {
         self.vm.lock().await.set_preference(id, None).await
     }
 
