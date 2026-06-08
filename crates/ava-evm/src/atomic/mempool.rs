@@ -44,10 +44,10 @@
 //! ## Context type (`AvaNextBlockCtx`)
 //!
 //! [`next_batch`](AtomicMempool::next_batch) takes a context carrying the atomic
-//! gas budget for the next block. The full `AvaNextBlockCtx` (timestamp,
-//! recipient, gas limit, P-chain height; spec 10 §17.3) lands in **M6.13**; this
-//! module defines the minimal local [`AvaNextBlockCtx`] it needs (just the
-//! atomic gas limit) and will be folded into the real type then.
+//! gas budget for the next block. As of **M6.13** that context is the canonical
+//! [`AvaNextBlockCtx`] (timestamp(ms), recipient, gas limit, P-chain height,
+//! parent fee state; spec 10 §17.3), defined in `evmconfig` and re-exported
+//! here. The mempool reads only its `atomic_gas_limit` budget.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -58,6 +58,11 @@ use ava_types::id::Id;
 use tokio::sync::Notify;
 
 use crate::atomic::tx::{AtomicTx, TX_BYTES_GAS, Tx, X2C_RATE};
+// M6.13: the canonical next-block build/fee context now lives in `evmconfig`;
+// the mempool consumes only its `atomic_gas_limit` budget (the M6.16 local stub
+// was folded into it). Re-exported here so `next_batch` callers keep importing
+// it from `mempool` unchanged.
+pub use crate::evmconfig::AvaNextBlockCtx;
 
 pub use gossip::Gossipable;
 
@@ -113,27 +118,6 @@ pub enum MempoolError {
     /// Checked arithmetic overflowed while computing gas/burn (overview §6.1).
     #[error("gas/fee arithmetic overflow")]
     Overflow,
-}
-
-/// The minimal next-block context the atomic mempool needs: the atomic gas
-/// budget for the block being built.
-///
-/// **M6.13 follow-up:** the full `AvaNextBlockCtx` (timestamp(ms), recipient,
-/// gas limit, P-chain height; spec 10 §17.3) replaces this; the builder will
-/// derive the atomic gas limit from it. Kept local so M6.16 is independent of
-/// the not-yet-landed builder env.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AvaNextBlockCtx {
-    /// The maximum total atomic-tx gas the next block may include.
-    pub atomic_gas_limit: u64,
-}
-
-impl AvaNextBlockCtx {
-    /// Builds a context with the given atomic gas budget.
-    #[must_use]
-    pub fn with_atomic_gas_limit(atomic_gas_limit: u64) -> Self {
-        Self { atomic_gas_limit }
-    }
 }
 
 /// A pending tx plus its precomputed effective gas price (the heap key).

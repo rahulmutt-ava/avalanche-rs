@@ -41,13 +41,108 @@ use ava_evm_reth::{
     BundleRetention, Chain, ConfigureEvm, Database, DepositContract, EthBlockExecutionCtx,
     EthChainSpec, EthEvmConfig, EthExecutorSpec, EthereumHardfork, EthereumHardforks, ExecOutcome,
     ExternalConsensusExecutor, ForkCondition, ForkFilter, ForkFilterKey, ForkHash, ForkId, Genesis,
-    Hardfork, Hardforks, Head, Header, NodeRecord, PreExecutionHook, RecoveredTx, State,
-    StateDbError, StateProviderDatabase, U256,
+    Hardfork, Hardforks, Head, Header, NextBlockEnvAttributes, NodeRecord, PreExecutionHook,
+    RecoveredTx, State, StateDbError, StateProviderDatabase, U256,
 };
+use ruint::aliases::U256 as RuintU256;
 
 use crate::chainspec::AvaChainSpec;
+use crate::error::Error;
+use crate::feerules::acp176::Acp176State;
+use crate::feerules::window::Window;
+use crate::feerules::{base_fee, gas_limit};
 use crate::precompile::registry::{AvaCtxExt, AvaPrecompiles, PrecompileRegistry};
 use crate::state::FirewoodStateView;
+
+/// The Avalanche-specific dynamic-fee state carried from the parent block into
+/// the next-block build/verify context (spec 10 §17.3, spec 21 §7).
+///
+/// The active fork decides which variant is meaningful; the builder/verifier
+/// extracts it from the parent header's extra-data (the AP3 rolling window +
+/// parent base fee, or the ACP-176 24-byte fee-state blob — M6.7) and threads it
+/// here so [`feerules::base_fee`] is a pure function of `(spec, parent, ctx)`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AvaFeeState {
+    /// AP3..Fortuna rolling-window regime: the parent's gas window + base fee.
+    Window {
+        /// `feeWindow` parsed from `parent.Extra` (empty for genesis/first-AP3).
+        window: Window,
+        /// `parent.BaseFee` (wei).
+        base_fee: RuintU256,
+    },
+    /// Fortuna+ ACP-176 regime: the parent's 24-byte fee state. `gas_price()`
+    /// yields the next-block base fee directly.
+    Acp176(Acp176State),
+}
+
+impl Default for AvaFeeState {
+    fn default() -> Self {
+        // Genesis / pre-AP3 default: an empty window with a zero base fee. The
+        // pre-AP3 base_fee dispatch returns `NilBaseFee` regardless of this.
+        AvaFeeState::Window {
+            window: Window::default(),
+            base_fee: RuintU256::ZERO,
+        }
+    }
+}
+
+/// The next-block build/verify context — `ConfigureEvm::NextBlockEnvCtx` in the
+/// spec §17.3 design. Carries the Avalanche-specific inputs reth's
+/// `next_evm_env` does not model: the sub-second (ACP-226) timestamp, the
+/// P-Chain height (warp predicate ctx, §17.5), the atomic gas budget, and the
+/// parent dynamic-fee state ([`AvaFeeState`]).
+///
+/// **Relationship to `AvaBlockCtx`** (`precompile::registry::AvaBlockCtx`, M6.21):
+/// distinct concerns. `AvaNextBlockCtx` is the **build/fee** context consumed by
+/// [`AvaEvmConfig::next_evm_env`] to derive `block_env.{basefee, gas_limit}`;
+/// `AvaBlockCtx` is the **revm chain-slot extension** (G10) the precompile
+/// handler reads at call time. They are not interchangeable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AvaNextBlockCtx {
+    /// The timestamp (unix seconds) of the next block.
+    pub timestamp: u64,
+    /// The sub-second (ACP-226) timestamp in milliseconds.
+    pub timestamp_ms: u64,
+    /// The suggested fee recipient (coinbase) for the next block.
+    pub suggested_fee_recipient: Address,
+    /// An optional builder-supplied gas-limit override (else the phase default).
+    pub gas_limit_hint: Option<u64>,
+    /// The P-Chain height pinned for this block (warp predicate ctx, §17.5).
+    pub pchain_height: u64,
+    /// The parent dynamic-fee state (window or ACP-176), spec 21 §7.
+    pub parent_fee_state: AvaFeeState,
+    /// The maximum total atomic-tx gas the next block may include (the budget
+    /// [`crate::atomic::mempool::AtomicMempool::next_batch`] packs against,
+    /// `ap5.AtomicGasLimit = 100_000`).
+    pub atomic_gas_limit: u64,
+}
+
+impl Default for AvaNextBlockCtx {
+    fn default() -> Self {
+        Self {
+            timestamp: 0,
+            timestamp_ms: 0,
+            suggested_fee_recipient: Address::ZERO,
+            gas_limit_hint: None,
+            pchain_height: 0,
+            parent_fee_state: AvaFeeState::default(),
+            atomic_gas_limit: 0,
+        }
+    }
+}
+
+impl AvaNextBlockCtx {
+    /// Builds a context with the given atomic gas budget (the minimal form the
+    /// atomic mempool needs; the builder fills the remaining fields). Preserves
+    /// the M6.16 ergonomic constructor while the full type lives here (M6.13).
+    #[must_use]
+    pub fn with_atomic_gas_limit(atomic_gas_limit: u64) -> Self {
+        Self {
+            atomic_gas_limit,
+            ..Self::default()
+        }
+    }
+}
 
 /// A pre-execution hook that does nothing — the reexecute / pure-EVM path, where
 /// there is no atomic Import/Export to apply. The atomic-tx hook lands in M6.16.
@@ -341,6 +436,83 @@ impl AvaEvmConfig {
             evm_env,
             header: header.clone(),
         }
+    }
+
+    /// `ConfigureEvm::next_evm_env` override (spec 10 §7.2/§17.3 G2): builds the
+    /// [`AvaEvmEnv`] for `parent + 1`, then **overrides** `block_env.basefee` and
+    /// `block_env.gas_limit` with the Avalanche per-fork fee rules
+    /// ([`feerules::base_fee`]/[`feerules::gas_limit`]) keyed on the phase active
+    /// at `ctx.timestamp`.
+    ///
+    /// reth derives the base fee from EIP-1559 inside its own `next_evm_env`;
+    /// Avalanche replaced that mechanism in stages (AP3 window → AP4 block gas
+    /// cost → Fortuna/ACP-176). We reuse reth's env construction for everything
+    /// else (cfg/spec id, beneficiary, prevrandao, blob params) and only swap the
+    /// two fee fields.
+    ///
+    /// **Pre-AP3 (`FeeRegime::Legacy`):** legacy pricing has no base fee, so
+    /// `feerules::base_fee` returns [`Error::NilBaseFee`] (coreth `errNilBaseFee`
+    /// parity); we leave `block_env.basefee == 0` (treated as "absent"), matching
+    /// coreth's nil-base-fee handling.
+    ///
+    /// **Base-fee-to-coinbase (M6.6 finding #3):** Avalanche *credits* the AP3+
+    /// base fee to the coinbase rather than burning it (revm's London default
+    /// **burns** it). That is a base-fee-**recipient** change requiring a custom
+    /// revm handler / `EvmFactory`, which is **deferred to M6.22** (the same
+    /// live-handler install M6.21 deferred). This method sets the base-fee
+    /// **value/schedule** only — see the M6.13 report.
+    ///
+    /// # Errors
+    /// Returns [`Error`] if the fork-dispatch base fee cannot be resolved for a
+    /// reason other than the pre-AP3 nil case (e.g. the carried fee-state does
+    /// not match the active regime — a builder-wiring bug).
+    pub fn next_evm_env(&self, parent: &Header, ctx: &AvaNextBlockCtx) -> Result<AvaEvmEnv, Error> {
+        // 1. reth's Ethereum baseline env for `parent + 1` (cfg/spec id, block
+        //    number/timestamp, beneficiary, prevrandao, blob params). The inner
+        //    `EthEvmConfig::next_evm_env` is infallible (`Error = Infallible`).
+        let attrs = NextBlockEnvAttributes {
+            timestamp: ctx.timestamp,
+            suggested_fee_recipient: ctx.suggested_fee_recipient,
+            prev_randao: B256::ZERO,
+            // A non-zero placeholder so the baseline env is valid; overridden
+            // below by `feerules::gas_limit`.
+            gas_limit: ctx.gas_limit_hint.unwrap_or(0),
+            parent_beacon_block_root: parent.parent_beacon_block_root,
+            withdrawals: None,
+            extra_data: Default::default(),
+            slot_number: None,
+        };
+        let mut evm_env = match ConfigureEvm::next_evm_env(&self.inner, parent, &attrs) {
+            Ok(env) => env,
+            Err(never) => match never {},
+        };
+
+        // 2. Override the gas limit with the Avalanche per-fork value.
+        evm_env.block_env.gas_limit = gas_limit(&self.chain_spec, parent, ctx)?;
+
+        // 3. Override the base fee. Pre-AP3 (`NilBaseFee`) leaves basefee == 0
+        //    (treated as nil, coreth `errNilBaseFee` parity).
+        match base_fee(&self.chain_spec, parent, ctx) {
+            Ok(bf) => evm_env.block_env.basefee = bf,
+            Err(Error::NilBaseFee) => evm_env.block_env.basefee = 0,
+            Err(e) => return Err(e),
+        }
+
+        // 4. The header the per-block execution context is derived from. The
+        //    fee-bearing fields mirror the overridden env so the reexecute path
+        //    (`evm_env_for_header`) and build path agree.
+        let header = Header {
+            number: parent.number.saturating_add(1),
+            timestamp: ctx.timestamp,
+            parent_hash: B256::ZERO,
+            parent_beacon_block_root: parent.parent_beacon_block_root,
+            beneficiary: ctx.suggested_fee_recipient,
+            gas_limit: evm_env.block_env.gas_limit,
+            base_fee_per_gas: Some(evm_env.block_env.basefee),
+            ..Default::default()
+        };
+
+        Ok(AvaEvmEnv { evm_env, header })
     }
 }
 
