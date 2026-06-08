@@ -10,8 +10,15 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "SAE proxy-unit clock Time<D: ProxyUnit> (tick/fast_forward/set_rate/compare; specs/11 §2.1). M7.1 scaffold."
+description = "SAE proxy-unit clock Time<D: ProxyUnit> (tick/fast_forward/set_rate/compare; specs/11 §2.1)."
 
 [dependencies]
+ava-saevm-intmath = { path = "../intmath" }
 
 [dev-dependencies]
+# `compare` is implemented with an inline u128 cross-multiply (it is generic over
+# `D: Into<u128>`, whereas `cmputils::compare_fractions` takes `u64`). cmputils is
+# kept as the independent test oracle that cross-checks `Time::compare` for the
+# u64-backed `D` case (specs/11 §2.1).
+ava-saevm-cmputils = { path = "../cmputils" }
+proptest = { workspace = true }

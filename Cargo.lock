@@ -1480,6 +1480,11 @@ dependencies = [
 [[package]]
 name = "ava-saevm-proxytime"
 version = "0.1.0"
+dependencies = [
+ "ava-saevm-cmputils",
+ "ava-saevm-intmath",
+ "proptest",
+]
 
 [[package]]
 name = "ava-saevm-testutil"
