@@ -134,14 +134,60 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > land M6.8/M6.11–13). Facade re-exports added: `ChainSpecBuilder, DepositContract, BaseFeeParams, BlobParams,
 > Genesis, NodeRecord, Header` + new `AvaEvmError::IncompatibleFork`. Deps added: `ava-version`, `chrono`.
 
-### Task M6.6: `ExternalConsensusExecutor::execute_batch` + 1-block reexecute → `differential::cchain_state_root` (TDD ENTRY POINT)
+### Task M6.6: `ExternalConsensusExecutor::execute_batch` + 1-block reexecute → `differential::cchain_state_root` (TDD ENTRY POINT) ✅ DONE (c41f994)
 **Crate:** ava-evm  ·  **Depends on:** M6.1, M6.3, M6.4, M6.5  ·  **Spec:** 10 §3.2, §17.1, §17.4 (executor drive); 02 §10.5, §11.1 (recorded-oracle); 04 §4.2
 **Files:** `crates/ava-evm/src/evmconfig.rs`, `crates/ava-evm/tests/cchain_state_root.rs`, `crates/ava-evm/tests/vectors/cchain/reexecute/genesis_to_1/*.json` (blockexport fixtures)
-- [ ] **Step 1 — Red:** Create `crates/ava-evm/tests/cchain_state_root.rs` with `#[test] fn cchain_state_root()` (the exit-gate name) running in **recorded-oracle / reexecute mode**: load the committed `genesis_to_1` blockexport fixture (genesis state + block 1 bytes + Go-recorded post-state root), build `AvaEvmConfig`, open a `FirewoodStateView` at the genesis root, decode block 1's EVM txs, call `execute_batch(env, &mut state, NoopPreHook, &txs)`, convert the returned `bundle` via `propose_from_bundle`, and `assert_eq!(proposal.root_hash(), fixture.expected_root)`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm cchain_state_root` → fails (executor/`AvaEvmConfig` absent or root mismatch). Assert the failure reason is a missing executor, not a missing fixture.
-- [ ] **Step 3 — Green:** Implement `AvaEvmConfig { chain_spec, executor_factory: AvaBlockExecutorFactory, assembler }`; impl facade `ConfigureEvm` minimally (`evm_env`, `block_executor_factory`, `block_assembler`) and impl `ExternalConsensusExecutor::execute_batch` by driving the reth `BlockExecutor` (`apply_pre_execution_changes` → `execute_transaction` loop → `finish`) over a `State<FirewoodStateView>` with `.with_bundle_update()`, returning `ExecOutcome { result, bundle }` (§17.1). 1 block proves the executor + Firewood-ethhash wiring (the cheapest differential oracle, 02 §10.5). Commit the blockexport fixture + manifest with Go provenance.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm cchain_state_root` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: execute_batch + 1-block reexecute state-root parity (differential::cchain_state_root)`
+- [x] **Step 1 — Red:** Create `crates/ava-evm/tests/cchain_state_root.rs` with `#[test] fn cchain_state_root()` (the exit-gate name) running in **recorded-oracle / reexecute mode**: load the committed `genesis_to_1` blockexport fixture (genesis state + block 1 bytes + Go-recorded post-state root), build `AvaEvmConfig`, open a `FirewoodStateView` at the genesis root, decode block 1's EVM txs, call `execute_batch(env, &mut state, NoopPreHook, &txs)`, convert the returned `bundle` via `propose_from_bundle`, and `assert_eq!(proposal.root_hash(), fixture.expected_root)`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm cchain_state_root` → fails (executor/`AvaEvmConfig` absent or root mismatch). Assert the failure reason is a missing executor, not a missing fixture.
+- [x] **Step 3 — Green:** Implement `AvaEvmConfig`; impl facade `ConfigureEvm` and `ExternalConsensusExecutor::execute_batch` by driving the reth `BlockExecutor` over a `State<StateProviderDatabase<FirewoodStateView>>` with bundle update, returning `ExecOutcome { result, bundle }` (§17.1). Commit the blockexport fixture + manifest with Go provenance.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm cchain_state_root` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: execute_batch + 1-block reexecute state-root parity (differential::cchain_state_root)`
+
+> **AS-BUILT (M6.6).** `AvaEvmConfig` **wraps reth's `EthEvmConfig<AvaExecutorSpec>`** (reuses reth's
+> `ConfigureEvm` rather than re-deriving it). `execute_batch` drives the bare `BlockExecutor`
+> (`apply_pre_execution_changes` → `execute_transaction` loop → `apply_post_execution_changes`) over a
+> `State<StateProviderDatabase<FirewoodStateView>>`, then `merge_transitions(Reverts)` + `take_bundle()`.
+> Added `NoopPreHook` and `AvaExecutorSpec` (chain-spec adapter supplying `EthExecutorSpec`/`Hardforks`).
+> **reth v2.2.0 type realities (folded into facade):** `EthPrimitives::Block = alloy_consensus::Block<TransactionSigned>`,
+> `TransactionSigned = EthereumTxEnvelope<TxEip4844>` (≠ `alloy_consensus::TxEnvelope` = `<TxEip4844Variant>`);
+> `EthPrimitives::Receipt = alloy_consensus::EthereumReceipt`; `State<DB>::Error = EvmDatabaseError<DB::Error>`
+> (not raw `ProviderError`); `BundleRetention`/`BundleBuilder` at `revm::database::states::bundle_state`. The
+> full coreth block header is NOT alloy-`Header`-decodable (coreth appends header extras) → the test decodes
+> the body tx via EIP-2718 and builds the env header from recorded fields; full block-wire decode is M6.7.
+>
+> **FACADE CHANGES (breaking — reconcile in M6.26 reuse surface):** `RecoveredTx = Recovered<TransactionSigned>`
+> (was `Recovered<TxEnvelope>`); `ExecOutcome.result: BlockExecutionResult<EthReceipt>` (was `<Receipt>`);
+> `AvaEvmEnv` gained `header: Header`; `PreExecutionHook::apply(&mut dyn Database<Error = StateDbError>)`
+> (was `Error = ProviderError`), `StateDbError = EvmDatabaseError<ProviderError>`. New facade re-exports:
+> `Evm/EvmEnv/EvmFactory/NextBlockEnvAttributes`, `EthBlockExecutionCtx/EthEvmFactory/EthExecutorSpec`,
+> `ForkFilter*/ForkHash/ForkId/Hardforks/Head`, `EthBlockAssembler/EthEvmConfig/RethReceiptBuilder`,
+> `RethBlock/EthPrimitives/EthReceipt/TransactionSigned`, `Recovered/SignerRecoverable`, `Decodable2718`,
+> `SealedBlock/SealedHeader`, `BundleBuilder/BundleRetention`, `Database`, `StateProviderDatabase`,
+> `EvmDatabaseError`, `StateDbError`. Facade deps added: `reth-evm-ethereum`, `reth-ethereum-primitives`,
+> `reth-ethereum-forks`, `reth-revm` (pinned rev, `features=["std"]`). No ava-evm deps added.
+>
+> **Go fixture provenance:** coreth git rev `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11`, go 1.25.9; scratch
+> `package core` test (`GenerateChainWithGenesis`, `dummy.NewCoinbaseFaker`, `params.TestApricotPhase3Config`)
+> ran genesis→block 1 (1 funded EOA → 1×1-AVAX legacy transfer); source inlined in `manifest.json`; scratch
+> deleted, `../avalanchego` left clean (verified).
+>
+> **⚠️ THREE PARITY FINDINGS (see SPEC FIXes below; tracked as M6 follow-ups):**
+> 1. **5-FIELD ACCOUNT RLP (state-root parity gap, HIGH).** coreth's libevm `types.StateAccount` appends a
+>    5th `Extra` field (empty `0x80` for an EOA) → coreth-StateDB roots (`0x9cb2…`) differ from the standard
+>    4-field `[nonce,balance,storageRoot,codeHash]` RLP (`0x3292…`) that `state.rs::rlp_account` +
+>    Firewood-ethhash emit. **The committed fixture's `expected_root` is over the 4-field encoding** (Go +
+>    Firewood agree there) — so `cchain_state_root` currently proves *Rust-4field == Go-4field internal
+>    consistency*, NOT parity with coreth's real on-chain StateDB root. The 5-field coreth roots are recorded
+>    as `coreth_*_state_root_5field`. **Real mainnet reexecute parity (the M6.29 exit gate) REQUIRES adding
+>    the 5th field to `state.rs::rlp_account`** → new follow-up **M6.30** (state-encoding parity).
+> 2. **Paris not in `AvaChainSpec` schedule (MED).** `final_paris_total_difficulty == 0` but Paris/pre-merge
+>    Eth forks aren't keyed by block → reth's `base_block_reward` (`is_paris_active_at_block`) mints a spurious
+>    5-ETH PoW reward. Worked around in `AvaExecutorSpec` (forces Paris + pre-merge forks active at block 0).
+>    **Fix in chainspec.rs:** activate Paris at genesis + key pre-merge Eth forks `ForkCondition::Block(0)`
+>    (`revm_spec_id` unaffected). → folded into **M6.8** scope (genesis/chainspec).
+> 3. **Base-fee burn vs coinbase credit (MED).** Avalanche credits the AP3 base fee to the coinbase (does NOT
+>    burn); revm default LONDON burns it (tip=0). Sender pays identically; only coinbase differs. Fixture's
+>    expected root uses the revm burn model. The base-fee-recipient override is **M6.13** scope (`next_evm_env`).
 
 ### Task M6.7: Block wire format `decode_ava_evm_block`/`assemble_ava_block` → `golden::cchain_block_wire`
 **Crate:** ava-evm  ·  **Depends on:** M6.5, M6.6  ·  **Spec:** 10 §9.3, §6.2; 02 §6
@@ -399,6 +445,26 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
   Update final PORTING.md; confirm `#![forbid(unsafe_code)]` holds everywhere except inside `ava-evm-reth` (binding wrappers).
 - [ ] **Step 4 — Confirm green:** All commands above exit 0; exit tests pass; differential::cchain_state_root green in recorded mode.
 - [ ] **Step 5 — Commit:** `ava-evm: M6 exit gate — C-Chain on reth green; avalanchers runs C-Chain`
+
+### Task M6.30: 5-field account-RLP state-encoding parity (libevm `StateAccount.Extra`)  ⟸ NEW (surfaced by M6.6)
+**Crate:** ava-evm  ·  **Depends on:** M6.3/M6.4 (state.rs)  ·  **Blocks:** real-mainnet `differential::cchain_state_root` (M6.29)  ·  **Spec:** 10 §5/§17.2; 04 §4
+**Files:** `crates/ava-evm/src/state.rs` (`rlp_account`/`decode_rlp_account`), `crates/ava-evm/tests/vectors/cchain/account_rlp/*.json`
+**Why:** M6.6 found coreth's libevm `types.StateAccount` serializes a **5th `Extra` field** (empty `0x80` for an
+EOA) after `[nonce,balance,storageRoot,codeHash]`. The 4-field RLP currently emitted by `state.rs` (and
+Firewood-ethhash) yields a DIFFERENT trie root than coreth's real StateDB (`0x3292…` 4-field vs `0x9cb2…`
+coreth). The M6.6 fixture's `expected_root` is over the 4-field encoding, so today `cchain_state_root` proves
+Rust↔Go internal consistency, NOT parity with the on-chain coreth root. **Real recorded-mainnet reexecute
+parity requires matching libevm's account encoding byte-for-byte.**
+- [ ] **Step 1 — Red:** Characterize libevm's `StateAccount` encoding exactly (what `Extra` carries for C-Chain
+  EOAs vs contracts; whether it is ever non-empty on mainnet). Add a golden vector with the coreth-StateDB
+  5-field root (Go-authoritative) and a failing assertion that `state.rs` produces it.
+- [ ] **Step 2 — Confirm red:** root mismatch (4-field vs 5-field).
+- [ ] **Step 3 — Green:** Emit/decode the 5th field in `rlp_account`/`decode_rlp_account` (and anywhere account
+  RLP is materialized: genesis alloc M6.8, atomic hook M6.15). Re-point the M6.6 fixture `expected_root` to the
+  5-field (coreth) root.
+- [ ] **Step 4 — Confirm green:** `cchain_state_root` passes against the coreth StateDB root; genesis-root
+  parity (M6.8) holds against real Mainnet/Fuji C-Chain genesis roots.
+- [ ] **Step 5 — Commit:** `ava-evm: 5-field libevm StateAccount RLP for coreth state-root parity`
 
 ---
 

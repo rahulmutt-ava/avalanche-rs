@@ -1191,6 +1191,22 @@ This is the single most correctness-critical conversion in the port (the §14 #2
 differential gate). reth gives us either a `BundleState` (raw revm delta) or a
 `HashedPostState` (keccak-keyed). We normalize to Firewood ethhash `BatchOp`s:
 
+> **⚠️ SPEC FIX (M6.6 as-built finding) — account RLP is 5-field, not 4-field.**
+> coreth runs on **ava-labs/libevm** (a go-ethereum fork) whose `types.StateAccount`
+> serializes a **5th `Extra` field** *after* the standard `[nonce, balance, storageRoot,
+> codeHash]` (an empty `0x80` for an EOA). Appending it changes the account-node RLP
+> and therefore the trie root. Empirically (M6.6, coreth `fb174e8`): the same single
+> account hashes to `0x3292…` under the standard 4-field encoding (which both
+> go-ethereum's `secure trie` *and* Firewood-ethhash produce) but to `0x9cb2…` under
+> coreth's real `StateDB`. **For on-chain coreth state-root parity, `rlp_account`/
+> `decode_rlp_account` (and every other account-RLP materialization: genesis alloc §8.3,
+> `EVMStateTransfer` hook §6.3) MUST emit the 5th field byte-for-byte as libevm does.**
+> The M6.6 `differential::cchain_state_root` fixture currently pins the *4-field* root
+> (so it proves Rust↔Go internal consistency, not coreth-StateDB parity); closing this is
+> tracked as plan task **M6.30**, a prerequisite for the real recorded-mainnet reexecute
+> gate (M6.29). The 4-field encoding below is correct for the *shape* of the conversion;
+> add the trailing `Extra` field when M6.30 lands.
+
 ```rust
 /// HashedPostState is { accounts: B256(=keccak(addr)) -> Option<Account>,
 ///                      storages: B256 -> HashedStorage { wiped, slots: B256->U256 } }.
