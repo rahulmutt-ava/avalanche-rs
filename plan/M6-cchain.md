@@ -480,14 +480,17 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 >   distinct chains) doesn't exercise this; for exact Go parity with multiple SAME-chain atomic txs per block,
 >   sort txs by id before merge (fold into M6.18 semantic-verify or M6.20 build, which order the batch).
 
-### Task M6.18: Atomic semantic verify, conflict sets, bonus blocks (C10)
+### Task M6.18: Atomic semantic verify, conflict sets, bonus blocks (C10) ✅ DONE (05cc015)
 **Crate:** ava-evm  ·  **Depends on:** M6.17, M6.9  ·  **Spec:** 10 §6.5; 07
 **Files:** `crates/ava-evm/src/atomic/verify.rs`, `crates/ava-evm/tests/atomic_verify.rs`
-- [ ] **Step 1 — Red:** `fn rejects_conflicting_inputs_across_ancestry()`: a tx whose UTXOs are spent in shared memory or by another atomic tx in the same/ancestor block → `Error::ConflictingAtomicInputs`; `fn bonus_blocks_skip_set_matches_go()` reproduces the height→ID skip-set verbatim.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_verify` → fails.
-- [ ] **Step 3 — Green:** Implement conflict set (`Set<Id>` of consumed UTXOs checked across verified-block ancestry), `bonusBlocks` skip-set constant, and the atomic semantic-verify pass invoked from `EvmBlock::verify`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_verify` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: atomic semantic verify + conflicts + bonus blocks (§6.5)`
+- [x] **Step 1 — Red:** `fn rejects_conflicting_inputs_across_ancestry()`: a tx whose UTXOs are spent in shared memory or by another atomic tx in the same/ancestor block → `Error::ConflictingAtomicInputs`; `fn bonus_blocks_skip_set_matches_go()` reproduces the height→ID skip-set verbatim.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_verify` → fails.
+- [x] **Step 3 — Green:** Implement conflict set (`Set<Id>` of consumed UTXOs checked across verified-block ancestry), `bonusBlocks` skip-set constant, and the atomic semantic-verify pass invoked from `EvmBlock::verify`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_verify` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: atomic semantic verify + conflicts + bonus blocks (§6.5)`
+
+> **AS-BUILT (M6.18).** `atomic/verify.rs`: `input_utxos(&AtomicTx)->BTreeSet<Id>` (coreth `InputUTXOs`: Import → `input_id()`=`tx_id.prefix(output_index)`; Export → raw 32-byte `nonce(8 BE) ++ 0x00000014 ++ address(20)`, NOT hashed); `verify_no_conflicts(&[AtomicTx], &BTreeSet<Id>)` (intra-block overlap = coreth `verifyTxs` + processing-ancestry overlap = coreth `conflicts`); `mainnet_bonus_blocks()->&BTreeMap<u64,Id>` + `is_bonus_block`. Hooked into `EvmBlock::verify` BEFORE EVM execution; added `EvmBlockContext::processing_ancestor_inputs()`. `Error::ConflictingAtomicInputs` already existed. **116 ava-evm tests green.**
+> **FINDINGS (folded below):** (1) **bonusBlocks = 57 entries** (102972→103633), Mainnet-only (`readMainnetBonusBlocks`); Fuji/local empty. (2) **Processing-ancestry conflict is a no-op on the linear-accept path** (correct — coreth's `conflicts` stops at last-accepted) — the non-linear sibling/processing-fork ancestry walk needs the verified-block tree owned by the `ChainVm` adapter (M6.10); `verify_no_conflicts` already takes the ancestry input-union, so the follow-up is just threading it from the adapter → **new follow-up M6.18a** (wire ancestry inputs from `EvmVm`'s `verified` map into `verify`). (3) **bonusBlocks skip applies at shared-memory *apply* time, not at trie-index time** — blocks are still indexed in the atomic trie; `AtomicBackend::accept` (M6.17) does NOT yet consult `is_bonus_block` before `SharedMemory::apply` → **fold into M6.18a / M6.27 recovery** (wire `is_bonus_block` into the apply path).
 
 ### Task M6.19: `differential::atomic_xc` X↔C import/export parity
 **Crate:** ava-evm  ·  **Depends on:** M6.15, M6.17, M6.18  ·  **Spec:** 10 §6, §14 #3; 02 §11; 07
@@ -498,14 +501,18 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_xc` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: X↔C atomic import/export parity (differential::atomic_xc)`
 
-### Task M6.20: `BlockBuilderDriver` on-demand build + precomputed-root finish (G5)
+### Task M6.20: `BlockBuilderDriver` on-demand build + precomputed-root finish (G5) ✅ DONE (dd81e6e)
 **Crate:** ava-evm  ·  **Depends on:** M6.10, M6.13, M6.15, M6.16  ·  **Spec:** 10 §4, §17.6 (G5); 21 §4b (budget)
 **Files:** `crates/ava-evm/src/builder.rs`, `crates/ava-evm/tests/build.rs`
-- [ ] **Step 1 — Red:** `tests/build.rs` `fn build_then_verify_same_root()`: `build_on(parent, ctx)` pulls one atomic batch + EVM txs (effective-tip order, until gas/blockGasCost budget), computes the Firewood root, passes `Some((root, TrieUpdates::default()))` to `finish`, and the self-built block **re-verifies to the identical root** (build-then-verify symmetry); `fn respects_min_build_delay()`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm build` → fails.
-- [ ] **Step 3 — Green:** Implement `BlockBuilderDriver` (§17.6): `next_block_attrs`, open `State` view, `builder_for_next_block`, `apply_pre_execution_changes` (atomic + predicate), reserve atomic gas, pack EVM txs by tip with gas/blockgascost budget + invalid-tx eviction, `propose_from_bundle` + `stash_proposal`, `finish(view_tip, Some((root, default)))` (G5/G1), `assemble_ava_block`, `minBlockBuildingRetryDelay` guard, `Notify`-driven.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm build` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: on-demand BlockBuilderDriver + precomputed-root finish (G5)`
+- [x] **Step 1 — Red:** `tests/build.rs` `fn build_then_verify_same_root()`: `build_on(parent, ctx)` pulls one atomic batch + EVM txs (effective-tip order, until gas/blockGasCost budget), computes the Firewood root, passes `Some((root, TrieUpdates::default()))` to `finish`, and the self-built block **re-verifies to the identical root** (build-then-verify symmetry); `fn respects_min_build_delay()`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm build` → fails.
+- [x] **Step 3 — Green:** Implement `BlockBuilderDriver` (§17.6): ... `propose_from_bundle` + `stash_proposal`, `finish(view_tip, Some((root, default)))` (G5/G1), `assemble_ava_block`, `minBlockBuildingRetryDelay` guard, `Notify`-driven.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm build` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: on-demand BlockBuilderDriver + precomputed-root finish (G5)`
+
+> **AS-BUILT (M6.20).** `builder.rs`: `BlockBuilderDriver` — `build_on(parent, parent_state_root, ctx, evm_txs)` pulls one atomic batch → reserves atomic gas + AP4 blockGasCost surcharge → packs EVM txs by effective tip under the gas budget → `execute_batch` with `AtomicStateHook` over the parent Firewood view → `propose_from_bundle` stashes the precomputed root → `assemble_ava_block`; `can_build_on` + `MIN_BLOCK_BUILD_DELAY` (per-parent retry guard); per-fork AP3 base-fee / AP4 ext-data-gas+block-gas-cost header fields; ext_data marshals the signed atomic batch. `vm.rs::build_block` resolves the preferred leaf's header+root from the processing tree and drives the builder (else `NotFound`=`ErrNoPendingBlock`). Facade += `pub use alloy_consensus::Transaction as ConsensusTx` (gas_limit/effective_tip accessors). **118 ava-evm tests green.**
+> **AS-BUILT DEVIATION (→ spec 10 §17.6):** the §17.6 sketch's vN-sensitive reth `builder_for_next_block` + `finish(view_tip, Some((root, TrieUpdates::default())))` seam is realized through the EXISTING `execute_batch` + `FirewoodStateProvider::propose_from_bundle` path (already stashes deterministic ops keyed by the real Firewood root; the empty-`TrieUpdates` half lives in `state.rs::state_root_with_updates`). Same path `verify` uses → build-then-verify symmetry holds BY CONSTRUCTION, not via the unstable reth builder seam. (Same spirit as the §17.2.2 proposal-stash deviation.)
+> **FOLLOW-UPS:** (1) **No reth `TransactionPool` in ava-evm yet** — `build_on` takes EVM tx candidates as an explicit effective-tip-ordered `Vec<RecoveredTx>`; `vm.rs::build_block` supplies `vec![]` today (atomic-only blocks build from the mempool). Wire `best_transactions` when the EVM txpool lands (→ M6.23-era). (2) `vm.rs::build_block` uses `AvaFeeState::default()` for the next-block ctx — thread parent-extra-data fee-state extraction (AP3 window blob / ACP-176 24-byte state) once M6.7's extractor is wired. (3) builder leaves empty-trie sentinels for `tx_root`/`receipt_root` (self-verify only asserts `state_root`+`gas_used`, §3.2); full receipt-root path = M6.23/M6.24.
 
 ### Task M6.21: `AvaPrecompiles` `PrecompileProvider` + registry (G4/G10) ✅ DONE (c4dc2e8)
 **Crate:** ava-evm  ·  **Depends on:** M6.6  ·  **Spec:** 10 §8, §17.5 (G4), §17.11 (G10)
@@ -539,14 +546,18 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm warp_precompile` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: warp predicate pass + precompiles (G4, 20 §7)`
 
-### Task M6.23: `eth_*` RPC over Firewood + fee/accepted-tag overrides (G8)
+### Task M6.23: `eth_*` RPC over Firewood + fee/accepted-tag overrides (G8) ✅ DONE (1fa953a)
 **Crate:** ava-evm  ·  **Depends on:** M6.10, M6.13  ·  **Spec:** 10 §9.1, §17.9 (G8)
 **Files:** `crates/ava-evm/src/rpc/eth.rs`, `crates/ava-evm/tests/rpc_eth.rs`, `crates/ava-evm/tests/vectors/cchain/rpc/*.json`
-- [ ] **Step 1 — Red:** `tests/rpc_eth.rs` golden request→response: `eth_getBalance`/`eth_call`/`eth_getProof` read Firewood state; `eth_gasPrice`/`eth_feeHistory`/`eth_maxPriorityFeePerGas` use `feerules`; the `latest`/`safe`/`finalized` tags all map to last-accepted height (Snowman has no pending/unsafe); `debug_traceTransaction` (incl. prestate tracer) parity vs Go golden.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm rpc_eth` → fails.
-- [ ] **Step 3 — Green:** Instantiate facade `EthApi<Arc<FirewoodStateProvider>, AvaTxPool, ...>`; override fee helpers (`EthFees`) + accepted-block-tag mapping; wire revm-inspector tracing (prestate tracer). Commit RPC golden vectors.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm rpc_eth` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: eth_* RPC over Firewood + fee/accepted-tag overrides (G8)`
+- [x] **Step 1 — Red:** `tests/rpc_eth.rs` golden request→response: `eth_getBalance`/`eth_call`/`eth_getProof` read Firewood state; `eth_gasPrice`/`eth_feeHistory`/`eth_maxPriorityFeePerGas` use `feerules`; the `latest`/`safe`/`finalized` tags all map to last-accepted height; `debug_traceTransaction` parity.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm rpc_eth` → fails.
+- [x] **Step 3 — Green:** (see as-built deviation) direct handlers over Firewood + feerules + facade revm executor; accepted-tag mapping. Commit RPC golden vectors.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm rpc_eth` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: eth_* RPC over Firewood + fee/accepted-tag overrides (G8)`
+
+> **AS-BUILT DEVIATION (M6.23, → spec 10 §17.9).** Implemented `eth_*` as a plain `EthRpc` struct returning `serde_json::Value` **directly**, NOT by instantiating reth's `EthApi<Provider,Pool,…>`. Rationale: §17.9 itself flags `EthApi`'s third-party-provider instantiation as the medium-risk/soft-upstream-ask part; the avm/platformvm precedent implements handlers directly; the jsonrpsee-vs-axum mount decision is deferred to M8/12-node. **No `reth-rpc`/`reth-rpc-eth-api`/`jsonrpsee` pulled in.** `eth_call`/`eth_estimateGas` reuse the facade revm executor via `AvaEvmConfig::inner().evm_with_env(db,env).transact(tx)` over `StateProviderDatabase<FirewoodStateView>` (read-only convention: zero base fee + zero gas_price + `disable_nonce_check`). All reth/revm spelling stays behind the facade (G0). Facade += `revm::context::TxEnv`, `revm::context::result::{ExecutionResult,Output}`, `revm::primitives::TxKind` (tagged `// M6.23:`). **135 ava-evm tests green.**
+> **STATUS NOTES:** (1) **`eth_getProof`** account fields (balance/nonce/codeHash) correct today from direct Firewood reads; `accountProof`/`storageProof[].proof` arrays read the `StateProofProvider::proof` seam — populated once M6.25 lands, NO RPC-layer change needed. The golden test `eth_get_proof_account_fields_match_golden` asserts ACCOUNT FIELDS ONLY (stays green regardless of proof-array population). (2) **`debug_traceTransaction` DEFERRED** (returns a documented error naming the method) — the prestate tracer needs a revm inspector not reachable behind the facade without a heavy dep → fold into M6.24 or a follow-up. (3) **No reth `TransactionPool`** in ava-evm yet (same gap M6.20 flagged); `eth_sendRawTransaction`/`best_transactions` land with the EVM txpool task.
+> **⚠️ WAVE GOTCHA (parallel facade-touchers + shared `CARGO_TARGET_DIR`):** two worktrees both building `ava-evm-reth v0.1.0` (same name+version, different source paths) with DIFFERENT facade additions intermittently clobber each other's `.rlib` in the shared target dir → phantom "unresolved import" errors. Mitigation confirmed: build/test facade-touching agents in an ISOLATED target dir (`CARGO_TARGET_DIR=…/target-mNNN`), OR don't run two facade-touchers concurrently. The orchestrator's per-merge `touch crates/ava-evm-reth/src/lib.rs` + sequential green-gate is the reconcile step.
 
 ### Task M6.24: `avax.*` namespace + admin/health (G8)
 **Crate:** ava-evm  ·  **Depends on:** M6.16, M6.17, M6.23  ·  **Spec:** 10 §9.2, §17.9 (G8)
@@ -557,14 +568,18 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm rpc_avax` → pass.
 - [ ] **Step 5 — Commit:** `ava-evm: avax.* RPC namespace + admin/health (G8)`
 
-### Task M6.25: EVM + atomic-trie state sync over Firewood proofs (G8)
+### Task M6.25: EVM + atomic-trie state sync over Firewood proofs (G8) ✅ DONE (7c6f87b)
 **Crate:** ava-evm  ·  **Depends on:** M6.4, M6.17  ·  **Spec:** 10 §10, §17.9 (G8); 04 §4.2/§4.3
 **Files:** `crates/ava-evm/src/sync/mod.rs`, `crates/ava-evm/src/sync/server.rs`, `crates/ava-evm/src/sync/client.rs`, `crates/ava-evm/tests/state_sync.rs`
-- [ ] **Step 1 — Red:** `tests/state_sync.rs` `fn leafs_request_served_from_firewood_revision()` (range proof at a historical revision, wire-exact vs Go `firewood/syncer`) + `fn client_reconstructs_trie_and_verifies_root()`; atomic-trie sync over the 2nd Firewood instance then `ApplyToSharedMemory` from the synced cursor.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm state_sync` → fails.
-- [ ] **Step 3 — Green:** Implement `EvmStateSyncServer::handle_leafs` (Firewood range proofs), the client (reconstruct + verify root), atomic-trie sync, and block/header/receipt backfill into `CanonicalStore`, all over the p2p SDK (05) — no reth sync.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm state_sync` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: EVM + atomic-trie state sync over Firewood proofs (G8)`
+- [x] **Step 1 — Red:** `tests/state_sync.rs` `leafs_request_served_from_firewood_revision` (range proof at a historical revision, wire-exact) + `client_reconstructs_trie_and_verifies_root`; atomic-trie sync over the 2nd Firewood instance then `ApplyToSharedMemory` from the synced cursor.
+- [x] **Step 2 — Confirm red.** (nextest matches by fn name — use `-E 'binary(state_sync)'`, not `test(state_sync)`.)
+- [x] **Step 3 — Green:** `EvmStateSyncServer::handle_leafs` (Firewood range proofs), client (reconstruct + verify root), atomic-trie sync, `ApplyToSharedMemory` reconcile; real `state.rs` proof seam.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm -E 'binary(state_sync)'` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: EVM + atomic-trie state sync over Firewood proofs (G8)`
+
+> **AS-BUILT (M6.25).** `sync/server.rs` `EvmStateSyncServer::handle_leafs` serves Firewood range proofs; `sync/client.rs` reconstructs a fresh trie + verifies root; `sync/mod.rs` atomic-trie sync + `apply_atomic_trie_to_shared_memory` (height-ordered, `from_height`-exclusive cursor). **state.rs proof seam NOW REAL (M6.23's `eth_getProof` reads it):** `StateProofProvider::proof(input, address, slots)→AccountProof` (account + per-slot inclusion proofs), `StorageRootProvider::storage_proof(address, slot, hashed)→StorageProof`, `StorageRootProvider::storage_root(...)` (reads the encoded leaf field, no longer the unconditional empty stub); new pub helpers `decode_account_storage_root`, `FirewoodStateView::range_proof_bytes(start,end,limit)`, `FirewoodStateProvider::propose_and_stash` made pub. Proof `Vec<Bytes>` carries ONE element = firewood `FrozenRangeProof` bytes (wire-exact vs Go). No facade/Cargo/error.rs changes. **143 ava-evm tests green.**
+> **DEFERRED (G8 soft upstream ask, → spec 10 §10/§17.9):** firewood v0.5.0 exposes NO Eth-RLP-MPT proof nodes (only firewood `ProofNode`s) → reth-verifiable `AccountProof` `Vec<Bytes>` of RLP nodes can't be produced; `multiproof`/`storage_multiproof`/`witness` return documented `unsupported`. firewood derives sub-trie roots internally and doesn't surface/rewrite them → live per-account `storage_root` returns empty-trie sentinel (so `eth_getProof.storageHash` is limited for accounts with storage). commitInterval skip-backfill index not ported (backend.rs read-only this wave).
+> **SPEC FINDINGS (→ specs/10 §10/§17.9, §17.2.1):** (1) **wire format is firewood-native, NOT the proto `RangeProof` message** — Go syncer serializes `(*ffi.RangeProof).MarshalBinary()` = firewood Rust `FrozenRangeProof::write_to_vec`; the proto `RangeProof`/`ProofNode` messages are unused, only the `ProofRequest`/`ProofResponse` envelope (opaque `range_proof: bytes`) matters. (2) firewood `range_proof(start,end,limit)` returns a `FrozenRangeProof` (start_proof/end_proof/key_values), NOT `keys/vals/nodes` — extract keys/vals from `key_values()`, bytes from `write_to_vec`. (3) **Go ChangeProof is unimplemented** (`changeProofMarshaler`→"not implemented", `GetChangeProof`→`ErrInsufficientHistory`) → §10's "range/change proofs" is range-proofs-only today; change proofs are a future optimization on both sides.
 
 ### Task M6.26: Public reusable API surface for SAE (reuse contract)
 **Crate:** ava-evm + ava-evm-reth  ·  **Depends on:** M6.6, M6.4, M6.13, M6.15, M6.21, M6.5  ·  **Spec:** 10 §16, §17.10; 00 §11.1.5

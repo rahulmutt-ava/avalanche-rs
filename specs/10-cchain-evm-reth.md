@@ -1992,6 +1992,38 @@ provider is the part reth keeps refactoring; the *soft* upstream ask is a stable
 "EthApi over my provider/pool" builder. **Verdict: pure wrapper (+1 soft upstream
 ask).**
 
+> **AS-BUILT (M6.23/M6.25, Wave-7).**
+> - **`eth_*` is implemented as direct handlers, NOT reth `EthApi`.** Given the
+>   medium risk above and the avm/platformvm precedent, M6.23 ships an `EthRpc`
+>   struct returning `serde_json::Value` directly over `Arc<FirewoodStateProvider>`
+>   + `feerules` + the facade revm executor (`AvaEvmConfig::inner().evm_with_env(db,
+>   env).transact(tx)` for `eth_call`/`eth_estimateGas`, read-only convention: zero
+>   base fee + zero gas_price + `disable_nonce_check`). **No `reth-rpc`/
+>   `reth-rpc-eth-api`/`jsonrpsee` dep.** The jsonrpsee-vs-axum mount decision stays
+>   deferred to 12-node. `latest`/`safe`/`finalized` all map to last-accepted height.
+>   `debug_traceTransaction` (prestate tracer) is **deferred** — needs a revm
+>   inspector not reachable behind the facade without a heavy dep (→ M6.24/follow-up).
+> - **State-sync wire format is firewood-native, NOT the proto `RangeProof` message.**
+>   The Go syncer serializes `(*ffi.RangeProof).MarshalBinary()`, which equals the
+>   firewood-Rust `FrozenRangeProof::write_to_vec`. The proto `RangeProof`/`ProofNode`
+>   messages are **unused**; only the `ProofRequest`/`ProofResponse` envelope (opaque
+>   `range_proof: bytes`) matters. The §17.9 sketch's `range_proof(start,end,limit)`
+>   actually returns a `FrozenRangeProof` (start_proof/end_proof/key_values), not
+>   `keys/vals/nodes` — extract keys/vals from `key_values()`, bytes from `write_to_vec`.
+> - **firewood v0.5.0 exposes no Eth-RLP-MPT proof nodes** (only firewood
+>   `ProofNode`s) → the `StateProofProvider::proof`/`storage_proof` impls return a
+>   single firewood-`FrozenRangeProof`-bytes element, NOT a reth-verifiable `Vec<Bytes>`
+>   of RLP nodes; `multiproof`/`storage_multiproof`/`witness` return `unsupported`.
+>   firewood also derives sub-trie roots internally and doesn't surface/rewrite them
+>   → live per-account `storage_root` returns the empty-trie sentinel, so
+>   `eth_getProof.storageHash` is limited for accounts with storage. **This is the
+>   concrete shape of the G8 soft upstream ask** (a firewood "eth proof" + per-account
+>   storage-root API).
+> - **Go ChangeProof is unimplemented** (`firewood/syncer` `changeProofMarshaler` →
+>   "not implemented", `GetChangeProof` → `ErrInsufficientHistory`). §10's "range/change
+>   proofs" is **range-proofs-only** today; change proofs are a future optimization on
+>   both sides.
+
 ### 17.10 Reusable API surface for SAE (11) — the §16 reuse contract
 
 These wrapper types are **public, stable (behind the facade) APIs** of `ava-evm` /
