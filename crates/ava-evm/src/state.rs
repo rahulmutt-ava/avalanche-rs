@@ -126,42 +126,96 @@ fn storage_prefix(hashed_addr: &B256) -> Vec<u8> {
     hashed_addr.as_slice().to_vec()
 }
 
-/// Encodes an account leaf as standard Ethereum account RLP
-/// `[nonce, balance, storage_root, code_hash]` (spec 10 §17.2.1). Firewood-
-/// ethhash recomputes `storage_root` from the sub-trie at hash time, so the
-/// value we write may carry an empty `storage_root`; the persisted RLP shape
-/// must still be the canonical 4-field list.
+/// Encodes an account leaf as the libevm `StateAccount` **5-field** RLP:
+/// `[nonce, balance, storage_root, code_hash, is_multi_coin]` (spec 10
+/// §17.2.1). The 5th field is coreth's `isMultiCoin` bool (always `false` =
+/// `0x80` for standard C-Chain EOAs and contracts); it was added by
+/// `ava-labs/libevm` to extend the consensus `StateAccount` representation.
+///
+/// Firewood-ethhash recomputes `storage_root` from the sub-trie at hash time,
+/// so the value we write carries the empty-trie sentinel; the persisted RLP
+/// shape is always the canonical 5-field list (spec 10 §17.2.1, M6.30).
+///
+/// ## Encoding note
+///
+/// The 4-field alloy `TrieAccount` encoding is `[0xf8, L, <payload>]` where
+/// `L` is the 1-byte payload length (accounts are 68-108 bytes, always in
+/// the 56-127 range that fits one byte). The 5-field encoding appends one
+/// byte (`0x80` = `false`) to the payload and increments `L` by 1.
 #[must_use]
 pub fn rlp_account(nonce: u64, balance: U256, code_hash: B256) -> Vec<u8> {
-    let account = TrieAccount {
+    // Start from the standard 4-field alloy encoding.
+    let mut bytes = rlp_encode(TrieAccount {
         nonce,
         balance,
         // Firewood derives the true storage_root from the children; we encode
         // the empty-trie sentinel for the leaf bytes (spec 10 §17.2.1).
         storage_root: EMPTY_ROOT_HASH,
         code_hash,
-    };
-    rlp_encode(account)
+    });
+    // Patch the list length: bytes[0] = 0xf8 (list with 1-byte length),
+    // bytes[1] = payload_length. Add 1 for the extra bool field.
+    // Safety: account payload is always 68-108 bytes < 255, so no overflow.
+    debug_assert_eq!(
+        bytes[0], 0xf8,
+        "expected RLP list with 1-byte length prefix"
+    );
+    bytes[1] = bytes[1].saturating_add(1);
+    // Append isMultiCoin=false as RLP bool `false` = 0x80 (alloy-rlp / libevm
+    // `writeBool(false)` both produce 0x80, the empty-string sentinel for
+    // zero/false; see rlp/doc.go and alloy-rlp/src/encode.rs).
+    bytes.push(0x80);
+    bytes
 }
 
-/// Decodes a standard Ethereum account-leaf RLP blob into a reth [`Account`]
-/// (`nonce`, `balance`, `bytecode_hash`). The `storage_root` field is dropped:
-/// reth's `Account` does not carry it (Firewood owns the storage trie). The
+/// Decodes a libevm `StateAccount` **5-field** RLP blob into a reth [`Account`]
+/// (`nonce`, `balance`, `bytecode_hash`). The `storage_root` and `is_multi_coin`
+/// fields are dropped: reth's `Account` does not carry them (Firewood owns the
+/// storage trie; `is_multi_coin` is always `false` on standard accounts). The
 /// `code_hash` becomes `None` iff it is the empty-code sentinel `KECCAK_EMPTY`.
 ///
+/// The decoder is forward-compatible: it reads the list header, decodes the
+/// first 4 required fields, then ignores any remaining list payload (the
+/// `is_multi_coin` 5th field and any future extensions).
+///
 /// # Errors
-/// Returns [`ProviderError`] if the bytes are not valid account RLP.
+/// Returns [`ProviderError`] if the bytes are not valid 5-field account RLP or
+/// if the list header is malformed.
 pub fn decode_rlp_account(bytes: &[u8]) -> ProviderResult<Account> {
-    let mut buf = bytes;
-    let account = TrieAccount::decode(&mut buf).map_err(db_other)?;
-    let bytecode_hash = if account.code_hash == ava_evm_reth::KECCAK_EMPTY {
+    // Parse the list header: accounts use `[0xf8, L]` (1-byte length prefix,
+    // payload 68-109 bytes, always in the 56-127 range).
+    if bytes.len() < 2 {
+        return Err(db_other("account RLP too short"));
+    }
+    if bytes[0] != 0xf8 {
+        return Err(db_other(format!(
+            "expected RLP list header 0xf8, got 0x{:02x}",
+            bytes[0]
+        )));
+    }
+    let payload_len = bytes[1] as usize;
+    let payload_end = payload_len
+        .checked_add(2)
+        .filter(|&end| end <= bytes.len())
+        .ok_or_else(|| db_other("account RLP payload truncated"))?;
+    let mut payload: &[u8] = &bytes[2..payload_end];
+
+    // Decode the 4 required fields (nonce, balance, storage_root, code_hash).
+    let nonce = u64::decode(&mut payload).map_err(db_other)?;
+    let balance = U256::decode(&mut payload).map_err(db_other)?;
+    let _storage_root = B256::decode(&mut payload).map_err(db_other)?;
+    let code_hash = B256::decode(&mut payload).map_err(db_other)?;
+    // Any remaining payload bytes (the 5th `is_multi_coin` field and future
+    // extensions) are intentionally ignored for forward-compatibility.
+
+    let bytecode_hash = if code_hash == ava_evm_reth::KECCAK_EMPTY {
         None
     } else {
-        Some(account.code_hash)
+        Some(code_hash)
     };
     Ok(Account {
-        nonce: account.nonce,
-        balance: account.balance,
+        nonce,
+        balance,
         bytecode_hash,
     })
 }
@@ -711,8 +765,8 @@ mod tests {
 
     #[test]
     fn decode_rlp_account_roundtrip() {
-        // Golden vector: standard Ethereum account RLP [nonce, balance,
-        // storage_root, code_hash]. Provenance documented in
+        // Golden vector: libevm 5-field StateAccount RLP [nonce, balance,
+        // storage_root, code_hash, isMultiCoin=false]. Provenance documented in
         // tests/vectors/cchain/account_rlp/_provenance.md.
         let nonce = 7u64;
         let balance = U256::from(0x0de0_b6b3_a764_0000_u128); // 1 ether in wei
