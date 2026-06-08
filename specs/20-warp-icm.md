@@ -60,7 +60,8 @@ and `ava-saevm` (`11`).
 >   (not split into `message.rs`/`signature.rs`/`codec.rs`); the ACP-77 registry module is named **`message`**
 >   (the sketch says `registry.rs`) — same wire layout, same type registry, name kept to minimize churn.
 >   Final modules: `lib.rs` (envelope/`Message`/`UnsignedMessage`/`Signature`/`BitSetSignature`/`warp_codec`/
->   `CODEC_VERSION`), `error.rs`, `payload.rs`, `message.rs` (registry), `signer.rs`, `verifier.rs`
+>   `CODEC_VERSION`; `UnsignedMessage::parse` = `warp.ParseUnsignedMessage`, added by M6.22 so the C-Chain warp
+>   accept hook can reconstruct the unsigned message from a `SendWarpMessage` log), `error.rs`, `payload.rs`, `message.rs` (registry), `signer.rs`, `verifier.rs`
 >   (`verify_bit_set_signature`/`verify_weight`/`filter_validators`/`sum_weight`/`aggregate_public_keys`/
 >   `WarpSetVerifier` + quorum constants).
 > - **`acp118.rs` NOT yet implemented** (no `SignatureAggregator`/request-handler), and **`ava-network` is NOT
@@ -602,12 +603,19 @@ index (`10` §6.5).
 |---|---|---|---|
 | `getBlockchainID` | 2 | **200** | |
 | `getVerifiedWarpMessageBase` | 2 | **750** | base for `getVerifiedWarpMessage` |
-| `sendWarpMessageBase` | `LogGas + 3*LogTopicGas + 20_000 + WriteGasCostPerSlot` | same | `addWarpMessageBaseGasCost = 20_000` (cost of producing/serving a BLS sig) |
-| `perWarpMessageByte` | `LogDataGas` | same | per payload byte on send |
-| per-signer / per-chunk verify gas | — | — | `PredicateGas` charges per warp **signer** in the set + per 32-byte chunk + per-BLS-verify; `SafeMul`/`SafeAdd` with overflow → error |
+| `sendWarpMessageBase` | **41_500** (`LogGas 375 + 3·LogTopicGas 375 + 20_000 + WriteGasCostPerSlot 20_000`) | same | `addWarpMessageBaseGasCost = 20_000` (cost of producing/serving a BLS sig) |
+| `perWarpMessageByte` | **8** (`LogDataGas`) | same | per payload byte on send |
+| `verifyPredicateBase` | **200_000** | **125_000** | predicate-verify base |
+| `perWarpSigner` | **500** | **250** | per warp **signer** in the source set |
+| `perWarpMessageChunk` | **3_200** | **512** | per 32-byte chunk; **also re-charged on each `getVerifiedWarpMessage`/`getVerifiedWarpBlockHash` read** (coreth `contract_warp_handler.go`), not just at predicate verification |
 
-Granite raised read/verify costs "to target a worst-case verification cost". Copy
-both `GasConfig` tables verbatim into `ava-evm` and select by active fork (`10`).
+`PredicateGas = verifyPredicateBase + perWarpMessageChunk·numChunks + perWarpSigner·numSigners` (all `SafeMul`/`SafeAdd`; overflow → error). Granite
+raised read/verify costs "to target a worst-case verification cost" — note it
+*lowered* the per-chunk/per-signer/base rates (512/250/125_000 vs 3_200/500/200_000)
+while raising the fixed read bases (`getBlockchainID` 200, `getVerifiedWarpMessageBase`
+750). Copy both `GasConfig` tables verbatim into `ava-evm` and select by active fork (`10`).
+(Concrete values confirmed from coreth and pinned by M6.22; golden table in
+`crates/ava-evm/tests/vectors/cchain/warp/selectors.json`.)
 
 ---
 
