@@ -1,0 +1,4 @@
+{
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "eth_feeHistory", "params": ["0x2", "latest", []] },
+  "result": { "oldestBlock": "0x4", "baseFeePerGas": ["0x0", "0x0", "0x0"], "gasUsedRatio": [0.0, 0.0] }
+}
