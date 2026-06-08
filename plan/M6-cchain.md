@@ -614,14 +614,39 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > **DEFERRED (G8 soft upstream ask, → spec 10 §10/§17.9):** firewood v0.5.0 exposes NO Eth-RLP-MPT proof nodes (only firewood `ProofNode`s) → reth-verifiable `AccountProof` `Vec<Bytes>` of RLP nodes can't be produced; `multiproof`/`storage_multiproof`/`witness` return documented `unsupported`. firewood derives sub-trie roots internally and doesn't surface/rewrite them → live per-account `storage_root` returns empty-trie sentinel (so `eth_getProof.storageHash` is limited for accounts with storage). commitInterval skip-backfill index not ported (backend.rs read-only this wave).
 > **SPEC FINDINGS (→ specs/10 §10/§17.9, §17.2.1):** (1) **wire format is firewood-native, NOT the proto `RangeProof` message** — Go syncer serializes `(*ffi.RangeProof).MarshalBinary()` = firewood Rust `FrozenRangeProof::write_to_vec`; the proto `RangeProof`/`ProofNode` messages are unused, only the `ProofRequest`/`ProofResponse` envelope (opaque `range_proof: bytes`) matters. (2) firewood `range_proof(start,end,limit)` returns a `FrozenRangeProof` (start_proof/end_proof/key_values), NOT `keys/vals/nodes` — extract keys/vals from `key_values()`, bytes from `write_to_vec`. (3) **Go ChangeProof is unimplemented** (`changeProofMarshaler`→"not implemented", `GetChangeProof`→`ErrInsufficientHistory`) → §10's "range/change proofs" is range-proofs-only today; change proofs are a future optimization on both sides.
 
-### Task M6.26: Public reusable API surface for SAE (reuse contract)
+### Task M6.26: Public reusable API surface for SAE (reuse contract) ✅ DONE (254528e)
 **Crate:** ava-evm + ava-evm-reth  ·  **Depends on:** M6.6, M6.4, M6.13, M6.15, M6.21, M6.5  ·  **Spec:** 10 §16, §17.10; 00 §11.1.5
 **Files:** `crates/ava-evm/src/lib.rs` (re-exports), `crates/ava-evm-reth/src/lib.rs`, `crates/ava-evm/tests/reuse_surface.rs`
-- [ ] **Step 1 — Red:** `tests/reuse_surface.rs` `fn sae_reusable_items_are_public()`: a compile-test that imports each §17.10 item through public paths — `ava_evm_reth::{ExternalConsensusExecutor, ExecOutcome}`, `ava_evm::{AvaEvmConfig, FirewoodStateProvider, FirewoodStateView, FirewoodStateCommitter, hashed_post_state_to_batchops, AvaPrecompiles, PrecompileRegistry, AtomicStateHook, AvaChainSpec}` and calls `AvaEvmConfig::execute_batch` decoupled from any `EvmVm`/`ChainVm` — proving "one EVM engine, two drivers". Assert `EvmVm`/`BlockBuilderDriver` are NOT required to drive execution.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm reuse_surface` → fails (items private).
-- [ ] **Step 3 — Green:** Make the §17.10 items `pub` with stable paths; ensure `propose_from_bundle`/`view`-by-root/deferred-commit are reachable without the sync lifecycle. Document the NOT-shared boundary (block lifecycle) in rustdoc (00 §11.1.5).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm reuse_surface` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: expose reusable executor + Firewood state APIs for SAE (§16/§17.10)`
+- [x] **Step 1 — Red:** `tests/reuse_surface.rs` `fn sae_reusable_items_are_public()`: a compile-test that imports each §17.10 item through public paths — `ava_evm_reth::{ExternalConsensusExecutor, ExecOutcome}`, `ava_evm::{AvaEvmConfig, FirewoodStateProvider, FirewoodStateView, hashed_post_state_to_batchops, AvaPrecompiles, PrecompileRegistry, AtomicStateHook, AvaChainSpec}` and calls `AvaEvmConfig::execute_batch` decoupled from any `EvmVm`/`ChainVm` — proving "one EVM engine, two drivers". Assert `EvmVm`/`BlockBuilderDriver` are NOT required to drive execution.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm reuse_surface` → fails (items private).
+- [x] **Step 3 — Green:** Make the §17.10 items `pub` with stable paths; ensure `propose_from_bundle`/`view`-by-root/deferred-commit are reachable without the sync lifecycle. Document the NOT-shared boundary (block lifecycle) in rustdoc (00 §11.1.5).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm reuse_surface` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: expose reusable executor + Firewood state APIs for SAE (§16/§17.10)`
+
+> **AS-BUILT (M6.26).** Additive `pub use` at the `ava_evm` crate root (`crates/ava-evm/src/lib.rs`):
+> `AvaEvmConfig`, `AvaState`, `NoopPreHook` (from `evmconfig`); `FirewoodStateProvider`, `FirewoodStateView`,
+> `hashed_post_state_to_batchops` (from `state`); `AvaPrecompiles`, `PrecompileRegistry` (from
+> `precompile::registry`); `AtomicStateHook` (from `atomic::hook`); `AvaChainSpec` (from `chainspec`). The facade
+> (`ava-evm-reth`) was **not touched** — `ExternalConsensusExecutor`/`ExecOutcome`/`AvaEvmEnv`/`RecoveredTx` were
+> already `pub`. `tests/reuse_surface.rs` (2 tests) drives `execute_batch` standalone (no `EvmVm`/`ChainVm`/
+> `BlockBuilderDriver`). **164 ava-evm tests green** (+2). **§17.10 SPEC NAME RECONCILIATION (folded into spec 10
+> §17.10):** (1) **`FirewoodStateCommitter` is not a real type** — the open-view→propose→defer-commit role lives as
+> methods on `FirewoodStateProvider` (`propose_from_bundle`/`propose_and_stash`/`stash_proposal`/`commit`/`discard`).
+> (2) "open view by root" = `FirewoodStateProvider::history_by_state_root(root)`. (3) `revm_spec_id` is a method
+> `AvaChainSpec::revm_spec_id(timestamp)`, not a free fn. (4) `AvaState`/`NoopPreHook` additionally exposed.
+
+> **PREREQUISITE DONE — `ava-warp` crate extracted (ca04623), unblocking M6.22.** The generic Warp/ICM primitives
+> were lifted out of `ava-platformvm/src/warp/` into a dedicated `crates/ava-warp` crate (specs 20 §1): envelope
+> (`UnsignedMessage`/`Message`/`Signature`/`BitSetSignature`/codec), `payload` (`WarpPayload`/`Hash`/`AddressedCall`),
+> `message` (ACP-77 `RegistryPayload` registry — kept the module name `message`, spec §1 sketched `registry.rs`),
+> `signer` (`Signer`/`LocalSigner`), and the pure verification primitives (`verify_bit_set_signature`/`verify_weight`/
+> `filter_validators`/`sum_weight`/`aggregate_public_keys`/`WarpSetVerifier` + quorum constants). New `ava_warp::Error`
+> (thiserror) preserves the Go warp sentinel identities + adds `InvalidPayload` (the generic form of the registry
+> structural-check error). `ava-platformvm/src/warp/` is now a **thin re-export facade** + retains the L1-lifecycle
+> glue (`verify_warp_message`/`ParsedWarp`/`WarpSignatureVerifier`/`AcceptingVerifier`/`RejectingVerifier`); a
+> `From<ava_warp::Error> for ava_platformvm::Error` maps each variant 1:1 (`InvalidPayload → InvalidComponent`).
+> ava-platformvm **121 tests still green** (zero relocated). `acp118`/`ava-warp-rpc` remain future tasks (not yet
+> implemented). M6.22's Step-3 `ava-warp` dep now resolves.
 
 ### Task M6.27: G1/G9 invariant — reth never writes state/trie tables (CI) ✅ DONE (c4f0c54)
 **Crate:** ava-evm  ·  **Depends on:** M6.9, M6.20  ·  **Spec:** 10 §17.2 (G1 invariant), §17.7, §17.11 (G9)

@@ -54,6 +54,25 @@ crates/ava-warp/
 + `Handler`, `05`). It is depended on by `ava-platformvm` (`08`), `ava-evm` (`10`),
 and `ava-saevm` (`11`).
 
+> **AS-BUILT (extracted ca04623, M6 wave-9 prereq).** The crate was created by lifting the generic Warp/ICM
+> primitives out of `ava-platformvm/src/warp/` (where M4 first built them). Deviations from the sketch above:
+> - **Module names consolidated to match the existing P-Chain structure:** envelope + codec live in `lib.rs`
+>   (not split into `message.rs`/`signature.rs`/`codec.rs`); the ACP-77 registry module is named **`message`**
+>   (the sketch says `registry.rs`) — same wire layout, same type registry, name kept to minimize churn.
+>   Final modules: `lib.rs` (envelope/`Message`/`UnsignedMessage`/`Signature`/`BitSetSignature`/`warp_codec`/
+>   `CODEC_VERSION`), `error.rs`, `payload.rs`, `message.rs` (registry), `signer.rs`, `verifier.rs`
+>   (`verify_bit_set_signature`/`verify_weight`/`filter_validators`/`sum_weight`/`aggregate_public_keys`/
+>   `WarpSetVerifier` + quorum constants).
+> - **`acp118.rs` NOT yet implemented** (no `SignatureAggregator`/request-handler), and **`ava-network` is NOT
+>   yet a dependency** — added when ACP-118 lands. Likewise `ava-warp-rpc` (§ below) is future.
+> - **`ava_warp::Error` (thiserror)** preserves the Go warp sentinel identities + adds `InvalidPayload` (the
+>   generic form of the registry structural-check failure that P-Chain maps to its `InvalidComponent`).
+> - **The L1-lifecycle glue stays in `ava-platformvm`** (`verify_warp_message`/`ParsedWarp`/the injectable
+>   `WarpSignatureVerifier` trait + `AcceptingVerifier`/`RejectingVerifier`), since it parses ACP-77 registry
+>   payloads and surfaces `ava_platformvm::Error`. `ava-platformvm/src/warp/` is now a thin re-export facade over
+>   `ava-warp` + that glue; a `From<ava_warp::Error> for ava_platformvm::Error` maps variants 1:1. P-Chain's 121
+>   tests stayed green through the move.
+
 ---
 
 ## 2. Message formats (byte-exact, linear codec)

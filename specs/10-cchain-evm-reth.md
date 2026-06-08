@@ -2043,10 +2043,18 @@ re-implementing it. This is the concrete fulfillment of §16's reuse contract an
 |---|---|---|
 | `trait ExternalConsensusExecutor` + `ExecOutcome` (§17.1) | `ava-evm-reth` | the single batch-execute entrypoint; SAE's executor calls `execute_batch` per ordered block (11 §6.1 step 6) decoupled from `ChainVm` |
 | `AvaEvmConfig` (`impl ConfigureEvm` + `ExternalConsensusExecutor`) (§7.2/§17.3) | `ava-evm` | same revm executor, fee rules, precompiles, spec-id selection |
-| `FirewoodStateProvider` / `FirewoodStateView` / `FirewoodStateCommitter` (§17.2) | `ava-evm` | SAE's `Tracker` (11 §7.1) holds `Arc<FirewoodStateProvider>`; opens views by root, proposes, defers commit on the interval |
-| `hashed_post_state_to_batchops` + `propose_from_bundle` (§17.2.1) | `ava-evm` | identical `BundleState`→Firewood conversion ⇒ identical state roots across both drivers |
+| `FirewoodStateProvider` / `FirewoodStateView` (§17.2) | `ava-evm` | SAE's `Tracker` (11 §7.1) holds `Arc<FirewoodStateProvider>`; opens views by root (`history_by_state_root`), proposes, defers commit on the interval |
+| `hashed_post_state_to_batchops` + `FirewoodStateProvider::{propose_from_bundle,propose_and_stash,stash_proposal,commit,discard}` (§17.2.1) | `ava-evm` | identical `BundleState`→Firewood conversion ⇒ identical state roots across both drivers |
 | `AvaPrecompiles` / `PrecompileRegistry` / `AtomicStateHook` (§17.4/§17.5) | `ava-evm` | SAE C-Chain (`ava-saevm-cchain`) reuses warp/atomic semantics via hooks |
-| `AvaChainSpec` / `revm_spec_id` (§17.8) | `ava-evm` | shared fork schedule + spec-id |
+| `AvaChainSpec` (+ method `AvaChainSpec::revm_spec_id(timestamp)`) / `AvaState` / `NoopPreHook` (§17.8) | `ava-evm` | shared fork schedule + spec-id; state alias + no-op pre-hook for standalone execute |
+
+> **AS-BUILT (M6.26).** `FirewoodStateCommitter` is **not a distinct type** — the open-view→propose→defer-commit
+> role is methods on `FirewoodStateProvider` (`propose_from_bundle`/`propose_and_stash`/`stash_proposal`/`commit`/
+> `discard`); "open view by root" = `FirewoodStateProvider::history_by_state_root(root)`. `revm_spec_id` is a
+> **method on `AvaChainSpec`**, not a free fn. All items above are `pub use`'d at the `ava_evm` crate root
+> (`crates/ava-evm/src/lib.rs`); the facade `ExternalConsensusExecutor`/`ExecOutcome` were already public (no
+> facade edit needed). Proven by `crates/ava-evm/tests/reuse_surface.rs` (drives `execute_batch` with NO
+> `EvmVm`/`ChainVm`/`BlockBuilderDriver`).
 
 **Boundary that is NOT shared:** the block lifecycle. `EvmVm`/`EvmBlock` (§3, the
 synchronous `ChainVm`/verify-then-vote) and `BlockBuilderDriver` (§17.6) are
