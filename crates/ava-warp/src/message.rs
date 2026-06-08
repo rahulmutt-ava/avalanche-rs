@@ -5,12 +5,13 @@
 //! §3.1).
 //!
 //! This is the **third** of the three nested Warp codecs (specs 20 §3.1): the
-//! [`AddressedCall.payload`](super::payload::AddressedCall::payload) bytes decode
+//! [`AddressedCall.payload`](crate::payload::AddressedCall::payload) bytes decode
 //! to a [`RegistryPayload`]. The P-Chain L1 lifecycle (`08` §6) consumes
-//! [`RegisterL1Validator`] (from
-//! [`RegisterL1ValidatorTx`](crate::txs::RegisterL1ValidatorTx)) and
-//! [`L1ValidatorWeight`] (from
-//! [`SetL1ValidatorWeightTx`](crate::txs::SetL1ValidatorWeightTx)).
+//! [`RegisterL1Validator`] and [`L1ValidatorWeight`].
+//!
+//! > **Module naming.** specs 20 §1 names this module `registry`; this crate
+//! > keeps the original P-Chain name `message` (its type registry and wire
+//! > layout are identical) to minimise re-pointing churn.
 //!
 //! Registration order (= type IDs), mirroring Go `warp/message/codec.go`:
 //!
@@ -24,7 +25,7 @@
 use std::sync::{Arc, OnceLock};
 
 use ava_codec::AvaCodec;
-use ava_codec::error::Result;
+use ava_codec::error::Result as CodecResult;
 use ava_codec::linearcodec::LinearCodec;
 use ava_codec::manager::Manager;
 use ava_crypto::bls;
@@ -32,14 +33,14 @@ use ava_crypto::hashing;
 use ava_types::id::Id;
 use ava_types::short_id::{SHORT_ID_LEN, ShortId};
 
-use super::CODEC_VERSION;
-use crate::error::Error;
+use crate::CODEC_VERSION;
+use crate::error::{Error, Result};
 
 /// `message.PChainOwner` — a threshold + addresses owner embedded in the ACP-77
 /// registry payloads (`warp/message/register_l1_validator.go`, specs 20 §3.1).
 ///
-/// Distinct from [`crate::txs::components::PChainOwner`] only by codec home (this
-/// one lives in the warp-message registry); the wire layout is identical.
+/// Distinct from a P-Chain tx-component owner only by codec home (this one lives
+/// in the warp-message registry); the wire layout is identical.
 #[derive(AvaCodec, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PChainOwner {
     /// Threshold number of `addresses` that must sign.
@@ -112,23 +113,23 @@ impl RegisterL1Validator {
     /// owners).
     ///
     /// # Errors
-    /// Returns [`Error::InvalidComponent`] if any structural check fails (Go's
+    /// Returns [`Error::InvalidPayload`] if any structural check fails (Go's
     /// `ErrInvalidSubnetID`/`ErrInvalidWeight`/`ErrInvalidNodeID`/`ErrInvalidOwner`
     /// all map to the single component-invalid sentinel here).
-    pub fn verify(&self) -> std::result::Result<(), Error> {
+    pub fn verify(&self) -> Result<()> {
         if self.subnet_id == Id::EMPTY {
             // PrimaryNetworkID is the empty id.
-            return Err(Error::InvalidComponent);
+            return Err(Error::InvalidPayload);
         }
         if self.weight == 0 {
-            return Err(Error::InvalidComponent);
+            return Err(Error::InvalidPayload);
         }
         // `ids.ToNodeID` requires exactly 20 bytes and a non-empty node id.
         if self.node_id.len() != SHORT_ID_LEN || self.node_id.iter().all(|&b| b == 0) {
-            return Err(Error::InvalidComponent);
+            return Err(Error::InvalidPayload);
         }
         if !self.remaining_balance_owner.is_valid() || !self.disable_owner.is_valid() {
-            return Err(Error::InvalidComponent);
+            return Err(Error::InvalidPayload);
         }
         Ok(())
     }
@@ -164,11 +165,11 @@ impl L1ValidatorWeight {
     /// so it is only valid with a zero weight.
     ///
     /// # Errors
-    /// Returns [`Error::InvalidComponent`] (Go `ErrNonceReservedForRemoval`) when
+    /// Returns [`Error::InvalidPayload`] (Go `ErrNonceReservedForRemoval`) when
     /// `nonce == u64::MAX && weight != 0`.
-    pub fn verify(&self) -> std::result::Result<(), Error> {
+    pub fn verify(&self) -> Result<()> {
         if self.nonce == u64::MAX && self.weight != 0 {
-            return Err(Error::InvalidComponent);
+            return Err(Error::InvalidPayload);
         }
         Ok(())
     }
@@ -225,7 +226,7 @@ impl RegistryPayload {
     /// # Errors
     /// Returns a [`CodecError`](ava_codec::error::CodecError) on an unknown
     /// version/type, trailing bytes, or a short read.
-    pub fn parse(bytes: &[u8]) -> Result<Self> {
+    pub fn parse(bytes: &[u8]) -> CodecResult<Self> {
         let mut p = Self::default();
         registry_codec().unmarshal(bytes, &mut p)?;
         Ok(p)
@@ -236,7 +237,7 @@ impl RegistryPayload {
     /// # Errors
     /// Returns a [`CodecError`](ava_codec::error::CodecError) on a codec write
     /// failure.
-    pub fn marshal(&self) -> Result<Vec<u8>> {
+    pub fn marshal(&self) -> CodecResult<Vec<u8>> {
         registry_codec().marshal(CODEC_VERSION, self)
     }
 }

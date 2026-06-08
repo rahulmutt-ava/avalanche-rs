@@ -1372,6 +1372,7 @@ dependencies = [
  "ava-validators",
  "ava-version",
  "ava-vm",
+ "ava-warp",
  "bytes",
  "chrono",
  "hex",
@@ -1598,6 +1599,19 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tonic-build",
+]
+
+[[package]]
+name = "ava-warp"
+version = "0.1.0"
+dependencies = [
+ "ava-codec",
+ "ava-codec-derive",
+ "ava-crypto",
+ "ava-types",
+ "ava-utils",
+ "ava-validators",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -1,10 +1,9 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
-//! Local Warp signing on the P-Chain (`vms/platformvm/warp/signer.go`,
-//! specs 20 §5.1).
+//! Local Warp signing (`vms/platformvm/warp/signer.go`, specs 20 §5.1).
 //!
-//! A [`LocalSigner`] is this node's authority to produce a BLS signature over an
+//! A [`LocalSigner`] is a node's authority to produce a BLS signature over an
 //! [`UnsignedMessage`] *for its own chain at its own network*. It wraps a BLS
 //! [`bls::Signer`](ava_crypto::bls::Signer) (the node key) plus the
 //! `(network_id, chain_id)` it is authorized to sign for; signing first checks
@@ -17,7 +16,7 @@ use std::sync::Arc;
 use ava_crypto::bls;
 use ava_types::id::Id;
 
-use super::UnsignedMessage;
+use crate::UnsignedMessage;
 use crate::error::{Error, Result};
 
 /// `warp.Signer` — produce this node's BLS signature over an unsigned message.

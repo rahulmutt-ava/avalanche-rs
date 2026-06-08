@@ -5,9 +5,9 @@
 //! specs 20 §3).
 //!
 //! This is the **second** of the three nested Warp codecs (specs 20 §3.1): the
-//! [`UnsignedMessage.payload`](super::UnsignedMessage::payload) bytes decode to a
+//! [`UnsignedMessage.payload`](crate::UnsignedMessage::payload) bytes decode to a
 //! [`WarpPayload`], which for the ACP-77 flows is an [`AddressedCall`] whose own
-//! `payload` is in turn an ACP-77 [`RegistryPayload`](super::message::RegistryPayload).
+//! `payload` is in turn an ACP-77 [`RegistryPayload`](crate::message::RegistryPayload).
 //!
 //! Registration order (= type IDs), mirroring Go `warp/payload/codec.go`:
 //!
@@ -24,7 +24,7 @@ use ava_codec::linearcodec::LinearCodec;
 use ava_codec::manager::Manager;
 use ava_types::id::Id;
 
-use super::CODEC_VERSION;
+use crate::CODEC_VERSION;
 
 /// `payload.Payload` — the registered addressed-payload interface
 /// (`warp/payload/payload.go`).
@@ -83,7 +83,7 @@ pub struct AddressedCall {
     #[codec]
     pub source_address: Vec<u8>,
     /// `Payload` — the opaque inner payload (an ACP-77
-    /// [`RegistryPayload`](super::message::RegistryPayload) for the L1 flows).
+    /// [`RegistryPayload`](crate::message::RegistryPayload) for the L1 flows).
     #[codec]
     pub payload: Vec<u8>,
 }
