@@ -37,11 +37,15 @@
 use chrono::{DateTime, Utc};
 
 use ava_evm_reth::{
-    AvaEvmError, B256, BaseFeeParams, BlobParams, Chain, ChainHardforks, ChainSpec,
-    DepositContract, EthChainSpec, EthereumHardfork, EthereumHardforks, ForkCondition, Genesis,
-    Hardfork, Header, NodeRecord, SpecId, U256,
+    AccountInfo, Address, AvaEvmError, B256, BaseFeeParams, BlobParams, BundleBuilder, BundleState,
+    Bytecode, Bytes, Chain, ChainHardforks, ChainSpec, DepositContract, EMPTY_OMMER_ROOT_HASH,
+    EthChainSpec, EthereumHardfork, EthereumHardforks, ForkCondition, Genesis, Hardfork, Header,
+    KECCAK_EMPTY, NodeRecord, SpecId, StorageKeyMap, U256, keccak256,
 };
 use ava_version::upgrade::{Fork, UpgradeConfig, get_config};
+
+use crate::block::AvaHeader;
+use crate::error::Error;
 
 /// The chronologically-ordered set of Avalanche network-upgrade phases that the
 /// C-Chain EVM observes. Derives `Ord` so `phase >= AvaPhase::Cortina` is the
@@ -524,18 +528,32 @@ impl AvaChainSpec {
 
 /// Builds the ordered reth [`ChainHardforks`] from the Avalanche schedule.
 ///
-/// Inserts the pre-AP2 Ethereum forks at genesis (`Timestamp(0)`), then each
-/// Ethereum fork coreth maps to a phase at that phase's activation time, then
-/// every Avalanche phase. `ChainHardforks::insert` keeps the list ordered by
-/// `ForkCondition`.
+/// Inserts the pre-AP2 Ethereum forks **plus Paris/MergeNetsplit** at genesis
+/// (`ForkCondition::Block(0)`), then each Ethereum fork coreth maps to a phase
+/// at that phase's activation time, then every Avalanche phase.
+/// `ChainHardforks::insert` keeps the list ordered by `ForkCondition`.
+///
+/// **Paris-at-genesis (M6.8, resolves M6.6 finding #2).** Avalanche is never
+/// PoW; the merge "happened" before genesis. reth's block-reward path keys on
+/// [`EthereumHardforks::is_paris_active_at_block`] (a *block* predicate), and
+/// `final_paris_total_difficulty == 0` ([`AvaChainSpec::final_paris_total_difficulty`]).
+/// By activating Paris + every pre-merge Ethereum fork at `Block(0)` here, the
+/// executor sees the chain as post-merge from block 0 and applies **no** PoW
+/// block reward — matching coreth — without the temporary `AvaExecutorSpec`
+/// override M6.6 carried (now removed). `revm_spec_id` is unaffected: it is
+/// driven by the Avalanche `network_upgrades` timestamps, not this list.
 fn build_chain_hardforks(up: &NetworkUpgrades) -> ChainHardforks {
     let mut forks = ChainHardforks::new(Vec::new());
 
-    // Pre-Apricot-Phase-2 Ethereum forks are all active from launch (coreth
-    // `SetEthUpgrades` sets Homestead..MuirGlacier to block 0).
+    // Pre-Apricot-Phase-2 Ethereum forks are all active from launch, plus the
+    // merge-related forks (Dao..Paris): Avalanche is post-merge from block 0
+    // (coreth `SetEthUpgrades` sets Homestead..MuirGlacier to block 0, and the
+    // network is never PoW so Paris is active at genesis). Keyed by `Block(0)`
+    // so reth's `is_paris_active_at_block` / block-reward path resolve correctly.
     for eth in [
         EthereumHardfork::Frontier,
         EthereumHardfork::Homestead,
+        EthereumHardfork::Dao,
         EthereumHardfork::Tangerine,
         EthereumHardfork::SpuriousDragon,
         EthereumHardfork::Byzantium,
@@ -543,8 +561,11 @@ fn build_chain_hardforks(up: &NetworkUpgrades) -> ChainHardforks {
         EthereumHardfork::Petersburg,
         EthereumHardfork::Istanbul,
         EthereumHardfork::MuirGlacier,
+        EthereumHardfork::ArrowGlacier,
+        EthereumHardfork::GrayGlacier,
+        EthereumHardfork::Paris,
     ] {
-        forks.insert(AvaHardfork::Eth(eth), ForkCondition::Timestamp(0));
+        forks.insert(AvaHardfork::Eth(eth), ForkCondition::Block(0));
     }
 
     // Ethereum forks coreth maps to specific Avalanche phases.
@@ -640,6 +661,444 @@ impl EthereumHardforks for AvaChainSpec {
         // `ChainHardforks` list keys on the Ethereum fork's own name, so this
         // resolves through the same map entry `build_chain_hardforks` inserted.
         self.inner.fork(AvaHardfork::Eth(fork))
+    }
+}
+
+// ── C-Chain genesis parse + materialization (spec 10 §11.1 / §8.3, M6.8) ──────
+
+/// Local result alias for the genesis parser (the crate `Result`, not the
+/// `std::result::Result<(), AvaEvmError>` `check_compatible` uses above).
+type GenesisResult<T> = crate::error::Result<T>;
+
+/// One pre-funded / pre-deployed account in the C-Chain genesis `alloc`
+/// (coreth `core.GenesisAccount`). All fields are `0x`-hex in the JSON, parsed
+/// here into typed values. `code`/`storage` are absent for plain EOAs.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct RawGenesisAccount {
+    /// Account balance in wei (`0x`-hex big-endian scalar).
+    #[serde(default)]
+    balance: Option<String>,
+    /// Account nonce (`0x`-hex scalar).
+    #[serde(default)]
+    nonce: Option<String>,
+    /// Contract bytecode (`0x`-hex), absent for EOAs.
+    #[serde(default)]
+    code: Option<String>,
+    /// Storage slots (`slot -> value`, both `0x`-hex 32-byte).
+    #[serde(default)]
+    storage: Option<std::collections::BTreeMap<String, String>>,
+}
+
+/// The genesis `config` block (coreth `params.ChainConfig` + `extras`,
+/// spec 10 §11.1). Only the fields the EVM port consumes are decoded; the rest
+/// (the many block-0 Ethereum fork flags, `eip*Hash`, `daoForkSupport`) are
+/// accepted and ignored. Avalanche network-upgrade timestamps live in the node
+/// config (`ava_version`), not the embedded Mainnet/Fuji genesis JSON, so the
+/// optional `*BlockTimestamp` fields here override the schedule only when a
+/// custom (local/subnet) genesis sets them.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+struct RawGenesisConfig {
+    /// EVM chain id (43114 Mainnet, 43113 Fuji).
+    #[serde(rename = "chainId")]
+    chain_id: u64,
+    /// Timestamp-keyed precompile enable/disable + param changes (§8.3). Absent
+    /// in the Mainnet/Fuji genesis; carried for subnet/local parity.
+    #[serde(rename = "precompileUpgrades", default)]
+    precompile_upgrades: Vec<RawPrecompileUpgrade>,
+}
+
+/// One timestamp-keyed precompile upgrade entry (coreth/subnet-evm
+/// `PrecompileUpgrade`, spec 10 §8.3). The concrete precompile config is an
+/// opaque JSON object here (the precompile registry M6.22 owns interpretation);
+/// M6.8 captures only the `blockTimestamp` activation key so the upgrade
+/// schedule round-trips byte-compatibly. Each entry carries exactly one
+/// precompile config keyed by the precompile's name (e.g. `feeManagerConfig`),
+/// which always includes a `blockTimestamp`.
+#[derive(Clone, Debug, serde::Deserialize)]
+struct RawPrecompileUpgrade(serde_json::Map<String, serde_json::Value>);
+
+/// A single parsed precompile-upgrade activation (§8.3): the precompile-config
+/// key (e.g. `"feeManagerConfig"`) and its `blockTimestamp` activation second.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrecompileUpgrade {
+    /// The precompile-config key in the genesis/upgrade JSON.
+    pub key: String,
+    /// The `blockTimestamp` (unix seconds) at which the upgrade activates.
+    pub block_timestamp: u64,
+}
+
+/// The full C-Chain genesis JSON (coreth `core.Genesis`, spec 10 §11.1). The
+/// `cChainGenesis` string embedded in `genesis/genesis_{mainnet,fuji}.json` is
+/// exactly this shape.
+#[derive(Clone, Debug, serde::Deserialize)]
+struct RawGenesis {
+    config: RawGenesisConfig,
+    #[serde(default)]
+    nonce: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(rename = "extraData", default)]
+    extra_data: Option<String>,
+    #[serde(rename = "gasLimit")]
+    gas_limit: String,
+    #[serde(default)]
+    difficulty: Option<String>,
+    #[serde(rename = "mixHash", default)]
+    mix_hash: Option<String>,
+    #[serde(default)]
+    coinbase: Option<String>,
+    alloc: std::collections::BTreeMap<String, RawGenesisAccount>,
+    #[serde(default)]
+    number: Option<String>,
+    #[serde(rename = "gasUsed", default)]
+    gas_used: Option<String>,
+    #[serde(rename = "parentHash", default)]
+    parent_hash: Option<String>,
+}
+
+/// A parsed C-Chain genesis (spec 10 §11.1): the chain id, the header scalar
+/// fields, the `precompileUpgrades` schedule (§8.3), and the `alloc` (already
+/// materialized into Firewood ethhash [`BatchOp`]s + a `code_hash -> code`
+/// side-store list). [`CChainGenesis::state_root`] computes the genesis state
+/// root; [`CChainGenesis::genesis_header`] builds the coreth genesis header for
+/// the block ID.
+#[derive(Clone, Debug)]
+pub struct CChainGenesis {
+    /// EVM chain id.
+    chain_id: u64,
+    /// Genesis header timestamp (unix seconds).
+    timestamp: u64,
+    /// Genesis block number (always 0).
+    number: u64,
+    /// Genesis gas limit.
+    gas_limit: u64,
+    /// Genesis gas used (always 0).
+    gas_used: u64,
+    /// Genesis difficulty (0 — Avalanche is post-merge).
+    difficulty: U256,
+    /// Genesis block nonce (8 bytes, 0).
+    nonce: [u8; 8],
+    /// Genesis `extraData`.
+    extra: Bytes,
+    /// Genesis `mixHash`.
+    mix_digest: B256,
+    /// Genesis coinbase.
+    coinbase: Address,
+    /// Genesis parent hash (zero).
+    parent_hash: B256,
+    /// The genesis `alloc` as a revm [`BundleState`]: feed it through
+    /// [`FirewoodStateProvider::propose_from_bundle`](crate::state::FirewoodStateProvider::propose_from_bundle)
+    /// to obtain the genesis state root. The bundle path materializes accounts
+    /// via the 5-field `rlp_account` (M6.30) so the root matches coreth.
+    alloc_bundle: BundleState,
+    /// `code_hash -> bytecode` for every contract account in the `alloc`; the
+    /// caller seeds the bytecode side store before reading account code.
+    bytecode: Vec<(B256, Vec<u8>)>,
+    /// The `precompileUpgrades` schedule (§8.3), timestamp-keyed.
+    precompile_upgrades: Vec<PrecompileUpgrade>,
+}
+
+/// Parses a `0x`-prefixed (or bare) hex scalar into a `u64` (RLP-style minimal
+/// big-endian). An empty / `0x` string is `0`.
+fn parse_u64_hex(s: &str) -> GenesisResult<u64> {
+    let trimmed = s.trim_start_matches("0x");
+    if trimmed.is_empty() {
+        return Ok(0);
+    }
+    u64::from_str_radix(trimmed, 16).map_err(|e| Error::GenesisParse(format!("u64 hex {s:?}: {e}")))
+}
+
+/// Parses a `0x`-prefixed (or bare) hex scalar into a [`U256`]. Empty is `0`.
+fn parse_u256_hex(s: &str) -> GenesisResult<U256> {
+    let trimmed = s.trim_start_matches("0x");
+    if trimmed.is_empty() {
+        return Ok(U256::ZERO);
+    }
+    U256::from_str_radix(trimmed, 16)
+        .map_err(|_| Error::GenesisParse(format!("u256 hex {s:?} invalid")))
+}
+
+/// Decodes a `0x`-prefixed (or bare) hex byte string.
+fn parse_bytes_hex(s: &str) -> GenesisResult<Vec<u8>> {
+    hex::decode(s.trim_start_matches("0x"))
+        .map_err(|e| Error::GenesisParse(format!("hex {s:?}: {e}")))
+}
+
+/// Parses a 20-byte address from hex (with or without `0x`).
+fn parse_address(s: &str) -> GenesisResult<Address> {
+    let bytes = parse_bytes_hex(s)?;
+    if bytes.len() != 20 {
+        return Err(Error::GenesisParse(format!(
+            "address {s:?}: expected 20 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(Address::from_slice(&bytes))
+}
+
+/// Parses a 32-byte hash from hex (with or without `0x`).
+fn parse_b256(s: &str) -> GenesisResult<B256> {
+    let bytes = parse_bytes_hex(s)?;
+    if bytes.len() != 32 {
+        return Err(Error::GenesisParse(format!(
+            "hash {s:?}: expected 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(B256::from_slice(&bytes))
+}
+
+impl CChainGenesis {
+    /// Parses C-Chain genesis JSON (the `cChainGenesis` string, coreth
+    /// `core.Genesis`) into a [`CChainGenesis`], materializing the `alloc` into
+    /// Firewood ethhash [`BatchOp`]s via the 5-field [`rlp_account`] path
+    /// (M6.30) so the state root matches coreth byte-for-byte.
+    ///
+    /// # Errors
+    /// Returns [`Error::GenesisParse`] on invalid JSON or a malformed hex field.
+    pub fn parse(json: &str) -> GenesisResult<Self> {
+        let raw: RawGenesis =
+            serde_json::from_str(json).map_err(|e| Error::GenesisParse(e.to_string()))?;
+
+        // Header scalar fields (coreth `Genesis.toBlock`). Optional JSON fields
+        // default the way coreth's zero-value `Genesis` does.
+        let timestamp = raw
+            .timestamp
+            .as_deref()
+            .map(parse_u64_hex)
+            .transpose()?
+            .unwrap_or(0);
+        let number = raw
+            .number
+            .as_deref()
+            .map(parse_u64_hex)
+            .transpose()?
+            .unwrap_or(0);
+        let gas_limit = parse_u64_hex(&raw.gas_limit)?;
+        let gas_used = raw
+            .gas_used
+            .as_deref()
+            .map(parse_u64_hex)
+            .transpose()?
+            .unwrap_or(0);
+        let difficulty = raw
+            .difficulty
+            .as_deref()
+            .map(parse_u256_hex)
+            .transpose()?
+            .unwrap_or(U256::ZERO);
+        let nonce_u64 = raw
+            .nonce
+            .as_deref()
+            .map(parse_u64_hex)
+            .transpose()?
+            .unwrap_or(0);
+        let nonce = nonce_u64.to_be_bytes();
+        let extra = Bytes::from(
+            raw.extra_data
+                .as_deref()
+                .map(parse_bytes_hex)
+                .transpose()?
+                .unwrap_or_default(),
+        );
+        let mix_digest = raw
+            .mix_hash
+            .as_deref()
+            .map(parse_b256)
+            .transpose()?
+            .unwrap_or(B256::ZERO);
+        let coinbase = raw
+            .coinbase
+            .as_deref()
+            .map(parse_address)
+            .transpose()?
+            .unwrap_or(Address::ZERO);
+        let parent_hash = raw
+            .parent_hash
+            .as_deref()
+            .map(parse_b256)
+            .transpose()?
+            .unwrap_or(B256::ZERO);
+
+        // Materialize the alloc into a revm `BundleState`: each account becomes a
+        // present `AccountInfo` (balance, nonce, code_hash) + its storage slots.
+        // The provider's `propose_from_bundle` runs this through the 5-field
+        // `rlp_account` path (M6.30) so the state root matches coreth. The genesis
+        // is block 0, so the revert range is `0..=0`.
+        let mut builder: BundleBuilder = BundleState::builder(0..=0);
+        let mut bytecode: Vec<(B256, Vec<u8>)> = Vec::new();
+
+        // Parse + sort accounts by address for deterministic construction.
+        let mut accounts: Vec<(Address, RawGenesisAccount)> = Vec::with_capacity(raw.alloc.len());
+        for (addr_hex, acct) in &raw.alloc {
+            accounts.push((parse_address(addr_hex)?, acct.clone()));
+        }
+        accounts.sort_by_key(|(addr, _)| *addr);
+
+        for (addr, acct) in &accounts {
+            let balance = acct
+                .balance
+                .as_deref()
+                .map(parse_u256_hex)
+                .transpose()?
+                .unwrap_or(U256::ZERO);
+            let acct_nonce = acct
+                .nonce
+                .as_deref()
+                .map(parse_u64_hex)
+                .transpose()?
+                .unwrap_or(0);
+            let (code_hash, code) = match &acct.code {
+                Some(code_hex) => {
+                    let raw_code = parse_bytes_hex(code_hex)?;
+                    if raw_code.is_empty() {
+                        (KECCAK_EMPTY, None)
+                    } else {
+                        let h = keccak256(&raw_code);
+                        let bytecode_obj = Bytecode::new_raw(Bytes::from(raw_code.clone()));
+                        bytecode.push((h, raw_code));
+                        (h, Some(bytecode_obj))
+                    }
+                }
+                None => (KECCAK_EMPTY, None),
+            };
+            builder = builder.state_present_account_info(
+                *addr,
+                AccountInfo {
+                    balance,
+                    nonce: acct_nonce,
+                    code_hash,
+                    code,
+                    ..Default::default()
+                },
+            );
+
+            // Storage slots (present). A zero genesis slot is an absent slot.
+            if let Some(storage) = &acct.storage {
+                let mut slots: StorageKeyMap<(U256, U256)> = StorageKeyMap::default();
+                for (slot_hex, val_hex) in storage {
+                    let slot = parse_b256(slot_hex)?;
+                    let value = parse_u256_hex(val_hex)?;
+                    if value.is_zero() {
+                        continue;
+                    }
+                    // `StorageKeyMap` is keyed by the U256 slot; the value is the
+                    // (original, present) pair — original is zero at genesis.
+                    slots.insert(slot.into(), (U256::ZERO, value));
+                }
+                if !slots.is_empty() {
+                    builder = builder.state_storage(*addr, slots);
+                }
+            }
+        }
+        let alloc_bundle = builder.build();
+
+        // Precompile upgrades (§8.3): one config object per entry, keyed by the
+        // precompile-config name; each carries a `blockTimestamp`.
+        let mut precompile_upgrades = Vec::with_capacity(raw.config.precompile_upgrades.len());
+        for entry in &raw.config.precompile_upgrades {
+            for (key, cfg) in &entry.0 {
+                let block_timestamp = cfg
+                    .get("blockTimestamp")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        Error::GenesisParse(format!(
+                            "precompileUpgrade {key:?} missing blockTimestamp"
+                        ))
+                    })?;
+                precompile_upgrades.push(PrecompileUpgrade {
+                    key: key.clone(),
+                    block_timestamp,
+                });
+            }
+        }
+
+        Ok(Self {
+            chain_id: raw.config.chain_id,
+            timestamp,
+            number,
+            gas_limit,
+            gas_used,
+            difficulty,
+            nonce,
+            extra,
+            mix_digest,
+            coinbase,
+            parent_hash,
+            alloc_bundle,
+            bytecode,
+            precompile_upgrades,
+        })
+    }
+
+    /// The EVM chain id (43114 Mainnet, 43113 Fuji).
+    #[must_use]
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    /// The parsed `precompileUpgrades` schedule (§8.3).
+    #[must_use]
+    pub fn precompile_upgrades(&self) -> &[PrecompileUpgrade] {
+        &self.precompile_upgrades
+    }
+
+    /// The genesis `alloc` as a revm [`BundleState`] (5-field `rlp_account`,
+    /// M6.30). Feed it through
+    /// [`FirewoodStateProvider::propose_from_bundle`](crate::state::FirewoodStateProvider::propose_from_bundle)
+    /// + `commit` to obtain (and durably set) the genesis state root.
+    #[must_use]
+    pub fn alloc_bundle(&self) -> &BundleState {
+        &self.alloc_bundle
+    }
+
+    /// The `code_hash -> bytecode` pairs for every contract account in the
+    /// `alloc`; seed the bytecode side store with these so contract code reads
+    /// resolve (the genesis state root only commits the `code_hash`).
+    #[must_use]
+    pub fn bytecode(&self) -> &[(B256, Vec<u8>)] {
+        &self.bytecode
+    }
+
+    /// Builds the coreth genesis [`AvaHeader`] given the computed genesis
+    /// `state_root` (spec 10 §9.3 / §11.1, coreth `Genesis.toBlock`).
+    ///
+    /// For the embedded Mainnet/Fuji genesis (timestamp 0, no AP3+/Cancun/Granite
+    /// active at genesis), the header carries **no optional tail**: just the 15
+    /// standard Ethereum fields + `ext_data_hash`. `tx_root`/`receipt_root` are
+    /// the empty-trie root; `uncle_hash` is the empty-ommers hash; `ext_data_hash`
+    /// is the zero hash (coreth leaves the genesis header `ExtDataHash` unset —
+    /// it is the zero value, NOT `EmptyExtDataHash`).
+    #[must_use]
+    pub fn genesis_header(&self, state_root: B256) -> AvaHeader {
+        AvaHeader {
+            parent_hash: self.parent_hash,
+            uncle_hash: EMPTY_OMMER_ROOT_HASH,
+            coinbase: self.coinbase,
+            state_root,
+            tx_root: ava_evm_reth::EMPTY_ROOT_HASH,
+            receipt_root: ava_evm_reth::EMPTY_ROOT_HASH,
+            bloom: Bytes::from(vec![0u8; 256]),
+            difficulty: self.difficulty,
+            number: self.number,
+            gas_limit: self.gas_limit,
+            gas_used: self.gas_used,
+            time: self.timestamp,
+            extra: self.extra.clone(),
+            mix_digest: self.mix_digest,
+            nonce: self.nonce,
+            // coreth's genesis header leaves ExtDataHash as the zero value (the
+            // genesis block has no ExtData and toBlock never computes the hash).
+            ext_data_hash: B256::ZERO,
+            base_fee: None,
+            ext_data_gas_used: None,
+            block_gas_cost: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_root: None,
+            time_milliseconds: None,
+            min_delay_excess: None,
+        }
     }
 }
 
@@ -774,10 +1233,14 @@ mod tests {
             spec.ethereum_fork_activation(EthereumHardfork::Cancun),
             ForkCondition::Timestamp(up.etna)
         );
-        // Pre-AP2 forks are active from genesis.
+        // Pre-AP2 forks (and Paris) are active from genesis, keyed by block.
         assert_eq!(
             spec.ethereum_fork_activation(EthereumHardfork::Istanbul),
-            ForkCondition::Timestamp(0)
+            ForkCondition::Block(0)
+        );
+        assert_eq!(
+            spec.ethereum_fork_activation(EthereumHardfork::Paris),
+            ForkCondition::Block(0)
         );
     }
 

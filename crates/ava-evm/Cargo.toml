@@ -78,14 +78,19 @@ ruint = { workspace = true }
 # block builder (M6.20) parks on (coreth `txpool` `pending chan`). Only the
 # `sync` feature is needed in the library; the workspace tokio already carries it.
 tokio = { workspace = true }
+# M6.8 C-Chain genesis parsing (spec 10 §11.1): the embedded coreth genesis JSON
+# (`config` chain id + fork timestamps + `feeConfig` + precompile configs +
+# `alloc`) is parsed into `AvaChainSpec` + the upgrade schedule. Same schema as
+# subnet-evm/coreth `core.Genesis`. `hex` decodes the `0x`-prefixed alloc code /
+# byte fields (avalanchego linear-codec-free, plain hex like geth).
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }
-hex = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 # Building the secp256k1fx TransferInput/TransferOutput/OutputOwners payloads the
 # atomic-tx golden-vector tests embed in the reused X-Chain fx component enums.
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }

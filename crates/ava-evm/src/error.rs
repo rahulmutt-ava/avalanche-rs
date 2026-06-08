@@ -52,6 +52,11 @@ pub enum Error {
     #[error("conflicting atomic inputs")]
     ConflictingAtomicInputs,
 
+    /// The C-Chain genesis JSON (coreth `core.Genesis`) failed to parse — bad
+    /// JSON, a malformed hex field, or a missing required field (spec 10 §11.1).
+    #[error("invalid C-Chain genesis: {0}")]
+    GenesisParse(String),
+
     /// No stashed Firewood proposal exists for the given pre-commit state root
     /// (the `accept` path expected a proposal that `verify` should have
     /// stashed). Carries the missing root.
