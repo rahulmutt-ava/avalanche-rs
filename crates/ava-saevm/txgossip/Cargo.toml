@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-txgossip"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "SAE EVM mempool + push/pull gossip + effective-tip priority (specs/11 §9.2). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The SAE core VM: three frontiers + settlement + lifecycle + sae-rpc (specs/11 §1/§5). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

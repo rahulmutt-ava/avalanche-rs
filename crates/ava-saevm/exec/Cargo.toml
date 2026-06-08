@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "saexec single-task streaming executor on the ava-evm reuse APIs + Eventual receipt buffer (specs/11 §6). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

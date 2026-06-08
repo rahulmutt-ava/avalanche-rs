@@ -1421,6 +1421,74 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-saevm-adaptor"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-blocks"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-cchain"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-cmputils"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-core"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-db"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-exec"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-gasprice"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-gastime"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-hook"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-intmath"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-params"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-proxytime"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-testutil"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-txgossip"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-types"
+version = "0.1.0"
+
+[[package]]
+name = "ava-saevm-worstcase"
+version = "0.1.0"
+
+[[package]]
 name = "ava-secp256k1fx"
 version = "0.1.0"
 dependencies = [

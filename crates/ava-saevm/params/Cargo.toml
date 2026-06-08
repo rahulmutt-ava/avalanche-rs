@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-params"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "SAE (ACP-194) protocol parameters: the Tau discipline (BlockInstant, no Add<u64>), Lambda, and derived block/queue limits (specs/11 §2.3/§2.4). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

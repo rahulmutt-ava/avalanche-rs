@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-db"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "saedb Tracker: consensus-vs-execution state on Firewood revisions (CC-ORDER, no-reorg; specs/11 §7, 27 §2.4). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

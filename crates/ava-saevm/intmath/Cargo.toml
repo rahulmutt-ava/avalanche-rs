@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-intmath"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "SAE checked integer math (mul_div/mul_div_ceil/ceil_div/bounded_{add,sub,mul} via U256 intermediate; specs/21 §6/§8). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-worstcase"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "SAE predictive worst-case bounds + base-fee/balance assertions + ErrQueueFull (specs/11 §9.3/§2.4/§6.1). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]
