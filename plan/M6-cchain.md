@@ -270,14 +270,42 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > correctly asserts computed==header); the lifecycle test sets `header.state_root` to the executor's root, and raw
 > coreth bytes will verify once M6.22 lands the coinbase-credit `EvmFactory`.
 
-### Task M6.10: `EvmVm` `ChainVm` adapter
+### Task M6.10: `EvmVm` `ChainVm` adapter ✅ DONE (ab9e6da)
 **Crate:** ava-evm  ·  **Depends on:** M6.9, M3 (07 ChainVm boundary)  ·  **Spec:** 10 §3; 07 (ChainVm/Block)
 **Files:** `crates/ava-evm/src/vm.rs`, `crates/ava-evm/tests/chainvm.rs`
-- [ ] **Step 1 — Red:** `tests/chainvm.rs` `fn parse_get_setpref_lastaccepted()`: `parse_block` decodes to an unverified `EvmBlock`; `get_block` returns from the verified tree else blocks db; `set_preference` records target + retargets txpool with no reorg work; `last_accepted` returns committed `(Id, height)`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm chainvm` → fails.
-- [ ] **Step 3 — Green:** Implement `EvmVm` (fields per §3: chain_spec, evm_config, state, blocks, atomic, txpool, builder, `verified: DashMap`, `preferred: ArcSwap`, `last_accepted: ArcSwap`) and `impl ChainVm` (`parse_block`, `build_block`→builder, `get_block`, `set_preference` record-only, `last_accepted`). No reth fork choice (G6).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm chainvm` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: EvmVm ChainVm adapter (§3)`
+- [x] **Step 1 — Red:** `tests/chainvm.rs` `fn parse_get_setpref_lastaccepted()`: `parse_block` decodes to an unverified `EvmBlock`; `get_block` returns from the verified tree else blocks db; `set_preference` records target + retargets txpool with no reorg work; `last_accepted` returns committed `(Id, height)`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm chainvm` → fails.
+- [x] **Step 3 — Green:** Implement `EvmVm` (fields per §3: chain_spec, evm_config, state, blocks, atomic, txpool, builder, `verified: DashMap`, `preferred: ArcSwap`, `last_accepted: ArcSwap`) and `impl ChainVm` (`parse_block`, `build_block`→builder, `get_block`, `set_preference` record-only, `last_accepted`). No reth fork choice (G6).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm chainvm` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: EvmVm ChainVm adapter (§3)`
+
+> **AS-BUILT (M6.10).** `EvmVm` impls `ava_vm::block::ChainVm` (supertrait `Vm`); the engine-facing block
+> type is `VerifiedEvmBlock` which impls **`ava_vm::block::Block` (== `ava_snow::decidable::Block`, the ASYNC
+> decidable trait** — `id`/`parent`/`height`/`timestamp`/`bytes` + async `verify`/`accept`/`reject`, no VM handle
+> on the decision methods; this resolves the "two Block traits" M6.9 deferral — `ava-evm` impls the async
+> decidable one, NOT the sync `snowman::block::Block`). `VerifiedEvmBlock` bundles an `EvmBlock` + a shared
+> `Arc<EvmBlockContext>` + an `Arc<Shared>` (the processing tree + `last_accepted` pointer) so the `&self`-only
+> trait methods drive the M6.9 inherent lifecycle: `verify` resolves the parent root from the Firewood tip →
+> `EvmBlock::verify` (stashes pre-commit root) → inserts into `verified: DashMap`; `accept` → `EvmBlock::accept`
+> (commit + canonical append) + advances `last_accepted: ArcSwap`, leaving the block in `verified`; `reject` →
+> evict + `EvmBlock::reject` (discard proposal). `set_preference` is RECORD-ONLY into `preferred: ArcSwap` +
+> txpool `Notify` retarget (zero state mutation, asserted by the test — G6 linear accept, no reorgs). Block
+> ID ⇔ `B256` is a pure 32-byte reinterpret (`id_of`/`hash_of`). **DEVIATIONS / SEAMS:** (1) `get_block` resolves
+> the `verified` tree first, else confirms the id is a known accepted block via the `CanonicalStore` index — but
+> **full-byte reconstruction of an accepted-then-evicted block from the store is deferred to M6.23/M6.24**: the
+> M6.9 `CanonicalStore` schema persists only the header *commitment* (`B256`) + `ext_data`, NOT the full block
+> RLP, so an `EvmBlock` can't be rebuilt from it (accepted blocks are therefore NOT evicted from `verified`).
+> Fold the store-schema gap into M6.23/24. (2) `build_block` returns `Err(NotFound)` ("no pending block",
+> coreth `ErrNoPendingBlock` shape) pending the **M6.20** builder driver (`crate::builder` still a stub) — a
+> documented seam, not a blocker. (3) `Vm::initialize` is minimal (records the `ChainContext`); genesis-JSON
+> collaborator construction is M6.8 — `EvmVm::new(provider, config, blocks, genesis_id)` is the construction
+> seam; RPC handlers (M6.23/24) + state-sync probes (M6.25) stubbed empty/`None` per the avm/platformvm
+> precedent. (4) `dashmap = "6"` declared directly in `crates/ava-evm/Cargo.toml` (not a workspace dep; already
+> in `Cargo.lock` via reth's graph — no new external crate) — consider promoting to a workspace dep. Deps added:
+> `ava-snow`, `ava-vm`(already), `async-trait`, `tokio-util`, `dashmap`, `arc-swap`; dev `tokio`. **No facade
+> edits.** Error mapping mirrors the avm precedent: only the lookup-miss (`Error::MissingProposal`) →
+> `ava_vm::Error::NotFound`; otherwise `InvalidComponent`/`ParametersInvalid` (neither `ava_vm`/`ava_snow`
+> error has a free-form variant). 104→105 tests on-branch; 112 combined with M6.17.
 
 ### Task M6.11: `feerules::window` AP3 base fee + AP4 block gas cost (G2) ✅ DONE (71840d5)
 **Crate:** ava-evm  ·  **Depends on:** M6.5  ·  **Spec:** 21 §0, §4a, §4b; 10 §7.1, §17.3 (G2)
@@ -423,14 +451,34 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > 'test(atomic_mempool)'` matches the fn name not the binary → use `-E 'binary(atomic_mempool)'` (or the
 > full `-p ava-evm` run).
 
-### Task M6.17: `AtomicBackend` + atomic trie (2nd Firewood) + shared-memory batch (G3)
+### Task M6.17: `AtomicBackend` + atomic trie (2nd Firewood) + shared-memory batch (G3) ✅ DONE (68c3ee2)
 **Crate:** ava-evm  ·  **Depends on:** M6.14, M6.9, M3 (07 shared memory)  ·  **Spec:** 10 §6.4, §17.4 (G3); 07 (shared-memory contract); 04 §4.2
 **Files:** `crates/ava-evm/src/atomic/backend.rs`, `crates/ava-evm/src/atomic/trie.rs`, `crates/ava-evm/tests/atomic_backend.rs`
-- [ ] **Step 1 — Red:** `tests/atomic_backend.rs` `fn accept_indexes_trie_and_applies_shared_memory()`: `AtomicBackend::accept(height, txs)` writes `key = height(8B)||blockchainID(32B)` → serialized requests into a 2nd ethhash Firewood instance, root matches a Go golden atomic-trie root, `TrieKeyLength=40`, `EmptyRootHash` init, periodic `commitInterval` checkpoint, and the shared-memory `Requests{Put,Remove}` apply happens in ONE atomic batch with the trie commit.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_backend` → fails.
-- [ ] **Step 3 — Green:** Implement `AtomicTrie` (key encoding, `serialize_requests` via ava-codec byte-exact, `EmptyRootHash`), `AtomicBackend { trie, shared_memory, last_committed_root, commit_interval }` with `accept` (merge ops → propose → root → atomic shared-memory apply + commit together) per §17.4; hook into `EvmBlock::accept` AFTER state commit. Commit atomic-trie-root golden vector.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_backend` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: AtomicBackend + atomic trie + shared-memory batch (G3)`
+- [x] **Step 1 — Red:** `tests/atomic_backend.rs` `fn accept_indexes_trie_and_applies_shared_memory()`: `AtomicBackend::accept(height, txs)` writes `key = height(8B)||blockchainID(32B)` → serialized requests into a 2nd ethhash Firewood instance, root matches a Go golden atomic-trie root, `TrieKeyLength=40`, `EmptyRootHash` init, periodic `commitInterval` checkpoint, and the shared-memory `Requests{Put,Remove}` apply happens in ONE atomic batch with the trie commit.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_backend` → fails.
+- [x] **Step 3 — Green:** Implement `AtomicTrie` (key encoding, `serialize_requests` via ava-codec byte-exact, `EmptyRootHash`), `AtomicBackend { trie, shared_memory, last_committed_root, commit_interval }` with `accept` (merge ops → propose → root → atomic shared-memory apply + commit together) per §17.4; hook into `EvmBlock::accept` AFTER state commit. Commit atomic-trie-root golden vector.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_backend` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: AtomicBackend + atomic trie + shared-memory batch (G3)`
+
+> **AS-BUILT (M6.17).** `AtomicTrie` = a SECOND, independent ethhash Firewood instance (own dir); reuses the
+> §17.2.2 deviation (Firewood `Proposal<'db>` borrows the `&Db` → can't stash a live proposal; stash the
+> deterministic `BatchOp` list and re-propose+commit at commit time — roots bit-identical). **Key = `height.to_be_bytes()(8B) || blockchainID(32B)`, `TRIE_KEY_LENGTH = 40`** (`= wrappers.LongLen(8) + common.HashLength(32)`; height big-endian via `Packer.PackLong`). **Trie VALUE = `atomic.Codec.Marshal(CodecVersion=0, *Requests)` — a SINGLE `*Requests` per (height, chain) key, NOT a `map[ids.ID]*Requests`** (layout: `version(2B=0x0000)` + `RemoveRequests([][]byte: u32 count, each u32 len+bytes)` + `PutRequests([]*Element: u32 count, each = u32-len key, u32-len value, u32-count traits each u32-len+bytes)`). `EMPTY_ROOT_HASH` for the empty trie. `serialize_requests` uses byte-exact AvaCodec mirrors `CodecRequests`/`CodecElement`. `AtomicBackend { trie, shared_memory, last_committed_root, commit_interval }`; **`DEFAULT_COMMIT_INTERVAL = 4096`** (coreth `plugin/evm/config`): the trie root advances every block (`lastAcceptedRoot`), only `height % commitInterval == 0` records `lastCommittedRoot`. `accept(height, txs)` collects each tx's `(peerChainId, Requests)` into a `BTreeMap<Id, Requests>` (sorted, no HashMap on the write path) → propose+root → durable commit → `SharedMemory::apply`. **Wired into `EvmBlock::accept` ADDITIVELY:** `EvmBlockContext` gained `atomic_backend: Option<Arc<AtomicBackend>>` (defaults `None`; `new(...)` signature UNCHANGED; new `with_atomic_backend(...)` builder + `atomic_backend()` accessor); `accept` calls `backend.accept(self.number(), self.atomic_txs())?` AFTER `state.commit` and before the canonical append. All existing `lifecycle.rs` tests pass unchanged. **GOLDEN root is GO-EXECUTED** (scratch `package state` test in coreth `plugin/evm/atomic/state` at the pinned rev, go1.25.10, then deleted; provenance in `tests/vectors/cchain/atomic_trie/_provenance.md`): root `15211e79c52a022d51afc4ed1cd77db2477cbcb85620d28a15923c5f96476056` for the M6.14 import+export ops at height=1 — Rust reproduces byte-for-byte. **No facade edits.** 104→111 tests on-branch (3 backend integration + 4 trie unit); 112 combined with M6.10.
+>
+> **FOLLOW-UPS (flagged, fold into later tasks):**
+> - **Looser cross-store atomicity vs Go (→ recovery pass, M6.25/M6.27).** Coreth threads the atomic-trie's
+>   versiondb batch INTO `sharedMemory.Apply(requests, batch)` so trie-root advance + cross-chain put/remove land
+>   in ONE DB commit. Our Firewood atomic trie owns its own durable commit (separate DB), so we commit-trie-THEN-
+>   apply-shared-memory (no extra `batches` passed to `apply`). This holds the §17.4 invariant for a single-process
+>   node but is weaker than Go's shared-versiondb batch; a crash-consistency guarantee across the two stores needs
+>   an atomic-trie ↔ shared-memory reconcile/cursor pass on startup (coreth `ApplyToSharedMemory`), NOT implemented.
+> - **commitInterval skip-backfill not modeled.** Coreth `AcceptTrie` back-fills skipped commit heights into a
+>   `Root(height)` metadata index; our Firewood trie commits durably every block (revision window) + tracks the
+>   checkpoint pointer, so the metadata back-fill loop is unneeded for root parity — flag for state-sync (M6.25)
+>   if the `Root(height)` query API is later required.
+> - **Same-chain multi-tx ordering.** `merge_atomic_ops` concatenates per-chain `Requests` in tx order; coreth
+>   sorts txs by `tx.id()` (`utils.Sort(copyTxs)`) before merging. The golden (single import + single export,
+>   distinct chains) doesn't exercise this; for exact Go parity with multiple SAME-chain atomic txs per block,
+>   sort txs by id before merge (fold into M6.18 semantic-verify or M6.20 build, which order the batch).
 
 ### Task M6.18: Atomic semantic verify, conflict sets, bonus blocks (C10)
 **Crate:** ava-evm  ·  **Depends on:** M6.17, M6.9  ·  **Spec:** 10 §6.5; 07

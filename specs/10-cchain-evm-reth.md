@@ -526,6 +526,23 @@ as coreth.
   root matches Go's MPT root and it shares the propose/commit discipline; its root
   is checkpointed and used for atomic-state sync (§10). Keep the exact key
   encoding and `EmptyRootHash` initialization.
+  > **AS-BUILT (M6.17, Go-verified at the pinned coreth rev).** `TRIE_KEY_LENGTH = 40`
+  > (`wrappers.LongLen(8) + common.HashLength(32)`); key = `height.to_be_bytes() ||
+  > blockchainID` (height big-endian, `Packer.PackLong`). **The trie VALUE is a SINGLE
+  > `*atomic.Requests` per (height, chain) key — `Codec.Marshal(CodecVersion=0, *Requests)`
+  > — NOT a `map[ids.ID]*Requests`.** Value layout: `version(2B=0x0000)` +
+  > `RemoveRequests` (`[][]byte`: u32 count, each u32 len-prefixed) + `PutRequests`
+  > (`[]*Element`: u32 count, each = u32-len key, u32-len value, u32-count traits each
+  > u32-len-prefixed). `commitInterval` default = **4096** (coreth `plugin/evm/config`):
+  > the trie root advances every block (`lastAcceptedRoot`), only `height %
+  > commitInterval == 0` records `lastCommittedRoot`. Firewood reuses the §17.2.2
+  > deviation (stash the deterministic `BatchOp` list keyed by root, re-propose+commit
+  > at commit time — roots bit-identical). **Atomicity caveat:** coreth threads the
+  > atomic-trie versiondb batch INTO `sharedMemory.Apply(requests, batch)` (one DB
+  > commit); our second Firewood instance commits independently then calls `apply`, so
+  > the cross-store guarantee is looser — a startup reconcile/cursor pass (coreth
+  > `ApplyToSharedMemory`) + the skip-commit-height `Root(height)` back-fill are NOT
+  > yet implemented (flagged for the recovery/state-sync work, §10/M6.25).
 
 ### 6.5 Atomic semantic verify, conflicts, predicates (C10)
 
@@ -1773,6 +1790,12 @@ canonical number↔hash index — written by us, not by a stage.
 > `VerifiedEvmBlock` wrapper (bundling block + context) is **M6.10 (`vm.rs`) scope**. `verify` strictly asserts
 > computed-root == header-root and rejects on mismatch (correct); note that a real coreth block-1 header root
 > (coinbase-credit model) only matches our executor's root once the base-fee-recipient override lands (M6.22).
+> **✅ RESOLVED (M6.10, commit `ab9e6da`):** `ava-evm` impls the **async `decidable::Block`** (the
+> `ava_vm::block::Block` / `ava_snow::Block` re-export) — NOT the sync `snowman::block::Block` — on a
+> `VerifiedEvmBlock` wrapper bundling the `EvmBlock` + a shared `Arc<EvmBlockContext>` + the VM's `Arc<Shared>`
+> (processing `DashMap` + `last_accepted` `ArcSwap`). The `&self`-only `verify`/`accept`/`reject` drive the M6.9
+> inherent methods: `verify` resolves the parent root from the Firewood tip + inserts into the `verified` tree;
+> `accept` commits + advances `last_accepted` (block stays in `verified`); `reject` evicts + discards.
 
 **Wrapper design — `CanonicalStore`.** A thin writer over the block tables that the
 `ChainVm` adapter drives on Accept; Reject is a pure in-memory drop.
