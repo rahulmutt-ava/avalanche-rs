@@ -1,0 +1,24 @@
+{
+  "_comment": "M6.19 differential::atomic_xc — manifest for the X<->C atomic import/export parity test (crates/ava-evm/tests/atomic_xc.rs). This test is a recorded-oracle COMPOSITE that ties together the four facets of X<->C atomic parity over a single Go-executed ImportTx + ExportTx corpus. It does NOT introduce new golden bytes: every asserted byte string is sourced from the already-committed, Go-EXECUTED vectors below, so the parity chain stays anchored on coreth. See _provenance.md.",
+  "mode": "recorded-oracle (per-PR gate)",
+  "test": "crates/ava-evm/tests/atomic_xc.rs::atomic_xc",
+  "facets": {
+    "a_serialization": "byte-identical EvmOutput/EvmInput + unsigned import/export tx (struct + interface form) + export signed-tx id",
+    "b_requests": "Import->RemoveRequests on source chain; Export->PutRequests/Element on dest chain (chain id, remove ids, element key/value/traits)",
+    "c_evm_state_transfer": "AtomicStateHook on a Firewood-backed State overlay: import credit = amount*X2C_RATE wei; export debit = amount*X2C_RATE wei + nonce -> input.nonce+1",
+    "d_atomic_trie": "AtomicBackend::accept indexes merged batch Requests into the 2nd ethhash Firewood trie -> Go-golden root; cross-chain Put/Remove applied to the in-memory SharedMemory harness in the same accept"
+  },
+  "reused_vectors": [
+    {
+      "path": "crates/ava-evm/tests/vectors/cchain/atomic/atomic_txs.json",
+      "provenance": "crates/ava-evm/tests/vectors/cchain/atomic/_provenance.md",
+      "covers": "facets a, b, c (the import out amount 4999 / export in amount 3000 + nonce 7 drive the EVMStateTransfer balances)"
+    },
+    {
+      "path": "crates/ava-evm/tests/vectors/cchain/atomic_trie/atomic_trie_root.json",
+      "provenance": "crates/ava-evm/tests/vectors/cchain/atomic_trie/_provenance.md",
+      "covers": "facet d (empty root, trie keys, per-chain serialized Requests value, post-accept root 15211e79c52a022d51afc4ed1cd77db2477cbcb85620d28a15923c5f96476056)"
+    }
+  ],
+  "new_go_vectors_generated": false
+}
