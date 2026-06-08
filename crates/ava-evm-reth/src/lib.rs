@@ -190,6 +190,12 @@ pub use reth_ethereum_primitives::{
 // `Recovered<T>` (sender-attached tx) + the `SignerRecoverable` recovery trait
 // used by `ava-evm::block` to recover senders before execution (spec 10 §9.3).
 pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
+// M6.20: the `alloy_consensus::Transaction` trait (`gas_limit` /
+// `max_fee_per_gas` / `effective_tip_per_gas` / …) the on-demand
+// `BlockBuilderDriver` reads to order EVM txs by effective tip and budget block
+// gas (spec 10 §4/§17.6, 21 §4b). Aliased `ConsensusTx` so the crate never names
+// a bare `Transaction` that could collide with the atomic-tx `Tx` types (G0).
+pub use alloy_consensus::Transaction as ConsensusTx;
 // EIP-2718 typed-envelope decode for a single signed tx (`TransactionSigned`)
 // — used by `ava-evm::block` to decode the txs out of a block body (spec 10
 // §9.3); reused by the M6.6 reexecute test to decode the recorded tx.

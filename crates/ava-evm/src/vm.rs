@@ -42,10 +42,16 @@
 //!
 //! ## `build_block` (M6.20)
 //!
-//! The on-demand builder driver is **M6.20** (`crate::builder` is a stub). Until
-//! it lands, [`ChainVm::build_block`] returns [`Error::NotFound`] ("no block to
-//! build"), matching coreth's `ErrNoPendingBlock` shape when there is nothing to
-//! issue. This is a documented seam, not a blocker for M6.10.
+//! [`ChainVm::build_block`] drives the on-demand [`BlockBuilderDriver`] (§4/§17.6,
+//! G5) on the preferred leaf: it resolves the preferred block's coreth header +
+//! committed Firewood state root from the processing tree, builds the next-block
+//! [`AvaNextBlockCtx`], and calls [`BlockBuilderDriver::build_on`], which pulls
+//! one atomic batch + EVM txs under the gas / `blockGasCost` budget, computes the
+//! Firewood pre-commit root (stashed for commit-on-accept, the G5/G1 precomputed-
+//! root trick), and assembles the byte-exact coreth block whose `header.state_root`
+//! is that root — so the self-built block re-verifies to the identical root.
+//! When there is nothing to issue (no work, or the min-retry-delay guard), it
+//! returns [`Error::NotFound`] — coreth's `ErrNoPendingBlock` shape.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -72,9 +78,10 @@ use ava_vm::vm::{HttpHandler, Vm, VmEvent};
 
 use crate::atomic::mempool::AtomicMempool;
 use crate::block::{EvmBlock, EvmBlockContext, decode_ava_evm_block};
+use crate::builder::BlockBuilderDriver;
 use crate::canonical::CanonicalStore;
 use crate::error::Error;
-use crate::evmconfig::AvaEvmConfig;
+use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
 use crate::state::FirewoodStateProvider;
 
 /// Maps a `B256` block hash to a consensus [`Id`]. The C-Chain block ID is
@@ -244,6 +251,11 @@ pub struct EvmVm {
     /// Held behind a [`parking_lot::Mutex`] (the engine drives the VM as one
     /// actor, so contention is structural, not concurrent).
     txpool: Arc<parking_lot::Mutex<AtomicMempool>>,
+    /// The on-demand block builder (M6.20, §4/§17.6). Drives the same executor
+    /// over the preferred-block parent view + the atomic mempool batch, and
+    /// produces a block whose `header.state_root` is the precomputed Firewood
+    /// root (G5/G1). `build_block` resolves the preferred parent and calls it.
+    builder: BlockBuilderDriver,
     /// The currently preferred (leaf) block id (Go `vm.preferred`). Record-only:
     /// Snowman owns fork choice, so `set_preference` does no reorg work (G6).
     preferred: ArcSwap<Id>,
@@ -280,18 +292,21 @@ impl EvmVm {
         };
         let avax_asset_id = Id::EMPTY;
         let shared = Arc::new(Shared {
-            state,
+            state: Arc::clone(&state),
             blocks,
             verified: DashMap::new(),
             last_accepted: ArcSwap::from_pointee(tip),
         });
+        let txpool = Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
+            4096,
+            avax_asset_id,
+        )));
+        let builder = BlockBuilderDriver::new(evm_config.clone(), state, Arc::clone(&txpool));
         Self {
             shared,
             evm_config,
-            txpool: Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
-                4096,
-                avax_asset_id,
-            ))),
+            txpool,
+            builder,
             preferred: ArcSwap::from_pointee(tip.0),
             ctx: None,
             engine_state: EngineState::Initializing,
@@ -482,11 +497,50 @@ impl Vm for EvmVm {
 #[async_trait]
 impl ChainVm for EvmVm {
     async fn build_block(&mut self, _token: &CancellationToken) -> VmResult<Arc<dyn VmBlock>> {
-        // The on-demand builder driver is M6.20 (`crate::builder` is a stub).
-        // Until it lands there is never a block to build; return the "no pending
-        // block" error (coreth `ErrNoPendingBlock` shape) so the engine treats
-        // this as "the VM does not want to issue a block".
-        Err(VmError::NotFound)
+        // On-demand build (M6.20, §4/§17.6): build on the preferred leaf. We need
+        // the preferred block's coreth header (the build target's parent) and the
+        // committed Firewood state root it executes against. The preferred id is a
+        // verified-or-accepted block in the processing tree (`set_preference`
+        // records it; accepted blocks are retained there for resolvability). When
+        // the preferred id is not in the tree (e.g. a freshly-seeded genesis whose
+        // `AvaHeader` the VM never decoded), there is nothing to build on yet —
+        // return the "no pending block" shape (coreth `ErrNoPendingBlock`).
+        let preferred = *self.preferred.load_full();
+        let Some(parent) = self.shared.verified.get(&preferred) else {
+            return Err(VmError::NotFound);
+        };
+        let parent_header = parent.block.header().clone();
+        // The parent's own post-state root is the Firewood revision the child
+        // executes against (== the committed tip once the parent is accepted).
+        let parent_state_root = parent.precommit_root;
+        drop(parent);
+
+        // The next-block build/fee context (§17.3). The wall-clock timestamp is
+        // the build time; the fee state defaults to the genesis/first-AP3 window
+        // (the parent-extra fee-state extraction is M6.7's follow-up — see the
+        // build report). The atomic gas budget is the post-AP5 limit the mempool
+        // packs against.
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            .max(parent_header.time.saturating_add(1));
+        let ctx = AvaNextBlockCtx {
+            timestamp: now_secs,
+            ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
+        };
+
+        // The reth-txpool `best_transactions` integration is M6.23; until then the
+        // VM contributes no EVM txs (atomic-only blocks build from the mempool).
+        match self
+            .builder
+            .build_on(&parent_header, parent_state_root, &ctx, Vec::new())
+        {
+            Ok(block) => Ok(self.wrap(block)),
+            // "Nothing to build" / min-retry-delay guard -> no pending block.
+            Err(Error::MissingProposal(_)) => Err(VmError::NotFound),
+            Err(e) => Err(VmError::from(e)),
+        }
     }
 
     async fn get_block(&self, _token: &CancellationToken, id: Id) -> VmResult<Arc<dyn VmBlock>> {
