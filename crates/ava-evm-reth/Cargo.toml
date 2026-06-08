@@ -32,6 +32,17 @@ reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebf
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false, features = ["std"] }
 reth-trie-common = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false }
+# reth's ready-made Ethereum `ConfigureEvm` (`EthEvmConfig`) + block executor,
+# the Ethereum block/signed-tx primitives the executor consumes, and the
+# `Hardforks` chain-spec super-trait. `AvaEvmConfig` drives these directly to
+# execute a batch (spec 10 §17.1, G6) rather than re-deriving `ConfigureEvm`.
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false, features = ["std"] }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false, features = ["std"] }
+reth-ethereum-forks = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false, features = ["std"] }
+# `StateProviderDatabase` — reth's adapter wrapping a reth `StateProvider`
+# (our `FirewoodStateView`) into a revm `Database`, so the bare executor runs
+# over Firewood-ethhash (spec 10 §17.2).
+reth-revm = { git = "https://github.com/paradigmxyz/reth", rev = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4", default-features = false, features = ["std"] }
 # reth publishes `reth-primitives-traits` to crates.io (own 0.3.x version line)
 # and consumes it by version even internally — pin the version reth v2.2.0 uses.
 reth-primitives-traits = { version = "0.3.2", default-features = false }
