@@ -1,0 +1,67 @@
+{
+  "_comment": "Go-executed golden vectors for C-Chain atomic Import/Export tx codec + atomic ops (M6.14). See _provenance.md. Hex is lowercase, no 0x prefix. unsigned_import_tx.struct_codec_hex / unsigned_export_tx.struct_codec_hex are Codec.Marshal(0, &concreteStructPtr) — the BARE struct, no interface type_id (this is the 2-byte version prefix then the struct fields). The interface form the signed Tx envelope carries inserts a 4-byte u32 type_id (0 import / 1 export) right after the version prefix; the test reconstructs and checks it via splice_type_id. Verified equal to Go Codec.Marshal(0, &iface) where iface is the UnsignedAtomicTx interface field.",
+  "network_id": 1,
+  "blockchain_id": "1111111111111111111111111111111111111111111111111111111111111111",
+  "source_chain": "2222222222222222222222222222222222222222222222222222222222222222",
+  "destination_chain": "3333333333333333333333333333333333333333333333333333333333333333",
+  "avax_asset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+
+  "evm_output": {
+    "address": "0101010101010101010101010101010101010101",
+    "amount": 1000,
+    "asset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "codec_hex": "0000010101010101010101010101010101010101010100000000000003e8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+
+  "evm_input": {
+    "address": "0202020202020202020202020202020202020202",
+    "amount": 2000,
+    "asset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "nonce": 7,
+    "codec_hex": "0000020202020202020202020202020202020202020200000000000007d0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000000000000007"
+  },
+
+  "unsigned_import_tx": {
+    "_fields": "network_id=1, blockchain_id=0x11.., source_chain=0x22.., imported_inputs=[{tx_id=0x44.., output_index=1, asset_id=0xaa.., in=secp256k1fx.TransferInput{amt=5000, sig_indices=[0]}}], outs=[{address=0x01.., amount=4999, asset_id=0xaa..}]",
+    "struct_codec_hex": "0000000000011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222200000001444444444444444444444444444444444444444444444444444444444444444400000001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000005000000000000138800000001000000000000000101010101010101010101010101010101010101010000000000001387aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "interface_codec_hex": "000000000000000000011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222200000001444444444444444444444444444444444444444444444444444444444444444400000001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000005000000000000138800000001000000000000000101010101010101010101010101010101010101010000000000001387aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+
+  "import_atomic_ops": {
+    "chain": "2222222222222222222222222222222222222222222222222222222222222222",
+    "remove_requests": [
+      "073baa2c7cbe84111ec1b5a2dba50afa546640f5f66ce3828be5c57ed9d77d93"
+    ],
+    "put_requests": null
+  },
+
+  "unsigned_export_tx": {
+    "_fields": "network_id=1, blockchain_id=0x11.., destination_chain=0x33.., ins=[{address=0x02.., amount=3000, asset_id=0xaa.., nonce=7}], exported_outputs=[{asset_id=0xaa.., out=secp256k1fx.TransferOutput{amt=3000, locktime=0, threshold=1, addrs=[0x05..]}}]",
+    "struct_codec_hex": "000000000001111111111111111111111111111111111111111111111111111111111111111133333333333333333333333333333333333333333333333333333333333333330000000102020202020202020202020202020202020202020000000000000bb8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000000000000700000001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000070000000000000bb8000000000000000000000001000000010505050505050505050505050505050505050505",
+    "interface_codec_hex": "00000000000100000001111111111111111111111111111111111111111111111111111111111111111133333333333333333333333333333333333333333333333333333333333333330000000102020202020202020202020202020202020202020000000000000bb8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000000000000700000001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000070000000000000bb8000000000000000000000001000000010505050505050505050505050505050505050505"
+  },
+
+  "export_tx_id": "06ceeed2e0b93c5cb22055711767ce439ce220c94297136f64dd54438cd4fddc",
+
+  "export_atomic_ops": {
+    "chain": "3333333333333333333333333333333333333333333333333333333333333333",
+    "remove_requests": null,
+    "put_requests": [
+      {
+        "key": "c3da83f18816ccfe3294337d6d15188b13fc058de87d4b6778b15c2640993bca",
+        "traits": [
+          "0505050505050505050505050505050505050505"
+        ],
+        "value": "000006ceeed2e0b93c5cb22055711767ce439ce220c94297136f64dd54438cd4fddc00000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000070000000000000bb8000000000000000000000001000000010505050505050505050505050505050505050505"
+      }
+    ]
+  },
+
+  "constants": {
+    "x2c_rate": 1000000000,
+    "tx_bytes_gas": 1,
+    "evm_output_gas": 60,
+    "evm_input_gas": 1068,
+    "cost_per_signature": 1000
+  }
+}
