@@ -34,6 +34,26 @@ thiserror = { workspace = true }
 # DashMap-equivalent for the verify()->accept() proposal stash keyed by root
 # (§17.2.2). A simple `Mutex<HashMap<_,_>>` over parking_lot is enough here.
 parking_lot = { workspace = true }
+# M6.14 atomic X<->C tx types. The atomic tx codec is the avalanchego linear
+# codec (NOT RLP), so ava-evm reuses the same hand-written codec stack as the
+# other VMs:
+#   - ava-codec(+derive): the `#[derive(AvaCodec)]` linear codec + `Manager`.
+#   - ava-types: `Id` (32-byte chain/asset ids) + `ShortId` (20-byte addrs).
+#   - ava-vm: the canonical `atomic::Requests`/`Element` shared-memory payloads
+#     (`components::avax::shared_memory`) that X<->P already uses — reused, not
+#     re-defined, so all three VMs feed one shared-memory `Apply`.
+#   - ava-avm: the byte-exact, codec-serializable avax/fx components
+#     (`txs::components::{TransferableInput, TransferableOutput, Output}` +
+#     `txs::credential::FxCredential`/`Credential`). The atomic codec's secp fx
+#     type-ids (TransferInput=5, TransferOutput=7, Credential=9) coincide with the
+#     X-Chain codec's, so the X-Chain component encodings are byte-exact here.
+ava-codec = { path = "../ava-codec" }
+ava-codec-derive = { path = "../ava-codec-derive" }
+ava-types = { path = "../ava-types" }
+ava-vm = { path = "../ava-vm" }
+ava-avm = { path = "../ava-avm" }
+# sha256 of the signed bytes -> tx id (coreth `atomic/metadata.go` `Initialize`).
+ava-crypto = { path = "../ava-crypto" }
 # R3-pinned Firewood (spec 04 §4, 00 §11.2): the ethhash (Keccak/Eth-MPT/RLP)
 # state-of-record backend. Pinned to the SAME git tag the rest of the workspace
 # (ava-merkledb) uses so the graph resolves to one firewood. We depend directly
@@ -58,8 +78,9 @@ pretty_assertions = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Network-id constants (MAINNET_ID/FUJI_ID) for the fork-schedule table tests.
-ava-types = { path = "../ava-types" }
+# Building the secp256k1fx TransferInput/TransferOutput/OutputOwners payloads the
+# atomic-tx golden-vector tests embed in the reused X-Chain fx component enums.
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
 # Real on-disk scratch dirs for the Firewood roundtrip tests (Firewood is a
 # disk-backed DB). Already in the workspace lock via ava-merkledb; pinned locally.
 tempfile = "3"
