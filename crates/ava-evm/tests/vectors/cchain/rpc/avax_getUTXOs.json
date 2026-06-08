@@ -1,0 +1,4 @@
+{
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "avax.getUTXOs", "params": { "addresses": ["C-avax1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkr6ykw"], "sourceChain": "X", "limit": 0, "encoding": "hex" } },
+  "result": { "numFetched": "0", "utxos": [], "endIndex": { "address": "", "utxo": "11111111111111111111111111111111LpoYY" }, "encoding": "hex" }
+}

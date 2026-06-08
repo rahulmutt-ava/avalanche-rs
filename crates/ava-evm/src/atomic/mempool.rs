@@ -223,6 +223,19 @@ impl AtomicMempool {
         self.discarded.contains_key(tx_id)
     }
 
+    /// The cached signed bytes of `tx_id` if the pool holds it in any active
+    /// state (Pending/Current/Issued); `None` otherwise. Used by `avax.getAtomicTx`
+    /// to return a processing tx's bytes (coreth `Mempool.GetTx`).
+    #[must_use]
+    pub fn get_tx_bytes(&self, tx_id: &Id) -> Option<Vec<u8>> {
+        self.pending
+            .get(tx_id)
+            .map(|e| &e.tx)
+            .or_else(|| self.current.get(tx_id))
+            .or_else(|| self.issued.get(tx_id))
+            .map(|tx| tx.bytes().to_vec())
+    }
+
     /// `Add` / `AddRemoteTx` — add `tx` as a **remote** tx. Remote txs that fail
     /// admission (other than already-known / full) are recorded as Discarded so
     /// they are not re-requested.

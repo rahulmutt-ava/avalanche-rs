@@ -3,5 +3,11 @@
 
 //! `eth_*` + `avax.*` RPC over Firewood + fee/accepted-tag overrides
 //! (G8, spec 10 §9). Populated by M6.23/M6.24.
+//!
+//! All handlers are plain structs returning [`serde_json::Value`] (the M6.23
+//! precedent), NOT a `jsonrpsee`/`reth-rpc` server: the jsonrpsee-vs-axum mount
+//! topology is deferred to the 12-node milestone (spec §9.2).
 
+pub mod admin;
+pub mod avax;
 pub mod eth;

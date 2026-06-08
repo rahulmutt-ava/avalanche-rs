@@ -78,3 +78,75 @@ The vectors are self-checking against the in-repo handlers. After an intentional
 encoding/semantics change, run `cargo nextest run -p ava-evm --test rpc_eth`, read
 the recorded value from a failing assertion, and update the matching `result`
 field (the `eth_estimateGas` value in particular is the executor-recorded gas).
+
+---
+
+# `avax.*` RPC golden vectors (C-Chain / EVM, spec 10 §9.2/§17.9, G8, M6.24)
+
+These vectors pin the JSON-RPC `avax.*` request → response shapes the `ava-evm`
+`rpc::avax::AvaxRpc` handlers emit, matching coreth's `avax` service
+(`plugin/evm/atomic/vm/api.go`) + `admin.go`/`health.go`. As with the `eth_*`
+vectors these are **constructed from first principles** against an in-repo,
+deterministic state and are **self-checking against the in-repo handlers** (no
+live coreth capture is available in the sandbox). Files are
+`{ "request": <JSON-RPC 2.0 request>, "result": <expected result> }`; the handler
+API takes typed args, so the test constructs the call directly.
+
+The golden atomic tx is the **same `UnsignedExportTx` fixture** the atomic-tx
+codec golden vectors use (`tests/vectors/cchain/atomic/`, `src/atomic/tx.rs`):
+`network_id 1`, `blockchain_id 0x11×32`, `destination_chain 0x33×32`, one
+`EVMInput{0x02×20, 3000, AVAX(0xAA×32), nonce 7}`, one exported
+`TransferOutput{3000, owners[0x05×20]}`. Signed (zero-credential `Sign`) it has:
+
+- **`txID`** = `3zumDKZwsTxzxJmoTduDdipS2Cuz19b5XWCDVbXaZPh9ZwQ98` — CB58 of
+  `sha256(signedBytes)` (the same id whose hex `06ceeed2…4fddc` the atomic-tx
+  codec test pins).
+- **signed bytes (checksummed hex, `formatting.Hex`)** = the `tx` field of
+  `avax_getAtomicTx.json` / the `params.tx` of `avax_issueTx.json`. It is
+  `0x` + `hex(codec.Marshal(0, Tx) ++ sha256(...)[28..32])`.
+
+| Vector | Method | How derived |
+|---|---|---|
+| `avax_issueTx` | `avax.issueTx` | decode the checksummed-hex tx → `Tx::parse` → `AtomicMempool::add_local` → `{txID}` (the CB58 id). |
+| `avax_getAtomicTxStatus` | `avax.getAtomicTxStatus` | the tx recorded in the accepted index at height 3 → `{status:"Accepted", blockHeight:"3"}`. `blockHeight` is a `json.Uint64` quoted decimal string. Processing/Dropped/Unknown branches are asserted directly in the test (mempool + unit test). |
+| `avax_getAtomicTx` | `avax.getAtomicTx` | the accepted tx's signed bytes as checksummed hex + `{encoding:"hex", blockHeight:"3"}`. |
+| `avax_getBlockByHeight` | `avax.getBlockByHeight` | the `CanonicalStore` body bytes at height 3 (seeded as `b"body-3"`) as checksummed hex → `0x626f64792d330129086f`. The block-bytes wire format (the coreth RLP+ExtData block, §9.3) is owned by M6.7/the builder; this pins the **envelope** (`{block, encoding}`) over whatever body bytes the store holds. |
+| `avax_getUTXOs` | `avax.getUTXOs` | the **empty paginated** reply (`numFetched "0"`, `utxos []`, `endIndex{address:"", utxo:<empty id CB58>}`, `encoding "hex"`). |
+
+## `avax.getUTXOs` completeness (deferred shared-memory fetch)
+
+coreth's `GetUTXOs` reads `avax.GetAtomicUTXOs` — an **address-indexed**
+shared-memory iterator over a source chain. `ava-vm`'s `SharedMemory` trait
+(`ava_vm::components::avax::shared_memory`) exposes `apply` (the accept-side
+put/remove the atomic backend uses) but **not** the indexed `GetAtomicUTXOs`
+iterator the read API needs. So the handler validates the args (address count ≤
+`maxGetUTXOsAddrs`, non-empty) and returns the **empty paginated envelope** —
+the same shape coreth returns when no UTXOs match. Wiring the indexed fetch lands
+with the shared-memory iterator (a future task); the reply envelope is stable.
+
+## `avax.getAtomicTx` / `getAtomicTxStatus` accepted-tx index
+
+coreth threads an `atomicstate.AtomicRepository` (txID → signed bytes + height)
+that block-accept advances. Until the VM (`EvmVm`, M6.10) wires acceptance into a
+durable repository, the handlers read an in-memory `AcceptedAtomicTxIndex` (the
+accept-side `put` seam). The status precedence is coreth's `getAtomicTx`:
+Accepted (durable, with height) > Processing/Dropped (mempool) > Unknown.
+
+## `admin.*` + health
+
+`admin.startCPUProfiler`/`stopCPUProfiler`/`memoryProfile`/`lockProfile`/
+`setLogLevel` are **no-ops** in this build (the `profiler.Profiler` and dynamic
+logger are node-assembly concerns, §12-node) and each returns coreth's
+`api.EmptyReply` (`{}`). The node health endpoint (coreth `health.go`
+`HealthCheck` → `(nil, nil)`) reports `{healthy:true, lastAcceptedHeight}` — the
+extra detail is informational (coreth returns `nil` details today). These are
+asserted directly in `tests/rpc_avax.rs` / the `avax.rs`/`admin.rs` unit tests,
+no JSON vector.
+
+## Scoping — direct handlers, not jsonrpsee
+
+Like the `eth_*` handlers (M6.23), `AvaxRpc`/`AdminRpc` are plain handler structs
+returning `serde_json::Value`, NOT a `jsonrpsee`/`reth-rpc` server. Spec §9.2's
+"axum/JSON-RPC 2.0 … mount alongside or via ava-api's router" mount topology is
+explicitly deferred to the 12-node milestone; the handler API is the seam that
+mount would call.
