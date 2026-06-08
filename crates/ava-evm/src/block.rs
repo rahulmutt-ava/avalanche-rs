@@ -509,6 +509,24 @@ impl EvmBlockContext {
     pub fn evm_config(&self) -> &AvaEvmConfig {
         &self.evm_config
     }
+
+    /// The union of UTXO ids consumed by atomic txs in the still-**processing**
+    /// ancestry of the block under verification, back to the last-accepted block
+    /// (coreth `verifyTxs` → `conflicts`). The conflict-set verify
+    /// ([`crate::atomic::verify::verify_no_conflicts`]) rejects a block whose
+    /// atomic inputs overlap this set.
+    ///
+    /// On the linear-accept path (the parent IS last-accepted) the processing
+    /// ancestry is empty, so this is empty — coreth's `conflicts` returns
+    /// immediately once it walks past last-accepted, and an accepted parent's
+    /// UTXOs are already proven removed by the per-tx shared-memory `Get`. The
+    /// non-linear (sibling/processing-fork) ancestry is threaded in by the
+    /// `ChainVm` adapter (M6.10) once it owns the verified-block tree; until then
+    /// the intra-block conflict check (always applied) is the operative guard.
+    #[must_use]
+    pub fn processing_ancestor_inputs(&self) -> std::collections::BTreeSet<ava_types::id::Id> {
+        std::collections::BTreeSet::new()
+    }
 }
 
 impl EvmBlock {
@@ -536,6 +554,21 @@ impl EvmBlock {
     /// Returns [`Error`] if the parent view is unavailable, execution fails, the
     /// computed root disagrees with the header, or gas usage disagrees.
     pub fn verify(&self, ctx: &EvmBlockContext, parent_state_root: B256) -> Result<B256> {
+        // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
+        // block if its atomic txs double-spend each other (intra-block conflict)
+        // or a still-processing ancestor's atomic inputs. Linear-accept is the
+        // common case (parent == last-accepted), where the processing ancestry is
+        // empty and only the intra-block conflict can fire; the processing-ancestry
+        // input union is threaded in by the `ChainVm` adapter (M6.10) once it has
+        // the verified-block tree. Runs before EVM execution — a conflicting block
+        // is invalid regardless of its EVM state transition (cheaper to reject).
+        let unsigned: Vec<_> = self
+            .atomic_txs()
+            .iter()
+            .map(|tx| tx.unsigned.clone())
+            .collect();
+        crate::atomic::verify::verify_no_conflicts(&unsigned, &ctx.processing_ancestor_inputs())?;
+
         let txs = self.recover_senders()?;
 
         // Parent state view + revm overlay (the verify path, spec 10 §3.2).

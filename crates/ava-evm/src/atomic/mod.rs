@@ -10,3 +10,4 @@ pub mod hook;
 pub mod mempool;
 pub mod trie;
 pub mod tx;
+pub mod verify;
