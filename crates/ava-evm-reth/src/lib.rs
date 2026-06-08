@@ -20,7 +20,23 @@
 pub use reth_evm::execute::{
     BlockBuilder, BlockBuilderOutcome, BlockExecutionError, BlockExecutor, BlockExecutorFactory,
 };
-pub use reth_evm::{ConfigureEvm, EvmEnvFor, ExecutionCtxFor};
+pub use reth_evm::{
+    ConfigureEvm, Evm, EvmEnv, EvmEnvFor, EvmFactory, ExecutionCtxFor, NextBlockEnvAttributes,
+};
+// `EthEvmConfig`/`EthEvmFactory`/`EthBlockAssembler`/`RethReceiptBuilder` are
+// reth's ready-made Ethereum `ConfigureEvm` implementation; `AvaEvmConfig`
+// reuses it (parameterised on `AvaChainSpec`) to DRIVE the bare reth
+// `BlockExecutor` rather than re-deriving the whole `ConfigureEvm` trait by hand
+// (spec 10 §17.1 — "reth as a library", G6). `EthBlockExecutionCtx` is the
+// per-block context the Ethereum block executor consumes.
+pub use alloy_evm::eth::{EthBlockExecutionCtx, EthEvmFactory};
+// The `EthExecutorSpec` + `Hardforks` chain-spec super-traits `EthEvmConfig`'s
+// `ConfigureEvm` bound requires (alloy-evm / reth-ethereum-forks). `ava-evm`
+// implements them for `AvaChainSpec` so it can serve as the `EthEvmConfig`
+// chain spec (spec 10 §17.1/§17.8).
+pub use alloy_evm::eth::spec::EthExecutorSpec;
+pub use reth_ethereum_forks::{ForkFilter, ForkFilterKey, ForkHash, ForkId, Hardforks, Head};
+pub use reth_evm_ethereum::{EthBlockAssembler, EthEvmConfig, RethReceiptBuilder};
 // `BlockExecutionResult` is re-exported privately inside `reth_evm::execute`;
 // its canonical public home is `alloy-evm` (reth re-exports from there). Pin it
 // here so callers name only `ava_evm_reth::BlockExecutionResult`.
@@ -89,14 +105,51 @@ pub use reth_network_peers::NodeRecord;
 pub use revm::primitives::hardfork::SpecId;
 
 // --- revm (state overlay + precompile dispatch) --------------------------
+pub use revm::database::states::bundle_state::{BundleBuilder, BundleRetention};
 pub use revm::database::{BundleState, State, StateBuilder};
 pub use revm::handler::PrecompileProvider;
 pub use revm::state::{Account as RevmAccount, AccountInfo, Bytecode};
+// `Database` (revm's state-data trait) — the bound `State<DB>` requires and the
+// type `PreExecutionHook::apply` operates on. `StateProviderDatabase<DB>` is
+// reth's adapter turning a reth `StateProvider` (our `FirewoodStateView`) into a
+// revm `Database<Error = ProviderError>` so the bare reth executor can run over
+// Firewood-ethhash (spec 10 §17.1/§17.2).
+pub use revm::Database;
+// The error type a revm `State<DB>` overlay surfaces — `EvmDatabaseError<E>`
+// wrapping the inner db error (here `ProviderError`). `PreExecutionHook` operates
+// on the `State` overlay, so its `dyn Database` bound names this error.
+pub use reth_revm::database::StateProviderDatabase;
+pub use revm::database_interface::bal::EvmDatabaseError;
+
+/// The error a revm `State<StateProviderDatabase<…>>` overlay surfaces: the
+/// Firewood/provider read error (`ProviderError`) wrapped by revm's
+/// `EvmDatabaseError`. This is the `Database::Error` of the overlay
+/// `PreExecutionHook::apply` (and the block executor) operate on.
+pub type StateDbError = EvmDatabaseError<ProviderError>;
 
 // --- alloy primitives / consensus types crossing the facade boundary -----
 pub use alloy_consensus::{Header, Receipt, TxEnvelope};
 pub use alloy_primitives::map::B256Map;
 pub use alloy_primitives::{Address, B256, Bytes, U256};
+// The block + signed-tx types reth's Ethereum executor operates on
+// (`EthPrimitives`): `RethBlock = alloy_consensus::Block<TransactionSigned>` and
+// `TransactionSigned = EthereumTxEnvelope<TxEip4844>`. These are the wire types
+// `ava-evm::block` decodes (alloy RLP) and the executor consumes — distinct from
+// `TxEnvelope` (= `EthereumTxEnvelope<TxEip4844Variant>`), so they are named
+// explicitly here (spec 10 §9.3 / §17.1).
+pub use reth_ethereum_primitives::{
+    Block as RethBlock, EthPrimitives, Receipt as EthReceipt, TransactionSigned,
+};
+// `Recovered<T>` (sender-attached tx) + the `SignerRecoverable` recovery trait
+// used by `ava-evm::block` to recover senders before execution (spec 10 §9.3).
+pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
+// EIP-2718 typed-envelope decode for a single signed tx (`TransactionSigned`)
+// — used by `ava-evm::block` to decode the txs out of a block body (spec 10
+// §9.3); reused by the M6.6 reexecute test to decode the recorded tx.
+pub use alloy_eips::Decodable2718;
+// `SealedBlock`/`SealedHeader` are the sealed (hash-cached) wrappers reth's
+// `ConfigureEvm::context_for_*` consumes; exposed for the block lifecycle.
+pub use reth_primitives_traits::{SealedBlock, SealedHeader};
 
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the
@@ -104,24 +157,38 @@ pub use alloy_primitives::{Address, B256, Bytes, U256};
 pub const RETH_REV: &str = "88505c7fcbfdebfd3b56d88c86b62e950043c6c4";
 
 /// Recovered (sender-attached) transaction, the unit the executor consumes.
-pub type RecoveredTx = alloy_consensus::transaction::Recovered<TxEnvelope>;
+///
+/// This is `Recovered<TransactionSigned>` — `TransactionSigned` (=
+/// `EthereumTxEnvelope<TxEip4844>`) is reth's `EthPrimitives::SignedTx`, the
+/// `BlockExecutor::Transaction` the Ethereum executor's `execute_transaction`
+/// accepts. (NOT `Recovered<TxEnvelope>`: `TxEnvelope` is the *variant*-typed
+/// `EthereumTxEnvelope<TxEip4844Variant>`, a distinct type — spec 10 §17.1.)
+pub type RecoveredTx = Recovered<TransactionSigned>;
 
 /// The execution environment handed to a single batch execution: block env +
-/// chain/fork context. Kept opaque at the facade boundary; `ava-evm`'s
-/// `AvaEvmConfig` populates it from `AvaNextBlockCtx` (spec 10 §7.2).
+/// chain/fork context + the block header providing the per-block execution
+/// context (parent hash, extra data, withdrawals). `ava-evm`'s `AvaEvmConfig`
+/// populates `evm_env` from `AvaNextBlockCtx` on the build path (spec 10 §7.2)
+/// or from the decoded header on the reexecute/verify path (spec 10 §3.2).
 #[derive(Clone, Debug, Default)]
 pub struct AvaEvmEnv {
     /// reth/revm block environment (basefee, gas limit, timestamp, …),
     /// fork-overridden by `ava-evm::feerules` before execution.
     pub evm_env: reth_evm::EvmEnv,
+    /// The block header this batch executes as. Supplies the
+    /// `EthBlockExecutionCtx` fields (parent hash / beacon root / withdrawals /
+    /// extra data) the reth block executor's pre/post-execution changes need.
+    pub header: Header,
 }
 
 /// Receipts + the unflushed revm state delta produced by one batch. The caller
 /// (`ava-evm`) turns `bundle` into a Firewood proposal (spec 10 §17.2);
 /// decoupled from any block lifecycle so SAE can reuse it (§16).
 pub struct ExecOutcome {
-    /// Receipts, cumulative gas, and requests for the batch.
-    pub result: BlockExecutionResult<Receipt>,
+    /// Receipts, cumulative gas, and requests for the batch. `EthReceipt` is
+    /// reth's `EthPrimitives::Receipt` (= `alloy_consensus::EthereumReceipt`),
+    /// the type the Ethereum block executor produces.
+    pub result: BlockExecutionResult<EthReceipt>,
     /// revm state delta to convert into a Firewood proposal.
     pub bundle: BundleState,
 }
@@ -131,8 +198,10 @@ pub struct ExecOutcome {
 /// (spec 10 §17.4). Defined here so the executor trait can name it.
 pub trait PreExecutionHook {
     /// Apply state effects to the journaled overlay before tx execution.
-    /// `db` is the revm `State<_>` overlay the batch executes against.
-    fn apply(&self, db: &mut dyn revm::Database<Error = ProviderError>) -> Result<(), AvaEvmError>;
+    /// `db` is the revm `State<_>` overlay the batch executes against; its
+    /// `Database::Error` is [`StateDbError`] (the Firewood `ProviderError`
+    /// wrapped by revm's `EvmDatabaseError`).
+    fn apply(&self, db: &mut dyn revm::Database<Error = StateDbError>) -> Result<(), AvaEvmError>;
 }
 
 /// The ONE entrypoint SAE (spec 11) and the sync `ChainVm` (spec 10 §3) both
