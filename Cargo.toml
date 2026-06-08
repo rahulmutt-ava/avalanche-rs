@@ -10,7 +10,36 @@
 
 [workspace]
 resolver = "3"
-members = [ "crates/*", "xtask", "tests/differential" ]
+# The SAE sub-workspace lives two levels deep at `crates/ava-saevm/<name>/`
+# (crate names `ava-saevm-<name>`) — Cargo does not support nested `[workspace]`
+# tables, so each sub-crate is a member of this root workspace (M7.1, specs/11
+# §3). `crates/*` would also match the bare `crates/ava-saevm` container
+# directory (which has no manifest — it only holds the shared proptest.toml +
+# tests/), so that container is excluded below; the sub-crates are listed as
+# explicit literal members, which always win over `exclude`.
+members = [
+  "crates/*",
+  "crates/ava-saevm/params",
+  "crates/ava-saevm/intmath",
+  "crates/ava-saevm/cmputils",
+  "crates/ava-saevm/proxytime",
+  "crates/ava-saevm/gastime",
+  "crates/ava-saevm/gasprice",
+  "crates/ava-saevm/types",
+  "crates/ava-saevm/hook",
+  "crates/ava-saevm/worstcase",
+  "crates/ava-saevm/blocks",
+  "crates/ava-saevm/adaptor",
+  "crates/ava-saevm/db",
+  "crates/ava-saevm/exec",
+  "crates/ava-saevm/txgossip",
+  "crates/ava-saevm/core",
+  "crates/ava-saevm/cchain",
+  "crates/ava-saevm/testutil",
+  "xtask",
+  "tests/differential",
+]
+exclude = [ "crates/ava-saevm" ]
 
 [workspace.package]
 version = "0.1.0"
@@ -177,3 +206,22 @@ overflow-checks = false
 lto = "thin"
 codegen-units = 1
 panic = "unwind"
+
+# SAE (ACP-194) gas-as-time math must wrap-panic in release too, not silently
+# wrap (specs/00 §8, 11 §2). The global release profile keeps `overflow-checks =
+# false` for the rest of the workspace (perf); we scope the stricter bar to the
+# SAE arithmetic crates via per-package release overrides rather than flipping
+# the whole workspace. `dev`/`dev-checks`/`ci` already enable overflow-checks
+# globally, so SAE inherits there. These four crates additionally carry
+# `#![deny(clippy::arithmetic_side_effects)]` at the crate level (M7.1).
+[profile.release.package.ava-saevm-intmath]
+overflow-checks = true
+
+[profile.release.package.ava-saevm-proxytime]
+overflow-checks = true
+
+[profile.release.package.ava-saevm-gastime]
+overflow-checks = true
+
+[profile.release.package.ava-saevm-gasprice]
+overflow-checks = true

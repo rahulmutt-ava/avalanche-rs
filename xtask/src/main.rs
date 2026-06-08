@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+mod check_sae_lints;
 mod lint_determinism;
 mod porting;
 mod test;
@@ -61,6 +62,9 @@ enum Command {
     PortingReport,
     /// Determinism-audit AST pass (wall-clock / HashMap-in-codec / RNG bans).
     LintDeterminism,
+    /// Structural guard for the SAE stricter-lint bar (forbid-unsafe / pedantic
+    /// / arithmetic_side_effects on the ava-saevm crates).
+    CheckSaeLints,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -74,5 +78,6 @@ fn main() -> anyhow::Result<()> {
         Command::Vectors { action } => vectors::run(action),
         Command::PortingReport => porting::report(),
         Command::LintDeterminism => lint_determinism::run(),
+        Command::CheckSaeLints => check_sae_lints::run(),
     }
 }

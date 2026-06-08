@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-blocks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Byte-exact SAE block + D->M->I->X lifecycle, settlement Range, GC counter (specs/11 §4). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

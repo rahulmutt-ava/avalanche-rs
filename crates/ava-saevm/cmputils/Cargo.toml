@@ -1,0 +1,17 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+
+[package]
+name = "ava-saevm-cmputils"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "SAE comparison/test helpers (128-bit-widening fraction compare; specs/11 §2.1, dev-only). M7.1 scaffold."
+
+[dependencies]
+
+[dev-dependencies]

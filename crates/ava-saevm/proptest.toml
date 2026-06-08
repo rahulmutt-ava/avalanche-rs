@@ -1,0 +1,15 @@
+# proptest configuration shared across the ava-saevm sub-workspace (specs/02 §4).
+#
+# The headline determinism gate (prop::sae_execution_determinism, M7.16) and the
+# gas-time property tests run under this config. Cases are deterministic in CI;
+# the persisted-failure corpus lives in each crate's proptest-regressions/.
+
+# Number of generated cases per property (raised for the determinism/gas-time
+# proptests vs proptest's default of 256).
+cases = 256
+
+# Fail fast on a shrink that runs away (gas-time math must not loop).
+max_shrink_iters = 4096
+
+# Keep CI deterministic: do not consult an environment RNG seed source.
+failure_persistence = "direct"
