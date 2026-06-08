@@ -239,14 +239,36 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > `toBlock` leaves it zero (genesis has no ExtData, hash never computed). (2) Mainnet/Fuji genesis (timestamp
 > 0) carries **no optional header tail** beyond the always-present `ExtDataHash`; `baseFee = nil`.
 
-### Task M6.9: `EvmBlock` verify/accept/reject — pre-commit root, commit/discard, `CanonicalStore` (G6)
+### Task M6.9: `EvmBlock` verify/accept/reject — pre-commit root, commit/discard, `CanonicalStore` (G6) ✅ DONE (223ab75)
 **Crate:** ava-evm  ·  **Depends on:** M6.6, M6.7, M3 (06 Block trait)  ·  **Spec:** 10 §3.1, §3.2, §17.7 (G6); 06 (linear acceptance); 04 §4.2
 **Files:** `crates/ava-evm/src/block.rs`, `crates/ava-evm/src/state.rs` (committer), new `crates/ava-evm/src/canonical.rs`, `crates/ava-evm/tests/lifecycle.rs`
-- [ ] **Step 1 — Red:** `tests/lifecycle.rs` (driven by the M3 engine harness / `ava-snow::testutil`): `fn verify_computes_precommit_root_no_commit()` (verify yields header root, EVM tip unchanged), `fn accept_commits_and_advances_tip()`, `fn reject_drops_proposal_without_commit()` (sibling proposals independent — proposal-on-proposal), and `fn canonical_store_advances_by_one()`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm lifecycle` → fails.
-- [ ] **Step 3 — Green:** Impl 06 `Block` for `EvmBlock`: `verify` (syntactic + semantic execute via `execute_batch` into overlay, compute Firewood pre-commit root via stashed proposal, assert == header.state_root, receipts/gas/bloom), `accept` (`FirewoodStateCommitter::commit` → `CanonicalStore::append_canonical` → set `last_accepted`), `reject` (`FirewoodStateProvider::discard` + evict). Implement `canonical.rs` `CanonicalStore` (G6): single MDBX rw-tx appends Headers/CanonicalHeaders/HeaderNumbers/BlockBodyIndices/Transactions + static-file receipts + tip pointer, **never** touching state/trie tables; invariant `LAST_CANONICAL == last_accepted.height`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm lifecycle` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: EvmBlock verify/accept/reject + CanonicalStore (G6)`
+- [x] **Step 1 — Red:** `tests/lifecycle.rs` (driven by the M3 engine harness / `ava-snow::testutil`): `fn verify_computes_precommit_root_no_commit()` (verify yields header root, EVM tip unchanged), `fn accept_commits_and_advances_tip()`, `fn reject_drops_proposal_without_commit()` (sibling proposals independent — proposal-on-proposal), and `fn canonical_store_advances_by_one()`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm lifecycle` → fails.
+- [x] **Step 3 — Green:** Impl 06 `Block` for `EvmBlock`: `verify` (syntactic + semantic execute via `execute_batch` into overlay, compute Firewood pre-commit root via stashed proposal, assert == header.state_root, receipts/gas/bloom), `accept` (`FirewoodStateCommitter::commit` → `CanonicalStore::append_canonical` → set `last_accepted`), `reject` (`FirewoodStateProvider::discard` + evict). Implement `canonical.rs` `CanonicalStore` (G6): single MDBX rw-tx appends Headers/CanonicalHeaders/HeaderNumbers/BlockBodyIndices/Transactions + static-file receipts + tip pointer, **never** touching state/trie tables; invariant `LAST_CANONICAL == last_accepted.height`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm lifecycle` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: EvmBlock verify/accept/reject + CanonicalStore (G6)`
+
+> **AS-BUILT (M6.9).** Lifecycle exposed as **inherent `EvmBlock::{verify,accept,reject}(…, &EvmBlockContext)`
+> methods** (+ `header_state_root`/`parent_hash`/`parts`/`into_parts` accessors), NOT a direct `Block`-trait impl
+> — see DEVIATION. `verify` executes via `execute_batch` into an overlay, `propose_from_bundle`+`stash_proposal`
+> for the Firewood pre-commit root, asserts `== header.state_root` (rejects on mismatch), tip UNCHANGED; `accept`
+> = `commit(root)` → `CanonicalStore::append_canonical` → `last_accepted`; `reject` = `discard(root)` + evict.
+> `Error` gained `From<AvaEvmError>`. 4 lifecycle + 3 canonical tests green; no facade re-exports.
+> **DEVIATION 1 (Block trait → M6.10):** there are TWO `Block` traits — `ava_snow::Block` (root re-export) is the
+> **async** `decidable::Block` (HAS `verify`); the **synchronous** spec-06 one (`ava_snow::snowman::block::Block`,
+> 06 §2.4) is `accept`/`reject`-ONLY (no `verify`, no VM-context arg). Neither is implementable on `EvmBlock`
+> alone (lifecycle needs provider/config/canonical-store), and an unused `ava-snow` dep trips the workspace
+> `unused_crate_dependencies` deny. So M6.9 ships inherent methods taking `EvmBlockContext`; **the trait impl on a
+> `VerifiedEvmBlock` wrapper is M6.10 (`vm.rs`) scope.** The §3.1 `async fn verify` sketch matches the async trait.
+> **DEVIATION 2 (G6 backend, §17.7):** `CanonicalStore` is over the **`ava-database` KV** backend
+> (one-byte-prefixed Headers/CanonicalHeaders/HeaderNumbers/Bodies/Receipts + singleton tip pointer), NOT reth-db
+> MDBX — the G6 contract is "non-state block metadata only," which prefixed-KV satisfies; co-loading reth's MDBX
+> alongside Firewood's global-ethhash switch is avoidable risk. `append_canonical` is the seam a future reth-db
+> migration re-implements. **NOTE (parity, → M6.22):** a real coreth block-1 header carries post-state root
+> `0x8b0bf83…` (coinbase-credit/3-account model) but our executor yields `0x4027f3ed…` (burn model) — they
+> coincide only at genesis. This is the **base-fee-recipient gap deferred to M6.22** (NOT a `verify` bug — `verify`
+> correctly asserts computed==header); the lifecycle test sets `header.state_root` to the executor's root, and raw
+> coreth bytes will verify once M6.22 lands the coinbase-credit `EvmFactory`.
 
 ### Task M6.10: `EvmVm` `ChainVm` adapter
 **Crate:** ava-evm  ·  **Depends on:** M6.9, M3 (07 ChainVm boundary)  ·  **Spec:** 10 §3; 07 (ChainVm/Block)
@@ -346,14 +368,34 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > Signing/recovery deferred to M6.18. Deps added: `ava-codec(-derive)`, `ava-types`, `ava-vm`, `ava-avm`,
 > `ava-crypto`, dev `ava-secp256k1fx`.
 
-### Task M6.15: `AtomicStateHook` EVMStateTransfer pre-hook + atomic gas (G3)
+### Task M6.15: `AtomicStateHook` EVMStateTransfer pre-hook + atomic gas (G3) ✅ DONE (44f3160)
 **Crate:** ava-evm  ·  **Depends on:** M6.14, M6.6, M6.13  ·  **Spec:** 10 §6.3, §17.4 (G3); 21 §4b (atomic gas budget)
 **Files:** `crates/ava-evm/src/atomic/hook.rs`, `crates/ava-evm/tests/atomic_transfer.rs`
-- [ ] **Step 1 — Red:** `tests/atomic_transfer.rs` `fn import_credits_export_debits_and_bumps_nonce()`: apply `AtomicStateHook` to a `State<FirewoodStateView>` overlay; Import credits `amount * X2C_RATE` wei (checked); Export debits + sets `nonce = max(cur, i.nonce+1)` (matches coreth); assert resulting `BundleState` folds into the same Firewood proposal as EVM effects; overflow → `Error::FeeOverflow`.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_transfer` → fails.
-- [ ] **Step 3 — Green:** Implement `AtomicStateHook::apply(&[AtomicTx], &mut impl revm::Database)` (checked `X2C_RATE` mul, increment/decrement balance, nonce bump) and `AvaBlockExecutor<E>` decorator whose `apply_pre_execution_changes` runs inner pre-changes then the atomic hook (and reserves predicate slot for M6.22), implementing `PreExecutionHook` so `execute_batch` accepts it (§17.1/§17.4). Wire atomic gas into the block budget (M6.13 helpers).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_transfer` → pass.
-- [ ] **Step 5 — Commit:** `ava-evm: AtomicStateHook EVMStateTransfer pre-hook + atomic gas (G3)`
+- [x] **Step 1 — Red:** `tests/atomic_transfer.rs` `fn import_credits_export_debits_and_bumps_nonce()`: apply `AtomicStateHook` to a `State<FirewoodStateView>` overlay; Import credits `amount * X2C_RATE` wei (checked); Export debits + sets `nonce = max(cur, i.nonce+1)` (matches coreth); assert resulting `BundleState` folds into the same Firewood proposal as EVM effects; overflow → `Error::FeeOverflow`.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-evm atomic_transfer` → fails.
+- [x] **Step 3 — Green:** Implement `AtomicStateHook::apply(&[AtomicTx], &mut impl revm::Database)` (checked `X2C_RATE` mul, increment/decrement balance, nonce bump) and `AvaBlockExecutor<E>` decorator whose `apply_pre_execution_changes` runs inner pre-changes then the atomic hook (and reserves predicate slot for M6.22), implementing `PreExecutionHook` so `execute_batch` accepts it (§17.1/§17.4). Wire atomic gas into the block budget (M6.13 helpers).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm atomic_transfer` → pass.
+- [x] **Step 5 — Commit:** `ava-evm: AtomicStateHook EVMStateTransfer pre-hook + atomic gas (G3)`
+
+> **AS-BUILT (M6.15).** `AtomicStateHook` impls the facade `PreExecutionHook` directly (no separate
+> `AvaBlockExecutor` decorator needed — `execute_batch` already takes `&dyn PreExecutionHook`, M6.6). Import →
+> `checked_mul(amount, X2C_RATE)` credit; Export → debit + `nonce = max(cur, nonce+1)`. `tx_gas`/`batch_gas`/
+> `batch_fee` reuse M6.13 `feerules::atomic_gas`/`atomic_fee` (counts only, constants not re-derived); warp-predicate
+> pass has a reserved no-op slot for M6.22. Confirmed vs coreth `plugin/evm/atomic/{import,export}_tx.go`
+> `EVMStateTransfer` (read directly, no scratch test). **FACADE CHANGE (breaking, reconcile M6.26):** revm's
+> `Database` trait is **read-ONLY** (no `increment_balance`/`set_nonce`); writes go via `DatabaseCommit::commit`
+> (which `State<DB>` impls). So `PreExecutionHook::apply` was widened from `&mut dyn Database<Error=StateDbError>`
+> to **`&mut dyn StateDb`** where new facade `pub trait StateDb: Database<Error=StateDbError> + DatabaseCommit {}`
+> (+ blanket impl). The hook per touched address: `db.basic(addr)?` (loads into overlay cache — mandatory, else
+> `commit`'s `apply_account_state` panics on a missing cache entry) → mutate (checked) → `db.commit` a
+> `RevmAccount{ status: AccountStatus::Touched, .. }` (**`Touched` required** — untouched accounts are a commit
+> no-op). Folds into the same `BundleState` → Firewood proposal as EVM effects. Facade re-exports added:
+> `AddressMap` (alloy), `DatabaseCommit`, `AccountStatus`, `EvmStorage` (revm) + `impl From<StateDbError> for
+> AvaEvmError`. **SPEC FINDING (§6.3/§17.4):** the sketch's `db.increment_balance`/`db.set_nonce` write API does
+> not exist on revm `Database` — use `basic()` read + `DatabaseCommit::commit` with a `Touched` account; the
+> `PreExecutionHook` trait must be `Database + DatabaseCommit`. **Export nonce-equality / insufficient-funds
+> REJECTIONS are semantic-verify-time (coreth `ErrInvalidNonce`/`ErrInsufficientFunds`, scope M6.17/M6.18)** — the
+> pure transfer hook saturates the debit rather than erroring (no such `Error` variant yet).
 
 ### Task M6.16: Atomic mempool ✅ DONE (ac1bb8d)
 **Crate:** ava-evm  ·  **Depends on:** M6.14  ·  **Spec:** 10 §6.4, §17.4; 05 (gossip SDK)

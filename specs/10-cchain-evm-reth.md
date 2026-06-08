@@ -1421,6 +1421,22 @@ tx, (b) crediting/debiting an account from *outside* the EVM ("EVMStateTransfer"
 or (c) committing a *second* trie + a shared-memory batch atomically with the state
 commit. coreth's atomic Import/Export (§6) is exactly this.
 
+> **✅ AS-BUILT API CORRECTION (M6.15, commit `44f3160`).** The `increment_balance(db, …)` /
+> `db.increment_balance(…)` calls in the sketches below (and §6.3) are **not real** — revm's `Database`
+> trait is **read-only** (`basic`/`storage`/`code_by_hash`/`block_hash`). The write path is
+> `DatabaseCommit::commit(AddressMap<Account>)`, which `State<DB>` implements. So the facade
+> `PreExecutionHook::apply` was widened from `&mut dyn Database<Error = StateDbError>` to
+> **`&mut dyn StateDb`**, where the facade defines `pub trait StateDb: Database<Error = StateDbError>
+> + DatabaseCommit {}` (+ blanket impl); `execute_batch` is unchanged (still takes `&dyn PreExecutionHook`).
+> The hook, per touched address: `db.basic(addr)?` (this also **loads the account into the overlay cache** —
+> mandatory, or `commit`'s `apply_account_state` panics on the missing entry) → mutate `balance`/`nonce`
+> with checked arithmetic → `db.commit` a `RevmAccount { status: AccountStatus::Touched, .. }` (**`Touched`
+> is required** — untouched accounts are a commit no-op). This folds the delta into the same `BundleState`
+> → Firewood proposal as the EVM effects. `AtomicStateHook` impls `PreExecutionHook` directly (no separate
+> `AvaBlockExecutor` decorator needed). **Export nonce-equality / insufficient-funds REJECTIONS** are
+> semantic-verify-time (coreth `ErrInvalidNonce`/`ErrInsufficientFunds`, G3 verify scope M6.17/M6.18); the
+> pure transfer hook saturates the debit rather than erroring.
+
 **reth primitives involved (`reth-evm`, `revm`).**
 `BlockExecutor` (we wrap its pre-execution phase); `BlockExecutorFactory` (we own
 it, so we can inject the hook); `revm::database::State<DB>` (the journaled overlay
@@ -1740,6 +1756,23 @@ an uncommitted proposal. We must keep reth-db's block/receipt storage consistent
 `Pipeline`, `UnifiedStorageWriter` for state. *Used directly:* the raw `reth-db`
 (MDBX) tables + `reth-static-file` for headers/bodies/receipts/logs and the
 canonical number↔hash index — written by us, not by a stage.
+
+> **✅ AS-BUILT DEVIATIONS (M6.9, commit `223ab75`).** (1) **`CanonicalStore` backend = `ava-database`
+> KV, NOT reth-db MDBX.** The G6 contract is "non-state block metadata only, never state/trie tables" —
+> a one-byte-prefixed KV store (Headers / CanonicalHeaders / HeaderNumbers / Bodies / Receipts + a
+> singleton tip pointer) satisfies it, and pulling reth-db's MDBX `DatabaseEnv` + table schemas + `tx_mut`
+> through the G0 facade is a large surface for a writer this thin — plus `ava-evm` already links Firewood's
+> global-ethhash compile switch, so co-loading reth's MDBX is avoidable risk. `append_canonical` is the seam
+> a future reth-db migration re-implements; the sketch below shows the reth-db shape it would take. (2)
+> **`Block` trait impl deferred to M6.10.** There are TWO `Block` traits: `ava_snow::Block` (root re-export)
+> is the **async** `decidable::Block` (HAS `verify`); the **synchronous** spec-06 one
+> (`ava_snow::snowman::block::Block`, 06 §2.4) is `accept`/`reject`-**only** (no `verify`, no VM-context arg).
+> Neither is implementable on `EvmBlock` alone — the lifecycle needs the provider/config/canonical-store — and
+> an unused `ava-snow` dep trips the workspace `unused_crate_dependencies` deny. So M6.9 ships the lifecycle as
+> **inherent `EvmBlock::{verify,accept,reject}(…, &EvmBlockContext)` methods**; the trait impl on a
+> `VerifiedEvmBlock` wrapper (bundling block + context) is **M6.10 (`vm.rs`) scope**. `verify` strictly asserts
+> computed-root == header-root and rejects on mismatch (correct); note that a real coreth block-1 header root
+> (coinbase-credit model) only matches our executor's root once the base-fee-recipient override lands (M6.22).
 
 **Wrapper design — `CanonicalStore`.** A thin writer over the block tables that the
 `ChainVm` adapter drives on Accept; Reject is a pure in-memory drop.
