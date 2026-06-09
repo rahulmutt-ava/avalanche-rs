@@ -269,6 +269,21 @@ where
 ///
 /// The adaptor also implements [`BuildBlockWithContext`] so the proposervm
 /// path receives a P-Chain-height context.
+///
+/// # Concurrency — known limitation (M7.10)
+///
+/// Every consensus call funnels through the single `Arc<Mutex<V>>`, which exists
+/// only because the base [`ava_vm::Vm`] supertrait methods (`initialize`,
+/// `set_state`, `app_*`, …) take `&mut self`; the [`ChainVm`] block operations
+/// are all `&self`. A consequence is that [`Vm::wait_for_event`] holds the mutex
+/// for its **entire** (potentially long-blocking) duration, so a real VM whose
+/// `wait_for_event` parks until a pending tx arrives would block every concurrent
+/// `verify`/`accept`/`build_block` on the same lock — a deadlock. This is benign
+/// for the current conformance fakes (their `wait_for_event` returns promptly),
+/// but **must be resolved before wiring the real SAE VM** (M7.18): give `V`
+/// interior mutability so the adaptor can hold `Arc<V>` (no outer mutex), or move
+/// event notification onto a channel established at `initialize`. Tracked in
+/// `plan/M7-saevm.md` (M7.10 as-built) and the M7 progress memory.
 pub struct Adaptor<BP, V>
 where
     BP: BlockProperties,

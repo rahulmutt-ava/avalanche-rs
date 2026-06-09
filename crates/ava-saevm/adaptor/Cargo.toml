@@ -20,7 +20,6 @@ ava-database = { path = "../../ava-database" }
 ava-version = { path = "../../ava-version" }
 
 async-trait = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde_json = { workspace = true }
