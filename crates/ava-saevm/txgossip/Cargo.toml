@@ -13,5 +13,13 @@ publish.workspace = true
 description = "SAE EVM mempool + push/pull gossip + effective-tip priority (specs/11 §9.2). M7.1 scaffold."
 
 [dependencies]
+ava-evm-reth = { path = "../../ava-evm-reth" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+hex = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }

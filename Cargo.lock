@@ -1572,6 +1572,15 @@ version = "0.1.0"
 [[package]]
 name = "ava-saevm-txgossip"
 version = "0.1.0"
+dependencies = [
+ "ava-evm-reth",
+ "hex",
+ "pretty_assertions",
+ "proptest",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "ava-saevm-types"
