@@ -464,6 +464,28 @@ Key methods (cite `blocks/execution.go`, `settlement.go`):
 The Go `runtime.AddCleanup` GC-leak counter (`InMemoryBlockCount`) maps to a
 `Drop` impl decrementing an `AtomicI64` (test observability — §10).
 
+> **AS-BUILT (M7.11).** `interim_execution_time` is `proxytime::Time<u64>` (the
+> canonical proxy gas unit — `Time<Gas>` is not used; `Gas`/`Price` appear only
+> at boundaries), and `synchronous` is a `OnceLock<()>`. The block is the **stock
+> reth/alloy `SealedBlock<RethBlock>`** (hash = `keccak256(RLP(header))`),
+> reached via the `ava-evm-reth` facade — **not** the coreth `AvaHeader`. The
+> once-only transitions use lock-free atomics: `mark_settled` is an atomic
+> `ancestry.swap(None)` (a `None` prior value ⇒ `ReSettled`); `mark_executed` is
+> a load-check-then-`store` on the single execution thread (an API-misuse guard,
+> not a data-race guard — matching Go). `last_to_settle_at` treats a block's
+> **build time as a lower bound on its execution-completion instant** (skip
+> `build_time > settle_at` without consulting the exec result), then decides on
+> the gas clock; when execution lags it returns the nearest synchronous floor
+> with `known = false` (`ErrExecutionLagging`).
+> **`adaptor::BlockProperties` is deferred to the VM layer (M7.18)**: the orphan
+> rule forbids `impl BlockProperties for Arc<Block>` (`Arc` is not fundamental),
+> and `bytes() -> &[u8]` needs the VM's cached wire bytes — both live naturally
+> on the VM's local block-handle. The `hook.Settled` header-extras embedding
+> (§4.1) is likewise deferred to M7.21 (reth header-extension). `WorstCaseBounds`
+> is a minimal placeholder until M7.13. The GC-counter test relies on nextest's
+> process-per-test isolation (the `static AtomicI64` is shared under plain
+> `cargo test`).
+
 ---
 
 ## 5. Adaptor — exposing SAE as a Snowman `ChainVM` (cross-ref 06/07)
@@ -662,6 +684,24 @@ settled-by height for that block), or the head if archival.
 > **Deviation from `04` default (RocksDB) noted:** the *consensus* KV uses the
 > standard `ava-database` backend; the *execution* trie is Firewood directly,
 > exactly as `04` §4.2/§4.3 prescribe for the EVM. No new storage engine.
+
+> **AS-BUILT (M7.12).** `ava_evm::FirewoodStateProvider` exposes **no public
+> `track`/`untrack`/`RevisionManager`** API — revision lifecycle is encapsulated.
+> So `Tracker::track`/`untrack` is a **Tracker-owned ref-count layer**
+> (`Mutex<BTreeMap<B256,u64>>`) that *records* the consensus-critical window
+> (Go's `triedb.Reference`/`Dereference`); actual in-memory eviction is governed
+> by the provider's own retained window (a real `Dereference`→drop hook is a
+> future provider extension). `state_db(root)` = `provider.history_by_state_root`
+> (so `StateDb` is a type alias for `ava_evm::FirewoodStateView`); `commit`s go
+> through `provider.commit(root)`. **CC-ORDER (`27` §2.4)** is split: this module
+> owns the *durability half* (the commit), the executor owns the *call-order
+> half* (`maybe_commit`→`track`→`mark_executed`, all before any consensus pointer
+> advance). `close` is idempotent (already-tip or `MissingProposal` ⇒ no-op). The
+> height-indexed `ExecutionResults` DB (the third storage kind above) is the
+> M7.8 `ava-saevm-types::ExecutionResultsDb`, **re-exported** from `ava-saevm-db`
+> rather than re-implemented — so `saedb` presents the full §7 storage surface.
+> This task does **not** depend on `ava-saevm-blocks` (keyed on roots/heights,
+> not the `Block` type) and was built in parallel with M7.11.
 
 ---
 
