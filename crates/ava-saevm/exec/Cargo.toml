@@ -26,6 +26,9 @@ ava-vm = { path = "../../ava-vm" }
 arc-swap = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 ava-database = { path = "../../ava-database" }
