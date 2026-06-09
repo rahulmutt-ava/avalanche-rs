@@ -16,7 +16,6 @@ description = "SAE lifecycle hooks: Points/BlockBuilder trait seam + Op (mint/bu
 ava-saevm-params = { path = "../params" }
 ava-saevm-intmath = { path = "../intmath" }
 ava-saevm-gastime = { path = "../gastime" }
-ava-saevm-proxytime = { path = "../proxytime" }
 ava-saevm-types = { path = "../types" }
 ava-types = { path = "../../ava-types" }
 ava-vm = { path = "../../ava-vm" }

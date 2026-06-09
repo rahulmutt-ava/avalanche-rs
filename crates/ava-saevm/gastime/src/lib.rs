@@ -232,6 +232,7 @@ impl GasTime {
         let inner = ava_saevm_proxytime::Time::new(gas_unix, gas_numerator, rate);
 
         // FromProxyTime derives the target from the (clamped) rate.
+        // const divisor (TARGET_TO_RATE = 2, never 0); wrapping_div only to satisfy arithmetic_side_effects
         let target = rate.wrapping_div(TARGET_TO_RATE);
 
         let excess = if config.static_pricing() { 0 } else { excess };

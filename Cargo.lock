@@ -1484,7 +1484,6 @@ dependencies = [
  "ava-saevm-gastime",
  "ava-saevm-intmath",
  "ava-saevm-params",
- "ava-saevm-proxytime",
  "ava-saevm-types",
  "ava-types",
  "ava-vm",
