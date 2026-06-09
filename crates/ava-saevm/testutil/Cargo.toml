@@ -13,5 +13,6 @@ publish.workspace = true
 description = "SAE test utilities (saetest/blockstest/txtest/escrow, dev-only; specs/11 §3). M7.1 scaffold."
 
 [dependencies]
+ava-saevm-db = { path = "../db" }
 
 [dev-dependencies]

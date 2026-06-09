@@ -1486,6 +1486,8 @@ dependencies = [
 name = "ava-saevm-exec"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-primitives",
  "arc-swap",
  "ava-database",
  "ava-evm",
@@ -1495,11 +1497,14 @@ dependencies = [
  "ava-saevm-gastime",
  "ava-saevm-hook",
  "ava-saevm-proxytime",
+ "ava-saevm-testutil",
  "ava-saevm-types",
  "ava-saevm-worstcase",
  "ava-vm",
  "hex",
  "parking_lot",
+ "proptest",
+ "secp256k1 0.31.1",
  "serde",
  "serde_json",
  "tempfile",
@@ -1568,6 +1573,9 @@ dependencies = [
 [[package]]
 name = "ava-saevm-testutil"
 version = "0.1.0"
+dependencies = [
+ "ava-saevm-db",
+]
 
 [[package]]
 name = "ava-saevm-txgossip"
