@@ -1441,6 +1441,19 @@ dependencies = [
 [[package]]
 name = "ava-saevm-blocks"
 version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "ava-evm-reth",
+ "ava-saevm-params",
+ "ava-saevm-proxytime",
+ "ava-saevm-types",
+ "ava-vm",
+ "hex",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "ava-saevm-cchain"
