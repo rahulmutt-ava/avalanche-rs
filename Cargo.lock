@@ -1470,14 +1470,24 @@ name = "ava-saevm-core"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "async-trait",
+ "ava-database",
  "ava-evm-reth",
+ "ava-saevm-adaptor",
  "ava-saevm-blocks",
+ "ava-saevm-gastime",
  "ava-saevm-params",
  "ava-saevm-proxytime",
  "ava-saevm-types",
+ "ava-types",
+ "ava-version",
  "ava-vm",
  "parking_lot",
+ "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

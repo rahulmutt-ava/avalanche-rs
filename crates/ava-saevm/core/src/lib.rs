@@ -15,8 +15,12 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
+pub mod block_handle;
 pub mod frontier;
 pub mod settle;
+pub mod vm;
 
+pub use block_handle::SaeBlock;
 pub use frontier::Frontier;
 pub use settle::{SettleError, settle};
+pub use vm::{BlockBuilderSeam, BuildError, Error, ExecutorSeam, Vm};
