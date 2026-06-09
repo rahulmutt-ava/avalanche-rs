@@ -207,6 +207,45 @@ impl GasTime {
         tm
     }
 
+    /// Reconstructs a [`GasTime`] from a settled block's gas-clock components.
+    ///
+    /// Mirrors Go's `hook.SettledGasTime`, which builds
+    /// `proxytime.New(gas_unix, gas_numerator, SafeRateOfTarget(target))` and
+    /// then `gastime.FromProxyTime(pt, excess, config)`. Unlike [`new`], the
+    /// proxy clock starts with a non-zero sub-second fraction (`gas_numerator`)
+    /// and the target is derived from the (clamped) rate (`rate / TARGET_TO_RATE`),
+    /// matching `FromProxyTime`. Under static pricing the excess is forced to
+    /// zero; afterwards [`enforce_min_excess`] is applied.
+    ///
+    /// [`new`]: GasTime::new
+    /// [`enforce_min_excess`]: GasTime::enforce_min_excess
+    #[must_use]
+    pub fn from_settled(
+        gas_unix: u64,
+        gas_numerator: u64,
+        target: u64,
+        excess: u64,
+        config: GasPriceConfig,
+    ) -> Self {
+        // SafeRateOfTarget(target) = rate_of(clamp_target(target)).
+        let rate = rate_of(clamp_target(target));
+        let inner = ava_saevm_proxytime::Time::new(gas_unix, gas_numerator, rate);
+
+        // FromProxyTime derives the target from the (clamped) rate.
+        let target = rate.wrapping_div(TARGET_TO_RATE);
+
+        let excess = if config.static_pricing() { 0 } else { excess };
+
+        let mut tm = Self {
+            inner,
+            target,
+            excess,
+            config,
+        };
+        tm.enforce_min_excess();
+        tm
+    }
+
     /// Returns the `T` parameter of ACP-176.
     ///
     /// Mirrors Go's `Time.Target`.
