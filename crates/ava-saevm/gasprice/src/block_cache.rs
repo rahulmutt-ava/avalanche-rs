@@ -66,10 +66,13 @@ impl Block {
     /// Because block builders sequence transactions without executing them in
     /// SAE, gas *limits* are accumulated, not gas charged.
     ///
-    /// The threshold comparison is done in `f64` (matching Go's
-    /// `float64(gasUsed)*p/100`); `sum_gas` is a `u64` sum of gas limits widened
-    /// to `f64` for the comparison only — no value flows back to integer space,
-    /// so no truncating cast occurs.
+    /// The threshold is computed exactly as Go does — `uint64(float64(gasUsed) *
+    /// p / 100)` — by truncating the `f64` product toward zero to a `u64` BEFORE
+    /// comparing. The accumulator comparison `sum_gas < threshold` is then a pure
+    /// integer compare. Doing the truncation first matters: when the float
+    /// threshold has a fractional part landing exactly on an integer `sum_gas`
+    /// (`floor(t) == sum_gas < t`), Go stops the loop; a float compare would
+    /// advance one extra tx (an off-by-one vs Go).
     #[must_use]
     // floats: no overflow-panic; RPC estimator, non-consensus path. Widening
     // u64 gas to f64 is cast_precision_loss only (RPC display math).
@@ -86,8 +89,12 @@ impl Block {
         let mut sum_gas: u64 = self.txs[0].gas;
         let gas_used = self.gas_used as f64;
         for &p in percentiles {
-            let threshold = gas_used * p / 100.0;
-            while (sum_gas as f64) < threshold && tx_index < self.txs.len().saturating_sub(1) {
+            let t = gas_used * p / 100.0;
+            // Go-faithful truncating threshold; t in [0, gas_used] (p <= 100),
+            // non-negative after trunc, fits u64. Mirrors Go's `uint64(...)`.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let threshold: u64 = t.trunc() as u64;
+            while sum_gas < threshold && tx_index < self.txs.len().saturating_sub(1) {
                 tx_index = tx_index.saturating_add(1);
                 sum_gas = sum_gas.saturating_add(self.txs[tx_index].gas);
             }
@@ -163,6 +170,38 @@ mod tests {
             b.tip_percentiles(&[25.0, 50.0, 75.0]),
             vec![U256::from(2u64), U256::from(3u64), U256::from(4u64)]
         );
+    }
+
+    #[test]
+    fn tip_percentiles_fractional_threshold_truncates_like_go() {
+        // Two 50k-gas txs (tips 1, 2); gas_used 100_001 so the threshold has a
+        // fractional part that lands exactly on the first cumulative-gas
+        // boundary: 100_001 * 50 / 100 = 50_000.5, floor = 50_000 == sum_gas
+        // after tx[0].
+        //
+        // Go truncates first: threshold = uint64(50_000.5) = 50_000, then
+        // `50_000 < 50_000` is false, so the loop STOPS at tx[0] (tip 1).
+        // A naive f64 compare `50_000.0 < 50_000.5` is true and would advance
+        // one extra tx to tx[1] (tip 2) — the off-by-one this guards against.
+        let txs = vec![
+            Tx {
+                gas: 50_000,
+                tip: U256::from(1u64),
+            },
+            Tx {
+                gas: 50_000,
+                tip: U256::from(2u64),
+            },
+        ];
+        let b = Block {
+            timestamp: 0,
+            gas_used: 100_001,
+            gas_limit: 1_000_000,
+            base_fee: U256::ZERO,
+            txs,
+        };
+        // Must select tip 1 (Go's truncating behavior), not tip 2.
+        assert_eq!(b.tip_percentiles(&[50.0]), vec![U256::from(1u64)]);
     }
 
     #[test]
