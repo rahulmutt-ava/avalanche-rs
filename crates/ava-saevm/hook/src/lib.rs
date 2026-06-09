@@ -271,7 +271,7 @@ pub trait PointsG<T: Transaction>: Points + BlockBuilder<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`<Self as BlockBuilder<T>>::Error`] if a rebuilder cannot be
+    /// Returns `<Self as BlockBuilder<T>>::Error` if a rebuilder cannot be
     /// constructed.
     fn block_rebuilder_from(
         &self,
