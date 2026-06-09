@@ -1484,6 +1484,26 @@ dependencies = [
 [[package]]
 name = "ava-saevm-exec"
 version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "ava-database",
+ "ava-evm",
+ "ava-evm-reth",
+ "ava-saevm-blocks",
+ "ava-saevm-db",
+ "ava-saevm-gastime",
+ "ava-saevm-hook",
+ "ava-saevm-proxytime",
+ "ava-saevm-types",
+ "ava-saevm-worstcase",
+ "ava-vm",
+ "hex",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ava-saevm-gasprice"

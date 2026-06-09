@@ -4,7 +4,7 @@
 //! `ava-saevm-gastime` — the SAE gas clock: Tau-pinned rate, excess scaling,
 //! and the ACP-176 price (specs/11 §2.2, specs/21 §6).
 //!
-//! [`GasTime`] wraps a [`proxytime::Time<u64>`] (the proxy-unit clock measured
+//! [`GasTime`] wraps a `proxytime::Time<u64>` (the proxy-unit clock measured
 //! in gas) and layers the ACP-176/194 dynamic-fee state on top: the target `T`,
 //! the excess `x`, and a [`GasPriceConfig`]. SAE measures the passage of time in
 //! gas — consuming `target * TARGET_TO_RATE` gas equals one wall-clock second.
@@ -156,7 +156,7 @@ fn scale_excess(
 /// The SAE gas clock: an instant in time whose passage is measured in
 /// [`Gas`] consumption, tracking the ACP-176 dynamic-fee state.
 ///
-/// Wraps a [`proxytime::Time<u64>`] (rate pinned to `R = TARGET_TO_RATE * T`)
+/// Wraps a `proxytime::Time<u64>` (rate pinned to `R = TARGET_TO_RATE * T`)
 /// plus the target `T`, excess `x`, and a [`GasPriceConfig`].
 ///
 /// Port of `vms/saevm/gastime/gastime.go::Time`.
@@ -272,6 +272,17 @@ impl GasTime {
         self.inner.rate()
     }
 
+    /// Returns a clone of the underlying proxy-clock instant (the per-block
+    /// gas-time stored in `ExecutionResults` and the seed for the per-tx clock).
+    ///
+    /// Mirrors Go's `gastime.Time.Time` (the embedded `*proxytime.Time`): the
+    /// SAE executor (M7.14) clones this to drive `Tick` per transaction and to
+    /// persist the block's final gas-clock instant.
+    #[must_use]
+    pub fn time(&self) -> ava_saevm_proxytime::Time<u64> {
+        self.inner.clone()
+    }
+
     /// Returns the K variable of ACP-103/176 (`scaling * T`, capped at
     /// `u64::MAX`).
     ///
@@ -365,7 +376,7 @@ impl GasTime {
     /// target and re-pins the proxy-clock rate.
     ///
     /// After [`tick`], under dynamic pricing the excess is rescaled via
-    /// [`scale_excess`] (round up, saturating, `K = T * scaling`). The target
+    /// `scale_excess` (round up, saturating, `K = T * scaling`). The target
     /// is then clamped, the proxy-clock rate re-pinned to `2 * new_target`, the
     /// new config stored, and [`enforce_min_excess`] applied. Under static
     /// pricing the excess is forced to zero.
@@ -399,7 +410,7 @@ impl GasTime {
 
     /// Bounds the excess to be no less than `excess_for_price(min_price, K)`.
     ///
-    /// Avoids the binary search in [`excess_for_price`] when the current excess
+    /// Avoids the binary search in `excess_for_price` when the current excess
     /// already yields a price satisfying the minimum.
     ///
     /// Mirrors Go's `Time.enforceMinExcess`.
