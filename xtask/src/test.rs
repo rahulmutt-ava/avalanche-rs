@@ -92,9 +92,16 @@ fn repo_root() -> anyhow::Result<PathBuf> {
 
 /// Every `crates/<crate>/fuzz` directory that holds a cargo-fuzz manifest,
 /// sorted for stable ordering.
+///
+/// Discovers two levels:
+/// - `crates/<crate>/fuzz/Cargo.toml` — top-level crate fuzz dirs.
+/// - `crates/ava-saevm/<subcrate>/fuzz/Cargo.toml` — SAE sub-workspace fuzz
+///   dirs (one extra nesting level, matching `crates/ava-saevm/*/fuzz`).
 fn discover_fuzz_crates(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let crates_dir = root.join("crates");
     let mut out = Vec::new();
+
+    // Top-level: crates/<crate>/fuzz
     for entry in std::fs::read_dir(&crates_dir)
         .with_context(|| format!("reading {}", crates_dir.display()))?
     {
@@ -103,6 +110,20 @@ fn discover_fuzz_crates(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
             out.push(path);
         }
     }
+
+    // SAE sub-workspace: crates/ava-saevm/<subcrate>/fuzz
+    let saevm_dir = crates_dir.join("ava-saevm");
+    if saevm_dir.is_dir() {
+        for entry in std::fs::read_dir(&saevm_dir)
+            .with_context(|| format!("reading {}", saevm_dir.display()))?
+        {
+            let path = entry?.path();
+            if path.join("fuzz/Cargo.toml").is_file() {
+                out.push(path);
+            }
+        }
+    }
+
     out.sort();
     Ok(out)
 }

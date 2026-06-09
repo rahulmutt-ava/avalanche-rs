@@ -1,0 +1,25 @@
+# cargo-fuzz crate for ava-saevm-blocks. Detached from the root workspace (own
+# `[workspace]` table) so `cargo build --workspace` ignores it; build with
+# `cargo +nightly fuzz build` (see specs/11 §4.1, M7.31).
+[package]
+name = "ava-saevm-blocks-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ava-saevm-blocks = { path = ".." }
+ava-evm-reth = { path = "../../../ava-evm-reth" }
+
+[[bin]]
+name = "decode_block"
+path = "fuzz_targets/decode_block.rs"
+test = false
+doc = false
+bench = false

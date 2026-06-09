@@ -1450,6 +1450,7 @@ dependencies = [
  "ava-saevm-types",
  "ava-vm",
  "hex",
+ "proptest",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
