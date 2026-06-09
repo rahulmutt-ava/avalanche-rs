@@ -29,7 +29,7 @@ impl Priced for FakeTx {
         if self.cap < base {
             return None;
         }
-        Some(self.cap - base)
+        Some(self.cap.saturating_sub(base))
     }
 
     fn nonce(&self) -> u64 {
