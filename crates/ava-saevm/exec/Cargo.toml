@@ -10,8 +10,26 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "saexec single-task streaming executor on the ava-evm reuse APIs + Eventual receipt buffer (specs/11 §6). M7.1 scaffold."
+description = "saexec single-task streaming executor on the ava-evm reuse APIs (specs/11 §6.1): pure execute step + D->M->I->X commit."
 
 [dependencies]
+ava-saevm-blocks = { path = "../blocks" }
+ava-saevm-db = { path = "../db" }
+ava-saevm-gastime = { path = "../gastime" }
+ava-saevm-hook = { path = "../hook" }
+ava-saevm-proxytime = { path = "../proxytime" }
+ava-saevm-types = { path = "../types" }
+ava-saevm-worstcase = { path = "../worstcase" }
+ava-evm = { path = "../../ava-evm" }
+ava-evm-reth = { path = "../../ava-evm-reth" }
+ava-vm = { path = "../../ava-vm" }
+arc-swap = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+ava-database = { path = "../../ava-database" }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
