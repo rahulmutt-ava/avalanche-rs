@@ -727,9 +727,23 @@ concrete chain — they make the core EVM-policy-agnostic. The trait set (cited
 `before/after_executing_block`, and the generic `BlockBuilder<Tx>`
 (`build_header`, `potential_end_of_block_ops`, `build_block`) +
 `block_rebuilder_from`. `Op` (mint/burn with nonce-authorized debits + min-balance
-guard) and `Settled` are the data types. Ported as object-safe `#[async_trait]`
+guard) and `Settled` are the data types. Ported as object-safe
 traits behind `Arc<dyn …>` where dynamic, generic over `Tx: Transaction` for the
 builder.
+
+> **AS-BUILT (M7.9).** These hook points are **synchronous** — Go is sync at all
+> of `BeforeExecutingBlock`/`AfterExecutingBlock`/`EndOfBlockOps`/`ApplyTo`, so
+> `Points`/`BlockBuilder`/`PointsG` carry **no `#[async_trait]`**. The trait
+> *seam* + `Op`/`Settled` land in M7.9; the method **bodies** land in M7.21
+> (C-Chain hooks). State mutation in `Op::apply_to` goes through a minimal
+> object-safe `StateMut` trait (the revm-backed impl is M7.14), and `Op` uses
+> `BTreeMap` (deterministic iteration, not `HashMap`). Trait methods that take
+> the libevm `params.Rules` / Snowman `block.Context` / `*types.Transaction` /
+> `Receipt` / `saetypes.BlockSource` use **placeholder associated types** until
+> those are wired (M7.14/M7.21), since the concrete reth `Block` is not yet
+> re-exported from `ava-saevm-types`. `gasprice` (§3) decouples from blocks (§4)
+> via the same kind of `Backend`/`BlockSource` trait seam (the worst-case-bounds
+> next-block base-fee is a `Backend` hook, default `None`, wired in M7.13).
 
 ### 9.2 Tx gossip (`ava-saevm-txgossip`)
 
