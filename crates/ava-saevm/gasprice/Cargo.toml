@@ -13,5 +13,8 @@ publish.workspace = true
 description = "SAE eth_gasPrice/eth_feeHistory estimator over the executed/settled frontier (specs/11 §3). M7.1 scaffold."
 
 [dependencies]
+ava-saevm-intmath = { path = "../intmath" }
+ava-saevm-types = { path = "../types" }
+thiserror = { workspace = true }
 
 [dev-dependencies]
