@@ -10,8 +10,15 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "saedb Tracker: consensus-vs-execution state on Firewood revisions (CC-ORDER, no-reorg; specs/11 §7, 27 §2.4). M7.1 scaffold."
+description = "saedb Tracker: consensus-vs-execution state on Firewood revisions (CC-ORDER, no-reorg; specs/11 §7, 27 §2.4)."
 
 [dependencies]
+ava-saevm-types = { path = "../types" }
+ava-evm = { path = "../../ava-evm" }
+ava-evm-reth = { path = "../../ava-evm-reth" }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+ava-database = { path = "../../ava-database" }
+tempfile = "3"
