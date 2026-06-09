@@ -10,8 +10,19 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "SAE predictive worst-case bounds + base-fee/balance assertions + ErrQueueFull (specs/11 §9.3/§2.4/§6.1). M7.1 scaffold."
+description = "SAE predictive worst-case bounds + base-fee/balance assertions + ErrQueueFull (specs/11 §9.3/§2.4/§6.1)."
 
 [dependencies]
+ava-saevm-blocks = { path = "../blocks" }
+ava-saevm-gastime = { path = "../gastime" }
+ava-saevm-hook = { path = "../hook" }
+ava-saevm-intmath = { path = "../intmath" }
+ava-saevm-params = { path = "../params" }
+ava-saevm-types = { path = "../types" }
+ava-types = { path = "../../ava-types" }
+ava-vm = { path = "../../ava-vm" }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+ava-evm-reth = { path = "../../ava-evm-reth" }
+pretty_assertions = { workspace = true }

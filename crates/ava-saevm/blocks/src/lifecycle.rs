@@ -7,6 +7,7 @@
 //! execution-half of `blocks/settlement.go` (the [`Range`](crate::Range) /
 //! `last_to_settle_at` half lives in `settlement.rs`).
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,8 +16,9 @@ use arc_swap::ArcSwapOption;
 use tokio::sync::Notify;
 
 use ava_evm_reth::{B256, RethBlock, SealedBlock};
+use ava_saevm_gastime::GasTime;
 use ava_saevm_proxytime::Time;
-use ava_saevm_types::ExecutionResults;
+use ava_saevm_types::{Address, ExecutionResults, U256};
 use ava_vm::components::gas::Price;
 
 // ---------------------------------------------------------------------------
@@ -108,20 +110,29 @@ pub struct Ancestry {
 }
 
 /// Builder-predicted worst-case bounds, set before execution as an early-warning
-/// system for near-miss mispredictions (specs/11 §4.2, Go
+/// system for near-miss mispredictions (specs/11 §4.2/§6.1, Go
 /// `blocks.WorstCaseBounds`).
 ///
-/// > **TODO(M7.13).** The full bounds type — `max_base_fee`, `latest_end_time`
-/// > (a `GasTime`), and per-op
-/// > `min_op_burner_balances` — is owned by `ava-saevm-worstcase`, which is not
-/// > yet implemented. This is a minimal placeholder so the
-/// > `bounds: OnceLock<WorstCaseBounds>` field compiles; it will be replaced by
-/// > the real type (and `CheckBaseFeeBound` / `CheckMinOpBurnerBalance` checks)
-/// > when M7.13 lands.
-#[derive(Clone, Debug, Default)]
+/// Produced by `ava_saevm_worstcase::State::finish_block` (M7.13) and attached to
+/// a [`Block`] before execution via [`Block::set_worst_case_bounds`]. During
+/// actual execution the executor asserts the realised base fee and per-op
+/// burner balances stay within these bounds (the `check_base_fee_bound` /
+/// `check_sender_balance_bound` assertions live in `ava-saevm-worstcase`,
+/// reading this data; a violation is test-fatal).
+///
+/// Note: there is deliberately no `Default` impl — [`GasTime`] has no sensible
+/// zero value, and the only construction site is the worst-case replay.
+#[derive(Clone, Debug)]
 pub struct WorstCaseBounds {
     /// Upper bound on the base fee this block will encounter at execution.
     pub max_base_fee: Price,
+    /// The final worst-case gas clock after replaying the candidate block (Go
+    /// `LatestEndTime`).
+    pub latest_end_time: GasTime,
+    /// Per-op snapshots of each burner's balance taken immediately before that
+    /// op was applied during worst-case replay (Go `MinOpBurnerBalances`). The
+    /// outer `Vec` is op-indexed; an empty inner map is an op with no burns.
+    pub min_op_burner_balances: Vec<BTreeMap<Address, U256>>,
 }
 
 /// The artefacts produced by executing a block, handed to

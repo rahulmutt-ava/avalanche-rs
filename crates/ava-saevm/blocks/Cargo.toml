@@ -13,6 +13,7 @@ publish.workspace = true
 description = "Byte-exact SAE block + D->M->I->X lifecycle, settlement Range, GC counter (specs/11 §4)."
 
 [dependencies]
+ava-saevm-gastime = { path = "../gastime" }
 ava-saevm-params = { path = "../params" }
 ava-saevm-proxytime = { path = "../proxytime" }
 ava-saevm-types = { path = "../types" }
