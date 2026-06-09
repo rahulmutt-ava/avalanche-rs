@@ -10,8 +10,19 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Byte-exact SAE block + D->M->I->X lifecycle, settlement Range, GC counter (specs/11 §4). M7.1 scaffold."
+description = "Byte-exact SAE block + D->M->I->X lifecycle, settlement Range, GC counter (specs/11 §4)."
 
 [dependencies]
+ava-saevm-params = { path = "../params" }
+ava-saevm-proxytime = { path = "../proxytime" }
+ava-saevm-types = { path = "../types" }
+ava-evm-reth = { path = "../../ava-evm-reth" }
+ava-vm = { path = "../../ava-vm" }
+arc-swap = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
+hex = { workspace = true }
+serde_json = { workspace = true }
