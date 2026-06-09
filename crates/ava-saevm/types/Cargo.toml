@@ -10,8 +10,14 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "SAE ExecutionResults canoto blob + HeightIndex-backed results DB (specs/11 §4.1/§7). M7.1 scaffold."
+description = "SAE ExecutionResults blob (fixed-layout codec) + HeightIndex-backed results DB (specs/11 §4.1/§7)."
 
 [dependencies]
+ava-saevm-proxytime = { path = "../proxytime" }
+ava-vm = { path = "../../ava-vm" }
+ava-evm-reth = { path = "../../ava-evm-reth" }
+ava-database = { path = "../../ava-database" }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }

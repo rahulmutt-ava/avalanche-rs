@@ -1516,6 +1516,14 @@ version = "0.1.0"
 [[package]]
 name = "ava-saevm-types"
 version = "0.1.0"
+dependencies = [
+ "ava-database",
+ "ava-evm-reth",
+ "ava-saevm-proxytime",
+ "ava-vm",
+ "proptest",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ava-saevm-worstcase"
