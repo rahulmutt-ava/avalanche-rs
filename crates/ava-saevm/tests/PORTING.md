@@ -53,4 +53,5 @@ sub-workspace scaffold only; rows are added per task as each crate is implemente
 
 | Go test | Status | Rust counterpart / note |
 |---|---|---|
-| _(seeded in M7.24–M7.32)_ | ⬜ | — |
+| _(seeded in M7.24–M7.30, M7.32)_ | ⬜ | — |
+| `blocks/parse_block` fuzz (no Go counterpart) | ✅ | `crates/ava-saevm/blocks/fuzz/fuzz_targets/decode_block.rs` (nightly cargo-fuzz) + `blocks/tests/parse_block_fuzz_smoke.rs` (stable proptest, M7.31) |
