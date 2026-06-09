@@ -16,11 +16,22 @@ description = "The SAE core VM: three frontiers + settlement + lifecycle + sae-r
 ava-saevm-blocks = { path = "../blocks" }
 ava-saevm-params = { path = "../params" }
 ava-saevm-types = { path = "../types" }
+ava-saevm-adaptor = { path = "../adaptor" }
+ava-evm-reth = { path = "../../ava-evm-reth" }
+ava-vm = { path = "../../ava-vm" }
+ava-types = { path = "../../ava-types" }
+ava-database = { path = "../../ava-database" }
+ava-version = { path = "../../ava-version" }
 arc-swap = { workspace = true }
+async-trait = { workspace = true }
 parking_lot = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 ava-saevm-proxytime = { path = "../proxytime" }
-ava-evm-reth = { path = "../../ava-evm-reth" }
-ava-vm = { path = "../../ava-vm" }
+ava-saevm-gastime = { path = "../gastime" }
+tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
