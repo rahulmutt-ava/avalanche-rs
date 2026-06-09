@@ -809,6 +809,23 @@ the executor **asserts** actual ≤/≥ bound (`CheckBaseFeeBound`,
 `CheckSenderBalanceBound`) and logs (test-fatal) on violation — an early-warning
 that the prediction model is wrong. Ported with `U256` (`ruint`) and checked math.
 
+> **AS-BUILT (M7.13).** `WorstCaseBounds` is defined in **`ava-saevm-blocks`** (not
+> `ava-saevm-worstcase`): the dependency direction is `worstcase → blocks`, and the
+> `Block` stores `bounds: OnceLock<WorstCaseBounds>`, so the type must live at or
+> below `blocks`. Expanding it (`max_base_fee: Price`, `latest_end_time: GasTime`,
+> `min_op_burner_balances: Vec<BTreeMap<Address, U256>>`) re-added the `gastime`
+> dep that M7.11 had dropped. `worstcase::State<H: Points>` replays over the
+> **object-safe `hook::StateMut` seam passed per-call** (`apply(&mut self, &Op,
+> &mut dyn StateMut)`) rather than owning a concrete `state.StateDB` like Go — so
+> the replay is unit-testable with an in-memory fake, matching the M7.9/M7.12
+> seam-with-deferred-revm-impl precedent. The reth-tx half of `ApplyTx` (libevm
+> `txpool.ValidateTransaction` intrinsic-gas validation, `types.Sender` signer
+> recovery, `GetCodeHash` EOA check) and the saedb-opener-driven `State::new`
+> (open state at the settled root, rebuild the `GasTime` from the settled block's
+> `executed_by_gas_time()` `Time<u64>` via the hook gas config, raise
+> `SettledBlockNotExecuted`) are **deferred to M7.14**, where the concrete reth
+> signed-transaction + a `code_hash` state accessor first exist.
+
 ---
 
 ## 10. Invariants (from `docs/invariants.md`) — test-enforced
