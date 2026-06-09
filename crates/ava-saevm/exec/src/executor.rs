@@ -10,13 +10,22 @@
 //! [`Executor::execute_one`] drives [`execute_step`](crate::execute_step) for one
 //! block and publishes the receipts.
 //!
-//! # Deferred to M7.15 (the async reactor)
+//! # Async reactor (M7.15)
 //!
-//! The bounded `mpsc` queue + `processQueue` task loop, the `Eventual<Receipt>`
-//! receipt buffer keyed by tx hash, the `ChainHead` / `WaitUntil*` event
-//! plumbing, and the `CancellationToken` / `JoinHandle` / `TaskTracker` graceful
-//! shutdown are all M7.15 — see the `// TODO(M7.15)` markers. This task delivers
-//! the synchronous step + the fields the reactor will hang off of.
+//! The executor now carries the async-notification layer (specs/11 §6, §1.5):
+//! an [`Eventual<TxReceipt>`] receipt buffer keyed by tx hash, a [`HeadEvents`]
+//! chain-head broadcast, the [`ExecutionWaiters`] `WaitUntil{Executed,Settled}`
+//! signals, and a [`CancellationToken`] + [`TaskTracker`] for graceful
+//! shutdown. After [`Executor::execute_one`] commits a block it resolves the
+//! per-tx receipt eventuals, advances the executed-frontier height, then emits a
+//! [`ChainHeadEvent`] — strictly **after** advancing `last_executed`
+//! (invariant 6, specs/11 §10).
+//!
+//! # Deferred to M7.26
+//!
+//! The bounded `mpsc` queue + the spawned `processQueue` task *loop* (the
+//! backpressure path) is M7.26 — see the `// M7.26` markers. This task delivers
+//! the notification/shutdown primitives wired into the synchronous step.
 
 use std::sync::Arc;
 
@@ -25,9 +34,15 @@ use ava_saevm_blocks::{Block, WorstCaseBounds};
 use ava_saevm_db::Tracker;
 use ava_saevm_gastime::GasTime;
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::driver::{EvmDriver, ExecHooks, TxReceipt};
 use crate::error::{Error, Result};
+use crate::events::{ChainHeadEvent, ExecutionWaiters, HeadEvents};
+use crate::eventual::Eventual;
 use crate::execute_step::{StepOutput, execute_step};
 
 /// A minimal receipt sink: receipts produced by the execute step are appended
@@ -79,8 +94,23 @@ pub struct Executor<D: EvmDriver, H: ExecHooks> {
     hooks: H,
     /// The saedb revision tracker (commit policy + ref-count window).
     tracker: Tracker,
-    /// The per-tx receipt sink.
+    /// The per-tx receipt sink (the ordered append log; the awaitable per-tx
+    /// resolution is [`receipt_eventuals`](Self::receipt_eventuals)).
     receipts: Arc<ReceiptSink>,
+    /// The awaitable per-tx receipt buffer keyed by tx hash (Go
+    /// `eventual.Value[*Receipt]`). A caller can [`await_receipt`](Self::await_receipt)
+    /// a specific tx before its block executes; the eventual is resolved once
+    /// the block commits.
+    receipt_eventuals: Arc<Mutex<HashMap<ava_saevm_types::B256, Eventual<TxReceipt>>>>,
+    /// The chain-head event broadcast (Go `event.FeedOf[ChainHeadEvent]`).
+    head_events: HeadEvents,
+    /// The `WaitUntil{Executed,Settled}` height waiters (invariant 6).
+    waiters: ExecutionWaiters,
+    /// Cancels the executor's spawned tasks on shutdown (Go `context.Context`).
+    shutdown: CancellationToken,
+    /// Tracks the executor's spawned tasks so [`shutdown`](Self::shutdown) can
+    /// drain them (Go `io.Closer` reverse-order close / `sync.WaitGroup`).
+    tasks: TaskTracker,
 }
 
 impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
@@ -101,6 +131,11 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
             hooks,
             tracker,
             receipts: Arc::new(ReceiptSink::new()),
+            receipt_eventuals: Arc::new(Mutex::new(HashMap::new())),
+            head_events: HeadEvents::new(),
+            waiters: ExecutionWaiters::new(),
+            shutdown: CancellationToken::new(),
+            tasks: TaskTracker::new(),
         }
     }
 
@@ -114,6 +149,60 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
     #[must_use]
     pub fn last_executed(&self) -> Option<Arc<Block>> {
         self.last_executed.load_full()
+    }
+
+    /// Subscribes to the chain-head event feed (one [`ChainHeadEvent`] per
+    /// executed block; specs/11 §6).
+    #[must_use]
+    pub fn subscribe_chain_head(&self) -> broadcast::Receiver<ChainHeadEvent> {
+        self.head_events.subscribe_chain_head()
+    }
+
+    /// The `WaitUntil{Executed,Settled}` waiters (invariant 6 ordering).
+    #[must_use]
+    pub fn waiters(&self) -> &ExecutionWaiters {
+        &self.waiters
+    }
+
+    /// The executor's [`CancellationToken`]; cancelled by [`shutdown`](Self::shutdown).
+    #[must_use]
+    pub fn shutdown_token(&self) -> &CancellationToken {
+        &self.shutdown
+    }
+
+    /// The [`TaskTracker`] the executor spawns its async tasks under (M7.26's
+    /// `processQueue` loop registers here; see [`shutdown`](Self::shutdown)).
+    #[must_use]
+    pub fn task_tracker(&self) -> &TaskTracker {
+        &self.tasks
+    }
+
+    /// Awaits the receipt of transaction `tx_hash`, registering an
+    /// [`Eventual`] if one is not already pending. Resolves once the block
+    /// containing the tx commits (specs/11 §6.1 step 6).
+    pub async fn await_receipt(&self, tx_hash: ava_saevm_types::B256) -> TxReceipt {
+        let eventual = self
+            .receipt_eventuals
+            .lock()
+            .entry(tx_hash)
+            .or_default()
+            .clone();
+        eventual.wait().await
+    }
+
+    /// Gracefully shuts the executor down (specs/11 §6.2): cancels the
+    /// [`CancellationToken`] (so any spawned task observing it finishes its
+    /// in-flight work), closes the [`TaskTracker`], and awaits the drain.
+    ///
+    /// The Firewood `tracker.close(last_root)` snapshot-flatten is a documented
+    /// hook here: the synchronous [`execute_one`](Self::execute_one) commits
+    /// per-block via the saedb [`Tracker`], so no separate close is required for
+    /// the M7.15 path; the explicit `close` lands with the M7.26 `processQueue`
+    /// loop that owns the long-lived Firewood handle.
+    pub async fn shutdown(&self) {
+        self.shutdown.cancel();
+        self.tasks.close();
+        self.tasks.wait().await;
     }
 
     /// Synchronously executes one block against the current `last_executed`
@@ -157,12 +246,40 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
         // Advance the cached parent gas clock for the next block's continuity.
         self.parent_gas_clock
             .store(Arc::new(output.gas_time.clone()));
-        // Publish the block's receipts to the sink.
+        // Publish the block's receipts to the ordered sink.
         self.receipts.publish(&output.receipts);
 
-        // TODO(M7.15): the async reactor — bounded mpsc queue + processQueue task
-        // loop, Eventual<Receipt> buffer keyed by tx hash, ChainHead /
-        // WaitUntil* events, CancellationToken / JoinHandle / TaskTracker drain.
+        // --- Async-reactor notifications (M7.15) ---
+        //
+        // INVARIANT 6 (atomics-before-broadcast, specs/11 §10): `execute_step`
+        // has already advanced the internal `last_executed` pointer (its `I`
+        // step, inside `mark_executed`). Only AFTER that do we fan out the
+        // external signals (`X`): resolve the per-tx receipt eventuals, advance
+        // the executed-frontier height, then emit the chain-head event. A
+        // poll-after-wake therefore always observes a `last_executed`/height
+        // `>=` what any broadcast announced.
+
+        // Resolve the awaitable per-tx receipt buffer (set-once each).
+        {
+            let mut buf = self.receipt_eventuals.lock();
+            for receipt in &output.receipts {
+                buf.entry(receipt.tx_hash).or_default().set(receipt.clone());
+            }
+        }
+
+        // Advance the executed-frontier height BEFORE the chain-head broadcast.
+        let height = block.height();
+        self.waiters.set_executed(height);
+
+        // Emit the chain-head event (last — the external `X` signal).
+        self.head_events.emit(ChainHeadEvent {
+            height,
+            hash: block.hash(),
+        });
+
+        // M7.26: the bounded-mpsc `processQueue` task loop (backpressure on
+        // `enqueue`) is spawned under `self.tasks` and feeds this synchronous
+        // step from a FIFO queue; `shutdown` already drains it.
 
         Ok(output)
     }

@@ -41,14 +41,34 @@
 //! [`execute_batch`](ava_evm_reth::ExternalConsensusExecutor::execute_batch) and
 //! [`ava_evm::FirewoodStateProvider::propose_from_bundle`].
 //!
-//! # Deferred to M7.15
+//! # Async reactor (M7.15)
 //!
-//! The full async reactor — the bounded `mpsc` queue + `processQueue` task, the
-//! `Eventual<Receipt>` receipt buffer, `ChainHead` / `WaitUntil*` event
-//! plumbing, `CancellationToken` / `JoinHandle` / `TaskTracker` — is M7.15.
-//! This task delivers the synchronous execute step plus the [`Executor`]
-//! skeleton and a minimal receipt sink + chain-head notify the reactor will
-//! hang off of. See the `// TODO(M7.15)` markers.
+//! The async-notification layer of the streaming executor (specs/11 §6, §1.5):
+//!
+//! * [`Eventual<T>`] — a set-once, [`tokio::sync::watch`]-backed awaitable cell
+//!   (Go `eventual.Value[*Receipt]`). Keyed by tx hash in the [`Executor`]'s
+//!   receipt buffer, it lets a caller await a specific tx's receipt before or
+//!   after its block executes.
+//! * [`HeadEvents`] — a [`tokio::sync::broadcast`] of [`ChainHeadEvent`] (Go
+//!   `event.FeedOf[T]`): one chain-head event per executed block, exposed via
+//!   [`Executor::subscribe_chain_head`].
+//! * [`ExecutionWaiters`] — the `WaitUntil{Executed,Settled}` height watches
+//!   (Go `chan struct{}` close fan-out). **Invariant 6 (specs/11 §10,
+//!   atomics-before-broadcast):** the executed/settled height is advanced
+//!   *before* the waiter wakes, so a poll-after-wake always observes `>=` what
+//!   the broadcast announced.
+//! * Graceful shutdown — a [`tokio_util::sync::CancellationToken`] plus a
+//!   [`tokio_util::task::TaskTracker`] on the [`Executor`]:
+//!   [`Executor::shutdown`] cancels, lets in-flight tasks finish, and
+//!   `tracker.wait()`s for the drain.
+//!
+//! # Deferred to M7.26
+//!
+//! The bounded-`mpsc` queue + the spawned `processQueue` task *loop* (the
+//! backpressure path that `await`s on `enqueue` when full) is M7.26. M7.15
+//! provides the notification/shutdown primitives + chain-head emission wired
+//! into the synchronous [`Executor::execute_one`]; the loop that feeds it from a
+//! bounded queue is built on top of these in M7.26. See the `// M7.26` markers.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -60,6 +80,8 @@
 
 mod driver;
 mod error;
+mod events;
+mod eventual;
 mod execute_step;
 mod executor;
 
@@ -67,5 +89,7 @@ pub use crate::driver::{
     AvaEvmDriver, BlockOutcome, EvmDriver, ExecHooks, NoopExecHooks, TxReceipt, rebuild_gas_clock,
 };
 pub use crate::error::{Error, Result};
+pub use crate::events::{ChainHeadEvent, ExecutionWaiters, HeadEvents};
+pub use crate::eventual::Eventual;
 pub use crate::execute_step::{StepOutput, execute_step};
 pub use crate::executor::{Executor, ReceiptSink};
