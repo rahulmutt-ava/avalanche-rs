@@ -1434,7 +1434,6 @@ dependencies = [
  "ava-version",
  "ava-vm",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tokio-util",
 ]
