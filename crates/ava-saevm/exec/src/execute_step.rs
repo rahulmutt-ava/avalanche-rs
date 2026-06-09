@@ -119,13 +119,16 @@ pub fn execute_step<D: EvmDriver, H: ExecHooks>(
     // (7) End-of-block ops are appended (Go: `hooks.EndOfBlockOps`); for the
     // pure-EVM path they are empty.
     //
-    // TODO(M7.27): the Go reference also runs the per-tx early-warning
+    // TODO(M7.21+): the Go reference also runs the per-tx early-warning
     // prediction-model assertions here — `b.CheckSenderBalanceBound(...)` (per
     // tx, saexec/execution.go ~L192) and `b.CheckOpBurnerBalanceBounds(...)`
-    // (~L241). These are NOT wired in Rust yet: `worstcase::check_sender_balance_bound`
-    // exists but needs the per-tx `StateRead` handles the driver owns. Deferred
-    // to M7.27 ("worst-case bounds as property tests", specs/11 §12); the
-    // consensus-load-bearing base-fee bound (step 5) IS enforced above.
+    // (~L241). These are NOT wired into the executor's per-tx path yet:
+    // `worstcase::check_sender_balance_bound` exists but needs the per-tx
+    // `StateRead` handles the driver owns (a driver-interface extension, best
+    // done with the C-Chain hook bodies in M7.21+). M7.27 proved the bound is
+    // never violated over the property space via the `Op` seam directly
+    // (`worstcase/tests/bounds_prop.rs`, specs/11 §12); the consensus-load-bearing
+    // base-fee bound (step 5) IS enforced above.
     let ops = hooks.end_of_block_ops(block)?;
     let outcome = driver.execute_block(block, parent_root, base_fee, &ops)?;
 
