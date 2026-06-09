@@ -13,5 +13,14 @@ publish.workspace = true
 description = "The SAE core VM: three frontiers + settlement + lifecycle + sae-rpc (specs/11 §1/§5). M7.1 scaffold."
 
 [dependencies]
+ava-saevm-blocks = { path = "../blocks" }
+ava-saevm-params = { path = "../params" }
+ava-saevm-types = { path = "../types" }
+arc-swap = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
+ava-saevm-proxytime = { path = "../proxytime" }
+ava-evm-reth = { path = "../../ava-evm-reth" }
+ava-vm = { path = "../../ava-vm" }
