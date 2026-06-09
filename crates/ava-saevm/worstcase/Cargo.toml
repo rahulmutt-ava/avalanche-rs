@@ -26,3 +26,4 @@ thiserror = { workspace = true }
 [dev-dependencies]
 ava-evm-reth = { path = "../../ava-evm-reth" }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
