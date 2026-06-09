@@ -32,7 +32,16 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 ava-database = { path = "../../ava-database" }
+ava-saevm-testutil = { path = "../testutil" }
+# Tx-signing surface for the determinism property test: build + sign legacy
+# value-transfer txs (`TxLegacy` -> `signature_hash` -> secp256k1 recoverable ->
+# `into_signed`). Pinned to the versions already in the workspace lock (reached
+# transitively via `ava-evm-reth`) so adding them as dev-deps does not churn it.
+alloy-consensus = "=2.0.5"
+alloy-primitives = "=1.6.0"
+secp256k1 = { workspace = true }
 hex = { workspace = true }
+proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3"
