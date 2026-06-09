@@ -1444,6 +1444,7 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "ava-evm-reth",
+ "ava-saevm-gastime",
  "ava-saevm-params",
  "ava-saevm-proxytime",
  "ava-saevm-types",
@@ -1563,6 +1564,19 @@ dependencies = [
 [[package]]
 name = "ava-saevm-worstcase"
 version = "0.1.0"
+dependencies = [
+ "ava-evm-reth",
+ "ava-saevm-blocks",
+ "ava-saevm-gastime",
+ "ava-saevm-hook",
+ "ava-saevm-intmath",
+ "ava-saevm-params",
+ "ava-saevm-types",
+ "ava-types",
+ "ava-vm",
+ "pretty_assertions",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ava-secp256k1fx"
