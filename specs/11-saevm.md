@@ -409,6 +409,15 @@ recording the settled block's gas-clock so recovery/state-sync can rebuild it.
 **`canoto`** is used for the *persisted* execution-results blob
 (`blocks/execution.canoto.go`, §7), **not** for the block on the wire.
 
+> **AS-BUILT (M7.8).** There is no canoto codec in the Rust workspace, so
+> `ava-saevm-types::ExecutionResults` persists via a deterministic **fixed-layout
+> 96-byte big-endian encoding** (`gas_time` 24 ++ `base_fee` 8 ++ `receipt_root`
+> 32 ++ `post_state_root` 32) rather than a canoto/`ava-codec` derive. This is
+> sufficient for the persist-and-reload round-trip (recovery/state-sync); exact
+> Go-canoto **byte** parity, if needed, is a differential-test concern (M7.29).
+> `gas_time` is stored as the proxy-clock scalars (`proxytime::Time<u64>`'s
+> `[seconds, fraction, hertz]`), echoing the side `hook.Settled` quad.
+
 Parsing (`sae/blocks.go::ParseBlock`) RLP-decodes, checks height fits `u64`,
 rejects blocks > `now + 10s` (`maxFutureBlockSeconds`), and verifies tx/uncle/
 withdrawals hashes match the header. Ancestry is **not** populated at parse — only
