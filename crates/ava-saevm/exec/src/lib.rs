@@ -92,4 +92,4 @@ pub use crate::error::{Error, Result};
 pub use crate::events::{ChainHeadEvent, ExecutionWaiters, HeadEvents};
 pub use crate::eventual::Eventual;
 pub use crate::execute_step::{StepOutput, execute_step};
-pub use crate::executor::{Executor, ReceiptSink};
+pub use crate::executor::{Executor, Queue, ReceiptSink};

@@ -1517,6 +1517,7 @@ dependencies = [
  "ava-saevm-db",
  "ava-saevm-gastime",
  "ava-saevm-hook",
+ "ava-saevm-params",
  "ava-saevm-proxytime",
  "ava-saevm-testutil",
  "ava-saevm-types",
