@@ -7,9 +7,11 @@
 //! M7.21 implements the SAE [`hook::PointsG`] surface as [`CChainHooks`]:
 //! deterministic header building, the ACP-176 gas config after a block,
 //! end-of-block mint/burn ops for atomic Import/Export of AVAX, and block
-//! rebuild for verification. The atomic Import/Export tx codec + txpool (the
-//! real source of [`AtomicOp`]s) and the VM `Initialize` harness + `/avax` API
-//! land in later M7 tasks (M7.22/M7.23); see `plan/M7-saevm.md`.
+//! rebuild for verification. M7.22 added the atomic Import/Export tx codec +
+//! [`State`] + [`AtomicTxpool`]. M7.23 ([`vm`]) supplies the VM `Initialize`
+//! harness — composing [`ava_saevm_core::Vm`] (the `sae::Vm` analog) with the
+//! C-Chain hooks + atomic txpool (specs/11 §5) — and the [`api`] `/avax`
+//! JSON-RPC service.
 //!
 //! [`hook::PointsG`]: ava_saevm_hook::PointsG
 
@@ -17,11 +19,14 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
+pub mod api;
 pub mod hooks;
 pub mod state;
 pub mod tx;
 pub mod txpool;
+pub mod vm;
 
+pub use api::{AVAX_EXTENSION_PATH, AVAX_SERVICE_NAME, AvaxService};
 pub use hooks::{
     AtomicOp, AtomicOpSource, BLACKHOLE_ADDR, CChainHooks, Error, GAS_CONFIG_AFTER_TARGET,
     Rebuilder,
@@ -29,3 +34,4 @@ pub use hooks::{
 pub use state::State;
 pub use tx::{Credential, Export, Import, Input, Output, Tx, Unsigned};
 pub use txpool::{AtomicTxpool, EvmPoolStub, WaitPool, WaitSource};
+pub use vm::{CChainCoreVm, Vm};
