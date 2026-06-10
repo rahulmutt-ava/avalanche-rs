@@ -21,6 +21,7 @@
 
 pub mod api;
 pub mod dynamic;
+pub mod gossip;
 pub mod hooks;
 pub mod state;
 pub mod tx;
@@ -28,6 +29,10 @@ pub mod txpool;
 pub mod vm;
 
 pub use api::{AVAX_EXTENSION_PATH, AVAX_SERVICE_NAME, AvaxService};
+pub use gossip::{
+    BloomSet, GossipMarshaller, GossipTransport, GossipTx, Gossipable, NoGossipTransport,
+    PULL_GOSSIP_PERIOD, PUSH_GOSSIP_PERIOD, PullGossiper, PushGossiper,
+};
 pub use hooks::{
     AtomicOp, AtomicOpSource, BLACKHOLE_ADDR, CChainHooks, Error, GAS_CONFIG_AFTER_TARGET,
     Rebuilder,
@@ -35,4 +40,5 @@ pub use hooks::{
 pub use state::State;
 pub use tx::{Credential, Export, Import, Input, Output, Tx, Unsigned};
 pub use txpool::{AtomicTxpool, EvmPoolStub, WaitPool, WaitSource};
+pub use vm::GossipConfig;
 pub use vm::{CChainCoreVm, Vm};

@@ -50,11 +50,37 @@ use ava_saevm_hook::{BlockBuilder, PointsG, Settled};
 use ava_types::id::Id;
 use ava_vm::components::avax::shared_memory::SharedMemory;
 use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::api::AvaxService;
+use crate::gossip::{BloomSet, PULL_GOSSIP_PERIOD, PUSH_GOSSIP_PERIOD};
 use crate::hooks::{AtomicOp, AtomicOpSource, CChainHooks, Error as HooksError};
 use crate::state::State;
 use crate::txpool::AtomicTxpool;
+
+/// Configuration for the cross-chain tx gossip loops (Go `cchain/vm.go`'s
+/// `pushGossipPeriod`/`pullGossipPeriod`). Tests pass shorter periods (Go uses
+/// 100 ms); production uses the [`PUSH_GOSSIP_PERIOD`]/[`PULL_GOSSIP_PERIOD`]
+/// defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct GossipConfig {
+    /// How often the push gossiper re-broadcasts the pool (default
+    /// [`PUSH_GOSSIP_PERIOD`]).
+    pub push_period: std::time::Duration,
+    /// How often the pull gossiper reconciles against peers (default
+    /// [`PULL_GOSSIP_PERIOD`]).
+    pub pull_period: std::time::Duration,
+}
+
+impl Default for GossipConfig {
+    fn default() -> Self {
+        Self {
+            push_period: PUSH_GOSSIP_PERIOD,
+            pull_period: PULL_GOSSIP_PERIOD,
+        }
+    }
+}
 
 /// Errors returned by the C-Chain VM harness.
 #[derive(Debug, thiserror::Error)]
@@ -198,8 +224,15 @@ pub struct Vm {
     state: Arc<Mutex<State>>,
     /// The cross-chain (atomic) transaction pool.
     txpool: Arc<AtomicTxpool>,
+    /// The cross-chain tx gossip set (bloom stand-in over the txpool). `issueTx`
+    /// admits through it; the push/pull loops gossip from it (Go `vm.gossipSet`).
+    gossip_set: Arc<BloomSet>,
     /// The `avax` JSON-RPC service mounted at `/avax`.
     avax: AvaxService,
+    /// Cancels the spawned gossip loops on [`Vm::shutdown`] (Go `onClose`).
+    gossip_shutdown: CancellationToken,
+    /// Tracks the spawned gossip loop tasks so [`Vm::shutdown`] can await them.
+    gossip_tasks: TaskTracker,
 }
 
 impl Vm {
@@ -221,6 +254,38 @@ impl Vm {
         chain_id: Id,
         avax_asset_id: Id,
     ) -> Result<Self, Error> {
+        Self::initialize_with_gossip(
+            db,
+            shared_memory,
+            chain_id,
+            avax_asset_id,
+            None::<(crate::gossip::NoGossipTransport, GossipConfig)>,
+        )
+    }
+
+    /// `VM.Initialize` with an explicit [`GossipConfig`] and an optional live
+    /// gossip [`Transport`](crate::gossip::GossipTransport).
+    ///
+    /// When `gossip` is `Some((transport, config))`, the push/pull gossip loops
+    /// are spawned (Go's `gossip.Every` goroutines), cancelled by
+    /// [`Vm::shutdown`] (Go `onClose`). When `None`, no loops are spawned (the
+    /// live `Network` transport is M8; in-process multi-node tests drive the
+    /// [`Vm::gossip_set`] via the `ava-saevm-testutil` network harness). Either
+    /// way the [`BloomSet`] is constructed and the `avax` service admits through
+    /// it.
+    ///
+    /// # Errors
+    /// As [`Vm::initialize`].
+    pub fn initialize_with_gossip<T>(
+        db: &Arc<dyn DynDatabase>,
+        shared_memory: Arc<dyn SharedMemory>,
+        chain_id: Id,
+        avax_asset_id: Id,
+        gossip: Option<(T, GossipConfig)>,
+    ) -> Result<Self, Error>
+    where
+        T: crate::gossip::GossipTransport + Clone,
+    {
         // 1. Set up the genesis SAE block (height 0, self-settling). The EVM-state
         //    genesis (Go `core.SetupGenesisBlock`) is owned by ava-evm / M8.
         let genesis = build_genesis().map_err(|e| Error::Genesis(e.to_string()))?;
@@ -239,21 +304,90 @@ impl Vm {
         let state = Arc::new(Mutex::new(State::new(Arc::clone(db))?));
         let txpool = Arc::new(AtomicTxpool::new(avax_asset_id));
 
-        // The avax service admits issued txs into the atomic pool and reads the
-        // accepted-tx index for getAtomicTx.
+        // 5. Build the gossip set (bloom stand-in over the txpool — Go
+        //    `gossip.NewBloomSet(newGossipTxPool(vm.txpool), ...)`).
+        let gossip_set = Arc::new(BloomSet::new(Arc::clone(&txpool)));
+
+        // The avax service admits issued txs through the gossip set + push
+        // gossiper (Go `newService(ctx, gossipSet, pushGossiper, state)`).
         let avax = AvaxService::new(
-            Arc::clone(&txpool),
+            Arc::clone(&gossip_set),
             Arc::clone(&state),
             shared_memory,
             chain_id,
         );
 
+        // 6. Spawn the push/pull gossip loops when a live transport is supplied
+        //    (Go `gossip.Every` goroutines, cancelled via `onClose`).
+        let gossip_shutdown = CancellationToken::new();
+        let gossip_tasks = TaskTracker::new();
+        if let Some((transport, config)) = gossip {
+            let push = crate::gossip::PushGossiper::new(
+                Arc::clone(&gossip_set),
+                transport.clone(),
+                config.push_period,
+            );
+            let pull = crate::gossip::PullGossiper::new(
+                Arc::clone(&gossip_set),
+                transport,
+                config.pull_period,
+            );
+            let push_cancel = gossip_shutdown.clone();
+            gossip_tasks.spawn(async move {
+                Self::run_gossip_loop(&push_cancel, config.push_period, || {
+                    push.gossip_once();
+                })
+                .await;
+            });
+            let pull_cancel = gossip_shutdown.clone();
+            gossip_tasks.spawn(async move {
+                Self::run_gossip_loop(&pull_cancel, config.pull_period, || {
+                    pull.gossip_once();
+                })
+                .await;
+            });
+        }
+        gossip_tasks.close();
+
         Ok(Self {
             core,
             state,
             txpool,
+            gossip_set,
             avax,
+            gossip_shutdown,
+            gossip_tasks,
         })
+    }
+
+    /// The shared body of a gossip loop: tick at `period`, calling `tick` each
+    /// time, until the [`CancellationToken`] fires (Go `gossip.Every`).
+    async fn run_gossip_loop<F: FnMut()>(
+        cancel: &CancellationToken,
+        period: std::time::Duration,
+        mut tick: F,
+    ) {
+        let mut ticker = tokio::time::interval(period);
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => return,
+                _ = ticker.tick() => tick(),
+            }
+        }
+    }
+
+    /// `VM.Shutdown` (Go `onClose`): cancel the gossip loops and await their
+    /// completion.
+    pub async fn shutdown(&self) {
+        self.gossip_shutdown.cancel();
+        self.gossip_tasks.wait().await;
+    }
+
+    /// The cross-chain tx gossip set (the bloom stand-in over the atomic txpool).
+    /// Multi-node tests connect this into the `ava-saevm-testutil` network.
+    #[must_use]
+    pub fn gossip_set(&self) -> &Arc<BloomSet> {
+        &self.gossip_set
     }
 
     /// The composed SAE core VM (the `sae.VM` analog).

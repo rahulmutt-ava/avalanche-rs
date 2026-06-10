@@ -37,8 +37,12 @@ ava-crypto = { path = "../../ava-crypto" }
 ava-chains = { path = "../../ava-chains" }
 # The atomic-tx state store (tx index + last-height) codec'd over a Database.
 ava-database = { path = "../../ava-database" }
-# The atomic txpool wakes a `WaitForEvent` waiter via a notify.
-tokio = { workspace = true, features = [ "sync" ] }
+# The atomic txpool wakes a `WaitForEvent` waiter via a notify; the gossip loops
+# tick on `time` intervals spawned on the `rt`.
+tokio = { workspace = true, features = [ "sync", "time", "rt" ] }
+# The gossip push/pull loops are spawned under a TaskTracker + cancelled via a
+# CancellationToken on shutdown (Go `onClose`; the M7.15 exec pattern).
+tokio-util = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 # The `/avax` JSON-RPC service is a direct serde_json handler (the SAE RPC
@@ -46,5 +50,7 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = [ "rt", "macros", "sync", "time" ] }
+tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "macros", "sync", "time", "test-util" ] }
 proptest = { workspace = true }
+# The in-memory multi-node gossip network harness (Go `saetest/network.go`).
+ava-saevm-testutil = { path = "../testutil" }

@@ -519,6 +519,13 @@ fn executor_execute_one_chains_blocks_and_accumulates_receipts() {
         tracker,
     );
 
+    // The `sae` last_executed_height gauge starts at the seeded genesis height.
+    assert_eq!(
+        executor.last_executed_height(),
+        0,
+        "gauge seeded at genesis height",
+    );
+
     // Block 1, built on the genesis SAE hash.
     let block1 = Arc::new(Block::new(empty_block(1, g.hash()), None, None).expect("block1"));
     let out1 = executor
@@ -528,6 +535,11 @@ fn executor_execute_one_chains_blocks_and_accumulates_receipts() {
         executor.last_executed().map(|b| b.hash()),
         Some(block1.hash()),
         "executor advanced last_executed to block 1",
+    );
+    assert_eq!(
+        executor.last_executed_height(),
+        1,
+        "gauge advanced per post-execution event (block 1)",
     );
     assert_eq!(executor.receipts().snapshot().len(), 1, "block 1's receipt");
 
@@ -541,6 +553,11 @@ fn executor_execute_one_chains_blocks_and_accumulates_receipts() {
         executor.last_executed().map(|b| b.hash()),
         Some(block2.hash()),
         "executor advanced last_executed to block 2",
+    );
+    assert_eq!(
+        executor.last_executed_height(),
+        2,
+        "gauge advanced per post-execution event (block 2)",
     );
     assert_eq!(
         executor.receipts().snapshot().len(),

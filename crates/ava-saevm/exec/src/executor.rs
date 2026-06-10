@@ -154,6 +154,15 @@ pub struct Executor<D: EvmDriver, H: ExecHooks> {
     /// Tracks the executor's spawned tasks so [`shutdown`](Self::shutdown) can
     /// drain them (Go `io.Closer` reverse-order close / `sync.WaitGroup`).
     tasks: TaskTracker,
+    /// Backing store for the `sae` `last_executed_height` gauge: the height of
+    /// the latest block that completed async execution (set at construction +
+    /// per post-execution event; specs/18 §2.11, Go `844535b313`).
+    ///
+    /// AS-BUILT: no prometheus registry reaches the SAE crates yet; this
+    /// `AtomicU64` is the honest gauge backing store, read via
+    /// [`Executor::last_executed_height`]. `// TODO(M8): register on the "sae"
+    /// prometheus namespace.`
+    last_executed_height_gauge: std::sync::atomic::AtomicU64,
 }
 
 impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
@@ -167,6 +176,9 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
         hooks: H,
         tracker: Tracker,
     ) -> Self {
+        // The gauge starts at the seeded last-executed height (Go sets it at
+        // `Executor` construction).
+        let seed_height = last_executed.height();
         Self {
             last_executed: ArcSwapOption::from(Some(last_executed)),
             parent_gas_clock: ArcSwap::from_pointee(parent_gas_clock),
@@ -179,6 +191,7 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
             waiters: ExecutionWaiters::new(),
             shutdown: CancellationToken::new(),
             tasks: TaskTracker::new(),
+            last_executed_height_gauge: std::sync::atomic::AtomicU64::new(seed_height),
         }
     }
 
@@ -192,6 +205,16 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
     #[must_use]
     pub fn last_executed(&self) -> Option<Arc<Block>> {
         self.last_executed.load_full()
+    }
+
+    /// The `sae` `last_executed_height` gauge value: the height of the latest
+    /// block that completed async execution (set at construction + per
+    /// post-execution event; specs/18 §2.11). The backing store for the
+    /// prometheus gauge once metrics plumbing reaches the SAE crates (M8).
+    #[must_use]
+    pub fn last_executed_height(&self) -> u64 {
+        self.last_executed_height_gauge
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Subscribes to the chain-head event feed (one [`ChainHeadEvent`] per
@@ -313,6 +336,11 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
         // Advance the executed-frontier height BEFORE the chain-head broadcast.
         let height = block.height();
         self.waiters.set_executed(height);
+        // Update the `sae` `last_executed_height` gauge (Go sets it per
+        // `sendPostExecutionEvents`). `Relaxed`: a monitoring gauge has no
+        // ordering relationship with consensus state.
+        self.last_executed_height_gauge
+            .store(height, std::sync::atomic::Ordering::Relaxed);
 
         // Emit the chain-head event (last — the external `X` signal).
         self.head_events.emit(ChainHeadEvent {
