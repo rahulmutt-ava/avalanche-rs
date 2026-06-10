@@ -26,6 +26,7 @@ pub mod driver;
 pub mod network;
 pub mod observation;
 pub mod program;
+pub mod saevm;
 pub mod xchain;
 
 pub use atomic::exported_utxo_observation;
@@ -33,6 +34,7 @@ pub use driver::LockstepDriver;
 pub use network::{Binary, NetworkConfig};
 pub use observation::Observation;
 pub use program::{Action, Program};
+pub use saevm::{FrontierObservation, VectorError, replay_recovery_vector};
 pub use xchain::run_program;
 
 // The networking deps are consumed only by the `interop_handshake` integration
@@ -49,5 +51,9 @@ mod dev_dep_uses {
     use ava_crypto as _;
     use ava_message as _;
     use ava_network as _;
+    // `pretty_assertions` + `proptest` are consumed by the integration-test
+    // targets (`sae_recovery`, `xchain_issue_tx`); reference them here so the
+    // lib-test build does not trip `unused_crate_dependencies`.
+    use pretty_assertions as _;
     use proptest as _;
 }
