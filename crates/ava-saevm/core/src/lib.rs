@@ -8,8 +8,9 @@
 //! ([`Frontier`] — `LastSettled`/`LastExecuted`/`LastAccepted`, specs/11 §1.1)
 //! with lock-free reads (specs/11 §13.5), the consensus-critical map (the `A..S`
 //! window), and the [`settle()`] driver that marks the settlement set `Σ` in
-//! increasing height on the gas-time clock (specs/11 §1.2). The full VM
-//! lifecycle (`BuildBlock` / `VerifyBlock` / `Accept`) lands in M7.18.
+//! increasing height on the gas-time clock (specs/11 §1.2). M7.18 added the full
+//! VM lifecycle (`BuildBlock` / `VerifyBlock` / `Accept` / `SetPreference`) and
+//! M7.24 the restart [`recovery`] procedure that rebuilds A/E/S from disk.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -17,10 +18,12 @@
 
 pub mod block_handle;
 pub mod frontier;
+pub mod recovery;
 pub mod settle;
 pub mod vm;
 
 pub use block_handle::SaeBlock;
 pub use frontier::Frontier;
+pub use recovery::{RecoverError, Recovered, RecoverySource, recover};
 pub use settle::{SettleError, settle};
 pub use vm::{BlockBuilderSeam, BuildError, Error, ExecutorSeam, Vm};
