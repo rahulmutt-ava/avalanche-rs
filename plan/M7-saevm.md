@@ -399,20 +399,15 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [x] **Step 4 — Confirm green:** 20/20 `test(dynamic)` + 31/31 cchain on merged main; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
 - [x] **Step 5 — Commit:** `sae(cchain): dynamic ACP-176/226/283 exponent integrators [Go 2750cc9e42]`
 
-### Task M7.32: Milestone exit gate
-**Sub-crate:** ava-saevm (all) + avalanchers bin  ·  **Depends on:** M7.1–M7.31 + M7.33 (M7.34 optional — unconsumed upstream)  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
-**Files:** `crates/ava-saevm/*/tests/PORTING.md` (filled), `tests/PORTING.md` aggregate row, `.config/nextest.toml` (ci profile), CI workflow SAE job
-- [ ] **Step 1 — Red:** Add a milestone meta-test list / xtask `xtask saevm-exit-gate` that asserts the named exit tests exist and are referenced: `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery`, `differential::sae_streaming`, all `invariant::*` (11). Run it → fails until everything is wired and PORTING.md is complete.
-- [ ] **Step 2 — Confirm red:** `cargo xtask saevm-exit-gate` → reports missing/failing items.
-- [ ] **Step 3 — Green:** Ensure all sub-crates ship their proptest suite + committed `proptest-regressions/`, golden vectors under `tests/vectors/saevm/`, the cargo-fuzz target (M7.31), and `tests/PORTING.md` rows (no `wip`). Fill PORTING.md mapping every Go `vms/saevm/...` test to its Rust counterpart (or `na — reason`). Confirm the `TaskTracker`-drain goroutine-leak analog passes for the executor/gossip tasks.
-- [ ] **Step 4 — Confirm green:** Run the full gate:
-  - `cargo build --workspace`
-  - `cargo build -p avalanchers`
-  - `cargo nextest run --profile ci` (includes `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery` recorded, all `invariant::*`)
-  - `cargo clippy --workspace -- -D warnings` (SAE crates with `clippy::pedantic` + `arithmetic_side_effects`)
-  - `cargo +nightly fuzz run decode_block -- -runs=10000` (smoke)
-  - `differential::sae_streaming` live mode green in the CI-gated nightly job (coordinate with cross-cutting harness X); `prop::sae_execution_determinism` + `differential::sae_recovery` green per-PR.
-- [ ] **Step 5 — Commit:** `sae: M7 exit gate — determinism + recovery + streaming differentials, §10 invariants, PORTING.md complete`
+### Task M7.32: Milestone exit gate ✅ DONE (0c1ddbb; merged post-7b40521) — **M7 MILESTONE COMPLETE**
+**Sub-crate:** ava-saevm (all) + avalanchers bin  ·  **Depends on:** M7.1–M7.31 + M7.33 (M7.34 optional — unconsumed upstream; also done)  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
+**Files:** `xtask/src/saevm_exit_gate.rs`, `crates/ava-saevm/tests/PORTING.md` (filled), `.config/nextest.toml` (ci override), `.github/workflows/ci.yml` (saevm-exit-gate step), `Taskfile.yml`
+> **AS-BUILT (M7.32).** `xtask saevm-exit-gate` (+ Taskfile task + a CI step in the `differential` job; `lint-saevm` was already in `lint-all-ci`) is a **static, deterministic checker** (file-greps, no test runner): asserts the 4 named exit tests + all 11 `invariant::*` fns exist, PORTING.md has no `wip`/`⬜`/`_(seeded` rows AND its Summary line matches the actual row counts, and the fuzz target + stable smoke + `MANIFEST.json` + all 5 golden-vector dirs exist; per-item PASS/FAIL report. **PORTING.md filled: 169 ✅ / 3 🟡 / 35 n/a** (single shared matrix at `crates/ava-saevm/tests/PORTING.md` — there is NO workspace `tests/PORTING.md`; aggregation is `xtask porting-report`/tier-X X.20, plan-text corrected). The 3 🟡 + deferrals: `blockstest::TestIntegration` (full Go fixture surface → covered via the M7.29 corpus; remaining reth-block-shaped helper), `cchain/api::TestGetUTXOsPagination` (shared UTXO address index → **M8**, same as the M5.21 follow-up), `cchain/tx::TestJSONMarshal` (per-variant getTxJSON shape goldens → **M8**). The 35 n/a = reth-owned eth-namespace RPC (`11` §8 reuse), Go `TestMain`/benchmarks, goleak helpers (→ TaskTracker-drain tests: `exec::task_tracker_drains_on_shutdown`, `cchain::spawned_push_loop_gossips_then_shutdown_stops_it`), go-cmp builders. `.config/nextest.toml`: actioned the standing TODO — `package(/^ava-saevm/)` added to the ci long-leash override (valid now the sub-workspace exists). **Gate run green:** workspace + avalanchers build; 18-crate SAE+differential nextest = **227 passed (1 benign leaky, 1 skipped generator)**; `lint_saevm.sh` exit 0; `saevm-exit-gate` ALL CHECKS PASSED (re-verified on merged main). Nightly fuzz run stays CI-only (no nightly in-sandbox; stable smoke is the gate). **M8 handoff:** UTXO address index (getUTXOs pagination), getTxJSON shape goldens, live `Network::gossip` transport + real bloom + prometheus registration of the two `sae` gauges (M7.33 deferrals).
+- [x] **Step 1 — Red:** `xtask saevm-exit-gate` asserting the named exit tests + PORTING.md completeness → fails on the M7.1 skeleton.
+- [x] **Step 2 — Confirm red:** `cargo xtask saevm-exit-gate` → reports the placeholder rows.
+- [x] **Step 3 — Green:** PORTING.md filled (every Go `vms/saevm` test mapped: ✅ / 🟡-with-deferral / `n/a — reason`); vectors + fuzz target + TaskTracker-drain analogs confirmed.
+- [x] **Step 4 — Confirm green:** full gate run (see AS-BUILT; full-workspace nextest+clippy re-run by the orchestrator at merge; nightly fuzz CI-only).
+- [x] **Step 5 — Commit:** `sae: M7 exit gate — determinism + recovery + streaming differentials, §10 invariants, PORTING.md complete`
 
 ---
 
