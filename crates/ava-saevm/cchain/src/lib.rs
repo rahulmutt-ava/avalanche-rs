@@ -20,6 +20,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod api;
+pub mod dynamic;
 pub mod hooks;
 pub mod state;
 pub mod tx;
