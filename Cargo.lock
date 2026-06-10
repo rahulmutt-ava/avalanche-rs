@@ -1460,6 +1460,15 @@ dependencies = [
 [[package]]
 name = "ava-saevm-cchain"
 version = "0.1.0"
+dependencies = [
+ "ava-evm-reth",
+ "ava-saevm-gastime",
+ "ava-saevm-hook",
+ "ava-saevm-types",
+ "ava-types",
+ "ava-vm",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ava-saevm-cmputils"
