@@ -38,6 +38,25 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+## ★ ENVIRONMENT FINDING (2026-06-10) — THE GO SAE NODE RUNS HERE; M7.29/M7.30 CAN USE A REAL LIVE ORACLE
+
+**Verified empirically (not assumed):** the Go `avalanchego` checkout at `../avalanchego` builds and tests the SAE VM in this environment. `CGO_ENABLED=1 go build ./vms/saevm/...` → EXIT 0 (it even `go mod download`ed `firewood-go-ethhash` mid-build → **network for module download works**), and `go test ./vms/saevm/blocks/` → `ok`. Toolchain present: **`go 1.25.10` via mise** (matches `avalanchego/go.mod`; nix also ships 1.25.9), clang 21 (CGO), a 1.7G `~/go/pkg/mod` cache.
+
+**This SUPERSEDES the "Go node unavailable in the sandbox" assumption** that M7.8/M7.28 inherited (those used self-consistent Rust-frozen vectors with Go-byte-parity *deferred*). It no longer has to be deferred:
+- **M7.28 goldens can be RETRO-UPGRADED to real Go-byte parity** (extract actual vectors from `vms/saevm` instead of freezing Rust's own output) — do this as part of M7.29, or as a follow-up.
+- **M7.29 / M7.30 can run as TRUE differential tests vs a LIVE Go oracle**, per-PR, not recorded-only — which is the actual intent of those tasks.
+
+**Mechanics to use (the X cross-cutting differential seam for SAE):**
+1. **Pin the Go toolchain on every invocation** (default PATH resolves nix's 1.25.9 first; go.mod wants 1.25.10 → either GOTOOLCHAIN auto-downloads it, or — cleaner — prepend the path):
+   ```sh
+   export PATH="$HOME/.local/share/mise/installs/go/1.25.10/bin:$PATH"
+   cd ../avalanchego && CGO_ENABLED=1 go test ./vms/saevm/...
+   ```
+2. **Oracle = a small Go vector-emitter** under `avalanchego/vms/saevm/` (a `go test`-driven helper or a tiny `main`) that drives the saevm VM through a scripted block/tx/**crash** sequence and writes its `Observation`s (block hashes, post-exec **state roots**, **receipt roots**, base fees, settlement choices, **A/E/S frontier heights**) as JSON. The Rust `ava-differential` SAE driver drives the *identical* sequence and `prop_assert_eq!`s against it. Live per-PR is feasible here; keep the recorded-oracle corpus committed as the CI fallback.
+3. **Subagent note:** a background subagent's first `go build` may stall the watchdog while compiling the Go saevm graph cold (minutes, no streamed output) — **pre-warm `cd ../avalanchego && go build ./vms/saevm/...` in the orchestrator first** (same pattern as the reth pre-warm), then dispatch.
+
+---
+
 ## Tasks
 
 ### Task M7.1: SAE sub-workspace scaffolding + stricter-lint bar ✅ DONE (01d514f)
@@ -327,8 +346,9 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [x] **Step 5 — Commit:** `sae: golden::sae_block_hash + settlement & recovery-transcript vectors (provenance-tracked)`
 
 ### Task M7.29: `differential::sae_recovery` — crash+restart resettles to identical state
-**Sub-crate:** ava-differential (workspace `tests/differential/`)  ·  **Depends on:** M7.24, M7.28, X (cross-cutting differential harness)  ·  **Spec:** `11` §1.4/§10 invariant 7, `27` §9 (crash-injection), `02` §11
-**Files:** `tests/differential/src/saevm.rs`, `tests/differential/tests/sae_recovery.rs`, `tests/differential/proptest-regressions/`
+**Sub-crate:** ava-differential (workspace `tests/differential/`)  ·  **Depends on:** M7.24, M7.28, X (cross-cutting differential harness)  ·  **Spec:** `11` §1.4/§10 invariant 7, `27` §9 (crash-injection), `02` §11  ·  **NEXT UP — all deps met (M7.24✓, M7.28✓); first of the strictly-sequential M7.29→M7.30→M7.32 tail.**
+**Files:** `tests/differential/src/saevm.rs`, `tests/differential/tests/sae_recovery.rs`, `tests/differential/proptest-regressions/`, + a Go vector-emitter under `../avalanchego/vms/saevm/`
+> **★ USE A REAL GO ORACLE (see the ENVIRONMENT FINDING block above).** The Go saevm node runs in this env — do NOT settle for recorded-only/self-consistent; build the Go vector-emitter + the Rust `ava-differential` SAE driver and compare against the live Go run (recorded corpus committed as the CI fallback). While here, **retro-upgrade the M7.28 goldens** (`tests/vectors/saevm/{blocks,settlement,recovery}/*.json` + MANIFEST provenance) from self-consistent → real Go-byte parity, since M7.28's provenance explicitly deferred that to this task. Pre-warm `cd ../avalanchego && CGO_ENABLED=1 go build ./vms/saevm/...` (with the mise go-1.25.10 PATH) before any subagent dispatch.
 - [ ] **Step 1 — Red:** `tests/sae_recovery.rs::differential::sae_recovery` — a proptest over `(seed, block-stream, crash-point ∈ {mid-execute, between commit interval and head, after-commit-before-pointer})`: drive the Rust SAE node, inject the crash via the `27` §9 `FailpointDb`/out-of-process `kill` seam, restart, and `prop_assert_eq!` the post-recovery A/E/S frontiers + state roots equal the Go SAE node driven through the same crash+restart (recorded-oracle mode per-PR).
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential -E 'test(sae_recovery)'` → fails (no SAE driver / mismatch).
 - [ ] **Step 3 — Green:** Implement the `ava-differential` SAE driver + `Observation` collector (A/E/S frontier heights, state/receipt roots) and the crash-injection seam; reach Go-identical post-recovery state. Commit the regression corpus.
@@ -338,6 +358,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 ### Task M7.30: `differential::sae_streaming` — vs Go SAE node (CI-gated live)
 **Sub-crate:** ava-differential  ·  **Depends on:** M7.18, M7.23, M7.29, X  ·  **Spec:** `11` §12 (differential vs Go saevm), §13 (validate §9 pipelined-commit), `02` §11.1/§11.7
 **Files:** `tests/differential/tests/sae_streaming.rs`, `tests/differential/src/saevm.rs`
+> **★ LIVE GO ORACLE IS AVAILABLE HERE (see the ENVIRONMENT FINDING block above)** — the spec's "live mode CI-gated nightly only" was written assuming no Go node; in THIS env the live two-binary comparison can actually run per-PR. Reuse the M7.29 Go vector-emitter + SAE differential driver, extended to the streaming/per-`AwaitFinalization`-barrier comparison.
 - [ ] **Step 1 — Red:** `tests/sae_streaming.rs::differential::sae_streaming` — drive identical block/tx sequences through Rust and Go SAE nodes; `prop_assert_eq!` byte-identical block hashes, state roots, receipt roots, base fees, settlement choices, and S/E/A frontier heights at every `AwaitFinalization` barrier. Live two-binary mode gated behind a CI feature/env (`02` §11.7 nightly); a recorded-oracle subset runs per-PR.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential -E 'test(sae_streaming)' --features live` → fails (no live driver wired).
 - [ ] **Step 3 — Green:** Extend the SAE differential driver to the streaming comparison (issue txs, advance time identically, observe per-frontier state). Mark live mode CI-gated (coordinate with cross-cutting harness X); recorded subset per-PR. This validates the `00` §9 pipelined-commit optimization is observably-neutral.
