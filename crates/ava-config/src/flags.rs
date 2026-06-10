@@ -11,9 +11,10 @@ use ava_network::throttling::outbound_msg::{
     DEFAULT_AT_LARGE_ALLOC_SIZE, DEFAULT_NODE_MAX_AT_LARGE_BYTES, DEFAULT_VDR_ALLOC_SIZE,
 };
 use ava_snow::snowball::DEFAULT_PARAMETERS;
+use clap::{Arg, ArgAction, Command};
 
 use crate::defaults;
-use crate::duration::format_go_duration;
+use crate::duration::{format_go_duration, parse_go_duration};
 use crate::keys;
 
 /// The pflag value type of a flag (Go `pflag.Value.Type()`).
@@ -1554,6 +1555,55 @@ pub static FLAG_SPECS: &[FlagSpec] = &[
     },
 ];
 
+/// Adapts [`parse_go_duration`] to clap's value-parser signature.
+fn clap_go_duration(s: &str) -> Result<std::time::Duration, crate::ConfigError> {
+    parse_go_duration(s)
+}
+
+/// Builds the `avalanchers` [`clap::Command`] programmatically from the flag
+/// table, so flag names stay data the parity test can enumerate (12 §1.4).
+///
+/// pflag-parity choices:
+/// - Bools take `--x` and `--x=true|false` (`num_args(0..=1)` +
+///   `default_missing_value("true")`).
+/// - Durations parse with Go's `time.ParseDuration` grammar (not humantime).
+/// - Slices split on commas and may repeat; `stringToString` repeats `k=v`.
+/// - Deprecated flags get a `DEPRECATED:` help prefix (Go prints
+///   `Flag --<key> has been deprecated, <msg>`).
+/// - clap's auto `--version` is disabled: `version`/`version-json` are real
+///   table rows handled by the binary (12 §9).
+#[must_use]
+pub fn build_command(specs: &'static [FlagSpec]) -> Command {
+    let mut cmd = Command::new("avalanchers")
+        .version(ava_version::CURRENT.to_string())
+        .disable_version_flag(true)
+        .disable_help_flag(false)
+        .arg_required_else_help(false);
+    for s in specs {
+        let mut arg = Arg::new(s.key).long(s.key);
+        arg = match s.kind {
+            FlagKind::Bool => arg
+                .num_args(0..=1)
+                .default_missing_value("true")
+                .value_parser(clap::value_parser!(bool)),
+            FlagKind::Duration => arg.value_parser(clap_go_duration),
+            FlagKind::StringSlice | FlagKind::IntSlice => {
+                arg.value_delimiter(',').action(ArgAction::Append)
+            }
+            FlagKind::StringMap => arg.action(ArgAction::Append),
+            FlagKind::String | FlagKind::U64 | FlagKind::Uint | FlagKind::I64 | FlagKind::F64 => {
+                arg
+            }
+        };
+        arg = match s.deprecated {
+            Some(msg) => arg.help(format!("DEPRECATED: {msg}")),
+            None => arg.help(s.help),
+        };
+        cmd = cmd.arg(arg);
+    }
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1570,6 +1620,54 @@ mod tests {
         assert_eq!(spec_keys, all_keys);
         // Sorted by key, like the Go snapshot (13 §25).
         assert!(FLAG_SPECS.is_sorted_by(|a, b| a.key < b.key));
+    }
+
+    #[test]
+    fn build_command_accepts_bool_forms() {
+        // pflag bools accept both `--x` and `--x=true|false` (12 §1.4).
+        for (args, want) in [
+            (vec!["avalanchers", "--sybil-protection-enabled"], true),
+            (vec!["avalanchers", "--sybil-protection-enabled=true"], true),
+            (
+                vec!["avalanchers", "--sybil-protection-enabled=false"],
+                false,
+            ),
+        ] {
+            let m = build_command(FLAG_SPECS)
+                .try_get_matches_from(args.clone())
+                .unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            assert_eq!(
+                m.get_one::<bool>(keys::KEY_SYBIL_PROTECTION_ENABLED),
+                Some(&want),
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_command_parses_durations_and_slices() {
+        let m = build_command(FLAG_SPECS)
+            .try_get_matches_from([
+                "avalanchers",
+                "--network-ping-timeout=22.5s",
+                "--http-allowed-hosts=a.example,b.example",
+                "--acp-support=1,2",
+            ])
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            m.get_one::<std::time::Duration>(keys::KEY_NETWORK_PING_TIMEOUT),
+            Some(&std::time::Duration::from_millis(22_500))
+        );
+        let hosts: Vec<&String> = m
+            .get_many::<String>(keys::KEY_HTTP_ALLOWED_HOSTS)
+            .map(Iterator::collect)
+            .unwrap_or_default();
+        assert_eq!(hosts, ["a.example", "b.example"]);
+        let acps: Vec<&String> = m
+            .get_many::<String>(keys::KEY_ACP_SUPPORT)
+            .map(Iterator::collect)
+            .unwrap_or_default();
+        assert_eq!(acps, ["1", "2"]);
     }
 
     #[test]

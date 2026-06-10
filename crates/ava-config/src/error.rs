@@ -34,6 +34,16 @@ pub enum ConfigError {
         /// The raw input string.
         input: String,
     },
+
+    /// A negative duration. Valid in Go (`time.Duration` is signed), but
+    /// `std::time::Duration` is unsigned; no avalanchego flag default is
+    /// negative, and the durations are validated non-negative at parse time
+    /// anyway (13 §6/§11/§12).
+    #[error("negative duration {input:?} is not supported")]
+    NegativeDurationUnsupported {
+        /// The raw input string.
+        input: String,
+    },
 }
 
 /// Crate-local result alias.
