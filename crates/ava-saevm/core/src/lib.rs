@@ -19,11 +19,13 @@
 pub mod block_handle;
 pub mod frontier;
 pub mod recovery;
+pub mod rpc;
 pub mod settle;
 pub mod vm;
 
 pub use block_handle::SaeBlock;
 pub use frontier::Frontier;
 pub use recovery::{RecoverError, Recovered, RecoverySource, recover};
+pub use rpc::{RpcBlockLabel, RpcError, resolve_rpc_number};
 pub use settle::{SettleError, settle};
 pub use vm::{BlockBuilderSeam, BuildError, Error, ExecutorSeam, Vm};
