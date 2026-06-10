@@ -18,8 +18,14 @@
 #![warn(clippy::pedantic)]
 
 pub mod hooks;
+pub mod state;
+pub mod tx;
+pub mod txpool;
 
 pub use hooks::{
     AtomicOp, AtomicOpSource, BLACKHOLE_ADDR, CChainHooks, Error, GAS_CONFIG_AFTER_TARGET,
     Rebuilder,
 };
+pub use state::State;
+pub use tx::{Credential, Export, Import, Input, Output, Tx, Unsigned};
+pub use txpool::{AtomicTxpool, EvmPoolStub, WaitPool, WaitSource};
