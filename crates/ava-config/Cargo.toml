@@ -33,6 +33,7 @@ toml = "1"
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+proptest = { workspace = true }
 serde = { workspace = true }
 tempfile = "3"
 

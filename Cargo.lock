@@ -1122,6 +1122,7 @@ dependencies = [
  "ava-version",
  "base64",
  "clap",
+ "proptest",
  "serde",
  "serde_json",
  "serde_yaml",

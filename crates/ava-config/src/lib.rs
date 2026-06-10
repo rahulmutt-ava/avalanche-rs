@@ -15,6 +15,8 @@
 // (`tests/golden_flag_parity.rs` snapshot decode); silence
 // `unused_crate_dependencies` for the lib-test unit.
 #[cfg(test)]
+use proptest as _;
+#[cfg(test)]
 use serde as _;
 
 pub mod defaults;

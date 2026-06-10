@@ -39,13 +39,13 @@ Duration defaults are compared after a `parse_go_duration` →
 | `keys.go` ↔ `flags.go` join (13 §24 audit) | ✅ ported | `keys::tests::key_count_matches_go`, `keys::tests::keys_are_sorted_and_unique`, `flags::tests::every_key_has_one_spec` |
 | pflag bool grammar (`--x` / `--x=true`) | ✅ ported | `flags::tests::build_command_accepts_bool_forms` |
 | pflag slice/duration value grammar | ✅ ported | `flags::tests::build_command_parses_durations_and_slices`, `duration::tests::parse_go_duration_grammar`, `duration::tests::parse_go_duration_errors_match_go` (Go `time.ParseDuration` error shapes) |
-| `TestGetEnvVarName` (`config/viper.go`) | ⬜ not ported | `precedence::tests::env_var_name_mapping` lands with M8.9 |
-| viper precedence (flag > env > file > default) + `IsSet` | ⬜ not ported | `prop_config_precedence.rs::config_precedence` proptest lands with M8.11 (exit gate) |
-| config-file `-content` overrides path (json/yaml/toml) | ⬜ not ported | `precedence::tests::config_file_content_overrides_path` lands with M8.9 |
-| `getExpandedArg` path expansion | ⬜ not ported | `precedence::tests::data_dir_expansion` lands with M8.10 |
+| `TestGetEnvVarName` (`config/viper.go`) | ✅ ported | `precedence::tests::env_var_name_mapping` (M8.9) |
+| viper precedence (flag > env > file > default) + `IsSet` | ✅ ported | `prop_config_precedence.rs::config_precedence` proptest + `precedence::tests::is_set_layers` + `precedence::tests::typed_getters_walk_all_layers` (M8.10/M8.11 exit gate); the `snow-quorum-size` override + `network-allow-private-ips` parse-time deferral pinned in `prop_config_precedence.rs` unit cases |
+| config-file `-content` overrides path (json/yaml/toml) | ✅ ported | `precedence::tests::config_file_content_overrides_path`, `precedence::tests::config_file_content_types_funnel_to_json_value`, `precedence::tests::config_file_via_env_var`, `prop_config_precedence.rs::content_overrides_file` (M8.9) |
+| `getExpandedArg` path expansion | ✅ ported | `precedence::tests::data_dir_expansion` (M8.10; `$AVALANCHEGO_DATA_DIR`, `$VAR`, `${VAR}`, unknown→`""`) |
 | `TestGetChainConfigsFromFiles` / `...FromFlags` / dir-load family | ⬜ not ported | chain/subnet config-dir loaders are M8.13 |
 | `TestGetVMAliases*` / `TestGetChainAliases*` | ⬜ not ported | alias-file loaders are M8.13 |
 | `TestSubnetConfigs*` (`subnets.Config` defaulting/validation) | ⬜ not ported | M8.13 (`subnets.rs`) |
 | `TestGetNodeConfig` derived/network-dependent defaults | ⬜ not ported | M8.12 (`parse.rs::get_node_config`) — incl. `network-allow-private-ips` effective default, bootstrap sampling, fee/staking ignore-on-standard-networks |
 
-**Summary:** 4 ported ✅ / 0 partial 🟡 / 8 not ported ⬜ (owned by M8.9–M8.13) / 0 n/a.
+**Summary:** 8 ported ✅ / 0 partial 🟡 / 4 not ported ⬜ (owned by M8.12–M8.13) / 0 n/a.
