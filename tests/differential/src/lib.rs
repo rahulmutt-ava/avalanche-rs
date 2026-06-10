@@ -34,7 +34,10 @@ pub use driver::LockstepDriver;
 pub use network::{Binary, NetworkConfig};
 pub use observation::Observation;
 pub use program::{Action, Program};
-pub use saevm::{FrontierObservation, VectorError, replay_recovery_vector};
+pub use saevm::{
+    FrontierObservation, StreamingBarrier, VectorError, replay_recovery_vector,
+    replay_streaming_vector,
+};
 pub use xchain::run_program;
 
 // The networking deps are consumed only by the `interop_handshake` integration

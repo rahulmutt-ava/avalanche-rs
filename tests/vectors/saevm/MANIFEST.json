@@ -49,6 +49,14 @@
       "what": "LIVE Go-oracle crash+restart recovery vectors: per canonical height, the Go vms/saevm node's emitted block WIRE BYTES (RLP geth block) + committed ExecutionResults (gas-time, base fee, receipt/state roots), plus the Go source (pre-crash) and recovered (post-restart) A/E/S frontier observations, for three crash points. The Rust differential parse_block's the exact Go bytes (block-hash parity by construction), feeds them + the results into ava_saevm_core::recover(), and asserts the Rust-reconstructed A/E/S + LastSettled hash + roots == the Go node's.",
       "computed_by": "the live Go vms/saevm node via tests/differential/go-oracle/recovery_vector_emitter_test.go (avalanchego @ cc3b103b91173f5e8b89b1b31aea0816766c8ada, Go 1.25.10). Re-freeze: see tests/differential/go-oracle/README.md.",
       "go_value_parity": true
+    },
+    {
+      "file": "streaming_differential/streaming_{steady_settling,archival,fast_blocks}.json",
+      "test": "ava-differential tests/sae_streaming.rs::differential::sae_streaming (M7.30)",
+      "spec": "specs/11 §12, §13 (validate §9 pipelined-commit); specs/02 §11.1/§11.7",
+      "what": "LIVE Go-oracle STREAMING per-barrier transcripts: an ordered barriers[] array (one record per accepted height = one AwaitFinalization barrier), each carrying the Go vms/saevm node's emitted block WIRE BYTES (RLP geth block) + committed ExecutionResults (FULL-PRECISION gas-time {seconds, frac_num, frac_denom}, base fee, receipt/state roots) + the A/E/S frontier observed AFTER that accept. Three scripted streams (commit interval 16 / archival=1 / 2s-blocks). The Rust differential drives its own Frontier + settle() walk block-by-block over the same stream and asserts the reconstructed S/E/A + settlement choice + LastSettled hash + roots + base fee == the Go node's at EVERY barrier index — validating the specs/00 §9 pipelined-commit optimization is observably neutral (the steady_settling commit-interval-16 and archival=1 streams reach an identical final A/E/S). Block hashes + the per-barrier settlement choice are genuinely RECOMPUTED by Rust (parse_block re-seal + last_to_settle_at walk over the emitted gas-times/build-times); roots + base fee round-trip (the emitter exposes only the resolved base_fee, not the per-block gas-clock excess/target an independent price() recompute would need — see the M7.32 follow-up).",
+      "computed_by": "the live Go vms/saevm node via tests/differential/go-oracle/streaming_vector_emitter_test.go (avalanchego @ cc3b103b91173f5e8b89b1b31aea0816766c8ada, Go 1.25.10). Whole-second wall-clock advances keep the test-stub sub-second header component zero (matching the Go production cchain hook + the Rust whole-second Block::timestamp() model); the gas-time fraction is emitted + compared at full precision. Re-freeze: see tests/differential/go-oracle/README.md.",
+      "go_value_parity": true
     }
   ]
 }
