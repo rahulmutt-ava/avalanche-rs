@@ -16,6 +16,11 @@ description = "The minimal EVM C-Chain on sae::Vm: hooks, atomic Import/Export, 
 ava-saevm-gastime = { path = "../gastime" }
 ava-saevm-hook = { path = "../hook" }
 ava-saevm-types = { path = "../types" }
+# The SAE core VM (the `sae::Vm` analog): the Initialize harness composes it
+# with the C-Chain hooks + atomic txpool (specs/11 §5/§8).
+ava-saevm-core = { path = "../core" }
+# The SAE block lifecycle type the hook builder seam constructs.
+ava-saevm-blocks = { path = "../blocks" }
 ava-evm-reth = { path = "../../ava-evm-reth" }
 ava-types = { path = "../../ava-types" }
 ava-vm = { path = "../../ava-vm" }
@@ -36,6 +41,9 @@ ava-database = { path = "../../ava-database" }
 tokio = { workspace = true, features = [ "sync" ] }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
+# The `/avax` JSON-RPC service is a direct serde_json handler (the SAE RPC
+# convention; no jsonrpsee), matching `core::rpc` (M7.19).
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = [ "rt", "macros", "sync", "time" ] }
