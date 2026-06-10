@@ -1,0 +1,24 @@
+# ava-config — node configuration (M8 / specs 12 §1, 13).
+#
+# Dependency direction: ava-config -> { ava-snow (snowball default params),
+# ava-network (outbound-throttler default constants), ava-version (clap
+# version string) }. The genesis-derived defaults (LocalParams fee/staking
+# economics) are local constants in src/defaults.rs until ava-genesis lands
+# (TODO(M8.12): re-source from ava-genesis).
+
+[package]
+name = "ava-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Node configuration: 206-flag catalog, clap command builder, and the viper-parity layered resolver (M8 / specs 12 §1, 13)."
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
