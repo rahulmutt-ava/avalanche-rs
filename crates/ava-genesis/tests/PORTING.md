@@ -15,6 +15,6 @@ Legend: ⬜ not ported · 🟡 partial · ✅ ported
 | `TestGenesis` | ✅ `tests/golden_genesis_block_id.rs::genesis_block_id` (M8.8 per-PR exit gate) + `genesis_p_chain_bytes_byte_identical` (full byte-stream parity vs the committed Go dumps, specs 23 §9.2) |
 | `TestVMGenesis` | ✅ `tests/golden_genesis_block_id.rs::{genesis_block_id,vm_genesis_unknown_vm}` |
 | `TestAVAXAssetID` | ✅ `build.rs::tests::avax_asset_id_matches_go` (M8.7) |
-| `TestSampleBootstrappers` | ⬜ M8.14 (`bootstrappers.rs::tests::bootstrapper_parity`) |
-| `TestGetRecentStartTime` | ⬜ M8.14 (`recent_start.rs::tests::get_recent_start_time`) |
+| `TestSampleBootstrappers` | ✅ `bootstrappers.rs::tests::{bootstrapper_parity,sample_bootstrappers_deterministic}` (M8.14; + counts/IDs/IPs vs `bootstrappers.json` and a seeded-source determinism check Go lacks) |
+| `TestGetRecentStartTime` | ✅ `recent_start.rs::tests::get_recent_start_time_table` (M8.14; all 8 Go rows) |
 | `TestCChainGenesisTimestamp` | ⬜ M8.15 (needs the ava-cchain/reth eth-genesis parse — next wave) |

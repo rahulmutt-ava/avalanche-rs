@@ -16,6 +16,8 @@ ava-crypto = { path = "../ava-crypto" }
 ava-platformvm = { path = "../ava-platformvm" }
 ava-avm = { path = "../ava-avm" }
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# gonum-parity MT19937-64 + uniform sampler for sample_bootstrappers (23 §5.2).
+ava-utils = { path = "../ava-utils" }
 serde = { workspace = true }
 # `--genesis-file-content` is base64(JSON) (Go `GetConfigContent`); pinned here
 # (not yet a workspace dep) — already in Cargo.lock transitively at 0.22.

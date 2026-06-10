@@ -19,19 +19,21 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use ava_platformvm::txs::executor::StakingConfig;
-use ava_types::constants::{FUJI_ID, LOCAL_ID, MAINNET_ID};
 use ava_types::id::Id;
 
+pub mod bootstrappers;
 pub mod build;
 pub mod chains;
 pub mod config;
 pub mod error;
+pub mod recent_start;
 pub mod split;
 pub mod unparsed;
 pub mod validate;
 
+pub use bootstrappers::{Bootstrapper, bootstrappers, sample_bootstrappers};
 pub use build::{avax_asset_id, from_config, vm_genesis};
-pub use config::{Allocation, Config, LockedAmount, Staker};
+pub use config::{Allocation, Config, LockedAmount, Staker, get_config};
 pub use error::{GenesisError, Result};
 
 /// A chain whose genesis identity can be derived from the network genesis
@@ -54,28 +56,12 @@ type BuiltGenesis = Arc<(Vec<u8>, Id)>;
 static EMBEDDED_GENESIS: LazyLock<Mutex<HashMap<u32, BuiltGenesis>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// The embedded [`Config`] used by [`genesis_bytes`] for `network_id`.
-///
-/// Local (and the local-templated custom networks) resolve to
-/// [`config::UNMODIFIED_LOCAL_CONFIG`] — the **golden identity** of specs 23
-/// §7. The start-time-advanced live local config (`getRecentStartTime`, specs
-/// 23 §5.1) is exposed separately for node assembly.
-fn embedded_config(network_id: u32) -> Config {
-    match network_id {
-        MAINNET_ID => config::MAINNET_CONFIG.clone(),
-        FUJI_ID => config::FUJI_CONFIG.clone(),
-        LOCAL_ID => config::UNMODIFIED_LOCAL_CONFIG.clone(),
-        other => {
-            // Custom networks use the local config as a template (GetConfig).
-            let mut template = config::UNMODIFIED_LOCAL_CONFIG.clone();
-            template.network_id = other;
-            template
-        }
-    }
-}
-
 /// `(p_chain_genesis_bytes, avax_asset_id)` for a network: the custom config
-/// when given, else the embedded config for `network_id` (cached).
+/// when given, else [`config::get_config`]`(network_id)` (cached per network
+/// id). Note Go parity: Local resolves to the **live** start-time-advanced
+/// config, so its P-Chain genesis id is time-dependent; the golden tests pin
+/// [`config::UNMODIFIED_LOCAL_CONFIG`] via [`from_config`] directly
+/// (specs 23 §5.1).
 ///
 /// # Errors
 /// Propagates the [`build::from_config`] error.
@@ -89,7 +75,7 @@ pub fn genesis_bytes(network_id: u32, custom: Option<&Config>) -> Result<(Vec<u8
     if let Some(cached) = cache.get(&network_id) {
         return Ok((cached.0.clone(), cached.1));
     }
-    let built = Arc::new(build::from_config(&embedded_config(network_id))?);
+    let built = Arc::new(build::from_config(&config::get_config(network_id))?);
     cache.insert(network_id, Arc::clone(&built));
     Ok((built.0.clone(), built.1))
 }
@@ -97,7 +83,8 @@ pub fn genesis_bytes(network_id: u32, custom: Option<&Config>) -> Result<(Vec<u8
 /// The genesis identity of `chain` on `network_id` (specs 23 §4/§7):
 /// `Chain::P` ⇒ `sha256(p_chain_genesis_bytes)` (the P-Chain genesis block's
 /// parent / the `TestGenesis` golden id); `Chain::X`/`Chain::C` ⇒ the matching
-/// `CreateChainTx` id (the blockchain id).
+/// `CreateChainTx` id (the blockchain id; start-time-independent, so fixed
+/// even for the live Local config).
 ///
 /// # Errors
 /// Propagates the build/parse error.

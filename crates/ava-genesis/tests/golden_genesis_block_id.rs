@@ -88,10 +88,18 @@ fn go_dump(name: &str) -> Vec<u8> {
 #[test]
 fn genesis_block_id() {
     for row in &GOLDEN {
-        // Mainnet/Fuji resolve through the public genesis_bytes/embedded path;
-        // Local pins the pre-advance config (specs 23 §5.1 quirk).
-        let id = ava_genesis::genesis_block_id(row.network_id, Chain::P).expect(row.name);
-        assert_eq!(id.to_string(), row.p_genesis_block_id, "{} P", row.name);
+        // Mainnet/Fuji resolve through the public genesis_bytes/get_config
+        // path. Local's P id is computed over the **unmodified** local config
+        // (specs 23 §5.1 quirk: the live local config advances startTime, so
+        // its P genesis id is time-dependent — exactly as in Go, whose
+        // TestGenesis pins unmodifiedLocalConfig).
+        let p_id = if row.network_id == 12345 {
+            let (p_bytes, _) = from_config(&UNMODIFIED_LOCAL_CONFIG).expect("local build");
+            ava_platformvm::genesis::genesis_id(&p_bytes)
+        } else {
+            ava_genesis::genesis_block_id(row.network_id, Chain::P).expect(row.name)
+        };
+        assert_eq!(p_id.to_string(), row.p_genesis_block_id, "{} P", row.name);
 
         assert_eq!(
             ava_genesis::genesis_block_id(row.network_id, Chain::X)

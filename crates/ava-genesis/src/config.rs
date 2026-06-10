@@ -148,6 +148,42 @@ pub static FUJI_CONFIG: LazyLock<Config> =
 pub static UNMODIFIED_LOCAL_CONFIG: LazyLock<Config> =
     LazyLock::new(|| parse_embedded(LOCAL_GENESIS_CONFIG_JSON, "local"));
 
+/// `LocalConfig` — the **live** local genesis config: the embedded config with
+/// `startTime` advanced to the most recent 9-month chunk `<= now`
+/// (`getRecentStartTime`, specs 23 §5.1). Its genesis id is therefore
+/// time-dependent — the golden tests pin [`UNMODIFIED_LOCAL_CONFIG`] instead.
+pub static LOCAL_CONFIG: LazyLock<Config> = LazyLock::new(|| {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let mut config = UNMODIFIED_LOCAL_CONFIG.clone();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs();
+    config.start_time = crate::recent_start::get_recent_start_time(
+        config.start_time,
+        now,
+        crate::recent_start::LOCAL_NETWORK_UPDATE_START_TIME_PERIOD_SECS,
+    );
+    config
+});
+
+/// `genesis.GetConfig` — the embedded config for `network_id`; unknown ids use
+/// the (live) local config as a template with the network id overridden.
+#[must_use]
+pub fn get_config(network_id: u32) -> Config {
+    use ava_types::constants::{FUJI_ID, LOCAL_ID, MAINNET_ID};
+    match network_id {
+        MAINNET_ID => MAINNET_CONFIG.clone(),
+        FUJI_ID => FUJI_CONFIG.clone(),
+        LOCAL_ID => LOCAL_CONFIG.clone(),
+        other => {
+            let mut config = LOCAL_CONFIG.clone();
+            config.network_id = other;
+            config
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ava_types::constants::{self, FUJI_ID, LOCAL_ID, MAINNET_ID};
