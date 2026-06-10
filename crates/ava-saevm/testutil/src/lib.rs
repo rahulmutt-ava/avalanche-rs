@@ -10,4 +10,5 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
+pub mod invariants;
 pub mod schedule;
