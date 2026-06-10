@@ -19,6 +19,23 @@ ava-saevm-types = { path = "../types" }
 ava-evm-reth = { path = "../../ava-evm-reth" }
 ava-types = { path = "../../ava-types" }
 ava-vm = { path = "../../ava-vm" }
+# The byte-exact linear codec for the atomic Import/Export tx (M7.22, ATOMIC-1).
+ava-codec = { path = "../../ava-codec" }
+ava-codec-derive = { path = "../../ava-codec-derive" }
+# secp256k1fx Input/OutputOwners/Credential/TransferInput/TransferOutput embedded
+# as the base fx of the atomic tx components (specs 27 §3.1).
+ava-secp256k1fx = { path = "../../ava-secp256k1fx" }
+# sha256 of the signed bytes → tx_id (specs 27 §3.1).
+ava-crypto = { path = "../../ava-crypto" }
+# The cross-chain shared-memory `SharedMemory` view the state applies into a
+# single accept batch (specs 27 §2.3 ATOMIC-1).
+ava-chains = { path = "../../ava-chains" }
+# The atomic-tx state store (tx index + last-height) codec'd over a Database.
+ava-database = { path = "../../ava-database" }
+# The atomic txpool wakes a `WaitForEvent` waiter via a notify.
+tokio = { workspace = true, features = [ "sync" ] }
+parking_lot = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = [ "rt", "macros", "sync", "time" ] }
