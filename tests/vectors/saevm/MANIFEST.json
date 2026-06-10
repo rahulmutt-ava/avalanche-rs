@@ -1,5 +1,5 @@
 {
-  "_comment": "Provenance manifest for the SAE golden vectors under tests/vectors/saevm/. These are SELF-CONSISTENT, RUST-COMPUTED golden vectors that freeze the ava-saevm pipeline's own outputs, committed to guard against silent regression. They are NOT extracted from a running Go saevm node (that path is unavailable in the build sandbox). The Go vms/saevm sources listed below are the BEHAVIORAL REFERENCE; exact Go/geth byte parity is asserted separately by the M7.29 differential, not by these goldens. To re-freeze after an intentional change, run the in-tree generator: `cargo test -p ava-saevm-core --test golden -- --ignored --nocapture` (and, for blocks/block_hash.json, ava-saevm-blocks tests/block_hash_golden.rs) and paste the printed values.",
+  "_comment": "Provenance manifest for the SAE golden vectors under tests/vectors/saevm/. The blocks/*, settlement/*, and recovery/recovery_transcript.json vectors are SELF-CONSISTENT, RUST-COMPUTED goldens that freeze the ava-saevm pipeline's own outputs (a FakeExecutor with deterministic, height-derived fake roots), committed to guard against silent regression — they are NOT, and by fixture design cannot be, byte-identical to a live Go saevm node (the Go node builds entirely different blocks with real txs + real firewood/geth roots). Exact Go/geth byte parity is instead asserted by the M7.29 differential, whose LIVE-Go-extracted corpus lives under recovery_differential/ (see that entry below): the Rust SAE recovery pipeline is driven over the real Go node's emitted block WIRE BYTES + committed ExecutionResults, and its reconstructed A/E/S frontier + LastSettled choice + block hashes are asserted equal to the Go node's. To re-freeze the Rust-computed goldens after an intentional change, run `cargo test -p ava-saevm-core --test golden -- --ignored --nocapture` (and, for blocks/block_hash.json, ava-saevm-blocks tests/block_hash_golden.rs) and paste the printed values; to re-freeze the live Go corpus see tests/differential/go-oracle/README.md.",
   "go_reference": {
     "repo": "github.com/ava-labs/avalanchego",
     "subtree": "vms/saevm",
@@ -40,7 +40,15 @@
       "test": "ava-saevm-core tests/golden.rs::golden::recovery_transcript",
       "spec": "specs/11 §1.4, §10 invariant 7",
       "what": "a crash+restart transcript: the reconstructed A/E/S heights + recovered executed/settled post-state roots after recover() rebuilds from disk at commit_interval=16.",
-      "computed_by": "ava_saevm_core::recover() over a DiskState snapshot in tests/golden.rs."
+      "computed_by": "ava_saevm_core::recover() over a DiskState snapshot in tests/golden.rs (Rust-frozen, FakeExecutor fake roots — NOT Go-parity by fixture design; see recovery_differential/ for the live-Go-extracted recovery vectors)."
+    },
+    {
+      "file": "recovery_differential/recovery_{between_commit_and_head,archival_after_commit,commit_interval_exactly}.json",
+      "test": "ava-differential tests/sae_recovery.rs::differential::sae_recovery (M7.29)",
+      "spec": "specs/11 §1.4, §10 invariant 7; specs/27 §9; specs/02 §11",
+      "what": "LIVE Go-oracle crash+restart recovery vectors: per canonical height, the Go vms/saevm node's emitted block WIRE BYTES (RLP geth block) + committed ExecutionResults (gas-time, base fee, receipt/state roots), plus the Go source (pre-crash) and recovered (post-restart) A/E/S frontier observations, for three crash points. The Rust differential parse_block's the exact Go bytes (block-hash parity by construction), feeds them + the results into ava_saevm_core::recover(), and asserts the Rust-reconstructed A/E/S + LastSettled hash + roots == the Go node's.",
+      "computed_by": "the live Go vms/saevm node via tests/differential/go-oracle/recovery_vector_emitter_test.go (avalanchego @ cc3b103b91173f5e8b89b1b31aea0816766c8ada, Go 1.25.10). Re-freeze: see tests/differential/go-oracle/README.md.",
+      "go_value_parity": true
     }
   ]
 }

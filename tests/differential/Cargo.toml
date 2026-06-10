@@ -30,7 +30,18 @@ ava-snow = { path = "../../crates/ava-snow" }
 ava-database = { path = "../../crates/ava-database" }
 ava-types = { path = "../../crates/ava-types" }
 ava-version = { path = "../../crates/ava-version" }
+# The `saevm` collector (M7.29) drives the REAL SAE recovery pipeline
+# (`ava_saevm_core::recover`) over a `RecoverySource` populated from a LIVE
+# Go-oracle vector (block wire bytes + committed ExecutionResults), so the lib
+# links the SAE core/blocks/types + the reth block primitives it parses into.
+ava-saevm-core = { path = "../../crates/ava-saevm/core" }
+ava-saevm-blocks = { path = "../../crates/ava-saevm/blocks" }
+ava-saevm-types = { path = "../../crates/ava-saevm/types" }
+ava-saevm-proxytime = { path = "../../crates/ava-saevm/proxytime" }
+ava-evm-reth = { path = "../../crates/ava-evm-reth" }
+thiserror = { workspace = true }
 async-trait = { workspace = true }
+hex = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
 tokio-util = { workspace = true }
@@ -43,8 +54,10 @@ ava-network = { path = "../../crates/ava-network" }
 ava-message = { path = "../../crates/ava-message" }
 ava-crypto = { path = "../../crates/ava-crypto" }
 # The M5.22 `differential::xchain_issue_tx` determinism gate is a proptest dev
-# consumer of the `xchain` collector.
+# consumer of the `xchain` collector; M7.29 `differential::sae_recovery` reuses
+# proptest + pretty_assertions for the recorded Go-oracle recovery replay.
 proptest = { workspace = true }
+pretty_assertions = { workspace = true }
 
 [lints]
 workspace = true
