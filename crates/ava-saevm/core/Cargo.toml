@@ -32,6 +32,7 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+ava-saevm-testutil = { path = "../testutil" }
 ava-saevm-proxytime = { path = "../proxytime" }
 ava-saevm-gastime = { path = "../gastime" }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
