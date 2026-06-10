@@ -44,6 +44,40 @@ pub enum ConfigError {
         /// The raw input string.
         input: String,
     },
+
+    /// `--config-file-content` (or another `-content` flag) was not valid
+    /// base64 (Go: `unable to decode base64 content: %w`).
+    #[error("unable to decode base64 content: {msg}")]
+    InvalidBase64Content {
+        /// The underlying decode error.
+        msg: String,
+    },
+
+    /// `--config-file-content-type` (or the config-file extension) was not
+    /// one of json/yaml/toml (Go viper: `Unsupported Config Type %q`).
+    #[error("unsupported config type {content_type:?}")]
+    ConfigContentTypeNotSupported {
+        /// The offending type string.
+        content_type: String,
+    },
+
+    /// The `--config-file` path could not be read.
+    #[error("unable to read config file {path:?}: {msg}")]
+    ConfigFileRead {
+        /// The offending path.
+        path: String,
+        /// The underlying I/O error.
+        msg: String,
+    },
+
+    /// The config content failed to parse as its declared format.
+    #[error("unable to parse {format} config content: {msg}")]
+    ConfigParse {
+        /// The format that was attempted (json/yaml/toml).
+        format: String,
+        /// The underlying parse error.
+        msg: String,
+    },
 }
 
 /// Crate-local result alias.

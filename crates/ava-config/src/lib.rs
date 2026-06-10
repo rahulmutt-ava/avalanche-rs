@@ -16,13 +16,12 @@
 // `unused_crate_dependencies` for the lib-test unit.
 #[cfg(test)]
 use serde as _;
-#[cfg(test)]
-use serde_json as _;
 
 pub mod defaults;
 pub mod duration;
 pub mod error;
 pub mod flags;
 pub mod keys;
+pub mod precedence;
 
 pub use error::{ConfigError, Result};

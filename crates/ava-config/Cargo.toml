@@ -23,12 +23,18 @@ ava-snow = { path = "../ava-snow" }
 ava-version = { path = "../ava-version" }
 # `string` lets `Command::version` take the runtime `ava_version::CURRENT` string.
 clap = { workspace = true, features = [ "string" ] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Config-file formats (00 §4 sanctioned set) + the base64 `-content` flags
+# (12 §1.5). Pinned here (not workspace) — ava-config is the only consumer.
+base64 = "0.22"
+serde_yaml = "0.9"
+toml = "1"
 
 [dev-dependencies]
 assert_matches = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+tempfile = "3"
 
 [lints]
 workspace = true
