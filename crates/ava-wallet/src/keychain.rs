@@ -52,13 +52,13 @@ impl Keychain {
     /// `Keychain.Get` — the signer for `addr`, if owned.
     #[must_use]
     pub fn get(&self, addr: &ShortId) -> Option<&PrivateKey> {
-        self.by_addr.get(addr).map(|i| &self.keys[*i])
+        self.by_addr.get(addr).and_then(|i| self.keys.get(*i))
     }
 
     /// `EthKeychain.GetEth` — the signer for the eth address, if owned.
     #[must_use]
     pub fn get_eth(&self, addr: &[u8; 20]) -> Option<&PrivateKey> {
-        self.by_eth_addr.get(addr).map(|i| &self.keys[*i])
+        self.by_eth_addr.get(addr).and_then(|i| self.keys.get(*i))
     }
 
     /// `Keychain.Addresses` — the AVAX addresses this keychain controls.
@@ -93,6 +93,7 @@ pub fn sign_msg(key: &PrivateKey, msg: &[u8]) -> Result<[u8; SIGNATURE_LEN]> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

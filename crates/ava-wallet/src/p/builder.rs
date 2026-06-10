@@ -573,8 +573,8 @@ fn should_consume_asset(
 fn consume_stake(to_stake: &mut BTreeMap<Id, u64>, asset_id: Id, amount: u64) -> u64 {
     let entry = to_stake.entry(asset_id).or_insert(0);
     let staked = (*entry).min(amount);
-    *entry -= staked;
-    amount - staked
+    *entry = entry.saturating_sub(staked);
+    amount.saturating_sub(staked)
 }
 
 /// `spendHelper.consumeAsset` — burn first, stake the rest; returns the
@@ -587,8 +587,8 @@ fn consume_asset(
 ) -> u64 {
     let entry = to_burn.entry(asset_id).or_insert(0);
     let burned = (*entry).min(amount);
-    *entry -= burned;
-    consume_stake(to_stake, asset_id, amount - burned)
+    *entry = entry.saturating_sub(burned);
+    consume_stake(to_stake, asset_id, amount.saturating_sub(burned))
 }
 
 struct SpendHelper {
@@ -767,7 +767,7 @@ impl PBuilder for Builder<'_> {
         let (inputs, outputs, _) =
             self.spend(BTreeMap::new(), BTreeMap::new(), 0, complexity, None, &ops)?;
 
-        fx_ids.sort_by(|a, b| a.to_bytes().cmp(&b.to_bytes()));
+        fx_ids.sort_by_key(|id| id.to_bytes());
         Ok(CreateChainTx {
             base: BaseTx::new(self.base_tx(inputs, outputs, ops.memo())),
             subnet_id,
@@ -1296,5 +1296,623 @@ impl PBuilder for Builder<'_> {
         self.backend
             .get_owner(owner_id)
             .ok_or(Error::MissingOwner(owner_id))
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects
+)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use ava_platformvm::signer::ProofOfPossession;
+    use ava_platformvm::txs::Validator;
+    use ava_platformvm::txs::components::PChainOwner;
+    use ava_types::constants::UNIT_TEST_ID;
+
+    use super::*;
+    use crate::keychain::Keychain;
+    use crate::p::backend::WalletBackend;
+    use crate::p::signer::Signer;
+
+    // --- the Go-side fixture (wallet_avalanche_rs_vectors_p_test.go) ---
+
+    const MIN_ISSUANCE_TIME: u64 = 1_700_000_000;
+    const LOCK_TIME: u64 = 1_800_000_000;
+    const VALIDATOR_END: u64 = 1_750_000_000;
+
+    const NANO_AVAX: u64 = 1;
+    const MILLI_AVAX: u64 = 1_000_000;
+    const AVAX: u64 = 1_000_000_000;
+    const MEGA_AVAX: u64 = 1_000_000_000_000_000;
+
+    fn test_keys() -> Vec<ava_crypto::secp256k1::PrivateKey> {
+        // Go `secp256k1.TestKeys()`.
+        [
+            "24jUJ9vZexUM6expyMcT48LBx27k1m7xpraoV62oSQAHdziao5",
+            "2MMvUMsxx6zsHSNXJdFD8yc5XkancvwyKPwpw4xUK3TCGDuNBY",
+            "cxb7KpGWhDMALTjNNSJ7UQkkomPesyWAPUaWRGdyeBNzR6f35",
+            "ewoqjP7PxY4yr3iLTpLisriqt94hdyDFNgchSxGGztUrTXtNN",
+            "2RWLv6YVEXDiWLpaCbXhhqxtLbnFaKQsWPSSMSPhpWo47uJAeV",
+        ]
+        .iter()
+        .map(|s| {
+            let b = ava_crypto::cb58::cb58_decode(s).expect("decode");
+            ava_crypto::secp256k1::PrivateKey::from_bytes(&b).expect("key")
+        })
+        .collect()
+    }
+
+    fn avax_asset_id() -> Id {
+        Id::EMPTY.prefix(&[1789])
+    }
+
+    fn subnet_asset_id() -> Id {
+        Id::EMPTY.prefix(&[2024])
+    }
+
+    fn subnet_id() -> Id {
+        Id::EMPTY.prefix(&[7777])
+    }
+
+    fn validation_id() -> Id {
+        Id::EMPTY.prefix(&[8888])
+    }
+
+    fn other_chain_id() -> Id {
+        Id::EMPTY.prefix(&[6161])
+    }
+
+    fn node_id() -> NodeId {
+        NodeId::from_slice(&[
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+        ])
+        .expect("node id")
+    }
+
+    fn short_id(b: u8) -> ShortId {
+        ShortId::from_slice(&[b; 20]).expect("short id")
+    }
+
+    fn test_context() -> Context {
+        Context {
+            network_id: UNIT_TEST_ID,
+            avax_asset_id: avax_asset_id(),
+            complexity_weights: [1, 10, 100, 1000],
+            gas_price: 1,
+        }
+    }
+
+    fn secp_utxo(prefix: u64, asset_id: Id, amt: u64, addr: ShortId) -> Utxo {
+        Utxo {
+            tx_id: Id::EMPTY.prefix(&[prefix]),
+            output_index: u32::try_from(prefix).expect("index"),
+            asset_id,
+            out: FxOutput::Transfer(TransferOutput::new(
+                amt,
+                OutputOwners::new(0, 1, vec![addr]),
+            )),
+        }
+    }
+
+    fn locked_utxo(prefix: u64, amt: u64, addr: ShortId) -> Utxo {
+        Utxo {
+            tx_id: Id::EMPTY.prefix(&[prefix]),
+            output_index: u32::try_from(prefix).expect("index"),
+            asset_id: avax_asset_id(),
+            out: FxOutput::StakeableLock(LockOut::new(
+                LOCK_TIME,
+                FxOutput::Transfer(TransferOutput::new(
+                    amt,
+                    OutputOwners::new(0, 1, vec![addr]),
+                )),
+            )),
+        }
+    }
+
+    /// Go `rsMakeTestUTXOs`.
+    fn default_utxos(utxo_addr: ShortId) -> Vec<Utxo> {
+        vec![
+            secp_utxo(2024, avax_asset_id(), 2 * MILLI_AVAX, utxo_addr),
+            locked_utxo(2025, 3 * MILLI_AVAX, utxo_addr),
+            secp_utxo(2026, subnet_asset_id(), 99 * MEGA_AVAX, utxo_addr),
+            locked_utxo(2027, 88 * AVAX, utxo_addr),
+            secp_utxo(2028, avax_asset_id(), 9 * AVAX, utxo_addr),
+        ]
+    }
+
+    /// Go `rsMakeUTXOs(utxoKey, 1 nAVAX, 9 AVAX)`.
+    fn staker_utxos(utxo_addr: ShortId) -> Vec<Utxo> {
+        vec![
+            secp_utxo(2025, avax_asset_id(), NANO_AVAX, utxo_addr),
+            secp_utxo(2026, avax_asset_id(), 9 * AVAX, utxo_addr),
+        ]
+    }
+
+    fn bls_pop(scalar: u8) -> (ava_crypto::bls::SecretKey, ProofOfPossession) {
+        let mut sk_bytes = [0u8; 32];
+        sk_bytes[31] = scalar;
+        let sk = ava_crypto::bls::SecretKey::from_bytes(&sk_bytes).expect("bls sk");
+        let pk = sk.public_key().compress();
+        let proof = sk.sign_pop(&pk).compress();
+        (sk, ProofOfPossession::new(pk, proof))
+    }
+
+    struct Env {
+        keychain: Keychain,
+        backend: WalletBackend,
+        context: Context,
+        addrs: BTreeSet<ShortId>,
+        utxo_owner: OutputOwners,
+        subnet_owner: OutputOwners,
+        validation_owner: OutputOwners,
+    }
+
+    impl Env {
+        fn new(utxos: Vec<Utxo>, extra_chains: BTreeMap<Id, Vec<Utxo>>) -> Self {
+            let keys = test_keys();
+            let subnet_auth_addr = keys[0].public_key().address();
+            let utxo_addr = keys[1].public_key().address();
+            let validation_auth_addr = keys[2].public_key().address();
+
+            let utxo_owner = OutputOwners::new(0, 1, vec![utxo_addr]);
+            let subnet_owner = OutputOwners::new(0, 1, vec![subnet_auth_addr]);
+            let validation_owner = OutputOwners::new(0, 1, vec![validation_auth_addr]);
+
+            let mut utxo_sets = extra_chains;
+            utxo_sets.insert(PLATFORM_CHAIN_ID, utxos);
+            let owners = BTreeMap::from([
+                (subnet_id(), subnet_owner.clone()),
+                (validation_id(), validation_owner.clone()),
+            ]);
+
+            Self {
+                keychain: Keychain::new(keys),
+                backend: WalletBackend::new(utxo_sets, owners),
+                context: test_context(),
+                addrs: BTreeSet::from([utxo_addr, subnet_auth_addr, validation_auth_addr]),
+                utxo_owner,
+                subnet_owner,
+                validation_owner,
+            }
+        }
+
+        fn default() -> Self {
+            let keys = test_keys();
+            let utxo_addr = keys[1].public_key().address();
+            Self::new(default_utxos(utxo_addr), BTreeMap::new())
+        }
+
+        fn builder(&self) -> Builder<'_> {
+            Builder::new(self.addrs.clone(), self.context, &self.backend)
+        }
+
+        fn opts(&self) -> Vec<TxOption> {
+            vec![
+                TxOption::MinIssuanceTime(MIN_ISSUANCE_TIME),
+                TxOption::ChangeOwner(self.utxo_owner.clone()),
+            ]
+        }
+
+        /// Builds the unsigned + signed bytes and compares against the Go
+        /// vector.
+        fn check(&self, name: &str, unsigned: ava_platformvm::txs::UnsignedTx) {
+            let vector = load_vector(name);
+            let unsigned_bytes = ava_platformvm::txs::Codec()
+                .marshal(ava_platformvm::CODEC_VERSION, &unsigned)
+                .expect("marshal unsigned");
+            assert_eq!(
+                hex::encode(&unsigned_bytes),
+                vector.unsigned_hex,
+                "unsigned bytes mismatch for {name}"
+            );
+
+            let signer = Signer::new(&self.keychain, &self.backend);
+            let signed = signer.sign_unsigned(unsigned).expect("sign");
+            assert_eq!(
+                hex::encode(&signed.signed_bytes),
+                vector.signed_hex,
+                "signed bytes mismatch for {name}"
+            );
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Vector {
+        name: String,
+        #[serde(default)]
+        inputs: BTreeMap<String, String>,
+        unsigned_hex: String,
+        signed_hex: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct VectorFile {
+        vectors: Vec<Vector>,
+    }
+
+    fn load_vector(name: &str) -> Vector {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/wallet/p.json");
+        let data = std::fs::read_to_string(path).expect("read vectors");
+        let file: VectorFile = serde_json::from_str(&data).expect("parse vectors");
+        file.vectors
+            .into_iter()
+            .find(|v| v.name == name)
+            .unwrap_or_else(|| panic!("missing vector {name}"))
+    }
+
+    fn avax_output(env: &Env) -> TransferableOutput {
+        TransferableOutput {
+            asset_id: avax_asset_id(),
+            out: FxOutput::Transfer(TransferOutput::new(7 * AVAX, env.utxo_owner.clone())),
+        }
+    }
+
+    #[test]
+    fn insufficient_funds_is_reported() {
+        let env = Env::default();
+        // 1000 AVAX is far beyond the fixture's spendable balance.
+        let too_much = TransferableOutput {
+            asset_id: avax_asset_id(),
+            out: FxOutput::Transfer(TransferOutput::new(1_000 * AVAX, env.utxo_owner.clone())),
+        };
+        let err = env
+            .builder()
+            .new_base_tx(vec![too_much], &env.opts())
+            .expect_err("must fail");
+        assert_matches::assert_matches!(err, Error::InsufficientFunds { .. });
+    }
+
+    #[test]
+    fn new_base_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_base_tx(vec![avax_output(&env)], &env.opts())
+            .expect("build");
+        env.check("p_base", ava_platformvm::txs::UnsignedTx::Base(tx));
+    }
+
+    #[test]
+    fn new_base_tx_with_memo_bytes_match_go() {
+        let env = Env::default();
+        let mut opts = env.opts();
+        opts.push(TxOption::Memo(b"memo".to_vec()));
+        let tx = env
+            .builder()
+            .new_base_tx(vec![avax_output(&env)], &opts)
+            .expect("build");
+        env.check("p_base_memo", ava_platformvm::txs::UnsignedTx::Base(tx));
+    }
+
+    #[test]
+    fn new_add_subnet_validator_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_add_subnet_validator_tx(
+                SubnetValidator {
+                    validator: Validator {
+                        node_id: node_id(),
+                        start: 0,
+                        end: VALIDATOR_END,
+                        wght: 0,
+                    },
+                    subnet: subnet_id(),
+                },
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_add_subnet_validator",
+            ava_platformvm::txs::UnsignedTx::AddSubnetValidator(tx),
+        );
+    }
+
+    #[test]
+    fn new_remove_subnet_validator_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_remove_subnet_validator_tx(node_id(), subnet_id(), &env.opts())
+            .expect("build");
+        env.check(
+            "p_remove_subnet_validator",
+            ava_platformvm::txs::UnsignedTx::RemoveSubnetValidator(tx),
+        );
+    }
+
+    #[test]
+    fn new_create_chain_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_create_chain_tx(
+                subnet_id(),
+                b"abc".to_vec(),
+                Id::EMPTY.prefix(&[4242]),
+                vec![Id::EMPTY.prefix(&[5151])],
+                "dummyChain".to_string(),
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_create_chain",
+            ava_platformvm::txs::UnsignedTx::CreateChain(tx),
+        );
+    }
+
+    #[test]
+    fn new_create_subnet_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_create_subnet_tx(env.subnet_owner.clone(), &env.opts())
+            .expect("build");
+        env.check(
+            "p_create_subnet",
+            ava_platformvm::txs::UnsignedTx::CreateSubnet(tx),
+        );
+    }
+
+    #[test]
+    fn new_transfer_subnet_ownership_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_transfer_subnet_ownership_tx(subnet_id(), env.subnet_owner.clone(), &env.opts())
+            .expect("build");
+        env.check(
+            "p_transfer_subnet_ownership",
+            ava_platformvm::txs::UnsignedTx::TransferSubnetOwnership(tx),
+        );
+    }
+
+    #[test]
+    fn new_import_tx_bytes_match_go() {
+        let keys = test_keys();
+        let utxo_addr = keys[1].public_key().address();
+        let import_utxos = vec![default_utxos(utxo_addr)[0].clone()];
+        let env = Env::new(
+            default_utxos(utxo_addr),
+            BTreeMap::from([(other_chain_id(), import_utxos)]),
+        );
+        let tx = env
+            .builder()
+            .new_import_tx(other_chain_id(), env.subnet_owner.clone(), &env.opts())
+            .expect("build");
+        env.check("p_import", ava_platformvm::txs::UnsignedTx::Import(tx));
+    }
+
+    #[test]
+    fn new_export_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_export_tx(other_chain_id(), vec![avax_output(&env)], &env.opts())
+            .expect("build");
+        env.check("p_export", ava_platformvm::txs::UnsignedTx::Export(tx));
+    }
+
+    #[test]
+    fn new_add_permissionless_validator_tx_bytes_match_go() {
+        let keys = test_keys();
+        let utxo_addr = keys[1].public_key().address();
+        let env = Env::new(staker_utxos(utxo_addr), BTreeMap::new());
+
+        let vector = load_vector("p_add_permissionless_validator");
+        let (_, pop) = bls_pop(0x25);
+        assert_eq!(hex::encode(pop.public_key), vector.inputs["bls_pk_0"]);
+        assert_eq!(hex::encode(pop.proof), vector.inputs["bls_pop_0"]);
+
+        let tx = env
+            .builder()
+            .new_add_permissionless_validator_tx(
+                SubnetValidator {
+                    validator: Validator {
+                        node_id: node_id(),
+                        start: 0,
+                        end: VALIDATOR_END,
+                        wght: 2 * AVAX,
+                    },
+                    subnet: ava_types::constants::PRIMARY_NETWORK_ID,
+                },
+                PopSigner::ProofOfPossession(pop),
+                avax_asset_id(),
+                env.subnet_owner.clone(),
+                env.subnet_owner.clone(),
+                1_000_000,
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_add_permissionless_validator",
+            ava_platformvm::txs::UnsignedTx::AddPermissionlessValidator(tx),
+        );
+    }
+
+    #[test]
+    fn new_add_permissionless_delegator_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_add_permissionless_delegator_tx(
+                SubnetValidator {
+                    validator: Validator {
+                        node_id: node_id(),
+                        start: 0,
+                        end: VALIDATOR_END,
+                        wght: 2 * AVAX,
+                    },
+                    subnet: ava_types::constants::PRIMARY_NETWORK_ID,
+                },
+                avax_asset_id(),
+                env.subnet_owner.clone(),
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_add_permissionless_delegator",
+            ava_platformvm::txs::UnsignedTx::AddPermissionlessDelegator(tx),
+        );
+    }
+
+    #[test]
+    fn new_convert_subnet_to_l1_tx_bytes_match_go() {
+        let env = Env::default();
+        let (_, pop0) = bls_pop(0x25);
+        let (_, pop1) = bls_pop(0x26);
+
+        let validators = vec![
+            ConvertSubnetToL1Validator {
+                node_id: vec![0xaa; 20],
+                weight: 0x0102_0304_0506_0708,
+                balance: AVAX,
+                signer: pop0,
+                remaining_balance_owner: PChainOwner {
+                    threshold: 1,
+                    addresses: vec![short_id(0x11)],
+                },
+                deactivation_owner: PChainOwner {
+                    threshold: 1,
+                    addresses: vec![short_id(0x22)],
+                },
+            },
+            ConvertSubnetToL1Validator {
+                node_id: vec![0xbb; 20],
+                weight: 0x1112_1314_1516_1718,
+                balance: 2 * AVAX,
+                signer: pop1,
+                remaining_balance_owner: PChainOwner::default(),
+                deactivation_owner: PChainOwner::default(),
+            },
+        ];
+        let tx = env
+            .builder()
+            .new_convert_subnet_to_l1_tx(
+                subnet_id(),
+                other_chain_id(),
+                vec![0x5a; 32],
+                validators,
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_convert_subnet_to_l1",
+            ava_platformvm::txs::UnsignedTx::ConvertSubnetToL1(tx),
+        );
+    }
+
+    #[test]
+    fn new_register_l1_validator_tx_bytes_match_go() {
+        let env = Env::default();
+        let vector = load_vector("p_register_l1_validator");
+        let message = hex::decode(&vector.inputs["warp_message"]).expect("warp hex");
+        let proof: [u8; 96] = hex::decode(&vector.inputs["bls_pop_0"])
+            .expect("pop hex")
+            .try_into()
+            .expect("pop len");
+
+        let tx = env
+            .builder()
+            .new_register_l1_validator_tx(AVAX, proof, message, &env.opts())
+            .expect("build");
+        env.check(
+            "p_register_l1_validator",
+            ava_platformvm::txs::UnsignedTx::RegisterL1Validator(tx),
+        );
+    }
+
+    #[test]
+    fn new_set_l1_validator_weight_tx_bytes_match_go() {
+        let env = Env::default();
+        let vector = load_vector("p_set_l1_validator_weight");
+        let message = hex::decode(&vector.inputs["warp_message"]).expect("warp hex");
+
+        let tx = env
+            .builder()
+            .new_set_l1_validator_weight_tx(message, &env.opts())
+            .expect("build");
+        env.check(
+            "p_set_l1_validator_weight",
+            ava_platformvm::txs::UnsignedTx::SetL1ValidatorWeight(tx),
+        );
+    }
+
+    #[test]
+    fn new_increase_l1_validator_balance_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_increase_l1_validator_balance_tx(validation_id(), AVAX, &env.opts())
+            .expect("build");
+        env.check(
+            "p_increase_l1_validator_balance",
+            ava_platformvm::txs::UnsignedTx::IncreaseL1ValidatorBalance(tx),
+        );
+    }
+
+    #[test]
+    fn new_disable_l1_validator_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_disable_l1_validator_tx(validation_id(), &env.opts())
+            .expect("build");
+        env.check(
+            "p_disable_l1_validator",
+            ava_platformvm::txs::UnsignedTx::DisableL1Validator(tx),
+        );
+    }
+
+    #[test]
+    fn new_add_auto_renewed_validator_tx_bytes_match_go() {
+        let keys = test_keys();
+        let utxo_addr = keys[1].public_key().address();
+        let env = Env::new(staker_utxos(utxo_addr), BTreeMap::new());
+        let (_, pop) = bls_pop(0x25);
+
+        let tx = env
+            .builder()
+            .new_add_auto_renewed_validator_tx(
+                node_id(),
+                2 * AVAX,
+                PopSigner::ProofOfPossession(pop),
+                env.subnet_owner.clone(),
+                env.subnet_owner.clone(),
+                env.validation_owner.clone(),
+                1_000_000,
+                500_000,
+                7 * 24 * 3600,
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_add_auto_renewed_validator",
+            ava_platformvm::txs::UnsignedTx::AddAutoRenewedValidator(tx),
+        );
+    }
+
+    #[test]
+    fn new_set_auto_renewed_validator_config_tx_bytes_match_go() {
+        let env = Env::default();
+        let tx = env
+            .builder()
+            .new_set_auto_renewed_validator_config_tx(
+                validation_id(),
+                750_000,
+                14 * 24 * 3600,
+                &env.opts(),
+            )
+            .expect("build");
+        env.check(
+            "p_set_auto_renewed_validator_config",
+            ava_platformvm::txs::UnsignedTx::SetAutoRenewedValidatorConfig(tx),
+        );
     }
 }

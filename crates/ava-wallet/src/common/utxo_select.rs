@@ -81,6 +81,7 @@ pub fn unwrap_output(output: &Output) -> Result<(&TransferOutput, u64)> {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
     use ava_platformvm::stakeable::LockOut;
     use ava_secp256k1fx::OutputOwners;
