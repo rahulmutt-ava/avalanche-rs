@@ -32,6 +32,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 ava-database = { path = "../../ava-database" }
+ava-saevm-params = { path = "../params" }
 ava-saevm-testutil = { path = "../testutil" }
 # Tx-signing surface for the determinism property test: build + sign legacy
 # value-transfer txs (`TxLegacy` -> `signature_hash` -> secp256k1 recoverable ->

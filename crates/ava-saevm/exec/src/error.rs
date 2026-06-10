@@ -57,6 +57,14 @@ pub enum Error {
     #[error("executor not seeded: execute_one called before a last-executed block was installed")]
     NotSeeded,
 
+    /// An [`enqueue`](crate::Queue::enqueue) was attempted after the executor's
+    /// `processQueue` drain task closed its receiver (the executor has been shut
+    /// down). The bounded channel `send` failed because the loop is gone.
+    /// Recoverable from the caller's view (consensus can stop feeding); never
+    /// stops the executor (it is already stopping).
+    #[error("execution queue closed: enqueue after the processQueue loop shut down")]
+    QueueClosed,
+
     /// The parent's hash does not match this block's `parent_hash`. Distinct
     /// from a generic [`Error::Fatal`] so the executor's parent-hash sanity
     /// check is testable; it is treated as fatal by the executor loop.

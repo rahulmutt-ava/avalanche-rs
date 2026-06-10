@@ -35,7 +35,7 @@ use ava_saevm_db::Tracker;
 use ava_saevm_gastime::GasTime;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -73,6 +73,49 @@ impl ReceiptSink {
     #[must_use]
     pub fn snapshot(&self) -> Vec<TxReceipt> {
         self.receipts.lock().clone()
+    }
+}
+
+/// One item queued for execution: an ordered block, its parent's committed
+/// post-execution state root, and the builder's worst-case prediction (specs/11
+/// §6.2). The FIFO order of these on the bounded channel is the total execution
+/// order — there is no parallel block execution.
+type QueueItem = (Arc<Block>, ava_saevm_types::B256, WorstCaseBounds);
+
+/// A cloneable handle to the executor's bounded execution queue (specs/11 §6.2).
+///
+/// Holds the [`mpsc::Sender`] side of the bounded channel feeding the single
+/// `processQueue` drain task. [`enqueue`](Self::enqueue) is the AcceptBlock-side
+/// push: because the channel is **bounded**, `enqueue` parks (`send().await`)
+/// once the channel is full, pacing consensus to the execution thread (`Ω_Q`,
+/// specs/11 §2.4) — no unbounded queue growth.
+#[derive(Clone)]
+pub struct Queue {
+    tx: mpsc::Sender<QueueItem>,
+}
+
+impl Queue {
+    /// Enqueues `block` (with its `parent_root` and worst-case `bounds`) for
+    /// execution, parking until a slot is free if the bounded channel is full.
+    ///
+    /// This is the backpressure seam: with a bounded channel, a flood of accepts
+    /// blocks here rather than buffering unboundedly, so consensus paces itself
+    /// to execution throughput (specs/11 §6.2).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::QueueClosed`] if the executor's `processQueue` drain task has
+    /// shut down (the receiver was dropped); the block was not enqueued.
+    pub async fn enqueue(
+        &self,
+        block: Arc<Block>,
+        parent_root: ava_saevm_types::B256,
+        bounds: WorstCaseBounds,
+    ) -> Result<()> {
+        self.tx
+            .send((block, parent_root, bounds))
+            .await
+            .map_err(|_| Error::QueueClosed)
     }
 }
 
@@ -277,10 +320,69 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
             hash: block.hash(),
         });
 
-        // M7.26: the bounded-mpsc `processQueue` task loop (backpressure on
-        // `enqueue`) is spawned under `self.tasks` and feeds this synchronous
-        // step from a FIFO queue; `shutdown` already drains it.
-
         Ok(output)
+    }
+}
+
+impl<D: EvmDriver + Send + Sync + 'static, H: ExecHooks + Send + Sync + 'static> Executor<D, H> {
+    /// Spawns the bounded-`mpsc` `processQueue` drain task and returns a
+    /// cloneable [`Queue`] handle that feeds it (specs/11 §6.2).
+    ///
+    /// The channel is bounded to `capacity`, so [`Queue::enqueue`] parks once it
+    /// is full — this is the backpressure that paces consensus (`AcceptBlock`) to
+    /// the execution thread (`Ω_Q`, specs/11 §2.4); the queue cannot grow without
+    /// bound.
+    ///
+    /// The drain task is a single FIFO loop (no parallel block execution): it
+    /// pulls `(block, parent_root, bounds)` off the receiver and drives the
+    /// synchronous [`execute_one`](Self::execute_one). The total execution order
+    /// is exactly the enqueue order. The task is registered under
+    /// [`task_tracker`](Self::task_tracker) and exits on either channel-close or
+    /// [`shutdown_token`](Self::shutdown_token) cancellation, so
+    /// [`shutdown`](Self::shutdown) drains it cleanly.
+    ///
+    /// A recoverable per-block error is logged and the loop continues; a fatal
+    /// error (`Error::is_fatal`) stops the loop (Go `errFatal` terminates the
+    /// executor thread, specs/11 §11).
+    #[must_use]
+    pub fn start_process_queue(self: Arc<Self>, capacity: usize) -> Queue {
+        let (tx, mut rx) = mpsc::channel::<QueueItem>(capacity);
+        let token = self.shutdown.clone();
+        let executor = Arc::clone(&self);
+
+        self.tasks.spawn(async move {
+            loop {
+                tokio::select! {
+                    // Cancellation wins: stop draining promptly on shutdown.
+                    () = token.cancelled() => break,
+                    item = rx.recv() => {
+                        let Some((block, parent_root, bounds)) = item else {
+                            // Channel closed: every `Queue` sender dropped.
+                            break;
+                        };
+                        match executor.execute_one(&block, parent_root, &bounds) {
+                            Ok(_) => {}
+                            Err(e) if e.is_fatal() => {
+                                tracing::error!(
+                                    error = %e,
+                                    height = block.height(),
+                                    "fatal execution error; stopping processQueue loop",
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    height = block.height(),
+                                    "recoverable execution error; continuing processQueue loop",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Queue { tx }
     }
 }
