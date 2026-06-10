@@ -28,6 +28,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwapOption;
 use parking_lot::RwLock;
@@ -51,6 +52,15 @@ pub struct Frontier {
     last_accepted: ArcSwapOption<Block>,
     /// Hash → block for every block in the closed `[S, A]` window.
     consensus_critical: RwLock<HashMap<B256, Arc<Block>>>,
+    /// Backing store for the `sae` `last_settled_height` gauge: the height of
+    /// the latest settled block (set at construction + on every settle advance).
+    ///
+    /// AS-BUILT: there is no prometheus registry reaching the SAE crates yet (no
+    /// metrics plumbing in `core`/`exec`); this `AtomicU64` is the honest gauge
+    /// backing store, read via [`Frontier::last_settled_height`].
+    /// `// TODO(M8): register this on the "sae" prometheus namespace
+    /// (specs/18 §2.11).`
+    last_settled_height_gauge: AtomicU64,
 }
 
 impl Frontier {
@@ -61,11 +71,15 @@ impl Frontier {
     pub fn new(genesis: Arc<Block>) -> Self {
         let mut map = HashMap::new();
         map.insert(genesis.hash(), Arc::clone(&genesis));
+        // The gauge starts at the genesis (recovered S frontier) height (Go sets
+        // it once at startup).
+        let genesis_height = genesis.height();
         Self {
             last_settled: ArcSwapOption::from(Some(Arc::clone(&genesis))),
             last_executed: ArcSwapOption::from(Some(Arc::clone(&genesis))),
             last_accepted: ArcSwapOption::from(Some(genesis)),
             consensus_critical: RwLock::new(map),
+            last_settled_height_gauge: AtomicU64::new(genesis_height),
         }
     }
 
@@ -143,6 +157,11 @@ impl Frontier {
     pub fn advance_settled(&self, block: &Arc<Block>) {
         if Self::advances(&self.last_settled, block) {
             self.last_settled.store(Some(Arc::clone(block)));
+            // Update the `sae` `last_settled_height` gauge (Go sets it on settle
+            // in `AcceptBlock`). `Relaxed` is fine: a monitoring gauge has no
+            // ordering relationship with the consensus state.
+            self.last_settled_height_gauge
+                .store(block.height(), Ordering::Relaxed);
             let floor = block.height();
             self.consensus_critical
                 .write()
@@ -172,5 +191,14 @@ impl Frontier {
     #[must_use]
     pub fn consensus_critical_len(&self) -> usize {
         self.consensus_critical.read().len()
+    }
+
+    /// The `sae` `last_settled_height` gauge value: the height of the latest
+    /// settled block (set at construction + on every settle advance; specs/18
+    /// §2.11). The backing store for the prometheus gauge once metrics plumbing
+    /// reaches the SAE crates (M8).
+    #[must_use]
+    pub fn last_settled_height(&self) -> u64 {
+        self.last_settled_height_gauge.load(Ordering::Relaxed)
     }
 }

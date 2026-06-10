@@ -346,3 +346,30 @@ fn settle_when_known_false_reports_execution_lagging() {
     // Sanity: TAU is the discipline (5s) used for the settle_at computation.
     assert_eq!(TAU.as_secs(), 5);
 }
+
+// ---------------------------------------------------------------------------
+// (gauge) `sae` last_settled_height tracks S (specs/18 §2.11, Go 844535b313).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn last_settled_height_gauge_tracks_s_frontier() {
+    let chain = build_chain(6, &[0, 0, 0, 0, 0, 1]);
+    let frontier = Frontier::new(Arc::clone(&chain[0]));
+
+    // Starts at the genesis (recovered S frontier) height.
+    assert_eq!(frontier.last_settled_height(), 0, "gauge starts at genesis");
+
+    for h in 1..6u64 {
+        let b = &chain[h as usize];
+        frontier.advance_accepted(b);
+        mark_executed_at(b, h);
+        frontier.advance_executed(b);
+        let _ = settle(&frontier, b);
+        // The gauge equals the S frontier height at every step.
+        assert_eq!(
+            frontier.last_settled_height(),
+            frontier.last_settled().height(),
+            "gauge == S height after settle h={h}",
+        );
+    }
+}

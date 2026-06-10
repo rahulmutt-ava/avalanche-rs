@@ -1471,6 +1471,7 @@ dependencies = [
  "ava-saevm-core",
  "ava-saevm-gastime",
  "ava-saevm-hook",
+ "ava-saevm-testutil",
  "ava-saevm-types",
  "ava-secp256k1fx",
  "ava-types",
@@ -1479,6 +1480,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

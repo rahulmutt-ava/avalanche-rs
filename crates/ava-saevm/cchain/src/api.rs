@@ -19,10 +19,12 @@
 //!
 //! # AS-BUILT deviations
 //!
-//! * **Gossip.** Go's `IssueTx` adds to a bloom-`gossipSet` and a `pushGossiper`;
-//!   the Rust gossip/p2p seam (`txgossip`, M7.20) is not yet wired into the VM,
-//!   so `issue_tx` admits the tx directly into the [`AtomicTxpool`] (the local
-//!   side of Go's behaviour) and the push-gossip is a `// TODO(M7.x)` follow-up.
+//! * **Gossip.** Go's `IssueTx` adds to a bloom-`gossipSet` and a `pushGossiper`
+//!   (M7.33). The Rust [`AvaxService::issue_tx`] now admits through the
+//!   [`BloomSet`](crate::gossip::BloomSet) (which pools the tx + records it
+//!   seen), and the VM's spawned push-gossip loop re-broadcasts the pool — so
+//!   push is driven by the loop rather than per-issue. The live `Network`
+//!   transport is M8; see [`crate::gossip`].
 //! * **`getUTXOs` address formatting.** Go formats bech32 addresses via
 //!   `snow.Context.BCLookup`/`constants.GetHRP`; that node-context machinery is
 //!   M8. The Rust [`AvaxService::get_utxos`] queries shared memory directly by
@@ -35,9 +37,9 @@ use ava_types::id::Id;
 use ava_vm::components::avax::shared_memory::SharedMemory;
 use parking_lot::Mutex;
 
+use crate::gossip::{BloomSet, GossipTx};
 use crate::state::State;
 use crate::tx::Tx;
-use crate::txpool::AtomicTxpool;
 
 /// The `avax` service name (Go `avaxServiceName`).
 pub const AVAX_SERVICE_NAME: &str = "avax";
@@ -70,11 +72,13 @@ pub enum Error {
 
 /// The server-side handler for the `avax` RPC API (Go `cchain.service`).
 ///
-/// Holds the atomic [`AtomicTxpool`] (`issueTx` admits here), the atomic-tx
-/// [`State`] index (`getAtomicTx` reads here), and the C-Chain's shared-memory
-/// view (`getUTXOs` reads here).
+/// Holds the gossip [`BloomSet`] over the atomic txpool (`issueTx` admits
+/// here), the atomic-tx [`State`] index (`getAtomicTx` reads here), and the
+/// C-Chain's shared-memory view (`getUTXOs` reads here).
 pub struct AvaxService {
-    txpool: Arc<AtomicTxpool>,
+    /// The gossip set `issueTx` admits through (bloom set over the atomic
+    /// txpool); Go `service.gossipSet`.
+    gossip_set: Arc<BloomSet>,
     state: Arc<Mutex<State>>,
     shared_memory: Arc<dyn SharedMemory>,
     /// The C-Chain id (the peer chains' UTXOs are read against it).
@@ -82,16 +86,22 @@ pub struct AvaxService {
 }
 
 impl AvaxService {
-    /// Constructs the `avax` service (Go `newService`).
+    /// Constructs the `avax` service (Go `newService(ctx, gossipSet,
+    /// pushGossiper, state)`).
+    ///
+    /// The push gossiper is not held here: in this harness `issueTx` admits
+    /// through `gossip_set` (which records the tx as seen + pools it) and the
+    /// VM's spawned push loop re-broadcasts the pool each tick, so push is driven
+    /// by the loop rather than per-issue. See the module AS-BUILT note.
     #[must_use]
     pub fn new(
-        txpool: Arc<AtomicTxpool>,
+        gossip_set: Arc<BloomSet>,
         state: Arc<Mutex<State>>,
         shared_memory: Arc<dyn SharedMemory>,
         chain_id: Id,
     ) -> Self {
         Self {
-            txpool,
+            gossip_set,
             state,
             shared_memory,
             chain_id,
@@ -104,26 +114,24 @@ impl AvaxService {
         self.chain_id
     }
 
-    /// `avax.issueTx` (Go `service.IssueTx`): admit `tx` into the atomic txpool
-    /// and return its id. Re-issuing an already-known tx is a no-op that still
-    /// reports the id (Go ignores `txpool.ErrAlreadyKnown`).
+    /// `avax.issueTx` (Go `service.IssueTx`): admit `tx` through the bloom
+    /// gossip set (which records it as seen + pools it) and return its id.
+    /// Re-issuing an already-known tx is a no-op that still reports the id (Go
+    /// `gossipSet.Add` ignores `txpool.ErrAlreadyKnown`).
     ///
-    /// TODO(M7.x): also add to the bloom-gossip set + push gossiper once the
-    /// `txgossip` seam is wired into the VM.
+    /// The VM's spawned push-gossip loop re-broadcasts the pool each tick, so
+    /// the issued tx reaches connected peers (Go push-gossips per-issue; here
+    /// the loop drives push — see the module AS-BUILT note).
     ///
     /// # Errors
-    /// [`Error::Issuing`] if the pool rejects the tx for any reason other than
-    /// being already known.
-    // The `Result` is Go-faithful (`IssueTx` returns an error) and future-proof:
-    // M7.x's state-verified `Txpool.Add` + bloom-gossip admission introduce
-    // non-`AlreadyKnown` rejections. Today the pool's only error is
-    // `AlreadyKnown` (which Go ignores), so the body never takes the error path.
-    #[allow(clippy::unnecessary_wraps)]
+    /// [`Error::Issuing`] if the gossip set rejects the tx for any reason other
+    /// than being already known.
     pub fn issue_tx(&self, tx: &Tx) -> Result<Id, Error> {
         let id = tx.id();
-        match self.txpool.add(tx.clone()) {
-            Ok(()) | Err(crate::txpool::Error::AlreadyKnown) => Ok(id),
-        }
+        self.gossip_set
+            .add(GossipTx::new(tx.clone()))
+            .map_err(Error::Issuing)?;
+        Ok(id)
     }
 
     /// `avax.getAtomicTx` (Go `service.GetAtomicTx`): the accepted cross-chain tx

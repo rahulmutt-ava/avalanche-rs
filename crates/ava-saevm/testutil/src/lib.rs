@@ -11,4 +11,5 @@
 #![warn(clippy::pedantic)]
 
 pub mod invariants;
+pub mod network;
 pub mod schedule;
