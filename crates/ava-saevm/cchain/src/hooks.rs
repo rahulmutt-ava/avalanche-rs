@@ -1,7 +1,7 @@
 // Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
-//! C-Chain SAE hooks: the [`hook::PointsG`] implementation the C-Chain VM
+//! C-Chain SAE hooks: the [`ava_saevm_hook::PointsG`] implementation the C-Chain VM
 //! composes (specs/11 §8).
 //!
 //! Faithful port of `vms/saevm/cchain/hooks.go`'s `hooks`/`builder` types. This
@@ -14,7 +14,7 @@
 //! EVM-internal execution (opcodes, precompiles, fee recipient) is owned by
 //! `ava-evm`'s `ConfigureEvm` — these hooks own only the SAE
 //! streaming/settlement concerns (headers, gas clock, atomic mint/burn,
-//! rebuild). This task therefore needs only the SAE [`hook`] surface plus the
+//! rebuild). This task therefore needs only the SAE [`ava_saevm_hook`] surface plus the
 //! reth header/block types re-exported through [`ava_saevm_types`]; it does not
 //! re-derive any EVM-execution behaviour.
 //!

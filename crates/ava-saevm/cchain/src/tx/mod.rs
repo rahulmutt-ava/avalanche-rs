@@ -16,7 +16,7 @@
 //! * an [`Export`] debits EVM accounts ([`Input`]s, an account+nonce pair) and
 //!   produces UTXOs in shared memory (`exported_outs`) — it **burns** AVAX.
 //!
-//! [`Tx::as_op`] maps the tx onto the SAE [`hook::Op`] applied during block
+//! [`Tx::as_op`] maps the tx onto the SAE [`ava_saevm_hook::Op`] applied during block
 //! execution (the seam M7.21's `AtomicOp` describes); [`Tx::atomic_requests`]
 //! returns the shared-memory mutation merged into the accept batch (27 §2.3).
 
