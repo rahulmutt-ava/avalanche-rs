@@ -115,3 +115,9 @@ jobs:
       # run nightly (tier-X tasks X.15/X.22).
       - shell: nix develop --command bash -x {0}
         run: ./scripts/run_task.sh test-differential
+      # M7 (SAE VM / ACP-194) milestone exit gate: assert the named exit tests
+      # exist, PORTING.md is complete, and the golden vectors + fuzz target are
+      # present (specs/11 §10 + exit gate, M7.32).
+      - name: saevm-exit-gate
+        shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh saevm-exit-gate

@@ -205,6 +205,10 @@ tasks:
     desc: Aggregate the per-crate PORTING.md matrices
     cmd: '{{.NIX_RUN}} cargo xtask porting-report'
 
+  saevm-exit-gate:
+    desc: M7 (SAE VM / ACP-194) milestone exit gate (named exit tests + PORTING.md + vectors)
+    cmd: '{{.NIX_RUN}} cargo xtask saevm-exit-gate'
+
   install-nix:
     desc: Install nix with an OS-appropriate installer
     cmd: ./scripts/install_nix.sh
