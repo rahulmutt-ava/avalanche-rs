@@ -1284,9 +1284,11 @@ name = "ava-genesis"
 version = "0.1.0"
 dependencies = [
  "assert_matches",
+ "ava-avm",
  "ava-codec",
  "ava-crypto",
  "ava-platformvm",
+ "ava-secp256k1fx",
  "ava-types",
  "base64",
  "hex",

@@ -85,12 +85,18 @@ pub enum GenesisError {
     /// `math.Add` overflow computing the initial supply (`config.InitialSupply`).
     #[error("initial supply calculation overflowed")]
     SupplyOverflow,
+    /// Unix-time arithmetic overflowed building the staking window.
+    #[error("staking time computation overflowed")]
+    TimeOverflow,
     /// `VMGenesis` found no `CreateChainTx` with the requested VM id.
     #[error("couldn't find blockchain with VM ID {0}")]
     UnknownVmId(ava_types::id::Id),
     /// A linear-codec marshal/unmarshal failure.
     #[error("codec: {0}")]
     Codec(#[from] ava_codec::error::CodecError),
+    /// An `ava-platformvm` genesis marshal/parse failure.
+    #[error("platformvm genesis: {0}")]
+    Platform(#[from] ava_platformvm::error::Error),
     /// A bech32/hex address parse/format failure.
     #[error("address: {0}")]
     Address(#[from] ava_crypto::error::Error),
