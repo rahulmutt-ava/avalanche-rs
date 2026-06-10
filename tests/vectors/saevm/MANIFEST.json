@@ -1,0 +1,46 @@
+{
+  "_comment": "Provenance manifest for the SAE golden vectors under tests/vectors/saevm/. These are SELF-CONSISTENT, RUST-COMPUTED golden vectors that freeze the ava-saevm pipeline's own outputs, committed to guard against silent regression. They are NOT extracted from a running Go saevm node (that path is unavailable in the build sandbox). The Go vms/saevm sources listed below are the BEHAVIORAL REFERENCE; exact Go/geth byte parity is asserted separately by the M7.29 differential, not by these goldens. To re-freeze after an intentional change, run the in-tree generator: `cargo test -p ava-saevm-core --test golden -- --ignored --nocapture` (and, for blocks/block_hash.json, ava-saevm-blocks tests/block_hash_golden.rs) and paste the printed values.",
+  "go_reference": {
+    "repo": "github.com/ava-labs/avalanchego",
+    "subtree": "vms/saevm",
+    "note": "Reference inputs only — not a transliteration target (EVM = reth in avalanche-rs). Commit not pinned in this sandbox; M7.29 differential pins exact parity.",
+    "sources": [
+      "vms/saevm/blocks/block.go",
+      "vms/saevm/blocks/block_test.go",
+      "vms/saevm/blocks/settlement.go",
+      "vms/saevm/blocks/settlement_test.go",
+      "vms/saevm/sae/recovery.go",
+      "vms/saevm/sae/recovery_test.go"
+    ]
+  },
+  "vectors": [
+    {
+      "file": "blocks/block_hash.json",
+      "test": "ava-saevm-blocks tests/block_hash_golden.rs::sae_block_rlp_keccak_matches_geth",
+      "spec": "specs/11 §4.1",
+      "what": "block_hash = keccak256(RLP(header)) of a single fixed hand-built reference header.",
+      "computed_by": "reth/alloy SealedBlock::seal_slow over reference_block()."
+    },
+    {
+      "file": "blocks/chain_block_hashes.json",
+      "test": "ava-saevm-core tests/golden.rs::golden::sae_block_hash",
+      "spec": "specs/11 §4.1",
+      "what": "block hashes of every block in the fixed 9-element chain (genesis + 8 live-built blocks).",
+      "computed_by": "the live VM builder + reth SealedBlock hashing in tests/golden.rs."
+    },
+    {
+      "file": "settlement/settlement_choice.json",
+      "test": "ava-saevm-core tests/golden.rs::golden::settlement_vectors",
+      "spec": "specs/11 §1.2",
+      "what": "the settle() driver's (LastSettled height/hash, settled receipt root, settled state root) + A/E heights for the fixed chain.",
+      "computed_by": "the live settle() driver (Tau=5s, unit-rate gas clock) in tests/golden.rs."
+    },
+    {
+      "file": "recovery/recovery_transcript.json",
+      "test": "ava-saevm-core tests/golden.rs::golden::recovery_transcript",
+      "spec": "specs/11 §1.4, §10 invariant 7",
+      "what": "a crash+restart transcript: the reconstructed A/E/S heights + recovered executed/settled post-state roots after recover() rebuilds from disk at commit_interval=16.",
+      "computed_by": "ava_saevm_core::recover() over a DiskState snapshot in tests/golden.rs."
+    }
+  ]
+}

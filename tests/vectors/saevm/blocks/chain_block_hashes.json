@@ -1,0 +1,15 @@
+{
+  "_comment": "Golden vector for ava-saevm-core tests/golden.rs::golden::sae_block_hash (specs/11 §4.1). The SAE block hash is keccak256(RLP(header)) (a standard Ethereum block). These are the hashes of every block in the fixed 9-element chain (genesis at index 0, then 8 blocks built by the live VM builder in tests/golden.rs) — the core-side companion to blocks/block_hash.json. Frozen from the Rust pipeline itself (reth/alloy SealedBlock::seal_slow over the deterministic FakeBuilder linkage). Provenance: behavioral reference is Go vms/saevm/blocks/block.go; exact Go/geth byte parity is asserted by the M7.29 differential, not here.",
+  "chain_len": 9,
+  "block_hashes": [
+    "0x0acf0b96578256e62052663a0a39a9c54234b5228f9ace5fdf33e2862ee4b0c6",
+    "0x221208a63243c59115588aa599caed385723e8e3994fae5209f0ce5ba938270d",
+    "0x53a8e020e2b5993f4c4071179e9d75faa727c3d096379376aeb1899d1bc860fe",
+    "0xe67887536dd765fc2a46a8c0a406c8a3521916625e19976a340d2ad40a10561f",
+    "0x763fbc609fe7c3c176a98f13a44952c832d5c998aa30168d61aa7449f262641e",
+    "0x17ba1c0c0f8d5545f7fb2a90c5d84d3b42a4c1d36c584579261d73471d4bf9e4",
+    "0x4f1f673a5964c96d69f4965700155037eaedbd68b80a51d4c5f4896baf61948b",
+    "0x229f61a8e19abf0260e985f671551ef5c902ebb8323b446d5aebf2fb789f9a1a",
+    "0xdd57cbbd07aaa3f31600c649028300f5e908962972ab65bbca499344ba99968f"
+  ]
+}

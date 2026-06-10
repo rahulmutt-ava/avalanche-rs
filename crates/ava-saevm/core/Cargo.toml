@@ -35,4 +35,5 @@ tracing = { workspace = true }
 ava-saevm-testutil = { path = "../testutil" }
 ava-saevm-proxytime = { path = "../proxytime" }
 ava-saevm-gastime = { path = "../gastime" }
+hex = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
