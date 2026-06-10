@@ -965,6 +965,28 @@ in the binary/tests (`00` §7.1).
   base fees, settlement choices, and frontier heights at every step.
 - **Invariants §10:** each numbered invariant has a dedicated assertion harness.
 
+> **Implementation note (M7.29/M7.30, 2026-06-10) — the live-Go-oracle pattern
+> as built.** The differential is a *recorded-oracle backed by a live Go run*:
+> a Go emitter committed in **this** repo (`tests/differential/go-oracle/*.go`,
+> an in-package `sae` `_test.go` so it can use the unexported Go test harness)
+> is copied into the avalanchego checkout and run env-gated
+> (`SAE_EMIT_{RECOVERY,STREAMING}_VECTORS=<dir>`); the committed corpora
+> (`tests/vectors/saevm/{recovery,streaming}_differential/`) carry each block's
+> **wire bytes**, so the Rust side gets input byte-parity *by construction* and
+> the comparison lands on what Rust **recomputes**: re-sealed block hashes, the
+> per-barrier settlement choice (`last_to_settle_at`/`settle()` walk), and the
+> A/E/S trajectories. EVM state/receipt roots and base fees **round-trip** the
+> Go-emitted values (an independent root recompute is a real-EVM differential
+> follow-up; it would also re-open the firewood ffi v0.5-vs-v0.6 pin question,
+> `04` §4.2 delta). Two findings: (1) the settlement boundary can land on a
+> **sub-second gas-time tie**, so streaming vectors must carry the full-precision
+> fraction `{seconds, frac_num, frac_denom}` — whole-second gas-times are NOT
+> sufficient for settlement parity; (2) Go's *test-stub* `BlockTime` injects a
+> sub-second header component that neither the production cchain hook nor the
+> Rust `Block::timestamp()` models — scripted streams therefore advance
+> wall-clock by whole seconds. The `00` §9 pipelined-commit neutrality claim is
+> validated cross-stream (archival vs interval-16 reach identical final A/E/S).
+
 ---
 
 ## 13. Performance notes / improvements over Go
