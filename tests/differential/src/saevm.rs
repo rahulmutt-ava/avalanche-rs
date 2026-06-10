@@ -40,8 +40,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ava_evm_reth::{B256, RethBlock, SealedBlock};
-use ava_saevm_blocks::{Block, parse_block};
+use ava_saevm_blocks::{Block, ExecutionArtefacts, parse_block};
 use ava_saevm_core::recovery::{RecoverError, RecoverySource, recover};
+use ava_saevm_core::{Frontier, SettleError, settle};
 use ava_saevm_proxytime::Time;
 use ava_saevm_types::ExecutionResults;
 use ava_vm::components::gas::Price;
@@ -88,6 +89,22 @@ pub enum VectorError {
     /// Marking the parsed genesis synchronous failed.
     #[error("marking genesis synchronous: {0}")]
     Genesis(ava_saevm_blocks::Error),
+    /// Building / executing a streamed block against the Rust frontier failed.
+    #[error("driving streamed block at height {height}: {source}")]
+    Stream {
+        /// The barrier height that failed to drive.
+        height: u64,
+        /// The underlying block-lifecycle error.
+        source: ava_saevm_blocks::Error,
+    },
+    /// The Rust `settle()` walk failed for a streamed barrier.
+    #[error("settle() at height {height}: {source}")]
+    Settle {
+        /// The barrier height whose settlement failed.
+        height: u64,
+        /// The underlying settle error.
+        source: SettleError,
+    },
 }
 
 /// Decode a `0x`-prefixed (or bare) hex string into a fixed-width [`B256`].
@@ -349,4 +366,177 @@ pub async fn replay_recovery_vector(
     )?;
 
     Ok((rust, go_source, go_recovered))
+}
+
+// ===========================================================================
+// M7.30 streaming differential
+// ===========================================================================
+
+/// One `AwaitFinalization` barrier of the streaming differential: the Rust- and
+/// Go-side A/E/S frontier observations after accepting + executing the block at
+/// [`StreamingBarrier::height`]. The cross-implementation comparison is
+/// `rust == go` (the test asserts equality at every barrier).
+#[derive(Debug, Clone)]
+pub struct StreamingBarrier {
+    /// The accepted height this barrier observes.
+    pub height: u64,
+    /// The frontier the **Rust** pipeline reconstructed after this accept.
+    pub rust: FrontierObservation,
+    /// The frontier the **live Go node** observed after the same accept.
+    pub go: FrontierObservation,
+}
+
+/// Snapshot the Rust [`Frontier`]'s current A/E/S as a [`FrontierObservation`]
+/// (the per-barrier observation the streaming differential compares).
+fn observe_frontier(frontier: &Frontier) -> FrontierObservation {
+    let settled = frontier.last_settled();
+    let executed = frontier.last_executed();
+    let accepted = frontier.last_accepted();
+    FrontierObservation {
+        accepted_height: accepted.height(),
+        executed_height: executed.as_ref().map_or(0, |b| b.height()),
+        settled_height: settled.height(),
+        settled_hash: format!("0x{}", hex::encode(settled.hash().as_slice())),
+        settled_state_root: format!(
+            "0x{}",
+            hex::encode(settled.post_execution_state_root().as_slice())
+        ),
+        executed_state_root: format!(
+            "0x{}",
+            hex::encode(
+                executed
+                    .map_or(B256::ZERO, |b| b.post_execution_state_root())
+                    .as_slice()
+            )
+        ),
+    }
+}
+
+/// Build an [`ExecutionResults`] from a Go-emitted streaming `exec_results` JSON
+/// object, reconstructing the gas-time at **full precision** (seconds +
+/// fractional-second numerator/denominator). Unlike the recovery parser
+/// ([`exec_results_from_json`], whole-second), the streaming settlement boundary
+/// lands on a sub-second tie, so the fraction is consensus-critical (specs/11
+/// §1.2): `Time::new(secs, frac_num, frac_denom)` reconstructs the exact
+/// `proxytime.Time` the Go node executed by.
+fn stream_exec_results_from_json(v: &serde_json::Value) -> Result<ExecutionResults, VectorError> {
+    let gas_unix = u64_field(v, "gas_time_unix_seconds")?;
+    let frac_num = u64_field(v, "gas_time_frac_num")?;
+    let frac_denom = u64_field(v, "gas_time_frac_denom")?;
+    let base_fee = u64_field(v, "base_fee")?;
+    let receipt_root = parse_b256("receipt_root", str_field(v, "receipt_root")?)?;
+    let post_state_root = parse_b256("post_state_root", str_field(v, "post_state_root")?)?;
+    // A zero denominator would be a malformed corpus; fall back to unit rate
+    // (frac then contributes nothing) rather than constructing a /0 clock.
+    let hertz = if frac_denom == 0 { 1 } else { frac_denom };
+    Ok(ExecutionResults {
+        gas_time: Time::<u64>::new(gas_unix, frac_num, hertz),
+        base_fee: Price(base_fee),
+        receipt_root,
+        post_state_root,
+    })
+}
+
+/// Replay a Go-oracle **streaming** vector against the real Rust SAE pipeline:
+/// drive the Go-emitted block stream block-by-block through a [`Frontier`] +
+/// [`settle`](fn@settle) walk, returning one [`StreamingBarrier`] per accepted height
+/// (the per-`AwaitFinalization`-barrier transcript) pairing the Rust- and
+/// Go-side frontier observations.
+///
+/// At each barrier the driver: parses the Go block's wire bytes (re-sealing the
+/// hash), marks it executed from the Go-emitted [`ExecutionResults`] (gas-time,
+/// base fee, receipt/state roots), advances `LastAccepted`/`LastExecuted`, then
+/// runs the Rust `settle()` walk on behalf of the freshly-accepted block — so
+/// the **settlement choice** (which height becomes `LastSettled`) and the
+/// **block hashes** are genuinely recomputed by Rust; the roots/base-fee
+/// round-trip (see the test module docs).
+///
+/// # Errors
+/// Returns [`VectorError`] on malformed corpus JSON, a block that fails to parse,
+/// an inconsistent ancestry, or a `settle()` failure.
+pub async fn replay_streaming_vector(json: &str) -> Result<Vec<StreamingBarrier>, VectorError> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| VectorError::Json(e.to_string()))?;
+
+    // ---- parse the synchronous genesis from its wire bytes ----
+    let genesis_v = v
+        .get("genesis_block")
+        .ok_or(VectorError::MissingField("genesis_block"))?;
+    let genesis_bytes = parse_hex(
+        "genesis_block.wire_bytes_hex",
+        str_field(genesis_v, "wire_bytes_hex")?,
+    )?;
+    let genesis = Arc::new(parse_block(&genesis_bytes, parse_now()).map_err(|source| {
+        VectorError::ParseBlock {
+            height: u64_field(genesis_v, "height").unwrap_or(0),
+            source,
+        }
+    })?);
+    genesis.mark_synchronous().map_err(VectorError::Genesis)?;
+
+    let frontier = Frontier::new(Arc::clone(&genesis));
+
+    // ---- drive the per-barrier stream ----
+    let barriers_json = v
+        .get("barriers")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(VectorError::MissingField("barriers"))?;
+
+    let mut parent = Arc::clone(&genesis);
+    let mut out: Vec<StreamingBarrier> = Vec::with_capacity(barriers_json.len());
+
+    for bj in barriers_json {
+        let height = u64_field(bj, "height")?;
+        let bytes = parse_hex(
+            "barriers[].wire_bytes_hex",
+            str_field(bj, "wire_bytes_hex")?,
+        )?;
+        // parse_block re-seals (recomputes keccak256(RLP(header))) — block-hash
+        // parity with the Go node is verified by construction here.
+        let parsed = parse_block(&bytes, parse_now())
+            .map_err(|source| VectorError::ParseBlock { height, source })?;
+        // Link ancestry: parent is the previous height; last_settled is left None
+        // and re-derived by the settle() walk below (matching the recovery driver
+        // + the Go `newCanonicalBlock(..., nil)` contract).
+        let block = Arc::new(parsed);
+        block
+            .set_ancestors(Some(Arc::clone(&parent)), None)
+            .map_err(|source| VectorError::Stream { height, source })?;
+
+        // Mark executed from the Go-emitted committed results (gas-time decides
+        // settlement; roots/base-fee round-trip). interim == committed gas-time.
+        let results = stream_exec_results_from_json(
+            bj.get("exec_results")
+                .ok_or(VectorError::MissingField("barriers[].exec_results"))?,
+        )?;
+        let artefacts = ExecutionArtefacts {
+            interim_execution_time: results.gas_time.clone(),
+            results,
+        };
+        block
+            .mark_executed(artefacts, None)
+            .map_err(|source| VectorError::Stream { height, source })?;
+
+        // Advance A then E (the frontier ignores stale advances).
+        frontier.advance_accepted(&block);
+        frontier.advance_executed(&block);
+
+        // Run the real Rust settle() walk on behalf of the freshly-accepted block:
+        // this recomputes the LastSettled choice from the gas-times + build-times.
+        // ExecutionLagging cannot occur here — every ancestor is executed before
+        // its child is accepted (synchronous per-barrier execution), matching the
+        // Go oracle's `WaitUntilExecuted` between accepts.
+        settle(&frontier, &block).map_err(|source| VectorError::Settle { height, source })?;
+
+        let rust = observe_frontier(&frontier);
+        let go = FrontierObservation::from_json(
+            bj.get("frontier")
+                .ok_or(VectorError::MissingField("barriers[].frontier"))?,
+        )?;
+        out.push(StreamingBarrier { height, rust, go });
+
+        parent = block;
+    }
+
+    Ok(out)
 }
