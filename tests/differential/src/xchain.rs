@@ -155,7 +155,7 @@ enum TxSpec {
     BaseTransfer { amount: u64 },
 }
 
-/// Derives a small, bounded program of [`TxSpec`]s entirely from `seed`, so the
+/// Derives a small, bounded program of `TxSpec`s entirely from `seed`, so the
 /// produced txs are byte-identical across runs.
 ///
 /// The count (1..=4) and each transfer amount are derived from the seed via a
@@ -315,7 +315,7 @@ fn genesis_bytes() -> Vec<u8> {
 /// Runs the seed-derived program through a fresh `ava-avm` VM and returns the
 /// normalized final [`Observation`].
 ///
-/// Seeds one spendable genesis UTXO `U0`, then for each [`TxSpec`] in the program
+/// Seeds one spendable genesis UTXO `U0`, then for each `TxSpec` in the program
 /// builds a `BaseTx` spending the previous output, admits it, and drives
 /// `build → verify → accept` so each tx lands in its own accepted block. The
 /// observation records the last-accepted block id + height and the full sorted

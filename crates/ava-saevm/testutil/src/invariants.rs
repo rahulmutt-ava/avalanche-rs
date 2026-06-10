@@ -11,8 +11,8 @@
 //! exit gate can find them.
 //!
 //! The fakes mirror the ones in `core/tests/{lifecycle,recovery}.rs`: the core
-//! crate has no Firewood dependency, so "disk" is the in-memory [`DiskState`]
-//! and "execution" is the controllable [`FakeExecutor`]. Where a property is
+//! crate has no Firewood dependency, so "disk" is the in-memory `DiskState`
+//! and "execution" is the controllable `FakeExecutor`. Where a property is
 //! enforced by the *call-order contract* of these fakes (rather than a real
 //! durable write), the helper documents what is modeled versus real.
 //!
@@ -180,7 +180,7 @@ impl BlockBuilderSeam for FakeBuilder {
 // ---------------------------------------------------------------------------
 
 /// A controllable executor that records what it executed into the shared
-/// [`DiskState`]. [`FakeExecutor::run_next`] runs the strict `D → M → I → X`
+/// `DiskState`. `FakeExecutor::run_next` runs the strict `D → M → I → X`
 /// order of [`Block::mark_executed_with`]: it writes the durable artefacts (the
 /// **D** step, modeled by [`DiskState::record`]) *inside* the persist closure —
 /// which `mark_executed` runs **before** it sets the execution cell (M),
@@ -340,7 +340,7 @@ struct LiveRun {
     accepted_ids: Vec<Id>,
 }
 
-/// Builds a live VM over a shared [`DiskState`] and drives `n` blocks through
+/// Builds a live VM over a shared `DiskState` and drives `n` blocks through
 /// the full lifecycle (build → verify → accept → execute → settle), executing
 /// every accepted block so E == A == head and S advances via the live
 /// settlement driver. Returns the recorded frontier oracle.
@@ -387,7 +387,7 @@ async fn build_live_chain(n: u64) -> LiveRun {
 /// live run, and on the final frontier.
 ///
 /// The executor reactor that advances the VM's `LastExecuted` *frontier
-/// pointer* is M7.26 (stubbed here by [`FakeExecutor`], which passes `None` for
+/// pointer* is M7.26 (stubbed here by `FakeExecutor`, which passes `None` for
 /// the pointer), so the live frontier's E pointer stays at genesis. The real E
 /// — the height the executor has actually committed — is the *executed head*
 /// (every accepted block is executed by the fake, so E == A == head once a step
@@ -560,7 +560,7 @@ pub async fn assert_persist_order_execute() {
 /// settled ancestors) have been accepted and their executed roots committed to
 /// the durable disk.
 ///
-/// Models the durable-disk D-steps via [`DiskState`]; the order asserted is
+/// Models the durable-disk D-steps via `DiskState`; the order asserted is
 /// that settlement (S) only advances over heights already recorded as durably
 /// executed-and-accepted (present in the canonical disk table).
 ///
