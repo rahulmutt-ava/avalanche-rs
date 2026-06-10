@@ -225,14 +225,15 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-saevm-core` (11 tests) passes.
 - [x] **Step 5 — Commit:** `sae(core): VM lifecycle (cheap verify-by-rebuild, accept→enqueue, bootstrap blocking)`
 
-### Task M7.19: `ava-saevm-core` sae-rpc — frontier → RPC label mapping
+### Task M7.19: `ava-saevm-core` sae-rpc — frontier → RPC label mapping ✅ DONE (d76be86; merged into main post-5b8b062)
 **Sub-crate:** ava-saevm-core  ·  **Depends on:** M7.18, M7.7  ·  **Spec:** `11` §1.1 (RPC label table), §3 (sae/rpc)
 **Files:** `crates/ava-saevm/core/src/rpc.rs`, `crates/ava-saevm/core/tests/rpc_labels.rs`
-- [ ] **Step 1 — Red:** `tests/rpc_labels.rs`: `resolve_rpc_number` table — `pending → LastAccepted(A)`, `latest → LastExecuted(E)`, `safe`/`finalized → LastSettled(S)`; `future_block_not_resolved_errors`; `non_canonical_block_errors`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-saevm-core --test rpc_labels` → missing `resolve_rpc_number`.
-- [ ] **Step 3 — Green:** Implement `resolve_rpc_number(label)` mapping per the `11` §1.1 table and the eth-RPC surface mounting (block/receipt/gasPrice via M7.7) with sentinel errors `ErrFutureBlockNotResolved`/`ErrNonCanonicalBlock`. Cite `blocks/access.go::ResolveRPCNumber`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-saevm-core --test rpc_labels` passes.
-- [ ] **Step 5 — Commit:** `sae(core): RPC frontier label mapping (pending/latest/safe/finalized)`
+> **AS-BUILT (M7.19).** `resolve_rpc_number(label: RpcBlockLabel, frontier: &Frontier, canonical: F) -> Result<u64, RpcError>` where `F: Fn(u64)->Option<Arc<Block>>` (a **closure seam** for the canonical height index — keeps `rpc.rs` free of VM coupling + standalone-testable; callers back it with the VM's `height_index`). **`RpcBlockLabel`** = local enum `{Earliest, Latest, Pending, Safe, Finalized, Number(u64)}` — defined in `rpc.rs` NOT by extending `ava_saevm_gasprice::BlockNumberRef` (which lacks `Safe`/`Finalized`); the two mirror each other on the shared subset. Mapping (specs/11 §1.1): `Pending→A.height`, `Latest→E.height` (**falls back to S.height when E is `None`** — execution still catching up from genesis), `Safe`/`Finalized→S.height`, `Earliest→0`, `Number(n)`→`FutureBlockNotResolved` if `n>A`, `NonCanonicalBlock` if `n≤A` but absent from the canonical index. **`RpcError`** (local `thiserror`, NOT merged into `vm::Error` to keep that type stable) = `{FutureBlockNotResolved, NonCanonicalBlock}` (Go `ErrFutureBlockNotResolved`/`ErrNonCanonicalBlock`). **DEFERRED M7.23:** the actual HTTP-handler mounting (wiring block/receipt/gasPrice endpoints onto the M7.18-stubbed `create_handlers` via this resolver + the M7.7 estimator) — `// TODO(M7.23)` (needs the cchain harness `Initialize` context). 3 tests (label table + the 2 sentinels); 19 core tests green on merged main; `lint_saevm.sh` exit 0. **★ NO WATCHDOG STALL** (sonnet) — the dual-profile pre-warm (test + clippy) + scoped-verify-not-`lint_saevm.sh` fix worked; first agent this session to finish clean end-to-end without orchestrator salvage.
+- [x] **Step 1 — Red:** `tests/rpc_labels.rs`: `resolve_rpc_number` table — `pending → LastAccepted(A)`, `latest → LastExecuted(E)`, `safe`/`finalized → LastSettled(S)`; `future_block_not_resolved_errors`; `non_canonical_block_errors`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-saevm-core --test rpc_labels` → missing `resolve_rpc_number`.
+- [x] **Step 3 — Green:** Implemented `resolve_rpc_number(label, frontier, canonical)` per the `11` §1.1 table with `RpcError` sentinels. HTTP-surface mounting deferred to M7.23. Cite `blocks/access.go::ResolveRPCNumber`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-saevm-core` (19 tests incl. 3 rpc_labels) passes.
+- [x] **Step 5 — Commit:** `sae(core): RPC frontier label mapping (pending/latest/safe/finalized)`
 
 ### Task M7.20: `ava-saevm-txgossip` — EVM mempool + push/pull gossip + priority ✅ DONE (49af474; merged 881aeed)
 **Sub-crate:** ava-saevm-txgossip  ·  **Depends on:** M7.11, M7.14, M6 (ava-evm reth pool), M5 (`ava-network` gossip)  ·  **Spec:** `11` §9.2
