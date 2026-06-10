@@ -1288,6 +1288,7 @@ dependencies = [
  "ava-crypto",
  "ava-platformvm",
  "ava-types",
+ "base64",
  "hex",
  "serde",
  "serde_json",

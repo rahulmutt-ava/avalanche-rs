@@ -16,7 +16,9 @@
 
 pub mod config;
 pub mod error;
+pub mod split;
 pub mod unparsed;
+pub mod validate;
 
 pub use config::{Allocation, Config, LockedAmount, Staker};
 pub use error::{GenesisError, Result};

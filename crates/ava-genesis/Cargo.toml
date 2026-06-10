@@ -15,6 +15,9 @@ ava-codec = { path = "../ava-codec" }
 ava-crypto = { path = "../ava-crypto" }
 ava-platformvm = { path = "../ava-platformvm" }
 serde = { workspace = true }
+# `--genesis-file-content` is base64(JSON) (Go `GetConfigContent`); pinned here
+# (not yet a workspace dep) — already in Cargo.lock transitively at 0.22.
+base64 = "0.22"
 serde_json = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
