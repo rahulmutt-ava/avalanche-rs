@@ -1,0 +1,26 @@
+[package]
+name = "ava-genesis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Network genesis construction (port of genesis/**; specs 23): embedded Mainnet/Fuji/Local configs, bootstrapper lists, the byte-exact FromConfig build pipeline (P-Chain genesis bytes + AVAX asset ID), per-VM CreateChainTx extraction, and the genesis block IDs — the early interop gate with the Go node."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-crypto = { path = "../ava-crypto" }
+ava-platformvm = { path = "../ava-platformvm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+
+[lints]
+workspace = true

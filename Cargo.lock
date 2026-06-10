@@ -1280,6 +1280,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-genesis"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "ava-codec",
+ "ava-crypto",
+ "ava-platformvm",
+ "ava-types",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-logging"
 version = "0.1.0"
 dependencies = [
