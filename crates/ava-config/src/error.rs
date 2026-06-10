@@ -34,7 +34,6 @@ pub enum ConfigError {
         /// The raw input string.
         input: String,
     },
-
 }
 
 /// Crate-local result alias.

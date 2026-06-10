@@ -30,9 +30,11 @@ pub const KEY_BENCHLIST_HALFLIFE: &str = "benchlist-halflife";
 /// `--benchlist-unbench-probability`.
 pub const KEY_BENCHLIST_UNBENCH_PROBABILITY: &str = "benchlist-unbench-probability";
 /// `--bootstrap-ancestors-max-containers-received`.
-pub const KEY_BOOTSTRAP_ANCESTORS_MAX_CONTAINERS_RECEIVED: &str = "bootstrap-ancestors-max-containers-received";
+pub const KEY_BOOTSTRAP_ANCESTORS_MAX_CONTAINERS_RECEIVED: &str =
+    "bootstrap-ancestors-max-containers-received";
 /// `--bootstrap-ancestors-max-containers-sent`.
-pub const KEY_BOOTSTRAP_ANCESTORS_MAX_CONTAINERS_SENT: &str = "bootstrap-ancestors-max-containers-sent";
+pub const KEY_BOOTSTRAP_ANCESTORS_MAX_CONTAINERS_SENT: &str =
+    "bootstrap-ancestors-max-containers-sent";
 /// `--bootstrap-beacon-connection-timeout`.
 pub const KEY_BOOTSTRAP_BEACON_CONNECTION_TIMEOUT: &str = "bootstrap-beacon-connection-timeout";
 /// `--bootstrap-ids`.
@@ -86,7 +88,8 @@ pub const KEY_DYNAMIC_FEES_DB_READ_WEIGHT: &str = "dynamic-fees-db-read-weight";
 /// `--dynamic-fees-db-write-weight`.
 pub const KEY_DYNAMIC_FEES_DB_WRITE_WEIGHT: &str = "dynamic-fees-db-write-weight";
 /// `--dynamic-fees-excess-conversion-constant`.
-pub const KEY_DYNAMIC_FEES_EXCESS_CONVERSION_CONSTANT: &str = "dynamic-fees-excess-conversion-constant";
+pub const KEY_DYNAMIC_FEES_EXCESS_CONVERSION_CONSTANT: &str =
+    "dynamic-fees-excess-conversion-constant";
 /// `--dynamic-fees-max-gas-capacity`.
 pub const KEY_DYNAMIC_FEES_MAX_GAS_CAPACITY: &str = "dynamic-fees-max-gas-capacity";
 /// `--dynamic-fees-max-gas-per-second`.
@@ -176,23 +179,29 @@ pub const KEY_NETWORK_ALLOW_PRIVATE_IPS: &str = "network-allow-private-ips";
 /// `--network-compression-type`.
 pub const KEY_NETWORK_COMPRESSION_TYPE: &str = "network-compression-type";
 /// `--network-health-max-outstanding-request-duration`.
-pub const KEY_NETWORK_HEALTH_MAX_OUTSTANDING_REQUEST_DURATION: &str = "network-health-max-outstanding-request-duration";
+pub const KEY_NETWORK_HEALTH_MAX_OUTSTANDING_REQUEST_DURATION: &str =
+    "network-health-max-outstanding-request-duration";
 /// `--network-health-max-portion-send-queue-full`.
-pub const KEY_NETWORK_HEALTH_MAX_PORTION_SEND_QUEUE_FULL: &str = "network-health-max-portion-send-queue-full";
+pub const KEY_NETWORK_HEALTH_MAX_PORTION_SEND_QUEUE_FULL: &str =
+    "network-health-max-portion-send-queue-full";
 /// `--network-health-max-send-fail-rate`.
 pub const KEY_NETWORK_HEALTH_MAX_SEND_FAIL_RATE: &str = "network-health-max-send-fail-rate";
 /// `--network-health-max-time-since-msg-received`.
-pub const KEY_NETWORK_HEALTH_MAX_TIME_SINCE_MSG_RECEIVED: &str = "network-health-max-time-since-msg-received";
+pub const KEY_NETWORK_HEALTH_MAX_TIME_SINCE_MSG_RECEIVED: &str =
+    "network-health-max-time-since-msg-received";
 /// `--network-health-max-time-since-msg-sent`.
-pub const KEY_NETWORK_HEALTH_MAX_TIME_SINCE_MSG_SENT: &str = "network-health-max-time-since-msg-sent";
+pub const KEY_NETWORK_HEALTH_MAX_TIME_SINCE_MSG_SENT: &str =
+    "network-health-max-time-since-msg-sent";
 /// `--network-health-min-conn-peers`.
 pub const KEY_NETWORK_HEALTH_MIN_CONN_PEERS: &str = "network-health-min-conn-peers";
 /// `--network-id`.
 pub const KEY_NETWORK_ID: &str = "network-id";
 /// `--network-inbound-connection-throttling-cooldown`.
-pub const KEY_NETWORK_INBOUND_CONNECTION_THROTTLING_COOLDOWN: &str = "network-inbound-connection-throttling-cooldown";
+pub const KEY_NETWORK_INBOUND_CONNECTION_THROTTLING_COOLDOWN: &str =
+    "network-inbound-connection-throttling-cooldown";
 /// `--network-inbound-connection-throttling-max-conns-per-sec`.
-pub const KEY_NETWORK_INBOUND_CONNECTION_THROTTLING_MAX_CONNS_PER_SEC: &str = "network-inbound-connection-throttling-max-conns-per-sec";
+pub const KEY_NETWORK_INBOUND_CONNECTION_THROTTLING_MAX_CONNS_PER_SEC: &str =
+    "network-inbound-connection-throttling-max-conns-per-sec";
 /// `--network-initial-reconnect-delay`.
 pub const KEY_NETWORK_INITIAL_RECONNECT_DELAY: &str = "network-initial-reconnect-delay";
 /// `--network-initial-timeout`.
@@ -208,17 +217,21 @@ pub const KEY_NETWORK_MAXIMUM_TIMEOUT: &str = "network-maximum-timeout";
 /// `--network-minimum-timeout`.
 pub const KEY_NETWORK_MINIMUM_TIMEOUT: &str = "network-minimum-timeout";
 /// `--network-no-ingress-connections-grace-period`.
-pub const KEY_NETWORK_NO_INGRESS_CONNECTIONS_GRACE_PERIOD: &str = "network-no-ingress-connections-grace-period";
+pub const KEY_NETWORK_NO_INGRESS_CONNECTIONS_GRACE_PERIOD: &str =
+    "network-no-ingress-connections-grace-period";
 /// `--network-outbound-connection-throttling-rps`.
-pub const KEY_NETWORK_OUTBOUND_CONNECTION_THROTTLING_RPS: &str = "network-outbound-connection-throttling-rps";
+pub const KEY_NETWORK_OUTBOUND_CONNECTION_THROTTLING_RPS: &str =
+    "network-outbound-connection-throttling-rps";
 /// `--network-outbound-connection-timeout`.
 pub const KEY_NETWORK_OUTBOUND_CONNECTION_TIMEOUT: &str = "network-outbound-connection-timeout";
 /// `--network-peer-list-bloom-reset-frequency`.
-pub const KEY_NETWORK_PEER_LIST_BLOOM_RESET_FREQUENCY: &str = "network-peer-list-bloom-reset-frequency";
+pub const KEY_NETWORK_PEER_LIST_BLOOM_RESET_FREQUENCY: &str =
+    "network-peer-list-bloom-reset-frequency";
 /// `--network-peer-list-num-validator-ips`.
 pub const KEY_NETWORK_PEER_LIST_NUM_VALIDATOR_IPS: &str = "network-peer-list-num-validator-ips";
 /// `--network-peer-list-pull-gossip-frequency`.
-pub const KEY_NETWORK_PEER_LIST_PULL_GOSSIP_FREQUENCY: &str = "network-peer-list-pull-gossip-frequency";
+pub const KEY_NETWORK_PEER_LIST_PULL_GOSSIP_FREQUENCY: &str =
+    "network-peer-list-pull-gossip-frequency";
 /// `--network-peer-read-buffer-size`.
 pub const KEY_NETWORK_PEER_READ_BUFFER_SIZE: &str = "network-peer-read-buffer-size";
 /// `--network-peer-write-buffer-size`.
@@ -268,7 +281,8 @@ pub const KEY_PUBLIC_IP_RESOLUTION_SERVICE: &str = "public-ip-resolution-service
 /// `--router-health-max-drop-rate`.
 pub const KEY_ROUTER_HEALTH_MAX_DROP_RATE: &str = "router-health-max-drop-rate";
 /// `--router-health-max-outstanding-requests`.
-pub const KEY_ROUTER_HEALTH_MAX_OUTSTANDING_REQUESTS: &str = "router-health-max-outstanding-requests";
+pub const KEY_ROUTER_HEALTH_MAX_OUTSTANDING_REQUESTS: &str =
+    "router-health-max-outstanding-requests";
 /// `--simplex-max-network-delay`.
 pub const KEY_SIMPLEX_MAX_NETWORK_DELAY: &str = "simplex-max-network-delay";
 /// `--simplex-max-rebroadcast-wait`.
@@ -338,13 +352,17 @@ pub const KEY_SYSTEM_TRACKER_CPU_HALFLIFE: &str = "system-tracker-cpu-halflife";
 /// `--system-tracker-disk-halflife`.
 pub const KEY_SYSTEM_TRACKER_DISK_HALFLIFE: &str = "system-tracker-disk-halflife";
 /// `--system-tracker-disk-required-available-space`.
-pub const KEY_SYSTEM_TRACKER_DISK_REQUIRED_AVAILABLE_SPACE: &str = "system-tracker-disk-required-available-space";
+pub const KEY_SYSTEM_TRACKER_DISK_REQUIRED_AVAILABLE_SPACE: &str =
+    "system-tracker-disk-required-available-space";
 /// `--system-tracker-disk-required-available-space-percentage`.
-pub const KEY_SYSTEM_TRACKER_DISK_REQUIRED_AVAILABLE_SPACE_PERCENTAGE: &str = "system-tracker-disk-required-available-space-percentage";
+pub const KEY_SYSTEM_TRACKER_DISK_REQUIRED_AVAILABLE_SPACE_PERCENTAGE: &str =
+    "system-tracker-disk-required-available-space-percentage";
 /// `--system-tracker-disk-warning-available-space-percentage`.
-pub const KEY_SYSTEM_TRACKER_DISK_WARNING_AVAILABLE_SPACE_PERCENTAGE: &str = "system-tracker-disk-warning-available-space-percentage";
+pub const KEY_SYSTEM_TRACKER_DISK_WARNING_AVAILABLE_SPACE_PERCENTAGE: &str =
+    "system-tracker-disk-warning-available-space-percentage";
 /// `--system-tracker-disk-warning-threshold-available-space`.
-pub const KEY_SYSTEM_TRACKER_DISK_WARNING_THRESHOLD_AVAILABLE_SPACE: &str = "system-tracker-disk-warning-threshold-available-space";
+pub const KEY_SYSTEM_TRACKER_DISK_WARNING_THRESHOLD_AVAILABLE_SPACE: &str =
+    "system-tracker-disk-warning-threshold-available-space";
 /// `--system-tracker-frequency`.
 pub const KEY_SYSTEM_TRACKER_FREQUENCY: &str = "system-tracker-frequency";
 /// `--system-tracker-processing-halflife`.
@@ -352,37 +370,52 @@ pub const KEY_SYSTEM_TRACKER_PROCESSING_HALFLIFE: &str = "system-tracker-process
 /// `--throttler-inbound-at-large-alloc-size`.
 pub const KEY_THROTTLER_INBOUND_AT_LARGE_ALLOC_SIZE: &str = "throttler-inbound-at-large-alloc-size";
 /// `--throttler-inbound-bandwidth-max-burst-size`.
-pub const KEY_THROTTLER_INBOUND_BANDWIDTH_MAX_BURST_SIZE: &str = "throttler-inbound-bandwidth-max-burst-size";
+pub const KEY_THROTTLER_INBOUND_BANDWIDTH_MAX_BURST_SIZE: &str =
+    "throttler-inbound-bandwidth-max-burst-size";
 /// `--throttler-inbound-bandwidth-refill-rate`.
-pub const KEY_THROTTLER_INBOUND_BANDWIDTH_REFILL_RATE: &str = "throttler-inbound-bandwidth-refill-rate";
+pub const KEY_THROTTLER_INBOUND_BANDWIDTH_REFILL_RATE: &str =
+    "throttler-inbound-bandwidth-refill-rate";
 /// `--throttler-inbound-cpu-max-non-validator-node-usage`.
-pub const KEY_THROTTLER_INBOUND_CPU_MAX_NON_VALIDATOR_NODE_USAGE: &str = "throttler-inbound-cpu-max-non-validator-node-usage";
+pub const KEY_THROTTLER_INBOUND_CPU_MAX_NON_VALIDATOR_NODE_USAGE: &str =
+    "throttler-inbound-cpu-max-non-validator-node-usage";
 /// `--throttler-inbound-cpu-max-non-validator-usage`.
-pub const KEY_THROTTLER_INBOUND_CPU_MAX_NON_VALIDATOR_USAGE: &str = "throttler-inbound-cpu-max-non-validator-usage";
+pub const KEY_THROTTLER_INBOUND_CPU_MAX_NON_VALIDATOR_USAGE: &str =
+    "throttler-inbound-cpu-max-non-validator-usage";
 /// `--throttler-inbound-cpu-max-recheck-delay`.
-pub const KEY_THROTTLER_INBOUND_CPU_MAX_RECHECK_DELAY: &str = "throttler-inbound-cpu-max-recheck-delay";
+pub const KEY_THROTTLER_INBOUND_CPU_MAX_RECHECK_DELAY: &str =
+    "throttler-inbound-cpu-max-recheck-delay";
 /// `--throttler-inbound-cpu-validator-alloc`.
 pub const KEY_THROTTLER_INBOUND_CPU_VALIDATOR_ALLOC: &str = "throttler-inbound-cpu-validator-alloc";
 /// `--throttler-inbound-disk-max-non-validator-node-usage`.
-pub const KEY_THROTTLER_INBOUND_DISK_MAX_NON_VALIDATOR_NODE_USAGE: &str = "throttler-inbound-disk-max-non-validator-node-usage";
+pub const KEY_THROTTLER_INBOUND_DISK_MAX_NON_VALIDATOR_NODE_USAGE: &str =
+    "throttler-inbound-disk-max-non-validator-node-usage";
 /// `--throttler-inbound-disk-max-non-validator-usage`.
-pub const KEY_THROTTLER_INBOUND_DISK_MAX_NON_VALIDATOR_USAGE: &str = "throttler-inbound-disk-max-non-validator-usage";
+pub const KEY_THROTTLER_INBOUND_DISK_MAX_NON_VALIDATOR_USAGE: &str =
+    "throttler-inbound-disk-max-non-validator-usage";
 /// `--throttler-inbound-disk-max-recheck-delay`.
-pub const KEY_THROTTLER_INBOUND_DISK_MAX_RECHECK_DELAY: &str = "throttler-inbound-disk-max-recheck-delay";
+pub const KEY_THROTTLER_INBOUND_DISK_MAX_RECHECK_DELAY: &str =
+    "throttler-inbound-disk-max-recheck-delay";
 /// `--throttler-inbound-disk-validator-alloc`.
-pub const KEY_THROTTLER_INBOUND_DISK_VALIDATOR_ALLOC: &str = "throttler-inbound-disk-validator-alloc";
+pub const KEY_THROTTLER_INBOUND_DISK_VALIDATOR_ALLOC: &str =
+    "throttler-inbound-disk-validator-alloc";
 /// `--throttler-inbound-node-max-at-large-bytes`.
-pub const KEY_THROTTLER_INBOUND_NODE_MAX_AT_LARGE_BYTES: &str = "throttler-inbound-node-max-at-large-bytes";
+pub const KEY_THROTTLER_INBOUND_NODE_MAX_AT_LARGE_BYTES: &str =
+    "throttler-inbound-node-max-at-large-bytes";
 /// `--throttler-inbound-node-max-processing-msgs`.
-pub const KEY_THROTTLER_INBOUND_NODE_MAX_PROCESSING_MSGS: &str = "throttler-inbound-node-max-processing-msgs";
+pub const KEY_THROTTLER_INBOUND_NODE_MAX_PROCESSING_MSGS: &str =
+    "throttler-inbound-node-max-processing-msgs";
 /// `--throttler-inbound-validator-alloc-size`.
-pub const KEY_THROTTLER_INBOUND_VALIDATOR_ALLOC_SIZE: &str = "throttler-inbound-validator-alloc-size";
+pub const KEY_THROTTLER_INBOUND_VALIDATOR_ALLOC_SIZE: &str =
+    "throttler-inbound-validator-alloc-size";
 /// `--throttler-outbound-at-large-alloc-size`.
-pub const KEY_THROTTLER_OUTBOUND_AT_LARGE_ALLOC_SIZE: &str = "throttler-outbound-at-large-alloc-size";
+pub const KEY_THROTTLER_OUTBOUND_AT_LARGE_ALLOC_SIZE: &str =
+    "throttler-outbound-at-large-alloc-size";
 /// `--throttler-outbound-node-max-at-large-bytes`.
-pub const KEY_THROTTLER_OUTBOUND_NODE_MAX_AT_LARGE_BYTES: &str = "throttler-outbound-node-max-at-large-bytes";
+pub const KEY_THROTTLER_OUTBOUND_NODE_MAX_AT_LARGE_BYTES: &str =
+    "throttler-outbound-node-max-at-large-bytes";
 /// `--throttler-outbound-validator-alloc-size`.
-pub const KEY_THROTTLER_OUTBOUND_VALIDATOR_ALLOC_SIZE: &str = "throttler-outbound-validator-alloc-size";
+pub const KEY_THROTTLER_OUTBOUND_VALIDATOR_ALLOC_SIZE: &str =
+    "throttler-outbound-validator-alloc-size";
 /// `--tracing-endpoint`.
 pub const KEY_TRACING_ENDPOINT: &str = "tracing-endpoint";
 /// `--tracing-exporter-type`.
@@ -408,7 +441,8 @@ pub const KEY_UPTIME_REQUIREMENT: &str = "uptime-requirement";
 /// `--validator-fees-capacity`.
 pub const KEY_VALIDATOR_FEES_CAPACITY: &str = "validator-fees-capacity";
 /// `--validator-fees-excess-conversion-constant`.
-pub const KEY_VALIDATOR_FEES_EXCESS_CONVERSION_CONSTANT: &str = "validator-fees-excess-conversion-constant";
+pub const KEY_VALIDATOR_FEES_EXCESS_CONVERSION_CONSTANT: &str =
+    "validator-fees-excess-conversion-constant";
 /// `--validator-fees-min-price`.
 pub const KEY_VALIDATOR_FEES_MIN_PRICE: &str = "validator-fees-min-price";
 /// `--validator-fees-target`.
@@ -642,6 +676,6 @@ mod tests {
 
     #[test]
     fn keys_are_sorted_and_unique() {
-        assert!(super::ALL_KEYS.windows(2).all(|w| w[0] < w[1]));
+        assert!(super::ALL_KEYS.is_sorted_by(|a, b| a < b));
     }
 }

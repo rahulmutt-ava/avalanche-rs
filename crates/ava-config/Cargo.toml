@@ -18,6 +18,8 @@ publish.workspace = true
 description = "Node configuration: 206-flag catalog, clap command builder, and the viper-parity layered resolver (M8 / specs 12 §1, 13)."
 
 [dependencies]
+ava-network = { path = "../ava-network" }
+ava-snow = { path = "../ava-snow" }
 thiserror = { workspace = true }
 
 [lints]

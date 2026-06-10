@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod defaults;
+pub mod duration;
 pub mod error;
 pub mod flags;
 pub mod keys;
