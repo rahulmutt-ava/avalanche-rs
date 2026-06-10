@@ -1500,6 +1500,7 @@ dependencies = [
  "ava-types",
  "ava-version",
  "ava-vm",
+ "hex",
  "parking_lot",
  "serde_json",
  "thiserror 2.0.18",

@@ -1,0 +1,11 @@
+{
+  "_comment": "Golden vector for ava-saevm-core tests/golden.rs::golden::settlement_vectors (specs/11 §1.2). For the fixed 8-block chain driven through the live VM lifecycle (build->verify->accept->execute->settle), this freezes the settle() driver's LastSettled choice: (LastSettled height/hash, settled receipt root, settled state root), plus LastAccepted/LastExecuted heights. With Tau=5s discipline and unit-rate gas clock, accepting block 8 settles up to height 3 (settle_at = BlockTime(8) - Tau). The receipt/state roots are height-derived (post_state_root = byte (h%251), receipt_root = byte (h%251)+1), so the two roots are pinned independently. Frozen from the Rust pipeline itself. Provenance: behavioral reference is Go vms/saevm/blocks/settlement.go (lastToSettle / Settles); exact Go-value parity is deferred to the M7.29 differential.",
+  "chain_len": 8,
+  "tau_seconds": 5,
+  "last_accepted_height": 8,
+  "last_executed_height": 8,
+  "last_settled_height": 3,
+  "last_settled_hash": "0xe67887536dd765fc2a46a8c0a406c8a3521916625e19976a340d2ad40a10561f",
+  "settled_state_root": "0x0303030303030303030303030303030303030303030303030303030303030303",
+  "settled_receipt_root": "0x0404040404040404040404040404040404040404040404040404040404040404"
+}

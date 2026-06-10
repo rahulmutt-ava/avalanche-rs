@@ -1,0 +1,10 @@
+{
+  "_comment": "Golden vector for ava-saevm-core tests/golden.rs::golden::recovery_transcript (specs/11 §1.4, §10 invariant 7). Transcript of a crash+restart: the fixed 8-block chain is driven through the live VM lifecycle, the durable disk (canonical accepted bodies + height-indexed committed ExecutionResults + the saedb commit interval) is snapshotted at commit_interval=16 (the crash point), the live VM is dropped, then recover() rebuilds A/E/S purely from disk. This freezes the reconstructed (A,E,S) heights + the recovered executed/settled post-state roots, which must equal the live frontiers (re-execution from the last committed root is pure). Frozen from the Rust pipeline itself. Provenance: behavioral reference is Go vms/saevm/sae/recovery.go (Recover / newCanonicalBlock); exact Go-value parity is deferred to the M7.29 differential.",
+  "chain_len": 8,
+  "commit_interval": 16,
+  "recovered_accepted_height": 8,
+  "recovered_executed_height": 8,
+  "recovered_settled_height": 3,
+  "recovered_executed_state_root": "0x0808080808080808080808080808080808080808080808080808080808080808",
+  "recovered_settled_state_root": "0x0303030303030303030303030303030303030303030303030303030303030303"
+}
