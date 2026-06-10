@@ -8,6 +8,13 @@ the Merkle state DB on [**Firewood**](https://github.com/ava-labs/firewood) as a
 direct Rust dependency. A coding agent should be able to derive the implementation
 from these documents.
 
+> **Upstream provenance.** These specs were generated from avalanchego commit
+> `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
+> `cc3b103b91` (2026-06-09) have been reviewed and folded in as **"Upstream
+> delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
+> `18`, `21`, `27`) and plan files (`plan/M7`, `plan/M8`). When re-syncing
+> against newer avalanchego, start the review from `cc3b103b91`.
+
 ## Read this first
 
 **[`00-overview-and-conventions.md`](00-overview-and-conventions.md)** is the

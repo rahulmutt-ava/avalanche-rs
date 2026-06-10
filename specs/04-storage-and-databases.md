@@ -608,6 +608,14 @@ commit thread / `spawn_blocking` (§1.2).
 > The crate built clean in ~18s (pure Rust, no slow native step) — **R3 firewood
 > build risk retired in this environment.**
 
+> **Upstream delta (avalanchego `cc3b103b91`, 2026-06-09).** The Go node bumped
+> to **`firewood-go-ethhash/ffi v0.6.0`** (all four Go modules). Our workspace
+> still pins firewood git tag `v0.5.0` (rev `0695b91f`, `ava-merkledb`). Before
+> running the live-parity / differential gates against a current Go node
+> (M7.29/M7.30, M9), re-pin to the tag the Go oracle actually wraps and re-run
+> the `golden::firewood_ethhash_root` vectors — a hash-format or API change
+> between v0.5.0 and v0.6.0 would surface there first.
+
 Sketch (updated to the real API):
 
 ```rust

@@ -204,6 +204,13 @@ each, the table gives the on-restart recovery action and the invariant it restor
 | C6 | **During SAE async execution** (block accepted, executor crashed mid-block, before its commit) | Accepted frontier ahead of executed frontier; execution state at last committed interval. | SAE recovery (`11` §1.4): re-enqueue every accepted-but-unexecuted canonical block from `last_committed_block`, re-execute (pure ⇒ identical roots), rebuild E then S. | Recovery equivalence (`11` invariant 7). |
 | C7 | **Unclean stop, marker left set** | Any of the above + the `ungracefulShutdown` key present. | Node logs the warning and runs the extra integrity checks of §4. | Detect-and-verify rather than assume-clean. |
 
+> **Upstream delta (coreth `345fdfaa74`, #5445).** A **graceful** C-Chain
+> shutdown now commits the atomic trie at the last-accepted height even between
+> commit-interval boundaries (`10` §atomic backend), so the
+> re-index-from-tx-repository pass is only a *crash*-recovery path, not a
+> every-restart cost. No crash row changes: an unclean stop (C7) still
+> recovers from the last committed interval.
+
 ### 3.1 The trickiest case — shared-memory cross-chain two-sided consistency
 
 The dangerous scenario in any cross-chain atomic op is: **chain A exports a UTXO,

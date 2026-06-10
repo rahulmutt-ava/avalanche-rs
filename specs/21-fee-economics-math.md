@@ -827,6 +827,27 @@ impl GasTime {
 
 ---
 
+### 6.x Upstream delta — `vms/saevm/cchain/dynamic` (ACP-176 / ACP-226 / ACP-283 exponent integrators)
+
+> **Added upstream post-snapshot** (`2750cc9e42`, #5481, 2026-06-09).
+> **Unconsumed at Go HEAD** — preparatory consolidation for ramping C-Chain SAE
+> consensus parameters smoothly between blocks. Port as a `dynamic` module in
+> `ava-saevm-cchain` (plan/M7.34). Each parameter is a `uint64` **exponent
+> newtype** reusing §0's `CalculatePrice` (`value = minimum · e^(exp/K)`), with
+> two shared generic helpers: `toward(current, desired: Option, max_diff)`
+> (clamped one-block step; `None` = unchanged) and `search(n, f)` (smallest
+> exponent with `f(exp)`, i.e. binary-search inversion of the reader — **no
+> floats**, exactly Go's rounding):
+>
+> | Type | ACP | Reader | `minimum` | `K` (conversion rate) | per-block `maxDiff` | `Desired*` search bound |
+> |---|---|---|---|---|---|---|
+> | `TargetExponent` | **ACP-176** | `Target() -> Gas` (target gas/s) | 1 000 000 gas | `1 << 25` | `1 << 15` | 1 024 950 627 |
+> | `DelayExponent` | **ACP-226** (dynamic minimum block times) | `Delay() -> u64` (min block delay, ms) | 1 ms | `1 << 20` | 200 | 46 516 320 |
+> | `PriceExponent` | **ACP-283** (dynamic minimum gas price — *new ACP, not previously in these specs*) | `Price() -> gas::Price` (min gas price, wei) | 1 wei | 415 828 534 307 635 077 (`MaxUint64/ln(MaxUint64)`) | `diffToDouble/3600` where `diffToDouble = 288 230 376 151 711 744` (price can at most double per 3 600 blocks) | `MaxUint64 − 37` |
+>
+> Go ships table-driven tests per type (decode / `Toward` clamp both directions /
+> `Desired*` round-trip) — mirror them, plus a `prop::desired_exponent_inverts_reader`.
+
 ## 7. Mechanism → fork → crate
 
 Fork gating uses the shared `Fork`/`UpgradeConfig` model in §03 / §11.

@@ -63,6 +63,12 @@ Wave 6  (close-out)
 
 Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any other wave starts. Wave 3 depends on Waves 1+2. Wave 6 depends on all.
 
+> **UPSTREAM DELTA (avalanchego `cc3b103b91`, 2026-06-09 — folded 2026-06-10).** The Go node
+> bumped to **`firewood-go-ethhash/ffi v0.6.0`**; our workspace pins firewood git tag `v0.5.0`
+> (`ava-merkledb`, see `04` §4.2 upstream-delta). Before any live-Go-oracle task here
+> (M9.14/M9.15/M9.17/M9.19) — and before the M7.29/M7.30 SAE differentials — verify which ffi
+> tag the oracle binary wraps and re-pin + re-run `golden::firewood_ethhash_root` if it moved.
+
 ---
 
 ## Tasks

@@ -346,6 +346,15 @@ AVM (`vms/avm/metrics/*.go`): `txs_accepted` (by `type`), `tx_refreshes`,
 EVM (C-Chain) metrics are produced by the reth/coreth driver (`10`); they appear
 under `avalanche_evm_*` with `[chain]` and are diffed by the same golden test.
 
+> **Upstream delta (avalanchego `844535b313` #5362, `ab442aa244` #5408).** The
+> SAE VM (`11`) now registers parity-relevant metrics:
+>
+> | Namespace (via `MakeAndRegister(snowCtx.Metrics, ns)`) | Name | Type | Meaning |
+> |---|---|---|---|
+> | `sae` | `last_settled_height` | G | height of the latest settled block (set on settle in `AcceptBlock` + once at startup from the recovered S frontier) |
+> | `sae` | `last_executed_height` | G | height of the latest block that completed async execution (`saexec` registers on the same `sae` registry; set per `sendPostExecutionEvents` + at `Executor` construction) |
+> | `cchain` | `gossip_bloom_*`, `gossip_*` | — | the standard `network/p2p/gossip` + `utils/bloom` metric families for cross-chain (atomic) tx gossip |
+
 ### 2.12 API server — `avalanche_api_*` (`api/server/metrics.go`)
 
 | Name | Type | Labels | Meaning |

@@ -579,6 +579,29 @@ config) and a **dynamic** one (gas × price). Tx complexity is computed per tx t
 `gas` package). The **validator fee** (`validators/fee`) is a *separate* gas dimension tracking
 the ACP-77 continuous fee charged to active L1 validators against their `EndAccumulatedFee`.
 
+> **Upstream delta (avalanchego `c84b906db6`, ACP-236 (3), #5202).** At the spec
+> snapshot, `complexityVisitor` returned `errUnimplemented` for the auto-renew
+> txs (§3.4); upstream has since implemented them — `errUnimplemented` is gone:
+>
+> - **`IntrinsicAddAutoRenewedValidatorTxComplexities`**: `Bandwidth` = base-tx +
+>   `IntLen`(nodeID len) + `NodeIDLen` + `IntLen`(signer typeID) + `IntLen`(num
+>   stake outs) + `IntLen`(validator-rewards typeID) + `IntLen`(delegator-rewards
+>   typeID) + `IntLen`(validator-authority typeID) + `IntLen`(delegation shares) +
+>   `IntLen`(auto-compound reward shares) + `LongLen`(period); `DBWrite` = 3
+>   (put staker + weight diff + pk diff). Visitor adds signer/outputs/owner-×3
+>   complexities like `AddPermissionlessValidatorTx`.
+> - **`IntrinsicSetAutoRenewedValidatorConfigTxComplexities`**: `Bandwidth` =
+>   base-tx + `IDLen`(txID) + `IntLen`(auth typeID) + `IntLen`(authCredential
+>   typeID) + `IntLen`(auto-compound reward shares) + `LongLen`(period);
+>   `DBRead` = 1 (read tx), `DBWrite` = 1 (update staker); plus auth complexity.
+>
+> The same commit extends the **API/client/wallet** surface:
+> `platform.getCurrentValidators` replies embed an `AutoRenewedConfig
+> { validatorAuthority: Owner, nextPeriod: Uint64, autoCompoundRewardShares:
+> Uint32 }` for auto-renewed validators (nil otherwise) — see `14` §platform —
+> and the P-chain wallet builder gains `NewAddAutoRenewedValidatorTx` /
+> `NewSetAutoRenewedValidatorConfigTx` — see `12` §13 / plan/M8.25.
+
 ### ACP-77 L1 validator lifecycle
 
 `ConvertSubnetToL1Tx` converts a permissioned subnet into an L1 with an off-chain manager:

@@ -1575,6 +1575,16 @@ impl AtomicBackend {
 }
 ```
 
+> **Upstream delta (coreth `345fdfaa74`, #5445).** `VM::Shutdown` now commits
+> the atomic trie at the **last-accepted height even off the
+> `commit_interval` boundary**, *before* the inner VM closes the database:
+> `AtomicBackend::commit_last_accepted(height)` is a no-op if
+> `last_committed_height >= height`, else `trie.commit(height,
+> last_accepted_root)` + flush. This makes clean restarts skip the
+> re-index-from-atomic-tx-repository pass. Crash recovery is unchanged — an
+> unclean stop still re-indexes from the last committed interval (`27`).
+> Mirror this in the Rust `AtomicBackend` + the shutdown ordering (`17`).
+
 The **atomic mempool** is a *sidecar* (`AtomicMempool`, §6.4): NOT a reth
 `TransactionPool`, because its items aren't revm txs. It gossips via the p2p SDK
 (05) and the builder pulls **one atomic batch per block** (§17.6). Conflict/`bonusBlocks`

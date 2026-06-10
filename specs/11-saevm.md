@@ -372,6 +372,16 @@ ava-saevm-cchain      → core, ava-evm, ava-secp256k1fx-equivalent (avax import
 ava-saevm-testutil    (dev): saetest, blockstest, txtest, escrow
 ```
 
+> **Upstream delta (`ab442aa244`).** Go's `saetest` gained **`network.go`** — an
+> in-memory multi-node harness: `saetest.Sender` (an `common.AppSender` that
+> routes AppRequest/AppResponse/AppError/AppGossip between registered peers on
+> goroutines, with validator-aware gossip sampling), `Connect`/`ConnectTo`
+> (full-mesh or star wiring of `Peer`s), and `SetValidators`. The
+> multi-node tests formerly inlined in `sae/networked_test.go` now build on it,
+> and `cchain`'s gossip tests reuse it. Port into `ava-saevm-testutil` when
+> wiring live gossip (plan/M7.33) — it is also the natural substrate for the
+> M7.29/M7.30 differential harnesses.
+
 Public surface highlights:
 
 - **`ava-saevm-core::Vm`** — the SAE VM (everything except `Initialize`,
@@ -725,6 +735,35 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 `Initialize` (`cchain/vm.go`) sets up genesis, builds the hooks, constructs
 `sae::NewVM`, then the atomic txpool. It is the *harness* that supplies the
 `Initialize` method `sae::Vm` deliberately omits (§5).
+
+> **Upstream delta (avalanchego `fb174e8` → `cc3b103b9`, folded 2026-06-10).**
+> Three post-snapshot Go commits extend `cchain`/`sae`:
+>
+> 1. **Cross-chain (atomic) tx gossip** (`ab442aa244`, #5408). `cchain.VM`
+>    now wires the *atomic* txpool into the generic p2p gossip framework in
+>    `Initialize`: a `gossip.BloomSet` over the txpool (`gossipTx` newtype
+>    implements `Gossipable` via the linear-codec tx bytes; `GossipID` = txID),
+>    `gossip.NewSystem(...)` registered on **`p2p.AtomicTxGossipHandlerID`**,
+>    and push + pull `gossip.Every` loops with **configurable
+>    `pullGossipPeriod`/`pushGossipPeriod`** (tests use 100 ms) cancelled via
+>    `onClose`. Crucially, the `/avax` service constructor changed from
+>    `newService(ctx, txpool, state)` to **`newService(ctx, gossipSet,
+>    pushGossiper, state)`** — `avax.issueTx` now admits through the bloom set
+>    and push-gossips, instead of poking the txpool directly. Metrics register
+>    under a **`cchain`** namespace (`gossip_bloom_*`, `gossip_*`). Rust
+>    follow-up tracked as plan/M7.33 (the M7.23 AS-BUILT already deferred this
+>    wiring; there is now a concrete Go reference).
+> 2. **`cchain/dynamic` package** (`2750cc9e42`, #5481): exponential
+>    integrators for dynamic C-Chain consensus parameters — see `21` §6
+>    upstream-delta (ACP-176 target / ACP-226 min block delay / **ACP-283 min
+>    gas price**, a spec-new ACP). **Unconsumed at Go HEAD** (preparatory);
+>    plan/M7.34.
+> 3. **Frontier-height metrics** (`844535b313`, #5362): `sae` registers gauge
+>    **`last_settled_height`** (set in `AcceptBlock` when a block settles and
+>    once at startup from the recovered S frontier) and `saexec` registers
+>    **`last_executed_height`** (set in `sendPostExecutionEvents` and at
+>    `Executor` construction) — both on the `"sae"`-namespaced registry from
+>    `snowCtx.Metrics`. See `18` §2.11.
 
 ### Reuse decision (binding cross-ref to `10`)
 

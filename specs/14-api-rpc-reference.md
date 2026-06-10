@@ -264,7 +264,7 @@ objects (primary/subnet/L1).
 | `platform.getSubnet` | `subnetID: ids.ID` | `isPermissioned: bool`, `controlKeys: []string`, `threshold: Uint32`, `locktime: Uint64`, `subnetTransformationTxID: ids.ID`, `conversionID: ids.ID`, `managerChainID: ids.ID`, `managerAddress: JSONByteSlice` | |
 | `platform.getSubnets` | `ids: []ids.ID` | `subnets: []APISubnet{id, controlKeys: []string, threshold: Uint32}` | empty `ids` ⇒ all |
 | `platform.getStakingAssetID` | `subnetID: ids.ID` | `assetID: ids.ID` | |
-| `platform.getCurrentValidators` | `subnetID: ids.ID`, `nodeIDs: []NodeID` | `validators: []any` | primary/subnet/L1 validator objects |
+| `platform.getCurrentValidators` | `subnetID: ids.ID`, `nodeIDs: []NodeID` | `validators: []any` | primary/subnet/L1 validator objects; **upstream delta** (`c84b906db6`, ACP-236): auto-renewed validators embed `AutoRenewedConfig{validatorAuthority: Owner, nextPeriod: Uint64, autoCompoundRewardShares: Uint32}` (omitted otherwise) |
 | `platform.getL1Validator` | `validationID: ids.ID` | `subnetID: ids.ID`, `nodeID, publicKey, remainingBalanceOwner, deactivationOwner, startTime, weight, minNonce, balance`, `height: Uint64` | ACP-77 L1 validator |
 | `platform.getCurrentSupply` | `subnetID: ids.ID` | `supply: Uint64`, `height: Uint64` | |
 | `platform.sampleValidators` | `size: Uint16`, `subnetID: ids.ID` | `validators: []NodeID` | |

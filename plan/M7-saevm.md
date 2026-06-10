@@ -375,8 +375,28 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [x] **Step 4 — Confirm green:** `cargo +nightly fuzz run decode_block -- -runs=10000` clean (smoke); `cargo xtask test-fuzz` includes it. **[As-built: verified via the stable proptest smoke (18 tests green) + `cargo fuzz list` + `cargo build -p xtask`; the nightly run is CI-only.]**
 - [x] **Step 5 — Commit:** `sae(blocks): cargo-fuzz decode_block target + seed corpus`
 
+### Task M7.33: `ava-saevm-cchain` — live cross-chain (atomic) tx gossip wiring **[UPSTREAM DELTA — added 2026-06-10]**
+**Sub-crate:** ava-saevm-cchain (+ ava-saevm-testutil)  ·  **Depends on:** M7.20, M7.23  ·  **Spec:** `11` §8 upstream-delta + §3 testutil delta (Go `ab442aa244` #5408), `05` (p2p gossip)
+**Files:** `crates/ava-saevm/cchain/src/{gossip.rs,vm.rs,api.rs}`, `crates/ava-saevm/testutil/src/network.rs`, tests
+> **Why added:** Go landed cross-chain tx gossip *after* the spec snapshot, turning the M7.23 AS-BUILT follow-up ("bloom-gossip/`pushGossiper` + `AppSender` wiring → M7.x") into a concrete, referenceable design. Go reference: `cchain/gossip.go` (a `gossipTx` newtype implementing `Gossipable` over the linear-codec bytes; marshaller = `tx.Parse`/`tx.Bytes`; `gossipTxPool` adapting the atomic txpool to `gossip.Set`), `cchain/vm.go::Initialize` (a `gossip.BloomSet` + `gossip.NewSystem` on **`AtomicTxGossipHandlerID`**, push+pull `gossip.Every` loops with configurable periods, shut down via `onClose`), and the **`/avax` service signature change**: `newService(ctx, gossipSet, pushGossiper, state)` — `avax.issueTx` admits via the bloom set + push-gossip, not the raw txpool. Test substrate: Go's new `saetest/network.go` in-memory multi-node `Sender`/`Connect`/`SetValidators` harness (port into `ava-saevm-testutil`; also the substrate for M7.29/M7.30). Note the Rust generic gossip framework gap recorded in the M7.20 AS-BUILT still holds — either extend the M7.20 local seam or land the `ava-network` framework first.
+- [ ] **Step 1 — Red:** `cchain/tests/gossip.rs::issued_tx_reaches_peer_pool` — two in-memory-connected cchain VMs (testutil network harness); `avax.issueTx` on node A ⇒ tx appears in node B's atomic txpool via push gossip; a pre-seeded tx on B reaches A via pull gossip.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-cchain -E 'test(gossip)'` → fails.
+- [ ] **Step 3 — Green:** Port `gossip.rs` (Gossipable newtype + marshaller + pool adapter), wire bloom set + push/pull loops (tokio, configurable periods) into `Vm::initialize` with `on_close` teardown, change `AvaxService` to issue via gossip set + push gossiper, add the `testutil` network harness. While in the core/exec wiring, also add the two upstream frontier gauges (`844535b313`): `sae::last_settled_height` (set on settle + at startup) and `saexec::last_executed_height` (set per post-execution event + at construction) on the `"sae"` metrics namespace (`18` §2.11 delta).
+- [ ] **Step 4 — Confirm green:** cchain + testutil tests green; `lint_saevm.sh` exit 0.
+- [ ] **Step 5 — Commit:** `sae(cchain): cross-chain tx gossip (BloomSet + push/pull) + saetest network harness [Go ab442aa244]`
+
+### Task M7.34: `ava-saevm-cchain::dynamic` — ACP-176/226/283 exponent integrators **[UPSTREAM DELTA — added 2026-06-10; OPTIONAL for the M7 gate]**
+**Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.1 (lint bar; uses `ava-vm` `calculate_price`)  ·  **Spec:** `21` §6.x upstream-delta (Go `2750cc9e42` #5481)
+**Files:** `crates/ava-saevm/cchain/src/dynamic/{mod.rs,math.rs,price.rs,delay.rs,target.rs}`, tests
+> **Why added (and why optional):** new upstream package consolidating the exponential integrators for dynamic C-Chain consensus parameters — `TargetExponent` (ACP-176), `DelayExponent` (ACP-226 min block delay), `PriceExponent` (**ACP-283 dynamic min gas price — new ACP**, previously absent from these specs). **Unconsumed at Go HEAD** (preparatory), so it does not block the M7.32 gate; port it when Go wires a consumer, or earlier as a leaf task (pure math, golden-testable from the Go table tests). All constants + `toward`/binary-`search` semantics recorded in `21` §6.x.
+- [ ] **Step 1 — Red:** golden table tests per exponent type (decode / `Toward` clamp both directions / `Desired*` round-trip — values from Go `dynamic/*_test.go`) + `prop::desired_exponent_inverts_reader`.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-cchain -E 'test(dynamic)'` → fails.
+- [ ] **Step 3 — Green:** Port `toward`/`search` generics + the three exponent newtypes over `ava_vm::components::gas::calculate_price` (checked math, no floats, no raw casts).
+- [ ] **Step 4 — Confirm green:** tests green; `lint_saevm.sh` exit 0.
+- [ ] **Step 5 — Commit:** `sae(cchain): dynamic ACP-176/226/283 exponent integrators [Go 2750cc9e42]`
+
 ### Task M7.32: Milestone exit gate
-**Sub-crate:** ava-saevm (all) + avalanchers bin  ·  **Depends on:** M7.1–M7.31  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
+**Sub-crate:** ava-saevm (all) + avalanchers bin  ·  **Depends on:** M7.1–M7.31 + M7.33 (M7.34 optional — unconsumed upstream)  ·  **Spec:** all of `11`, exit gate (above), `00` §8 (SAE lint bar), `02` §13 (per-crate contracts)
 **Files:** `crates/ava-saevm/*/tests/PORTING.md` (filled), `tests/PORTING.md` aggregate row, `.config/nextest.toml` (ci profile), CI workflow SAE job
 - [ ] **Step 1 — Red:** Add a milestone meta-test list / xtask `xtask saevm-exit-gate` that asserts the named exit tests exist and are referenced: `golden::sae_block_hash`, `prop::sae_execution_determinism`, `differential::sae_recovery`, `differential::sae_streaming`, all `invariant::*` (11). Run it → fails until everything is wired and PORTING.md is complete.
 - [ ] **Step 2 — Confirm red:** `cargo xtask saevm-exit-gate` → reports missing/failing items.
@@ -425,6 +445,9 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `27` §3 | Crash points C6 (mid-execute) | M7.24, M7.29 |
 | `27` §3.1 | Shared-memory two-sided consistency (ATOMIC-1) | M7.22 |
 | `27` §5.4 | SAE recovery procedure | M7.24, M7.29 |
+| `11` §8 upstream-delta | cross-chain tx gossip + `/avax`-via-gossip + saetest network harness (Go `ab442aa244`) | **M7.33** |
+| `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`) | **M7.33** (Step 3) |
+| `21` §6.x upstream-delta | `cchain/dynamic` ACP-176/226/283 exponent integrators (Go `2750cc9e42`; unconsumed upstream) | **M7.34** (optional) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |

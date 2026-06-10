@@ -894,7 +894,8 @@ pub trait PBuilder {
     async fn new_import_tx(&self, src: Id, to: &Owner, opts: &[Option_]) -> Result<p::tx::ImportTx>;
     async fn new_export_tx(&self, dst: Id, outs: Vec<TransferableOutput>, opts: &[Option_]) -> Result<p::tx::ExportTx>;
     // … add/remove subnet validator, transfer ownership, transform subnet,
-    //     L1 conversion / register / set-weight / increase-balance / disable (ACP-77) …
+    //     L1 conversion / register / set-weight / increase-balance / disable (ACP-77),
+    //     add-auto-renewed-validator / set-auto-renewed-validator-config (ACP-236; upstream delta below) …
     async fn utxos(&self, src: Id) -> Result<Vec<Utxo>>;
     async fn get_owner(&self, owner_id: Id) -> Result<Owner>;
 }
@@ -918,7 +919,18 @@ pub trait PBuilder {
 Builders/signers are pure (no I/O) given a `Backend` snapshot, enabling the
 golden tx-vector tests (§12.5).
 
----
+> **Upstream delta (avalanchego `c84b906db6`, ACP-236 (3), #5202).** The Go
+> P-chain builder/wallet gained the auto-renew pair (mirror in `ava-wallet::p`,
+> plan/M8.25): `NewAddAutoRenewedValidatorTx(node_id, weight, signer,
+> validation_rewards_owner, delegation_rewards_owner, validator_authority,
+> delegation_shares, auto_compound_reward_shares, period: Duration, opts)` and
+> `NewSetAutoRenewedValidatorConfigTx(tx_id, auto_compound_reward_shares,
+> period, opts)` (`period == 0` ⇒ graceful exit at end of current cycle; the
+> latter resolves the validator-authority owner via `get_owner`/auth like
+> other authorized txs), plus the matching
+> `with_options` wrappers and `Wallet.Issue*` facades. Fee complexity for both
+> txs is now defined (`08` §6 delta). The wallet `Backend` consumes the new
+> `AutoRenewedConfig` fields from `platform.getCurrentValidators` (`14`).
 
 ## 14. Performance notes / improvements over Go
 

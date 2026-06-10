@@ -182,6 +182,15 @@ Wave 7 (differential sync-to-tip + gate)
 - [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-platformvm golden::calculate_price golden::pchain_dynamic_fee prop::price_monotone` green.
 - [x] **Step 5 — Commit:** `ava-platformvm: ACP-103 dynamic fee + static fee + complexity`
 
+> **UPSTREAM DELTA (Go `c84b906db6`, ACP-236 (3), #5202 — folded 2026-06-10).** The Rust
+> `complexity.rs` shipped only the intrinsic primitives; the per-tx `complexityVisitor` is
+> deferred (see the `TODO(after M4.3)` in `txs/fee/complexity.rs`). When that visitor lands,
+> note that Go has since **implemented** the previously-`errUnimplemented` auto-renew cases:
+> `IntrinsicAddAutoRenewedValidatorTxComplexities` (DBWrite=3) and
+> `IntrinsicSetAutoRenewedValidatorConfigTxComplexities` (DBRead=1, DBWrite=1) — exact
+> bandwidth formulas in `08` §6 upstream-delta; Go `txs/fee/calculator_test.go` gained the
+> golden rows to mirror. Do NOT port an `errUnimplemented` stub for these.
+
 ---
 
 ### Task M4.9: L1 validator continuous fee (ACP-77)
