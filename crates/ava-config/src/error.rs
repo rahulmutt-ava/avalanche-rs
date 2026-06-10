@@ -78,6 +78,33 @@ pub enum ConfigError {
         /// The underlying parse error.
         msg: String,
     },
+
+    /// The command line failed to parse (clap error rendered to text).
+    #[error("{msg}")]
+    CliParse {
+        /// The rendered clap error.
+        msg: String,
+    },
+
+    /// A key with no [`crate::flags::FlagSpec`] row was requested.
+    #[error("unknown configuration key {key:?}")]
+    UnknownKey {
+        /// The offending key.
+        key: String,
+    },
+
+    /// A layered value failed to parse as the flag's type.
+    #[error("invalid value {value:?} for {key} (want {want}): {msg}")]
+    InvalidFlagValue {
+        /// The flag key.
+        key: String,
+        /// The offending raw value.
+        value: String,
+        /// The expected type name.
+        want: &'static str,
+        /// The underlying parse error.
+        msg: String,
+    },
 }
 
 /// Crate-local result alias.
