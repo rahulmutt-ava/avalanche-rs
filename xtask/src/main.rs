@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod check_sae_lints;
+mod gen_genesis;
 mod lint_determinism;
 mod porting;
 mod saevm_exit_gate;
@@ -70,6 +71,9 @@ enum Command {
     /// exist, PORTING.md is complete (no wip/placeholder rows), and the golden
     /// vectors + fuzz target are present (specs/11 §10 + exit gate).
     SaevmExitGate,
+    /// Re-freeze the ava-genesis golden vectors from the Go oracle
+    /// (`genesis.FromConfig` byte dumps + golden IDs; specs 23 §7, M8.8).
+    GenGenesis,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -85,5 +89,6 @@ fn main() -> anyhow::Result<()> {
         Command::LintDeterminism => lint_determinism::run(),
         Command::CheckSaeLints => check_sae_lints::run(),
         Command::SaevmExitGate => saevm_exit_gate::run(),
+        Command::GenGenesis => gen_genesis::run(),
     }
 }
