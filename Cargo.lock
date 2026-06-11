@@ -1909,6 +1909,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-wallet"
+version = "0.1.0"
+dependencies = [
+ "assert_matches",
+ "ava-avm",
+ "ava-codec",
+ "ava-crypto",
+ "ava-evm",
+ "ava-platformvm",
+ "ava-secp256k1fx",
+ "ava-types",
+ "ava-warp",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-warp"
 version = "0.1.0"
 dependencies = [

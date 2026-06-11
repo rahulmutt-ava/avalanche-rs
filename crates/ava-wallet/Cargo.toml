@@ -1,0 +1,37 @@
+[package]
+name = "ava-wallet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Wallet SDK: P/X/C tx builders, signers and backends over a pure state snapshot (port of wallet/chain/{p,x,c} + wallet/subnet/primary/common) (M8 / specs 12 §13)."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+# secp256k1 keychain signing (recoverable sigs over sha256) + BLS PoP.
+ava-crypto = { path = "../ava-crypto" }
+# secp256k1fx OutputOwners/Input/TransferInput/TransferOutput/Credential.
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# P-Chain tx types, codec, UTXO, stakeable lock in/out, fee gas dimensions.
+ava-platformvm = { path = "../ava-platformvm" }
+# X-Chain tx types + codec + UTXO.
+ava-avm = { path = "../ava-avm" }
+# C-Chain atomic Import/Export tx types + atomic codec.
+ava-evm = { path = "../ava-evm" }
+# Warp message parsing for `fee::warp_complexity` (RegisterL1Validator /
+# SetL1ValidatorWeight intrinsic dimensions need the signer count).
+ava-warp = { path = "../ava-warp" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
