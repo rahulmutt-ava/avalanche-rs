@@ -15,6 +15,16 @@
 //! public IPv4; the "map" request (opcode 1 = UDP, 2 = TCP) installs a mapping
 //! with a lifetime in seconds. We map only TCP (the staking port), matching the
 //! UPnP router's `upnpProtocol = "TCP"`.
+//!
+//! **Gateway-discovery limitation (not full parity with Go).** Go's NAT-PMP path
+//! reads the OS route table to find the default gateway. There is no portable
+//! std-library route-table query, so `default_gateway_ipv4` instead derives
+//! the gateway from a `.1`-on-the-local-/24 heuristic (the common consumer-router
+//! convention). This matches the protocol exchange and the UPnP→PMP→noop probe
+//! *ordering* exactly, but the gateway address itself is a best-effort guess: on
+//! a network whose gateway is not `x.y.z.1` the probe simply finds no PMP gateway
+//! and the caller falls through to the no-op router. A real route-table read is a
+//! documented follow-up.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;

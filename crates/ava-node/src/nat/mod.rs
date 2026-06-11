@@ -31,13 +31,19 @@ pub use ava_network::nat::{
 
 pub use self::pmp::PmpRouter;
 
-/// Returns a router for the current network, mirroring Go `nat.GetRouter`:
-/// probe UPnP first (via `ava-network`'s `igd-next` IGD client), then NAT-PMP,
-/// else fall back to the no-op [`NoRouter`].
+/// Returns a router for the current network, mirroring Go `nat.GetRouter`'s
+/// probe *ordering*: UPnP first (via `ava-network`'s `igd-next` IGD client),
+/// then NAT-PMP, else fall back to the no-op [`NoRouter`].
 ///
 /// Unlike [`ava_network::nat::get_router`] (which lacks a PMP probe and so
 /// falls straight to the no-op router when UPnP is unavailable), this includes
-/// the [`pmp`] fallback, restoring full parity with the Go ordering.
+/// the [`pmp`] fallback, so the probe order matches Go.
+///
+/// The match is on *ordering*, not on gateway discovery: Go's NAT-PMP path
+/// reads the OS route table for the default gateway, whereas [`pmp`] derives it
+/// from a `.1`-on-the-local-/24 heuristic (see [`pmp::get_pmp_router`]). On a
+/// non-`.1`-gateway network the PMP probe will not find the real gateway and
+/// this falls through to the no-op router.
 #[must_use]
 pub fn get_router() -> Box<dyn NatRouter> {
     let upnp_or_noop = get_upnp_or_noop_router();

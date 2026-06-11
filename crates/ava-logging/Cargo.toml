@@ -19,11 +19,15 @@ parking_lot = { workspace = true }
 # custom `FormatEvent` hook the §5.4 design depends on (the workspace's 0.2 is a
 # transitive pin only).
 tracing-subscriber = { version = "0.3.20", features = ["registry", "fmt", "env-filter", "ansi"] }
-# Rolling/lumberjack-equivalent file writer.
+# Non-blocking appender wrapper around our size-aware rolling writer (`rolling`).
 tracing-appender = "0.2.3"
+# gzip for lumberjack-equivalent compressed backups (specs/18 §5.3).
+flate2 = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+# Tempdirs for the rotation + per-chain routing tests.
+tempfile = "3"
 
 [lints]
 workspace = true

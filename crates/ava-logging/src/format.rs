@@ -272,4 +272,45 @@ mod tests {
         assert_eq!(level_color(AvaLevel::Info), "\u{1b}[32m");
         assert_eq!(level_color(AvaLevel::Off), "");
     }
+
+    /// The JSON line must escape control/quote/non-ASCII content in both the
+    /// message and field values so the result is valid JSON that round-trips
+    /// through `serde_json` with the values preserved exactly.
+    #[test]
+    fn json_line_escapes_quotes_newlines_and_non_ascii() {
+        let message = "say \"hi\"\nover µ lines";
+        let field_value = "value \"q\"\nµ";
+        let mut extra = vec![(
+            "note".to_owned(),
+            serde_json::Value::String(field_value.to_owned()),
+        )];
+
+        let line = json_line(
+            AvaLevel::Info,
+            "2026-06-04T12:00:00.000Z",
+            "C",
+            "chain/foo.go:42",
+            message,
+            &mut extra,
+        )
+        .expect("json_line");
+
+        // The emitted line contains no raw newline (it was escaped).
+        assert!(
+            !line.contains('\n'),
+            "newline must be escaped, got {line:?}"
+        );
+
+        // It parses as valid JSON and preserves every value verbatim.
+        let parsed: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
+        let get = |k: &str| parsed.get(k).cloned().expect("key present");
+        assert_eq!(get("level"), serde_json::json!("info"));
+        assert_eq!(get("logger"), serde_json::json!("C"));
+        assert_eq!(get("caller"), serde_json::json!("chain/foo.go:42"));
+        assert_eq!(get("msg"), serde_json::Value::String(message.to_owned()));
+        assert_eq!(
+            get("note"),
+            serde_json::Value::String(field_value.to_owned())
+        );
+    }
 }

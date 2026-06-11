@@ -10,24 +10,32 @@
 //! keep working (specs/00 §7.3).
 //!
 //! The [`init_logging`] factory builds the global subscriber from a
-//! [`LogConfig`]: a display layer (stdout, at the display level) plus a rolling
-//! file layer per logger (file, at the file level). [`make_chain_logger`]
-//! returns an additional rolling file layer for a chain's `<alias>.log`. Both
-//! return [`ReloadHandle`]s so the admin `setLoggerLevel` endpoint (specs/12
-//! §3.5) can flip a per-logger level at runtime.
+//! [`LogConfig`]: a display layer (stdout, at the display level), a `main.log`
+//! rolling file layer (file, at the file level), plus a *reloadable per-chain
+//! slot*. After init, [`LogHandles::add_chain_logger`] appends a per-chain
+//! layer (writing `<alias>.log`, filtered to events carrying `chain =
+//! "<alias>"`) into that slot at runtime — mirroring Go `LogFactory.MakeChain`,
+//! which adds a chain's logger after the node is up. Every per-logger level is a
+//! [`ReloadHandle`] so the admin `setLoggerLevel` endpoint (specs/12 §3.5) can
+//! flip it at runtime.
+//!
+//! File rotation is the lumberjack-equivalent size-aware writer in the internal
+//! `rolling` module: a stable `<name>.log` live file, timestamped backups on
+//! size overflow, retention by count/age, and gzip when configured.
 
 #![forbid(unsafe_code)]
 
 mod format;
 mod level;
+mod rolling;
 
 use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
+use tracing::field::{Field, Visit};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling::{RollingFileAppender, Rotation as AppenderRotation};
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::layer::{Filter, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, Registry, reload};
 
@@ -37,6 +45,12 @@ pub use level::{AvaLevel, ParseLevelError};
 /// [`make_chain_logger`] is generic over, so downstream crates can name the
 /// bound without a direct `tracing-subscriber` dependency.
 pub use tracing_subscriber::registry::LookupSpan;
+
+/// The subscriber the global per-chain slot is parameterized over.
+///
+/// The reloadable chain-layer slot ([`init_logging`]) is the *first* layer
+/// added to the registry, so each boxed chain layer is a `Layer<Registry>`.
+type ChainLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
 /// Errors raised while building or mutating the logging subscriber.
 #[derive(Debug, thiserror::Error)]
@@ -57,10 +71,11 @@ pub type Result<T> = std::result::Result<T, LogError>;
 
 /// Lumberjack-equivalent rotation policy (specs/18 §5.3).
 ///
-/// Mirrors Go's `lumberjack.Logger` knobs. `tracing-appender` rotates on a time
-/// granularity rather than on size; this struct carries the Go knobs verbatim so
-/// the resolved [`ava_config`](https://docs.rs) `LoggingConfig` maps 1:1, and a
-/// future size-aware writer can honor them without an API change.
+/// Mirrors Go's `lumberjack.Logger` knobs and is honored by the size-aware
+/// rolling writer: the live file keeps the stable name `<name>.log`; once a
+/// write would exceed `max_size_mib`, it is renamed to a timestamped backup,
+/// pruned to at most `max_files` (and dropping anything older than
+/// `max_age_days`), and gzip-compressed when `compress` is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rotation {
     /// `--log-rotater-max-size` (MiB, default 8).
@@ -175,10 +190,18 @@ impl std::fmt::Debug for ReloadHandle {
     }
 }
 
+/// A type-erased handle to the global reloadable per-chain layer slot.
+///
+/// `reload::Handle` is parameterized by the slot's layer type and the
+/// subscriber; we erase the `modify`/append operation behind a boxed closure so
+/// callers can append chain layers without naming `tracing-subscriber` types.
+type ChainSlotAppender = Box<dyn Fn(ChainLayer) -> Result<()> + Send + Sync>;
+
 /// The handles + writer guards returned by [`init_logging`].
 ///
 /// The guards must be kept alive for the lifetime of the process — dropping a
 /// [`WorkerGuard`] flushes and stops the corresponding non-blocking appender.
+/// New per-chain loggers are added at runtime via [`Self::add_chain_logger`].
 pub struct LogHandles {
     /// The reloadable level for the stdout/display core.
     pub display: ReloadHandle,
@@ -186,6 +209,35 @@ pub struct LogHandles {
     pub main_file: ReloadHandle,
     /// Worker guards for every non-blocking appender; keep until shutdown.
     pub guards: Vec<WorkerGuard>,
+    /// Appender into the reloadable per-chain layer slot.
+    chain_slot: ChainSlotAppender,
+    /// The directory/format/level context for chain loggers added later.
+    cfg: LogConfig,
+}
+
+impl LogHandles {
+    /// Add a per-chain logger after init (mirrors Go `LogFactory.MakeChain`).
+    ///
+    /// Builds a rolling-file layer writing `<log-dir>/<alias>.log`, filtered so
+    /// only events carrying a `chain = "<alias>"` field reach it, and appends it
+    /// to the global reloadable chain slot. The returned [`ReloadHandle`] is the
+    /// per-chain logger level for the admin `setLoggerLevel` endpoint; the
+    /// appender's [`WorkerGuard`] is parked on `self.guards` for the process
+    /// lifetime.
+    ///
+    /// # Errors
+    /// - [`LogError::Io`] if the log directory/file cannot be created or opened.
+    /// - [`LogError::Reload`] if the chain slot is no longer reachable.
+    pub fn add_chain_logger(&mut self, alias: &str) -> Result<ReloadHandle> {
+        let ChainLogger {
+            layer,
+            handle,
+            guard,
+        } = make_chain_logger::<Registry>(alias, &self.cfg)?;
+        (self.chain_slot)(layer)?;
+        self.guards.push(guard);
+        Ok(handle)
+    }
 }
 
 impl std::fmt::Debug for LogHandles {
@@ -222,31 +274,90 @@ fn ensure_dir(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).map_err(|e| LogError::Io(e.to_string()))
 }
 
-/// Build a non-blocking rolling file appender writing `<dir>/<name>.log`.
+/// Build a non-blocking lumberjack-equivalent file appender for `<dir>/<name>.log`.
 ///
-/// `tracing-appender` rotates daily; the lumberjack size/age knobs in
-/// [`Rotation`] are carried on [`LogConfig`] for parity and consumed by a
-/// future size-aware writer.
+/// Wraps the size-aware [`rolling::RollingWriter`] (honoring all four
+/// [`Rotation`] knobs) in `tracing-appender`'s `NonBlocking` so writes — and the
+/// synchronous rotate/prune/compress that happens inside them — run off the hot
+/// path.
 fn rolling_appender(
     dir: &Path,
     name: &str,
+    rotation: Rotation,
 ) -> Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard)> {
     ensure_dir(dir)?;
-    let appender = RollingFileAppender::builder()
-        .rotation(AppenderRotation::DAILY)
-        .filename_prefix(name)
-        .filename_suffix("log")
-        .build(dir)
+    let writer = rolling::RollingWriter::new(dir, name, rotation)
         .map_err(|e| LogError::Io(e.to_string()))?;
-    Ok(tracing_appender::non_blocking(appender))
+    Ok(tracing_appender::non_blocking(writer))
+}
+
+/// A `Filter` that admits only events carrying a `chain = "<alias>"` field.
+///
+/// `filter_fn` only sees `&Metadata`, which does not carry per-event field
+/// *values*; so this custom filter visits the event's fields and matches the
+/// `chain` value against the layer's alias. Events without a matching `chain`
+/// field are routed elsewhere (the main file / display layers), never to this
+/// chain's file — mirroring Go's per-chain logger.
+#[derive(Clone)]
+struct ChainFieldFilter {
+    alias: String,
+}
+
+/// Visitor that captures the value of a `chain` field, if present.
+#[derive(Default)]
+struct ChainFieldVisitor {
+    chain: Option<String>,
+}
+
+impl Visit for ChainFieldVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "chain" {
+            self.chain = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "chain" && self.chain.is_none() {
+            // A `chain` field recorded via Debug (e.g. `chain = %alias`) renders
+            // with surrounding quotes/escapes only for non-string types; for the
+            // common `&str`/`String` case `record_str` already handled it.
+            self.chain = Some(format!("{value:?}"));
+        }
+    }
+}
+
+impl<S> Filter<S> for ChainFieldFilter {
+    fn enabled(
+        &self,
+        _meta: &tracing::Metadata<'_>,
+        _cx: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        // Field values are not available at `enabled` time (callsite-level
+        // check); defer the real decision to `event_enabled`, which sees the
+        // event. Returning `true` keeps the callsite live so `event_enabled` is
+        // consulted per event.
+        true
+    }
+
+    fn event_enabled(
+        &self,
+        event: &tracing::Event<'_>,
+        _cx: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        let mut visitor = ChainFieldVisitor::default();
+        event.record(&mut visitor);
+        visitor.chain.as_deref() == Some(self.alias.as_str())
+    }
 }
 
 /// Install the global logging subscriber (specs/18 §5.4).
 ///
-/// Builds a stdout display layer at `cfg.display_level` plus a `main.log` rolling
-/// file layer at `cfg.file_level`, both using the configured [`Format`]. Returns
-/// [`LogHandles`] carrying the reload handles (admin `setLoggerLevel`) and the
-/// appender worker guards (keep alive until shutdown).
+/// Builds a stdout display layer at `cfg.display_level`, a `main.log` rolling
+/// file layer at `cfg.file_level` (both using the configured [`Format`]), and a
+/// reloadable per-chain layer slot that starts empty. Returns [`LogHandles`]
+/// carrying the reload handles (admin `setLoggerLevel`), the appender worker
+/// guards (keep alive until shutdown), and [`LogHandles::add_chain_logger`] for
+/// adding chain loggers at runtime.
 ///
 /// # Errors
 /// - [`LogError::Io`] if the log directory cannot be created or opened.
@@ -256,13 +367,19 @@ pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
         reload::Layer::new(ava_to_level_filter(cfg.display_level));
     let (file_filter, file_handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
 
+    // The reloadable per-chain slot: a `Vec` of boxed layers (empty at init).
+    // It is the *first* layer on the registry so each chain layer is a
+    // `Layer<Registry>`, which `add_chain_logger` can build without naming the
+    // outer `Layered<...>` subscriber type.
+    let (chain_slot_layer, chain_slot_handle) = reload::Layer::new(Vec::<ChainLayer>::new());
+
     let display_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stdout)
         .with_ansi(cfg.format.with_ansi())
         .event_format(AvaFormat::new(cfg.format))
         .with_filter(display_filter);
 
-    let (main_writer, main_guard) = rolling_appender(&cfg.directory, "main")?;
+    let (main_writer, main_guard) = rolling_appender(&cfg.directory, "main", cfg.rotation)?;
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(main_writer)
         .with_ansi(false)
@@ -270,25 +387,36 @@ pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
         .with_filter(file_filter);
 
     Registry::default()
+        .with(chain_slot_layer)
         .with(display_layer)
         .with(file_layer)
         .try_init()
         .map_err(|_| LogError::AlreadyInitialized)?;
 
+    let chain_slot: ChainSlotAppender = Box::new(move |layer: ChainLayer| {
+        chain_slot_handle
+            .modify(|layers| layers.push(layer))
+            .map_err(|e| LogError::Reload(e.to_string()))
+    });
+
     Ok(LogHandles {
         display: ReloadHandle::new(display_handle, cfg.display_level),
         main_file: ReloadHandle::new(file_handle, cfg.file_level),
         guards: vec![main_guard],
+        chain_slot,
+        cfg: cfg.clone(),
     })
 }
 
 /// A per-chain file logger layer plus its reload handle and worker guard.
 ///
-/// Returned by [`make_chain_logger`]; the caller adds `layer` to a layered
-/// subscriber (or registers it via `tracing_subscriber::reload`) and keeps
-/// `guard` alive for the chain's lifetime.
+/// Produced by [`make_chain_logger`]. The `layer` is filtered so only events
+/// carrying a `chain = "<alias>"` field route to it; it is added to a layered
+/// subscriber (the usual path is [`LogHandles::add_chain_logger`], which appends
+/// it to the global reloadable chain slot). Keep `guard` alive for the chain's
+/// lifetime.
 pub struct ChainLogger<S> {
-    /// The rolling-file layer writing `<alias>.log`, filtered at the file level.
+    /// The rolling-file layer writing `<alias>.log`, level- and chain-filtered.
     pub layer: Box<dyn Layer<S> + Send + Sync>,
     /// The reloadable level for this chain logger.
     pub handle: ReloadHandle,
@@ -299,9 +427,11 @@ pub struct ChainLogger<S> {
 /// Build a per-chain rolling file logger writing `<log-dir>/<alias>.log`
 /// (specs/18 §5.3).
 ///
-/// Events carrying a `chain = <alias>` field route to this layer (the caller
-/// installs a matching field filter). The returned [`ReloadHandle`] is what the
-/// admin endpoint flips for that chain's logger.
+/// The returned `layer` carries two stacked filters: a reloadable
+/// [`LevelFilter`] (flipped by the returned [`ReloadHandle`] for the admin
+/// `setLoggerLevel` endpoint) and a chain-field filter so only events tagged
+/// `chain = "<alias>"` reach this chain's file. Most callers go through
+/// [`LogHandles::add_chain_logger`] instead of calling this directly.
 ///
 /// # Errors
 /// [`LogError::Io`] if the log directory cannot be created or opened.
@@ -309,13 +439,17 @@ pub fn make_chain_logger<S>(alias: &str, cfg: &LogConfig) -> Result<ChainLogger<
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    let (filter, handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
-    let (writer, guard) = rolling_appender(&cfg.directory, alias)?;
+    let (level_filter, handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
+    let (writer, guard) = rolling_appender(&cfg.directory, alias, cfg.rotation)?;
+    let chain_filter = ChainFieldFilter {
+        alias: alias.to_owned(),
+    };
     let layer = tracing_subscriber::fmt::layer()
         .with_writer(writer)
         .with_ansi(false)
         .event_format(AvaFormat::new(cfg.format))
-        .with_filter(filter)
+        .with_filter(chain_filter)
+        .with_filter(level_filter)
         .boxed();
     Ok(ChainLogger {
         layer,
@@ -329,6 +463,7 @@ mod tests {
     use std::cmp::Ordering;
 
     use assert_matches::assert_matches;
+    use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
 
@@ -407,5 +542,51 @@ mod tests {
     #[test]
     fn unknown_level_string_is_rejected() {
         assert_matches!("nope".parse::<AvaLevel>(), Err(_));
+    }
+
+    /// A chain logger added to a (scoped, non-global) subscriber routes only the
+    /// events tagged with its own `chain` field to its `<alias>.log`, and never
+    /// another chain's events. Uses `set_default` so the test does not collide
+    /// with the global subscriber other tests may install.
+    #[test]
+    fn chain_logger_routes_only_matching_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = LogConfig {
+            directory: dir.path().to_path_buf(),
+            format: Format::Plain,
+            ..LogConfig::default()
+        };
+
+        // Build two chain layers over a plain `Registry` directly (the same `S`
+        // `add_chain_logger` uses) and collect them into a single `Vec<ChainLayer>`
+        // layer — exactly the reloadable slot `init_logging` installs.
+        let c = make_chain_logger::<Registry>("C", &cfg).expect("C logger");
+        let p = make_chain_logger::<Registry>("P", &cfg).expect("P logger");
+
+        let chain_slot: Vec<ChainLayer> = vec![c.layer, p.layer];
+        let subscriber = Registry::default().with(chain_slot);
+        let dispatch = tracing::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!(chain = "C", "hello from C");
+            tracing::info!(chain = "P", "hello from P");
+            tracing::info!("no chain field at all");
+        });
+
+        // Flush the non-blocking appenders.
+        drop(c.guard);
+        drop(p.guard);
+
+        let c_log = std::fs::read_to_string(dir.path().join("C.log")).expect("C.log");
+        let p_log = std::fs::read_to_string(dir.path().join("P.log")).expect("P.log");
+
+        assert!(c_log.contains("hello from C"), "C.log: {c_log:?}");
+        assert!(!c_log.contains("hello from P"), "C.log leaked P: {c_log:?}");
+        assert!(
+            !c_log.contains("no chain field"),
+            "C.log leaked untagged: {c_log:?}"
+        );
+
+        assert!(p_log.contains("hello from P"), "P.log: {p_log:?}");
+        assert!(!p_log.contains("hello from C"), "P.log leaked C: {p_log:?}");
     }
 }
