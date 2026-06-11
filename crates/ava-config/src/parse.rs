@@ -637,13 +637,17 @@ fn get_upgrade_config(
     ))
 }
 
+/// The largest valid ACP number (Go reads ACPs as `int`, so each must fit
+/// `i32`).
+const MAX_ACP: u32 = i32::MAX.unsigned_abs();
+
 /// Parses an ACP int-slice flag into a `u32` set (each in `[0, i32::MAX]`).
 fn get_acp_set(layered: &Layered, key: &str) -> crate::Result<BTreeSet<u32>> {
     let mut acps = BTreeSet::new();
     for acp in layered.get_int_slice(key)? {
         let acp = u32::try_from(acp)
             .ok()
-            .filter(|v| *v <= u32::try_from(i32::MAX).unwrap_or(u32::MAX))
+            .filter(|v| *v <= MAX_ACP)
             .ok_or_else(|| invalid(key, format!("invalid ACP: {acp}")))?;
         acps.insert(acp);
     }
@@ -663,6 +667,7 @@ fn get_network_config(
         layered.get_f64(keys::KEY_NETWORK_INBOUND_CONNECTION_THROTTLING_MAX_CONNS_PER_SEC)?;
     let inbound_connection_upgrade_cooldown =
         layered.get_duration(keys::KEY_NETWORK_INBOUND_CONNECTION_THROTTLING_COOLDOWN)?;
+    // `.max(0.0)` also neutralizes NaN: `f64::max` returns the non-NaN operand.
     let ceil = (max_inbound_conns_per_sec * inbound_connection_upgrade_cooldown.as_secs_f64())
         .ceil()
         .max(0.0);
@@ -1348,24 +1353,37 @@ mod tests {
     use crate::subnets::PRIMARY_NETWORK_ID;
 
     /// Builds a `Layered` over a fresh tempdir data dir (so the plugin-dir /
-    /// staking-cert side effects stay sandboxed) with an ephemeral staking
-    /// cert (no disk keygen) and runs `get_node_config`.
-    fn node_config(args: &[&str]) -> (crate::Result<crate::node::Config>, tempfile::TempDir) {
+    /// staking-cert side effects stay sandboxed) and runs `get_node_config`.
+    /// `ephemeral_cert=false` rows exercise the staking TLS `-content` guards
+    /// (which fire before any disk keygen); `env` feeds the `AVAGO_*` layer.
+    fn node_config_with(
+        ephemeral_cert: bool,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> (crate::Result<crate::node::Config>, tempfile::TempDir) {
         let data = tempfile::tempdir().expect("tempdir");
         let mut all = vec![
             "avalanchers".to_string(),
             format!("--data-dir={}", data.path().display()),
-            "--staking-ephemeral-cert-enabled=true".to_string(),
         ];
+        if ephemeral_cert {
+            all.push("--staking-ephemeral-cert-enabled=true".to_string());
+        }
         all.extend(args.iter().map(ToString::to_string));
         let layered = Layered::build_with_env(
             build_command(FLAG_SPECS),
             all,
             FLAG_SPECS,
-            std::iter::empty(),
+            env.iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string())),
         )
         .expect("layered");
         (get_node_config(&layered), data)
+    }
+
+    /// [`node_config_with`] with an ephemeral staking cert and no env vars.
+    fn node_config(args: &[&str]) -> (crate::Result<crate::node::Config>, tempfile::TempDir) {
+        node_config_with(true, args, &[])
     }
 
     #[test]
@@ -1598,5 +1616,196 @@ mod tests {
             &format!("--track-subnets={PRIMARY_NETWORK_ID}"),
         ]);
         assert_matches!(config, Err(ConfigError::CannotTrackPrimaryNetwork));
+    }
+
+    #[test]
+    fn validation_guard_matrix() {
+        // One row per previously-unasserted validation sentinel.
+        //
+        // The staking-economics rows run on a custom network (local), where
+        // the flags apply (13 §5); each row's flags are crafted so every
+        // earlier guard in `staking_economics_from_flags`'s chain passes and
+        // exactly the target branch trips.
+        //
+        // `ConflictingImplicitACPOpinion` (objecting to a scheduled ACP) is
+        // not coverable today: `SCHEDULED_ACPS` is empty, so no flag value
+        // can trip it. Add a row here when an ACP is scheduled.
+        struct Case {
+            name: &'static str,
+            ephemeral_cert: bool,
+            args: &'static [&'static str],
+            check: fn(&'static str, ConfigError),
+        }
+        let cases = [
+            Case {
+                // ACP set algebra: the same ACP supported and objected
+                // (checked before the activated-ACP scrub).
+                name: "conflicting acp opinion",
+                ephemeral_cert: true,
+                args: &[
+                    "--network-id=local",
+                    "--acp-support=300",
+                    "--acp-object=300",
+                ],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::ConflictingACPOpinion, "{name}");
+                },
+            },
+            Case {
+                // Not a known name, `network-<n>`, or a bare number.
+                name: "invalid network id",
+                ephemeral_cert: true,
+                args: &["--network-id=not-a-network"],
+                check: |name, e| {
+                    assert_matches!(
+                        e,
+                        ConfigError::InvalidNetworkId { name: n } if n == "not-a-network",
+                        "{name}"
+                    );
+                },
+            },
+            Case {
+                // Custom upgrade content (`{}` base64) on a standard network
+                // (LocalID counts; 13 §21).
+                name: "upgrade not allowed on standard network",
+                ephemeral_cert: true,
+                args: &["--network-id=local", "--upgrade-file-content=e30="],
+                check: |name, e| {
+                    assert_matches!(
+                        e,
+                        ConfigError::UpgradeNotAllowed { network } if network == "local",
+                        "{name}"
+                    );
+                },
+            },
+            Case {
+                // ips/ids list lengths must match (13 §13).
+                name: "state sync peer count mismatch",
+                ephemeral_cert: true,
+                args: &["--network-id=local", "--state-sync-ips=127.0.0.1:9651"],
+                check: |name, e| {
+                    assert_matches!(
+                        e,
+                        ConfigError::StateSyncPeerCountMismatch { ips: 1, ids: 0 },
+                        "{name}"
+                    );
+                },
+            },
+            Case {
+                // key content set without cert content.
+                name: "staking cert content unset",
+                ephemeral_cert: false,
+                args: &["--network-id=local", "--staking-tls-key-file-content=Zm9v"],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::StakingCertContentUnset, "{name}");
+                },
+            },
+            Case {
+                // cert content set without key content.
+                name: "staking key content unset",
+                ephemeral_cert: false,
+                args: &["--network-id=local", "--staking-tls-cert-file-content=Zm9v"],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::StakingKeyContentUnset, "{name}");
+                },
+            },
+            Case {
+                // Guard 1: uptime requirement outside [0, 1].
+                name: "invalid uptime requirement",
+                ephemeral_cert: true,
+                args: &["--network-id=local", "--uptime-requirement=1.5"],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::InvalidUptimeRequirement, "{name}");
+                },
+            },
+            Case {
+                // Guard 2: min validator stake > max validator stake.
+                name: "min validator stake above max",
+                ephemeral_cert: true,
+                args: &[
+                    "--network-id=local",
+                    "--min-validator-stake=2",
+                    "--max-validator-stake=1",
+                ],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::MinValidatorStakeAboveMax, "{name}");
+                },
+            },
+            Case {
+                // Guard 4: min stake duration must be > 0.
+                name: "invalid min stake duration",
+                ephemeral_cert: true,
+                args: &["--network-id=local", "--min-stake-duration=0s"],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::InvalidMinStakeDuration, "{name}");
+                },
+            },
+            Case {
+                // Guard 5: max stake duration < min stake duration (both
+                // explicit and nonzero so guard 4 passes).
+                name: "min stake duration above max",
+                ephemeral_cert: true,
+                args: &[
+                    "--network-id=local",
+                    "--min-stake-duration=48h",
+                    "--max-stake-duration=24h",
+                ],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::MinStakeDurationAboveMax, "{name}");
+                },
+            },
+            Case {
+                // Guard 6: max consumption rate > PercentDenominator (1e6).
+                name: "stake max consumption too large",
+                ephemeral_cert: true,
+                args: &["--network-id=local", "--stake-max-consumption-rate=1000001"],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::StakeMaxConsumptionTooLarge, "{name}");
+                },
+            },
+            Case {
+                // Guard 7: max consumption rate < min consumption rate
+                // (100 <= 1e6 so guard 6 passes).
+                name: "stake max consumption below min",
+                ephemeral_cert: true,
+                args: &[
+                    "--network-id=local",
+                    "--stake-max-consumption-rate=100",
+                    "--stake-min-consumption-rate=200",
+                ],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::StakeMaxConsumptionBelowMin, "{name}");
+                },
+            },
+            Case {
+                // Guard 8: minting period < max stake duration (100h is above
+                // the 24h default min stake duration, so guard 5 passes).
+                name: "stake minting period below min",
+                ephemeral_cert: true,
+                args: &["--network-id=local", "--stake-minting-period=100h"],
+                check: |name, e| {
+                    assert_matches!(e, ConfigError::StakeMintingPeriodBelowMin, "{name}");
+                },
+            },
+        ];
+        for case in cases {
+            let (config, _dir) = node_config_with(case.ephemeral_cert, case.args, &[]);
+            let err = config
+                .err()
+                .unwrap_or_else(|| panic!("{}: expected an error", case.name));
+            (case.check)(case.name, err);
+        }
+    }
+
+    #[test]
+    fn env_layer_resolves_http_port() {
+        // One value driven through the AVAGO_* env layer into the resolved
+        // Config (precedence: CLI > env > file > default; 12 §1.6).
+        let (config, _dir) = node_config_with(
+            true,
+            &["--network-id=local"],
+            &[("AVAGO_HTTP_PORT", "12345")],
+        );
+        assert_eq!(config.expect("local").http_config.http_port, 12345);
     }
 }
