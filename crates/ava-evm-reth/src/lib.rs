@@ -287,6 +287,19 @@ pub use revm::interpreter::interpreter::EthInterpreter; // M6.31
 pub use revm::interpreter::interpreter_action::FrameInit; // M6.31
 pub use revm::precompile::{PrecompileHalt, PrecompileId, PrecompileResult}; // M6.31
 pub use revm::state::EvmState; // M6.31
+// `post_execution` — revm's stock post-execution steps. `AvaHandler` delegates
+// to `post_execution::refund` on the pre-AP1 path (quotient-2 refunds) and
+// re-derives `reward_beneficiary` with the Avalanche full-fee-to-coinbase rule
+// (coreth `state_transition.go` — the base fee is NOT burned, spec 21 §7).
+pub use revm::handler::post_execution; // M6.31
+// `ExecuteEvm` exposes `set_tx`/`transact` on the bare revm `Evm`;
+// `LocalContextTr` is the `ContextTr::Local` bound the `Handler` trait names.
+pub use revm::ExecuteEvm; // M6.31
+pub use revm::context::LocalContextTr; // M6.31
+// `PrecompileOutput`/`PrecompileHalt` constructors cross the facade so the
+// `DynPrecompile` adapter can convert a stateful-precompile `InterpreterResult`
+// back into the alloy-evm `PrecompileResult` (success/revert/halt + gas-used).
+pub use revm::precompile::PrecompileStatus; // M6.31
 // `Log`/`LogData` — the journal log record a stateful precompile emits
 // (`EvmInternals::log`), and the value carried into receipts.
 pub use alloy_primitives::{Log, LogData}; // M6.31

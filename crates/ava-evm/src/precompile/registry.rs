@@ -45,8 +45,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, CallInputs, Cfg, ContextTr, EthPrecompiles, InterpreterResult, JournalTr, Log,
-    LogData, PrecompileError, PrecompileProvider, SpecId, U256,
+    Address, B256, CallInputs, Cfg, ContextTr, EthPrecompiles, EvmInternals, InstructionResult,
+    InterpreterResult, JournalTr, Log, LogData, PrecompileError, PrecompileHalt, PrecompileOutput,
+    PrecompileProvider, SpecId, U256,
 };
 
 /// Per-call context handed to a [`StatefulPrecompile::run`]: the immediate
@@ -435,6 +436,80 @@ impl<CTX: ContextTr> PrecompileProvider<CTX> for AvaPrecompiles {
 
     fn contains(&self, address: &Address) -> bool {
         self.contains_stateful(address) || self.base.contains(address)
+    }
+}
+
+/// [`PrecompileStateOps`] over the alloy-evm [`EvmInternals`] journal hooks —
+/// the adapter the LIVE `PrecompilesMap`/`DynPrecompile` path uses (M6.31, G4).
+/// `EvmInternals` is what a dynamic precompile receives per call
+/// (`PrecompileInput::internals`); it exposes exactly the subnet-evm
+/// `contract.StateDB` surface (`sload`/`sstore`/`balance_incr`/`log`).
+pub struct InternalsStateOps<'a, 'b>(pub &'a mut EvmInternals<'b>);
+
+impl PrecompileStateOps for InternalsStateOps<'_, '_> {
+    fn get_state(&mut self, address: Address, key: B256) -> Result<B256, PrecompileError> {
+        self.0
+            .sload(address, U256::from_be_bytes(key.0))
+            .map(|loaded| B256::new(loaded.data.to_be_bytes::<32>()))
+            .map_err(|e| PrecompileError::Fatal(format!("precompile sload: {e:?}")))
+    }
+
+    fn set_state(
+        &mut self,
+        address: Address,
+        key: B256,
+        value: B256,
+    ) -> Result<(), PrecompileError> {
+        self.0
+            .sstore(
+                address,
+                U256::from_be_bytes(key.0),
+                U256::from_be_bytes(value.0),
+            )
+            .map(|_| ())
+            .map_err(|e| PrecompileError::Fatal(format!("precompile sstore: {e:?}")))
+    }
+
+    fn add_balance(&mut self, address: Address, amount: U256) -> Result<(), PrecompileError> {
+        self.0
+            .balance_incr(address, amount)
+            .map_err(|e| PrecompileError::Fatal(format!("precompile balance_incr: {e:?}")))
+    }
+
+    fn add_log(&mut self, address: Address, topics: Vec<B256>, data: Vec<u8>) {
+        self.0.log(Log {
+            address,
+            data: LogData::new_unchecked(topics, data.into()),
+        });
+    }
+}
+
+/// Converts a [`StatefulPrecompile`]'s [`InterpreterResult`] into the alloy-evm
+/// [`PrecompileOutput`] the `DynPrecompile` closure must return (M6.31). The
+/// `PrecompilesMap` provider converts it back via
+/// `precompile_output_to_interpreter_result`, reproducing the same
+/// `Return`/`Revert`/`PrecompileOOG`/`PrecompileError` + gas accounting:
+/// success/revert carry the regular gas spent; a halt consumes ALL supplied gas
+/// (geth "precompile returned an error" parity).
+#[must_use]
+pub fn interpreter_result_to_precompile_output(
+    r: InterpreterResult,
+    reservoir: u64,
+) -> PrecompileOutput {
+    match r.result {
+        InstructionResult::Return | InstructionResult::Stop => {
+            PrecompileOutput::new(r.gas.total_gas_spent(), r.output, reservoir)
+        }
+        InstructionResult::Revert => {
+            PrecompileOutput::revert(r.gas.total_gas_spent(), r.output, reservoir)
+        }
+        InstructionResult::PrecompileOOG | InstructionResult::OutOfGas => {
+            PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir)
+        }
+        _ => PrecompileOutput::halt(
+            PrecompileHalt::Other("stateful precompile call failed".into()),
+            reservoir,
+        ),
     }
 }
 
