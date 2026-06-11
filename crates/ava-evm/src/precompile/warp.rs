@@ -57,7 +57,7 @@ use ava_warp::verifier::{
 use ava_warp::{Message, Signature, UnsignedMessage};
 use parking_lot::Mutex;
 
-use crate::precompile::registry::{PrecompileCtx, StatefulPrecompile};
+use crate::precompile::registry::{PrecompileCtx, PrecompileStateOps, StatefulPrecompile};
 
 /// `ContractAddress` — the warp precompile address `0x02..05` (`module.go`).
 pub const WARP_PRECOMPILE_ADDRESS: Address = Address::new([
@@ -250,7 +250,12 @@ impl WarpPrecompile {
         input: &[u8],
         gas_limit: u64,
         ctx: &PrecompileCtx,
+        state: &mut dyn PrecompileStateOps,
     ) -> Result<InterpreterResult, PrecompileError> {
+        if ctx.read_only {
+            // Go `vm.ErrWriteProtection` — a STATICCALL cannot emit the log.
+            return Ok(failure(gas_limit));
+        }
         let cfg = self.gas_config();
         let mut g = Gas::new(gas_limit);
         if !g.record_regular_cost(cfg.send_warp_message_base) {
@@ -266,9 +271,9 @@ impl WarpPrecompile {
         }
 
         let Some(payload_data) = abi_decode_bytes(input) else {
-            return Err(PrecompileError::Fatal(
-                "invalid sendWarpMessage input".into(),
-            ));
+            // A malformed input is a user-triggerable call failure (consumes the
+            // supplied gas, geth error parity) — not a fatal EVM abort.
+            return Ok(failure(gas_limit));
         };
 
         let call = AddressedCall {
@@ -290,17 +295,23 @@ impl WarpPrecompile {
             .id()
             .map_err(|e| PrecompileError::Fatal(format!("warp message id: {e}")))?;
 
-        // Emit the `SendWarpMessage` log (3 topics + ABI-encoded message data).
+        // Emit the `SendWarpMessage` log (3 topics + ABI-encoded message data):
+        // into the live journal (so the receipt/bloom carry it, coreth
+        // `stateDB.AddLog` parity — M6.31) AND into the shared side buffer the
+        // accept hook drains (`take_logs` → `handle_precompile_accept`).
         let mut sender_topic = [0u8; 32];
         sender_topic[12..].copy_from_slice(ctx.caller.as_slice());
+        let topics = vec![
+            B256::from(SEND_WARP_MESSAGE_EVENT_TOPIC),
+            B256::from(sender_topic),
+            B256::from(*id.as_bytes()),
+        ];
+        let data = abi_encode_bytes(&unsigned_bytes);
+        state.add_log(WARP_PRECOMPILE_ADDRESS, topics.clone(), data.clone());
         self.logs.lock().push(WarpLog {
             address: WARP_PRECOMPILE_ADDRESS,
-            topics: vec![
-                B256::from(SEND_WARP_MESSAGE_EVENT_TOPIC),
-                B256::from(sender_topic),
-                B256::from(*id.as_bytes()),
-            ],
-            data: abi_encode_bytes(&unsigned_bytes),
+            topics,
+            data,
         });
 
         Ok(success(id.as_bytes().to_vec(), g))
@@ -324,7 +335,7 @@ impl WarpPrecompile {
         }
 
         let Some(index) = abi_decode_u32(input) else {
-            return Err(PrecompileError::Fatal("invalid warp index input".into()));
+            return Ok(failure(gas_limit));
         };
 
         let warp_preds = ctx
@@ -352,16 +363,20 @@ impl WarpPrecompile {
             return Ok(out_of_gas(gas_limit));
         }
 
-        // The predicate was verified before execution, so parsing should not fail;
-        // a parse error here is a non-recoverable precompile error (coreth returns
-        // an error invalidating the tx).
-        let raw = predicate_from_chunks(pred_chunks)
-            .ok_or_else(|| PrecompileError::Fatal("invalid predicate chunk encoding".into()))?;
-        let msg = Message::parse(&raw)
-            .map_err(|e| PrecompileError::Fatal(format!("parse warp message: {e}")))?;
+        // The predicate was verified before execution, so parsing should not
+        // fail; coreth returns an error here (the call fails, consuming the
+        // supplied gas) — mirror that as a non-fatal call failure.
+        let Some(raw) = predicate_from_chunks(pred_chunks) else {
+            return Ok(failure(gas_limit));
+        };
+        let Ok(msg) = Message::parse(&raw) else {
+            return Ok(failure(gas_limit));
+        };
 
-        let output = kind.handle(&msg).map_err(PrecompileError::Fatal)?;
-        Ok(success(output, g))
+        match kind.handle(&msg) {
+            Ok(output) => Ok(success(output, g)),
+            Err(_) => Ok(failure(gas_limit)),
+        }
     }
 }
 
@@ -422,23 +437,26 @@ impl StatefulPrecompile for WarpPrecompile {
         input: &[u8],
         gas_limit: u64,
         ctx: &PrecompileCtx,
+        state: &mut dyn PrecompileStateOps,
     ) -> Result<InterpreterResult, PrecompileError> {
         if input.len() < 4 {
-            return Err(PrecompileError::Fatal("warp: missing selector".into()));
+            // Missing selector — a user-triggerable call failure (coreth's
+            // `errInvalidSelector` consumes the supplied gas), not a fatal abort.
+            return Ok(failure(gas_limit));
         }
         let mut selector = [0u8; 4];
         selector.copy_from_slice(&input[0..4]);
         let args = &input[4..];
         match selector {
             SEL_GET_BLOCKCHAIN_ID => self.get_blockchain_id(gas_limit),
-            SEL_SEND_WARP_MESSAGE => self.send_warp_message(args, gas_limit, ctx),
+            SEL_SEND_WARP_MESSAGE => self.send_warp_message(args, gas_limit, ctx, state),
             SEL_GET_VERIFIED_WARP_MESSAGE => {
                 self.handle_warp_message(args, gas_limit, ctx, WarpReadKind::AddressedPayload)
             }
             SEL_GET_VERIFIED_WARP_BLOCK_HASH => {
                 self.handle_warp_message(args, gas_limit, ctx, WarpReadKind::BlockHash)
             }
-            _ => Err(PrecompileError::Fatal("warp: unknown selector".into())),
+            _ => Ok(failure(gas_limit)),
         }
     }
 }
@@ -503,6 +521,60 @@ pub async fn run_predicates<V: ValidatorState>(
     let mut results = Vec::with_capacity(predicates.len());
     for chunks in predicates {
         results.push(verify_one_predicate(state, ctx, chunks).await?);
+    }
+    Ok(results)
+}
+
+/// The per-transaction warp predicates riding in `tx`'s access list (coreth
+/// `predicate.FromAccessList`, spec 20 §7.2): one predicate per access-list
+/// tuple addressed to [`WARP_PRECOMPILE_ADDRESS`], its bytes the tuple's
+/// 32-byte storage keys concatenated in order (the chunked encoding —
+/// [`predicate_from_chunks`] recovers the raw message).
+#[must_use]
+pub fn warp_predicates_from_tx(tx: &ava_evm_reth::RecoveredTx) -> Vec<Vec<u8>> {
+    use ava_evm_reth::ConsensusTx as _;
+    let Some(access_list) = tx.access_list() else {
+        return Vec::new();
+    };
+    access_list
+        .iter()
+        .filter(|item| item.address == WARP_PRECOMPILE_ADDRESS)
+        .map(|item| {
+            item.storage_keys
+                .iter()
+                .flat_map(|key| key.0)
+                .collect::<Vec<u8>>()
+        })
+        .collect()
+}
+
+/// The block-level pre-execution predicate pass (M6.31, coreth
+/// `CheckBlockPredicates`, spec 10 §6.5 / 20 §7.2): for each transaction,
+/// extract its access-list warp predicates ([`warp_predicates_from_tx`]) and
+/// BLS-verify them against the proposervm-pinned validator sets
+/// ([`run_predicates`]), recording the per-message results keyed by **tx
+/// index** so the live [`crate::evmconfig::AvaEvmFactory`] threads them into
+/// the warp precompile's `getVerifiedWarpMessage` reads.
+///
+/// Runs BEFORE EVM execution (`apply_pre_execution_changes`); a predicate that
+/// fails verification is NOT a block error — it reads as `valid == false`.
+///
+/// # Errors
+/// Returns a [`ValidatorState`] error only if the validator-state lookups
+/// themselves fail (a node-level error, not a per-predicate failure).
+pub async fn build_block_predicates<V: ValidatorState>(
+    state: &V,
+    ctx: &PredicateContext,
+    txs: &[ava_evm_reth::RecoveredTx],
+) -> Result<crate::precompile::registry::PredicateResults, ava_validators::error::Error> {
+    let mut results = crate::precompile::registry::PredicateResults::default();
+    for (i, tx) in txs.iter().enumerate() {
+        let predicates = warp_predicates_from_tx(tx);
+        if predicates.is_empty() {
+            continue;
+        }
+        let valid = run_predicates(state, ctx, &predicates).await?;
+        results.set_warp(u64::try_from(i).unwrap_or(u64::MAX), predicates, valid);
     }
     Ok(results)
 }
@@ -857,6 +929,18 @@ fn success(output: Vec<u8>, gas: Gas) -> InterpreterResult {
         result: InstructionResult::Return,
         output: Bytes::from(output),
         gas,
+    }
+}
+
+/// A user-triggerable precompile call failure (all supplied gas consumed,
+/// geth "precompile returned an error" parity — `gas = 0` in `evm.Call`).
+fn failure(gas_limit: u64) -> InterpreterResult {
+    let mut g = Gas::new(gas_limit);
+    g.spend_all();
+    InterpreterResult {
+        result: InstructionResult::PrecompileError,
+        output: Bytes::new(),
+        gas: g,
     }
 }
 

@@ -1,5 +1,5 @@
 {
-  "description": "coreth GenerateChainWithGenesis: AP3 (London) genesis(1 funded EOA) → block 1 (one value transfer). Roots over the libevm 5-field StateAccount RLP [nonce,balance,storageRoot,codeHash,isMultiCoin=false(0x80)] (M6.30: coreth/Firewood-ethhash encoding). Post-state uses the BURN fee model (revm LONDON default): base fee burned, coinbase empty; sender/recipient balances+nonces read from coreth's executed StateDB (identical to revm). The base-fee-to-coinbase override is M6.13 scope.",
+  "description": "coreth GenerateChainWithGenesis: AP3 (London) genesis(1 funded EOA) → block 1 (one value transfer). Roots over the libevm 5-field StateAccount RLP [nonce,balance,storageRoot,codeHash,isMultiCoin=false(0x80)] (M6.30: coreth/Firewood-ethhash encoding). Post-state uses the CORETH fee model (M6.31 AvaHandler): the FULL effective gas price (base fee included) is credited to the coinbase — coreth state_transition.go `fee := gasUsed * msg.GasPrice; AddBalance(coinbase, fee)` — so the 3-account coreth root is the expected post root. The historical burn-model root (revm LONDON default, pre-M6.31) is kept as burn_model_post_state_root_5field for the record.",
   "chain_id": 1,
   "account_encoding": "libevm-5field (M6.30)",
   "genesis_base_fee": "225000000000",
@@ -24,6 +24,11 @@
   "block1_number": 1,
   "post_state": [
     {
+      "address": "0x0000000000000000000000000000000000000000",
+      "nonce": 0,
+      "balance": "4725000000000000"
+    },
+    {
       "address": "0x2222222222222222222222222222222222222222",
       "nonce": 0,
       "balance": "1000000000000000000"
@@ -34,6 +39,7 @@
       "balance": "98995275000000000000"
     }
   ],
-  "expected_post_state_root": "0x4027f3ed1315fbfc74038f23ab192612cca9e2ed2d4b683dd87a0333c19bd3b4",
-  "coreth_post_state_root_5field": "0x8b0bf83471bff5b54809ffbff89e31872c162496382747eeaa9d6f4af725a71a"
+  "expected_post_state_root": "0x8b0bf83471bff5b54809ffbff89e31872c162496382747eeaa9d6f4af725a71a",
+  "coreth_post_state_root_5field": "0x8b0bf83471bff5b54809ffbff89e31872c162496382747eeaa9d6f4af725a71a",
+  "burn_model_post_state_root_5field": "0x4027f3ed1315fbfc74038f23ab192612cca9e2ed2d4b683dd87a0333c19bd3b4"
 }

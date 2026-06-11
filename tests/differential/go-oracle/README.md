@@ -10,10 +10,18 @@ a normal `go test` never runs it:
 |---------|----------|-----------|--------|
 | `recovery_vector_emitter_test.go` | `SAE_EMIT_RECOVERY_VECTORS` | `sae_recovery.rs::differential::sae_recovery` (M7.29) | `tests/vectors/saevm/recovery_differential/` |
 | `streaming_vector_emitter_test.go` | `SAE_EMIT_STREAMING_VECTORS` | `sae_streaming.rs::differential::sae_streaming` (M7.30) | `tests/vectors/saevm/streaming_differential/` |
+| `precompile_configkey_golden_emitter_test.go` | (none — plain `go test -run TestM631EmitGoldens`) | `ava-evm precompile_golden.rs` (M6.31) | `crates/ava-evm/tests/vectors/cchain/precompile/configkey_golden.json` |
+| `precompile_selectors_emitter_test.go` + `precompile_nativeminter_selectors_emitter_test.go` | (none — plain `go test`) | constants pinned in `ava-evm src/precompile/{feemanager,rewardmanager,gaspricemanager,nativeminter}.rs` (M6.31) | (stdout only) |
 
-> The two emitters redeclare a few shared helper names (`observe*Frontier`,
+> The two SAE emitters redeclare a few shared helper names (`observe*Frontier`,
 > `*HexBytes`) under distinct prefixes, but to be safe drop **one emitter at a
 > time** into the checkout when re-freezing.
+>
+> The M6.31 precompile emitters are `package feemanager` /
+> `package nativeminter` tests — drop them into
+> `graft/subnet-evm/precompile/contracts/{feemanager,nativeminter}/` in the
+> avalanchego checkout (they use the contracts' own exported `Pack*` ABI
+> helpers, so the emitted bytes ARE the Go encoding).
 
 ## Recovery emitter (M7.29)
 

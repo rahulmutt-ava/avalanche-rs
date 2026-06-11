@@ -45,26 +45,108 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, CallInputs, Cfg, ContextTr, EthPrecompiles, InterpreterResult, PrecompileError,
+    Address, B256, CallInputs, Cfg, ContextTr, EthPrecompiles, EvmInternals, InstructionResult,
+    InterpreterResult, JournalTr, Log, LogData, PrecompileError, PrecompileHalt, PrecompileOutput,
     PrecompileProvider, SpecId, U256,
 };
 
 /// Per-call context handed to a [`StatefulPrecompile::run`]: the immediate
-/// caller, the call value, and (M6.22) the verified warp predicate results +
-/// proposervm block context. M6.21 only reserves the fields; the predicate pass
-/// that fills [`AvaCtxExt::predicates`] is M6.22.
+/// caller, the call value, the STATICCALL flag, and the verified warp predicate
+/// results + proposervm block context (M6.22/M6.31).
 #[derive(Clone, Debug)]
 pub struct PrecompileCtx {
     /// The immediate caller of the precompile (`CallInputs::caller`).
     pub caller: Address,
     /// The call value (wei) attached to the precompile call.
     pub value: U256,
-    /// The verified-predicate-results handle (warp BLS results, etc.). Empty
-    /// until M6.22's pre-execution predicate pass fills it.
+    /// Whether the call runs in a STATICCALL context (Go `readOnly`): a
+    /// state-changer selector must fail with write protection (M6.31).
+    pub read_only: bool,
+    /// The verified-predicate-results handle (warp BLS results, etc.), filled by
+    /// the pre-execution predicate pass (M6.22/M6.31).
     pub predicates: Arc<PredicateResults>,
-    /// The proposervm/P-Chain block context for this block. Defaulted here;
-    /// M6.22 sources it from `Block::verify_with_context`.
+    /// The proposervm/P-Chain block context for this block.
     pub block: AvaBlockCtx,
+}
+
+/// Journaled EVM state access handed to a [`StatefulPrecompile::run`] (G4,
+/// spec 10 §8): the subnet-evm `contract.StateDB` surface the ConfigKey
+/// precompiles need — read/write their own storage slots, mint native coin,
+/// and emit logs into the receipt journal. Dyn-compatible so the precompile
+/// trait stays object-safe; the live adapter wraps the revm journal
+/// (`ava_evm_reth::EvmInternals` on the `PrecompilesMap` path, the generic
+/// [`ContextTr`] journal on the [`AvaPrecompiles`] provider path), and tests
+/// can use the in-memory [`MemStateOps`].
+pub trait PrecompileStateOps {
+    /// `StateDB.GetState(address, key)` — read a storage slot (zero if unset).
+    ///
+    /// # Errors
+    /// Returns [`PrecompileError`] on an underlying state-read failure (fatal).
+    fn get_state(&mut self, address: Address, key: B256) -> Result<B256, PrecompileError>;
+
+    /// `StateDB.SetState(address, key, value)` — write a storage slot.
+    ///
+    /// # Errors
+    /// Returns [`PrecompileError`] on an underlying state-write failure (fatal).
+    fn set_state(
+        &mut self,
+        address: Address,
+        key: B256,
+        value: B256,
+    ) -> Result<(), PrecompileError>;
+
+    /// `StateDB.AddBalance(address, amount)` — credit native coin (creates the
+    /// account if absent, like coreth `CreateAccount` + `AddBalance`).
+    ///
+    /// # Errors
+    /// Returns [`PrecompileError`] on an underlying state failure (fatal).
+    fn add_balance(&mut self, address: Address, amount: U256) -> Result<(), PrecompileError>;
+
+    /// `StateDB.AddLog` — emit a log into the journal (lands in the receipt).
+    fn add_log(&mut self, address: Address, topics: Vec<B256>, data: Vec<u8>);
+}
+
+/// An in-memory [`PrecompileStateOps`] for unit/golden tests (and any host that
+/// wants to dry-run a precompile body): a `BTreeMap` slot store + balances +
+/// the emitted logs, all inspectable.
+#[derive(Clone, Debug, Default)]
+pub struct MemStateOps {
+    /// Storage: `(address, key) → value`.
+    pub storage: BTreeMap<(Address, B256), B256>,
+    /// Native-coin balances credited via `add_balance`.
+    pub balances: BTreeMap<Address, U256>,
+    /// Emitted logs in order: `(address, topics, data)`.
+    pub logs: Vec<(Address, Vec<B256>, Vec<u8>)>,
+}
+
+impl PrecompileStateOps for MemStateOps {
+    fn get_state(&mut self, address: Address, key: B256) -> Result<B256, PrecompileError> {
+        Ok(self
+            .storage
+            .get(&(address, key))
+            .copied()
+            .unwrap_or_default())
+    }
+
+    fn set_state(
+        &mut self,
+        address: Address,
+        key: B256,
+        value: B256,
+    ) -> Result<(), PrecompileError> {
+        self.storage.insert((address, key), value);
+        Ok(())
+    }
+
+    fn add_balance(&mut self, address: Address, amount: U256) -> Result<(), PrecompileError> {
+        let entry = self.balances.entry(address).or_default();
+        *entry = entry.saturating_add(amount);
+        Ok(())
+    }
+
+    fn add_log(&mut self, address: Address, topics: Vec<B256>, data: Vec<u8>) {
+        self.logs.push((address, topics, data));
+    }
 }
 
 /// The verified warp predicates for a single transaction: the raw predicate
@@ -115,16 +197,23 @@ impl PredicateResults {
 }
 
 /// The proposervm/P-Chain block context a stateful precompile may observe
-/// (G4/G10, §17.5). **Reserved plumbing** for M6.22; defaulted here.
-#[derive(Clone, Debug, Default)]
+/// (G4/G10, §17.5). Seeded from the block env by the live `AvaEvmFactory`
+/// (M6.31); the predicate pass threads `pchain_height` + the per-tx index.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct AvaBlockCtx {
     /// The P-Chain height the proposervm block was issued at (warp validator-set
-    /// selection). 0 until M6.22 wires the proposervm context.
+    /// selection). Threaded from the proposervm block ctx by the verify path.
     pub pchain_height: u64,
     /// The block timestamp (unix seconds) — the value `for_height` gates on.
     pub timestamp: u64,
     /// The index of the transaction currently executing within the block.
     pub current_tx_index: u64,
+    /// The block number (Go `BlockContext.Number()` — log records and the
+    /// FeeManager/GasPriceManager `lastChangedAt` slots store it, M6.31).
+    pub block_number: u64,
+    /// Whether Durango is active at this block (Go `rules.IsDurangoActivated()`
+    /// — gates strict ABI length checks, the Manager role, and event emission).
+    pub is_durango: bool,
 }
 
 /// The revm **context extension** (G10, §17.5/§17.11) threaded onto the revm
@@ -144,20 +233,25 @@ pub struct AvaCtxExt {
 
 /// A stateful Avalanche precompile (warp, allowlist, feemanager, …): runs
 /// against the live EVM state with access to the per-call [`PrecompileCtx`]
-/// (caller, value, verified predicate results). The concrete bodies are M6.22;
-/// M6.21 defines the trait + the dispatch path.
+/// (caller, value, verified predicate results) and the journaled
+/// [`PrecompileStateOps`] (storage slots, mint, logs — M6.31).
 pub trait StatefulPrecompile: Send + Sync {
     /// Execute the precompile over `input` with a `gas_limit`, returning the
-    /// revm [`InterpreterResult`] (output bytes + gas accounting).
+    /// revm [`InterpreterResult`] (output bytes + gas accounting). A
+    /// user-triggerable failure (bad selector/input, allow-list denial, write
+    /// protection) is expressed as a failed `InterpreterResult` (all supplied
+    /// gas consumed, geth error parity) — NOT as `Err`.
     ///
     /// # Errors
     ///
-    /// Returns [`PrecompileError`] on an unrecoverable precompile failure.
+    /// Returns [`PrecompileError`] only on an unrecoverable internal failure
+    /// (aborts the whole EVM batch).
     fn run(
         &self,
         input: &[u8],
         gas_limit: u64,
         ctx: &PrecompileCtx,
+        state: &mut dyn PrecompileStateOps,
     ) -> Result<InterpreterResult, PrecompileError>;
 }
 
@@ -311,18 +405,21 @@ impl<CTX: ContextTr> PrecompileProvider<CTX> for AvaPrecompiles {
         // Dispatch to an activated Avalanche stateful precompile, else fall
         // through to revm's standard Ethereum set (spec 10 §8/§17.5).
         if let Some(precompile) = self.dispatch_stateful(&inputs.bytecode_address).cloned() {
-            // M6.22 sources `predicates`/`block` from the `AvaCtxExt` carried on
-            // `context` (the revm `Chain` extension, G10); M6.21 plumbs an empty
-            // context so the dispatch path is exercised end-to-end.
+            // This generic-provider path is the M6.21 dispatch seam; the LIVE
+            // path (M6.31) installs the precompiles into the `PrecompilesMap`
+            // via `AvaEvmFactory` with the per-block `AvaCtxExt` threaded in.
+            // Here the predicate/block context defaults to empty.
             let pctx = PrecompileCtx {
                 caller: inputs.caller,
                 value: inputs.call_value(),
+                read_only: inputs.is_static,
                 predicates: Arc::new(PredicateResults::default()),
                 block: AvaBlockCtx::default(),
             };
             let input = inputs.input.bytes(context);
+            let mut ops = JournalStateOps(context.journal_mut());
             return precompile
-                .run(input.as_ref(), inputs.gas_limit, &pctx)
+                .run(input.as_ref(), inputs.gas_limit, &pctx, &mut ops)
                 .map(Some)
                 .map_err(|e| e.to_string());
         }
@@ -339,5 +436,123 @@ impl<CTX: ContextTr> PrecompileProvider<CTX> for AvaPrecompiles {
 
     fn contains(&self, address: &Address) -> bool {
         self.contains_stateful(address) || self.base.contains(address)
+    }
+}
+
+/// [`PrecompileStateOps`] over the alloy-evm [`EvmInternals`] journal hooks —
+/// the adapter the LIVE `PrecompilesMap`/`DynPrecompile` path uses (M6.31, G4).
+/// `EvmInternals` is what a dynamic precompile receives per call
+/// (`PrecompileInput::internals`); it exposes exactly the subnet-evm
+/// `contract.StateDB` surface (`sload`/`sstore`/`balance_incr`/`log`).
+pub struct InternalsStateOps<'a, 'b>(pub &'a mut EvmInternals<'b>);
+
+impl PrecompileStateOps for InternalsStateOps<'_, '_> {
+    fn get_state(&mut self, address: Address, key: B256) -> Result<B256, PrecompileError> {
+        self.0
+            .sload(address, U256::from_be_bytes(key.0))
+            .map(|loaded| B256::new(loaded.data.to_be_bytes::<32>()))
+            .map_err(|e| PrecompileError::Fatal(format!("precompile sload: {e:?}")))
+    }
+
+    fn set_state(
+        &mut self,
+        address: Address,
+        key: B256,
+        value: B256,
+    ) -> Result<(), PrecompileError> {
+        self.0
+            .sstore(
+                address,
+                U256::from_be_bytes(key.0),
+                U256::from_be_bytes(value.0),
+            )
+            .map(|_| ())
+            .map_err(|e| PrecompileError::Fatal(format!("precompile sstore: {e:?}")))
+    }
+
+    fn add_balance(&mut self, address: Address, amount: U256) -> Result<(), PrecompileError> {
+        self.0
+            .balance_incr(address, amount)
+            .map_err(|e| PrecompileError::Fatal(format!("precompile balance_incr: {e:?}")))
+    }
+
+    fn add_log(&mut self, address: Address, topics: Vec<B256>, data: Vec<u8>) {
+        self.0.log(Log {
+            address,
+            data: LogData::new_unchecked(topics, data.into()),
+        });
+    }
+}
+
+/// Converts a [`StatefulPrecompile`]'s [`InterpreterResult`] into the alloy-evm
+/// [`PrecompileOutput`] the `DynPrecompile` closure must return (M6.31). The
+/// `PrecompilesMap` provider converts it back via
+/// `precompile_output_to_interpreter_result`, reproducing the same
+/// `Return`/`Revert`/`PrecompileOOG`/`PrecompileError` + gas accounting:
+/// success/revert carry the regular gas spent; a halt consumes ALL supplied gas
+/// (geth "precompile returned an error" parity).
+#[must_use]
+pub fn interpreter_result_to_precompile_output(
+    r: InterpreterResult,
+    reservoir: u64,
+) -> PrecompileOutput {
+    match r.result {
+        InstructionResult::Return | InstructionResult::Stop => {
+            PrecompileOutput::new(r.gas.total_gas_spent(), r.output, reservoir)
+        }
+        InstructionResult::Revert => {
+            PrecompileOutput::revert(r.gas.total_gas_spent(), r.output, reservoir)
+        }
+        InstructionResult::PrecompileOOG | InstructionResult::OutOfGas => {
+            PrecompileOutput::halt(PrecompileHalt::OutOfGas, reservoir)
+        }
+        _ => PrecompileOutput::halt(
+            PrecompileHalt::Other("stateful precompile call failed".into()),
+            reservoir,
+        ),
+    }
+}
+
+/// [`PrecompileStateOps`] over a generic revm journal ([`JournalTr`]) — the
+/// adapter the [`AvaPrecompiles`] provider path uses. Storage keys/values cross
+/// as `B256` (Go `common.Hash`) and are converted to/from the revm `U256`
+/// slot space big-endian.
+struct JournalStateOps<'a, J: JournalTr>(&'a mut J);
+
+impl<J: JournalTr> PrecompileStateOps for JournalStateOps<'_, J> {
+    fn get_state(&mut self, address: Address, key: B256) -> Result<B256, PrecompileError> {
+        self.0
+            .sload(address, U256::from_be_bytes(key.0))
+            .map(|loaded| B256::new(loaded.data.to_be_bytes::<32>()))
+            .map_err(|e| PrecompileError::Fatal(format!("precompile sload: {e:?}")))
+    }
+
+    fn set_state(
+        &mut self,
+        address: Address,
+        key: B256,
+        value: B256,
+    ) -> Result<(), PrecompileError> {
+        self.0
+            .sstore(
+                address,
+                U256::from_be_bytes(key.0),
+                U256::from_be_bytes(value.0),
+            )
+            .map(|_| ())
+            .map_err(|e| PrecompileError::Fatal(format!("precompile sstore: {e:?}")))
+    }
+
+    fn add_balance(&mut self, address: Address, amount: U256) -> Result<(), PrecompileError> {
+        self.0
+            .balance_incr(address, amount)
+            .map_err(|e| PrecompileError::Fatal(format!("precompile balance_incr: {e:?}")))
+    }
+
+    fn add_log(&mut self, address: Address, topics: Vec<B256>, data: Vec<u8>) {
+        self.0.log(Log {
+            address,
+            data: LogData::new_unchecked(topics, data.into()),
+        });
     }
 }

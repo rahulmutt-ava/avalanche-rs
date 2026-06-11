@@ -147,6 +147,15 @@ pub use revm::primitives::TxKind;
 // revm `Database<Error = ProviderError>` so the bare reth executor can run over
 // Firewood-ethhash (spec 10 §17.1/§17.2).
 pub use revm::Database;
+// alloy-evm's OWN `Database` trait (= revm `Database<Error: Error + Send + Sync
+// + 'static> + Debug`) — the bound every alloy-evm `EvmFactory`/`Evm`
+// implementation requires. The M6.31 `AvaEvmFactory`/`AvaEvm` bound their
+// generics on THIS trait (not bare `revm::Database`) to satisfy the
+// factory/executor tower.
+pub use alloy_evm::Database as AlloyDatabase;
+// `incr_balance` & friends on the journal's per-account handle — needed in
+// scope for the `AvaHandler::reward_beneficiary` override (M6.31).
+pub use revm::context_interface::journaled_state::account::JournaledAccountTr;
 // The error type a revm `State<DB>` overlay surfaces — `EvmDatabaseError<E>`
 // wrapping the inner db error (here `ProviderError`). `PreExecutionHook` operates
 // on the `State` overlay, so its `dyn Database` bound names this error.
@@ -207,6 +216,13 @@ pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
 // gas (spec 10 §4/§17.6, 21 §4b). Aliased `ConsensusTx` so the crate never names
 // a bare `Transaction` that could collide with the atomic-tx `Tx` types (G0).
 pub use alloy_consensus::Transaction as ConsensusTx;
+// Transaction construction + signing surface for tests/tools (M6.31
+// `evm_factory` named test): build a `TxLegacy`/`TxEip1559`, take its
+// `signature_hash`, attach an `EvmSignature` via `into_signed`. The EIP-2930
+// `AccessList`/`AccessListItem` carry the warp predicate chunks (spec 20 §7.2).
+pub use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
+pub use alloy_eips::eip2930::{AccessList, AccessListItem};
+pub use alloy_primitives::Signature as EvmSignature;
 // EIP-2718 typed-envelope decode for a single signed tx (`TransactionSigned`)
 // — used by `ava-evm::block` to decode the txs out of a block body (spec 10
 // §9.3); reused by the M6.6 reexecute test to decode the recorded tx.
@@ -244,6 +260,65 @@ pub use revm::interpreter::Gas;
 pub use revm::interpreter::InstructionResult;
 pub use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileSpecId, Precompiles};
 // revm's `SpecId` is already re-exported above (revm fork/spec id, G7).
+
+// --- M6.31: live `EvmFactory` / `AvaEvm` / base-fee-to-coinbase handler ----
+// The custom `EvmFactory` (`ava-evm::evmconfig::AvaEvmFactory`) builds an
+// `AvaEvm` mirroring alloy-evm's `EthEvm` (same revm `Evm` core over the
+// `EthEvmContext`), with TWO Avalanche deltas: (1) the Avalanche stateful
+// precompiles are installed into the `PrecompilesMap` as `DynPrecompile`s at
+// EVM-creation time (height-gated by the block timestamp, G4 §8.3), and (2)
+// `transact_raw` runs `AvaHandler` — a revm `Handler` whose
+// `reward_beneficiary` credits the FULL effective gas price (base fee + tip)
+// to the coinbase, coreth `state_transition.go` parity (Avalanche does not
+// burn the base fee — spec 21 §7, spec 10 §6.5).
+//
+// `EthEvmContext<DB>` is the revm context alloy's Ethereum EVM runs on
+// (`Context<BlockEnv, TxEnv, CfgEnv, DB>`); `RevmEvm` is revm's bare `Evm`
+// struct the wrapper holds; `MainBuilder`/`MainContext` build it
+// (`Context::mainnet()…build_mainnet_with_inspector`). `PrecompilesMap` is the
+// dynamic precompile map reth's `EthEvmConfig` pins as the factory
+// `Precompiles` type; `DynPrecompile`/`PrecompileInput` are its runtime-install
+// surface, and `EvmInternals` is the journal/state hook handle a dynamic
+// precompile receives (sload/sstore/balance_incr/log — the stateful-precompile
+// state access, G4). `PrecompileHalt` is the NON-fatal precompile failure
+// (consumes the call frame's gas, geth `vm.ErrOutOfGas`-style) as opposed to
+// the fatal `PrecompileError`.
+pub use alloy_evm::eth::EthEvmContext; // M6.31
+pub use alloy_evm::precompiles::{DynPrecompile, PrecompileInput, PrecompilesMap}; // M6.31
+pub use alloy_evm::{EvmInternals, EvmInternalsError}; // M6.31
+pub use revm::context::result::{EVMError, HaltReason, ResultAndState}; // M6.31
+pub use revm::context::{BlockEnv, CfgEnv, Context, ContextSetters, Evm as RevmEvm}; // M6.31
+// The env-trait views the handler reads (`block.basefee()`, `beneficiary()`,
+// `tx.effective_gas_price()`); aliased so they cannot collide with the alloy
+// consensus `Transaction`/`Block` names already crossing the facade.
+pub use revm::context_interface::context::ContextError; // M6.31
+pub use revm::context_interface::{Block as BlockEnvTr, JournalTr, Transaction as TxEnvTr}; // M6.31
+pub use revm::handler::instructions::EthInstructions; // M6.31
+pub use revm::handler::{
+    EthFrame, EvmTr, EvmTrError, FrameResult, FrameTr, Handler, MainBuilder, MainContext,
+    MainnetHandler, SystemCallEvm,
+}; // M6.31
+pub use revm::inspector::{Inspector, InspectorEvmTr, InspectorHandler, NoOpInspector}; // M6.31
+pub use revm::interpreter::interpreter::EthInterpreter; // M6.31
+pub use revm::interpreter::interpreter_action::FrameInit; // M6.31
+pub use revm::precompile::{PrecompileHalt, PrecompileId, PrecompileResult}; // M6.31
+pub use revm::state::EvmState; // M6.31
+// `post_execution` — revm's stock post-execution steps. `AvaHandler` delegates
+// to `post_execution::refund` on the pre-AP1 path (quotient-2 refunds) and
+// re-derives `reward_beneficiary` with the Avalanche full-fee-to-coinbase rule
+// (coreth `state_transition.go` — the base fee is NOT burned, spec 21 §7).
+pub use revm::handler::post_execution; // M6.31
+// `ExecuteEvm` exposes `set_tx`/`transact` on the bare revm `Evm`;
+// `LocalContextTr` is the `ContextTr::Local` bound the `Handler` trait names.
+pub use revm::ExecuteEvm; // M6.31
+pub use revm::context::LocalContextTr; // M6.31
+// `PrecompileOutput`/`PrecompileHalt` constructors cross the facade so the
+// `DynPrecompile` adapter can convert a stateful-precompile `InterpreterResult`
+// back into the alloy-evm `PrecompileResult` (success/revert/halt + gas-used).
+pub use revm::precompile::PrecompileStatus; // M6.31
+// `Log`/`LogData` — the journal log record a stateful precompile emits
+// (`EvmInternals::log`), and the value carried into receipts.
+pub use alloy_primitives::{Log, LogData}; // M6.31
 
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the

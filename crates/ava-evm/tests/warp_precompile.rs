@@ -29,7 +29,7 @@ use async_trait::async_trait;
 
 use ava_crypto::bls;
 use ava_evm::precompile::registry::{
-    AvaBlockCtx, PrecompileCtx, PredicateResults, StatefulPrecompile,
+    AvaBlockCtx, MemStateOps, PrecompileCtx, PredicateResults, StatefulPrecompile,
 };
 use ava_evm::precompile::warp::{
     GRANITE_GAS_CONFIG, PRE_GRANITE_GAS_CONFIG, PredicateContext, WARP_PRECOMPILE_ADDRESS,
@@ -228,18 +228,22 @@ async fn predicate_verifies_then_precompile_reads() {
     let make_ctx = || PrecompileCtx {
         caller: Address::from(source_addr),
         value: ava_evm_reth::U256::ZERO,
+        read_only: false,
         predicates: Arc::new(pred_results.clone()),
         block: AvaBlockCtx {
             pchain_height: 42,
             timestamp: 1_000,
             current_tx_index: 0,
+            block_number: 7,
+            is_durango: true,
         },
     };
+    let mut ops = MemStateOps::default();
 
     // ---- getBlockchainID returns the snow-ctx chain id. --------------------
     let get_chain_id_sel = [0x42, 0x13, 0xcf, 0x78];
     let out = warp
-        .run(&get_chain_id_sel, 1_000_000, &make_ctx())
+        .run(&get_chain_id_sel, 1_000_000, &make_ctx(), &mut ops)
         .expect("getBlockchainID");
     assert_eq!(out.result, InstructionResult::Return);
     assert_eq!(&abi_bytes32(&out.output, 0), this_chain_id().as_bytes());
@@ -252,7 +256,9 @@ async fn predicate_verifies_then_precompile_reads() {
     // ---- getVerifiedWarpMessage(0) reads the cached VALID predicate. -------
     let mut input = vec![0x6f, 0x82, 0x53, 0x50];
     input.extend_from_slice(&u32_word(0));
-    let out = warp.run(&input, 5_000_000, &make_ctx()).expect("gvm 0");
+    let out = warp
+        .run(&input, 5_000_000, &make_ctx(), &mut ops)
+        .expect("gvm 0");
     assert_eq!(out.result, InstructionResult::Return);
     let (msg_source_chain, msg_sender, msg_payload, valid) = decode_verified_message(&out.output);
     assert!(valid, "predicate 0 must read as valid");
@@ -263,7 +269,9 @@ async fn predicate_verifies_then_precompile_reads() {
     // ---- getVerifiedWarpMessage(1) reads the cached INVALID predicate. -----
     let mut input = vec![0x6f, 0x82, 0x53, 0x50];
     input.extend_from_slice(&u32_word(1));
-    let out = warp.run(&input, 5_000_000, &make_ctx()).expect("gvm 1");
+    let out = warp
+        .run(&input, 5_000_000, &make_ctx(), &mut ops)
+        .expect("gvm 1");
     let (_, _, _, valid) = decode_verified_message(&out.output);
     assert!(!valid, "predicate 1 must read as invalid (failed verify)");
 
@@ -271,7 +279,9 @@ async fn predicate_verifies_then_precompile_reads() {
     let send_payload = b"outbound".to_vec();
     let mut input = vec![0xee, 0x5b, 0x48, 0xeb];
     input.extend_from_slice(&abi_encode_bytes(&send_payload));
-    let out = warp.run(&input, 10_000_000, &make_ctx()).expect("send");
+    let out = warp
+        .run(&input, 10_000_000, &make_ctx(), &mut ops)
+        .expect("send");
     assert_eq!(out.result, InstructionResult::Return);
 
     let expected_call = AddressedCall {
@@ -303,7 +313,7 @@ async fn predicate_verifies_then_precompile_reads() {
     // ---- Gas tables: both pre-Granite and Granite. -------------------------
     let warp_granite = WarpPrecompile::new(this_chain_id(), NETWORK_ID, true);
     let out = warp_granite
-        .run(&get_chain_id_sel, 1_000_000, &make_ctx())
+        .run(&get_chain_id_sel, 1_000_000, &make_ctx(), &mut ops)
         .expect("getBlockchainID granite");
     assert_eq!(
         out.gas.total_gas_spent(),
@@ -511,10 +521,12 @@ fn handle_precompile_accept_records_sent_messages() {
     let ctx = PrecompileCtx {
         caller: Address::from(caller),
         value: ava_evm_reth::U256::ZERO,
+        read_only: false,
         predicates: Arc::new(PredicateResults::default()),
         block: AvaBlockCtx::default(),
     };
-    warp.run(&input, 10_000_000, &ctx).expect("send");
+    let mut ops = MemStateOps::default();
+    warp.run(&input, 10_000_000, &ctx, &mut ops).expect("send");
 
     let logs = warp.take_logs();
     let backend = WarpBackend::new();
