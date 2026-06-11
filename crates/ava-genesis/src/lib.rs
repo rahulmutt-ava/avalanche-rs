@@ -2,6 +2,11 @@
 // See the file LICENSE for licensing terms.
 
 #![forbid(unsafe_code)]
+// ava-evm and ava-version are dev-dependencies used only in integration tests
+// (tests/golden_genesis_extras.rs); the lib itself does not import them, so the
+// `unused_crate_dependencies` lint fires at the lib level. This allow is the
+// standard workaround until Rust supports per-target dep declarations.
+#![allow(unused_crate_dependencies)]
 
 //! `ava-genesis` — network genesis construction (port of `genesis/**`,
 //! specs 23, 12 §6).
