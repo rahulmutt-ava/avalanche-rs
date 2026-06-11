@@ -29,6 +29,9 @@
 
 pub mod abi;
 pub mod allowlist;
+pub mod feemanager;
+pub mod gaspricemanager;
 pub mod nativeminter;
 pub mod registry;
+pub mod rewardmanager;
 pub mod warp;
