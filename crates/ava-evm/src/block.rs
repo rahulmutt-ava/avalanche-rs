@@ -44,7 +44,8 @@ use crate::atomic::tx::{Tx as AtomicTx, codec as atomic_codec};
 use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::{Error, Result};
-use crate::evmconfig::{AvaEvmConfig, NoopPreHook};
+use crate::evmconfig::{AvaEvmConfig, AvaExecCtx, NoopPreHook};
+use crate::precompile::warp::{WarpBackend, WarpLog, WarpPrecompile, handle_precompile_accept};
 use crate::state::{FirewoodStateProvider, FirewoodStateView};
 
 /// `customtypes.EmptyExtDataHash` = `keccak256(rlp(nil))` — the `ExtDataHash` of
@@ -452,6 +453,28 @@ pub struct EvmBlockContext {
     /// configured — `accept` skips atomic indexing when absent (e.g. a chain with
     /// no cross-chain activity, or tests that exercise only EVM state).
     atomic_backend: Option<Arc<AtomicBackend>>,
+    /// The warp accept seam (M6.31, spec 20 §3.1): the registered
+    /// [`WarpPrecompile`] instance (its `SendWarpMessage` log buffer) + the
+    /// [`WarpBackend`] that records accepted unsigned messages for signing.
+    /// `None` until wired via [`EvmBlockContext::with_warp`].
+    warp: Option<WarpAcceptSeam>,
+}
+
+/// The accept-time warp routing seam (M6.31, coreth `handlePrecompileAccept`):
+/// `verify` drains [`WarpPrecompile::take_logs`] and stashes them keyed by the
+/// pre-commit root; `accept` routes the accepted root's logs into the
+/// [`WarpBackend`] (BEFORE the canonical append, matching coreth's
+/// before-chain-Accept ordering); `reject` discards them.
+struct WarpAcceptSeam {
+    /// The SAME [`WarpPrecompile`] instance registered in the precompile
+    /// registry (its internal log buffer accumulates this block's sends).
+    precompile: Arc<WarpPrecompile>,
+    /// Records accepted unsigned messages so the node will sign them.
+    backend: Arc<WarpBackend>,
+    /// Per-verified-block `SendWarpMessage` logs keyed by pre-commit root.
+    /// Verifies are serial under consensus (one block verified at a time), so
+    /// the drained buffer is attributable to the just-verified block.
+    pending: parking_lot::Mutex<std::collections::BTreeMap<B256, Vec<WarpLog>>>,
 }
 
 impl EvmBlockContext {
@@ -468,7 +491,23 @@ impl EvmBlockContext {
             evm_config,
             canonical,
             atomic_backend: None,
+            warp: None,
         }
+    }
+
+    /// Attaches the warp accept seam (M6.31, spec 20 §3.1): `precompile` MUST
+    /// be the same instance registered in the EVM config's
+    /// [`crate::precompile::registry::PrecompileRegistry`] (its log buffer is
+    /// what `verify` drains); `backend` receives the accepted blocks' unsigned
+    /// messages. Additive — existing callers keep the no-warp behavior.
+    #[must_use]
+    pub fn with_warp(mut self, precompile: Arc<WarpPrecompile>, backend: Arc<WarpBackend>) -> Self {
+        self.warp = Some(WarpAcceptSeam {
+            precompile,
+            backend,
+            pending: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
+        });
+        self
     }
 
     /// Attaches an [`AtomicBackend`] so [`EvmBlock::accept`] indexes the block's
@@ -554,6 +593,26 @@ impl EvmBlock {
     /// Returns [`Error`] if the parent view is unavailable, execution fails, the
     /// computed root disagrees with the header, or gas usage disagrees.
     pub fn verify(&self, ctx: &EvmBlockContext, parent_state_root: B256) -> Result<B256> {
+        self.verify_with_predicates(ctx, parent_state_root, &AvaExecCtx::default())
+    }
+
+    /// [`EvmBlock::verify`] with an explicit per-block precompile execution
+    /// context (M6.31, spec 10 §6.5/§17.5): the verified warp predicate results
+    /// (from the pre-execution predicate pass,
+    /// [`crate::precompile::warp::build_block_predicates`], keyed by tx index)
+    /// and the proposervm-pinned P-Chain height. The `ChainVm` adapter runs the
+    /// async predicate pass against its `ValidatorState` first, then verifies
+    /// with the results threaded in; [`EvmBlock::verify`] is the
+    /// no-warp-predicates path.
+    ///
+    /// # Errors
+    /// As [`EvmBlock::verify`].
+    pub fn verify_with_predicates(
+        &self,
+        ctx: &EvmBlockContext,
+        parent_state_root: B256,
+        exec_ctx: &AvaExecCtx,
+    ) -> Result<B256> {
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
         // or a still-processing ancestor's atomic inputs. Linear-accept is the
@@ -581,9 +640,20 @@ impl EvmBlock {
         // Semantic execute the EVM txs (atomic pre-hook is NoopPreHook here; the
         // atomic Import/Export pre-hook is wired with the atomic backend, M6.15).
         let env = ctx.evm_config.evm_env_for_header(&self.eth_env_header()?);
-        let outcome = ctx
-            .evm_config
-            .execute_batch(env, &mut state, &NoopPreHook, &txs)?;
+        let outcome =
+            ctx.evm_config
+                .execute_batch_with_ctx(env, &mut state, &NoopPreHook, &txs, exec_ctx)?;
+
+        // Drain this verify's `SendWarpMessage` logs from the registered warp
+        // precompile NOW (whether or not the block proves valid below) so a
+        // failed verify cannot leak its logs into the next block's accept
+        // (M6.31, spec 20 §3.1). They are stashed keyed by pre-commit root only
+        // once the block verifies.
+        let warp_logs = ctx
+            .warp
+            .as_ref()
+            .map(|seam| seam.precompile.take_logs())
+            .unwrap_or_default();
 
         // Pre-commit root via Firewood propose (NOT committed); stashes by root.
         let precommit = ctx.state.propose_from_bundle(&outcome.bundle)?;
@@ -603,6 +673,11 @@ impl EvmBlock {
             return Err(Error::NoGasUsed);
         }
 
+        // Stash the verified block's warp logs for accept-time routing.
+        if let Some(seam) = ctx.warp.as_ref() {
+            seam.pending.lock().insert(precommit, warp_logs);
+        }
+
         Ok(precommit)
     }
 
@@ -617,6 +692,18 @@ impl EvmBlock {
     /// Returns [`Error::MissingProposal`] if no proposal is stashed for
     /// `precommit_root` (verify was not run, or it was rejected), or a store error.
     pub fn accept(&self, ctx: &EvmBlockContext, precommit_root: B256) -> Result<()> {
+        // 0. Warp precompile accept (M6.31, coreth `handlePrecompileAccept`,
+        //    spec 20 §3.1): route this block's `SendWarpMessage` logs (stashed
+        //    at verify time keyed by the pre-commit root) into the
+        //    `WarpBackend` so the node will sign them. BEFORE the state commit
+        //    + canonical append, matching coreth's before-chain-Accept order.
+        if let Some(seam) = ctx.warp.as_ref() {
+            let logs = seam.pending.lock().remove(&precommit_root);
+            if let Some(logs) = logs {
+                handle_precompile_accept(&seam.backend, &logs)?;
+            }
+        }
+
         // 1. Commit the Firewood proposal -> durably advances the EVM state tip.
         ctx.state.commit(precommit_root)?;
 
@@ -653,6 +740,11 @@ impl EvmBlock {
     /// Infallible today (returns [`Result`] to match the lifecycle signature and
     /// the spec-06 trait shape).
     pub fn reject(&self, ctx: &EvmBlockContext, precommit_root: B256) -> Result<()> {
+        // A rejected block's `SendWarpMessage` logs are never routed (spec 20
+        // §3.1 — only accepted messages are signed).
+        if let Some(seam) = ctx.warp.as_ref() {
+            seam.pending.lock().remove(&precommit_root);
+        }
         ctx.state.discard(precommit_root);
         Ok(())
     }

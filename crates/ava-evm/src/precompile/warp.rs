@@ -525,6 +525,60 @@ pub async fn run_predicates<V: ValidatorState>(
     Ok(results)
 }
 
+/// The per-transaction warp predicates riding in `tx`'s access list (coreth
+/// `predicate.FromAccessList`, spec 20 §7.2): one predicate per access-list
+/// tuple addressed to [`WARP_PRECOMPILE_ADDRESS`], its bytes the tuple's
+/// 32-byte storage keys concatenated in order (the chunked encoding —
+/// [`predicate_from_chunks`] recovers the raw message).
+#[must_use]
+pub fn warp_predicates_from_tx(tx: &ava_evm_reth::RecoveredTx) -> Vec<Vec<u8>> {
+    use ava_evm_reth::ConsensusTx as _;
+    let Some(access_list) = tx.access_list() else {
+        return Vec::new();
+    };
+    access_list
+        .iter()
+        .filter(|item| item.address == WARP_PRECOMPILE_ADDRESS)
+        .map(|item| {
+            item.storage_keys
+                .iter()
+                .flat_map(|key| key.0)
+                .collect::<Vec<u8>>()
+        })
+        .collect()
+}
+
+/// The block-level pre-execution predicate pass (M6.31, coreth
+/// `CheckBlockPredicates`, spec 10 §6.5 / 20 §7.2): for each transaction,
+/// extract its access-list warp predicates ([`warp_predicates_from_tx`]) and
+/// BLS-verify them against the proposervm-pinned validator sets
+/// ([`run_predicates`]), recording the per-message results keyed by **tx
+/// index** so the live [`crate::evmconfig::AvaEvmFactory`] threads them into
+/// the warp precompile's `getVerifiedWarpMessage` reads.
+///
+/// Runs BEFORE EVM execution (`apply_pre_execution_changes`); a predicate that
+/// fails verification is NOT a block error — it reads as `valid == false`.
+///
+/// # Errors
+/// Returns a [`ValidatorState`] error only if the validator-state lookups
+/// themselves fail (a node-level error, not a per-predicate failure).
+pub async fn build_block_predicates<V: ValidatorState>(
+    state: &V,
+    ctx: &PredicateContext,
+    txs: &[ava_evm_reth::RecoveredTx],
+) -> Result<crate::precompile::registry::PredicateResults, ava_validators::error::Error> {
+    let mut results = crate::precompile::registry::PredicateResults::default();
+    for (i, tx) in txs.iter().enumerate() {
+        let predicates = warp_predicates_from_tx(tx);
+        if predicates.is_empty() {
+            continue;
+        }
+        let valid = run_predicates(state, ctx, &predicates).await?;
+        results.set_warp(u64::try_from(i).unwrap_or(u64::MAX), predicates, valid);
+    }
+    Ok(results)
+}
+
 /// Verify a single warp predicate (spec 20 §7.2). Returns `Ok(true)` if it
 /// verified, `Ok(false)` if it is structurally invalid or fails quorum, and `Err`
 /// only on a validator-state lookup failure.

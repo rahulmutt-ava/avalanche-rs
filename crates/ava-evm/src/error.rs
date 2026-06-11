@@ -71,6 +71,11 @@ pub enum Error {
     /// A reth provider/state-read failure, wrapped through the facade.
     #[error(transparent)]
     Provider(#[from] ProviderError),
+
+    /// A `SendWarpMessage` log failed to decode/record on block accept
+    /// (`handlePrecompileAccept`, M6.31, spec 20 §3.1).
+    #[error("warp precompile accept: {0}")]
+    Warp(#[from] ava_warp::Error),
 }
 
 /// C-Chain VM result alias.
