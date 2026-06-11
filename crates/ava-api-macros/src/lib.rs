@@ -18,6 +18,34 @@
 //! whole point: the registered method set cannot drift from the trait
 //! (specs 12 §3.2).
 //!
+//! ## Which methods register
+//!
+//! Only `pub async fn`s on the impl block register as RPC methods. A non-`pub`
+//! item (a private helper) is silently ignored — it is a legitimate
+//! implementation detail. A `pub fn` that is **not** `async`, however, is almost
+//! certainly a mistyped RPC method (a forgotten `async`), so the macro raises a
+//! **compile error** rather than silently dropping it.
+//!
+//! ## Method name override
+//!
+//! By default the wire method name is the PascalCase of the snake_case Rust
+//! ident (`get_node_id` → `GetNodeId`). Dispatch matches the registered name
+//! **exactly after normalizing only the first letter** (Go's
+//! `utils/json/codec.go` shim), so acronym-bearing Go names such as `GetNodeID`
+//! cannot be recovered from the snake_case ident. Annotate the method with
+//! `#[rpc(name = "GetNodeID")]` to register the exact Go wire name:
+//!
+//! ```ignore
+//! #[rpc_service("info")]
+//! impl InfoService {
+//!     #[rpc(name = "GetNodeID")]
+//!     pub async fn get_node_id(&self, args: EmptyArgs) -> Result<Reply, RpcError> { /* … */ }
+//! }
+//! ```
+//!
+//! The `#[rpc(...)]` helper attribute is stripped from the emitted impl block so
+//! the block remains valid Rust.
+//!
 //! Each registered handler:
 //! - clones the service `Arc` so the boxed closure is `'static`,
 //! - deserializes the single gorilla `params[0]` object into `Args` — a failure
@@ -44,6 +72,21 @@ use syn::{
 ///
 /// See the crate docs for the full contract. The argument is the lowercase
 /// service segment of `Service.Method` (e.g. `"info"`, `"health"`).
+///
+/// A `pub fn` that is not `async` is rejected at compile time (a forgotten
+/// `async` on an intended RPC method). Make it `async` or drop `pub`:
+///
+/// ```compile_fail
+/// use ava_api_macros::rpc_service;
+/// struct S;
+/// #[rpc_service("svc")]
+/// impl S {
+///     // ERROR: pub methods in #[rpc_service] impl must be async (RPC).
+///     pub fn oops(&self) -> u8 {
+///         0
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn rpc_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     let service_name = parse_macro_input!(attr as LitStr);
@@ -60,20 +103,36 @@ fn expand(service_name: &LitStr, input: &ItemImpl) -> Result<TokenStream2, Error
     let self_ty = &input.self_ty;
     let (impl_generics, _ty_generics, where_clause) = input.generics.split_for_impl();
 
+    // Re-emit the impl block, but with the helper `#[rpc(...)]` attribute
+    // stripped from each method so the resulting Rust is valid (the attribute is
+    // only meaningful to this macro).
+    let mut emitted = input.clone();
+
     let mut registrations = Vec::new();
-    for item in &input.items {
+    for item in &mut emitted.items {
         if let ImplItem::Fn(method) = item {
-            // Only `pub async fn` methods are exposed as RPC endpoints; other
-            // helpers on the same impl block are left untouched.
-            if !matches!(method.vis, Visibility::Public(_)) || method.sig.asyncness.is_none() {
+            let is_pub = matches!(method.vis, Visibility::Public(_));
+            // A `pub fn` that forgot `async` is almost certainly a mistyped RPC
+            // method — reject it loudly rather than silently dropping it.
+            if is_pub && method.sig.asyncness.is_none() {
+                return Err(Error::new_spanned(
+                    &method.sig,
+                    "pub methods in #[rpc_service] impl must be async (RPC) — \
+                     make it async or non-pub",
+                ));
+            }
+            // Only `pub async fn` methods are exposed as RPC endpoints; non-pub
+            // helpers on the same impl block are legitimately ignored.
+            if !is_pub || method.sig.asyncness.is_none() {
                 continue;
             }
-            registrations.push(build_registration(service_name, method)?);
+            let name_override = take_rpc_attr(method)?;
+            registrations.push(build_registration(service_name, method, name_override)?);
         }
     }
 
     Ok(quote! {
-        #input
+        #emitted
 
         impl #impl_generics #self_ty #where_clause {
             /// Registers each `#[rpc_service]` method on `self` into `registry`
@@ -88,20 +147,47 @@ fn expand(service_name: &LitStr, input: &ItemImpl) -> Result<TokenStream2, Error
     })
 }
 
+/// Removes and parses an optional `#[rpc(name = "...")]` helper attribute from a
+/// method, returning the override name if present. The attribute is removed in
+/// place so the re-emitted impl block stays valid Rust.
+fn take_rpc_attr(method: &mut syn::ImplItemFn) -> Result<Option<String>, Error> {
+    let mut name_override = None;
+    let mut kept = Vec::with_capacity(method.attrs.len());
+    for attr in std::mem::take(&mut method.attrs) {
+        if !attr.path().is_ident("rpc") {
+            kept.push(attr);
+            continue;
+        }
+        // `#[rpc(name = "GetNodeID")]` — the only supported form.
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") {
+                let lit: LitStr = meta.value()?.parse()?;
+                name_override = Some(lit.value());
+                Ok(())
+            } else {
+                Err(meta.error("unsupported #[rpc(...)] key; expected `name = \"...\"`"))
+            }
+        })?;
+    }
+    method.attrs = kept;
+    Ok(name_override)
+}
+
 /// Builds the `registry.register(...)` call for a single async method.
 fn build_registration(
     service_name: &LitStr,
     method: &syn::ImplItemFn,
+    name_override: Option<String>,
 ) -> Result<TokenStream2, Error> {
     let method_ident = &method.sig.ident;
     // The Rust method is snake_case (`get_node_id`); the gorilla wire name is
-    // Go's exported PascalCase (`GetNodeID`). We convert snake_case ->
-    // PascalCase. The exact casing does not affect matching — the method
-    // segment is matched case-insensitively (14 §1.1), realized by the registry
-    // lowercasing both the registered key and the incoming segment — so
-    // `get_node_id` -> `GetNodeId` -> `getnodeid` matches a client's
-    // `getNodeID`/`GetNodeID`/`getnodeid` alike.
-    let go_method = pascalize(&method_ident.to_string());
+    // Go's exported PascalCase (`GetNodeID`). Dispatch matches the registered
+    // name EXACTLY after normalizing only its first letter (Go's
+    // `utils/json/codec.go` shim), so the registered name must be the precise Go
+    // wire name. `pascalize` recovers it for simple idents (`get_node_id` ->
+    // `GetNodeId`), but acronym-bearing names (`GetNodeID`) must be supplied via
+    // `#[rpc(name = "GetNodeID")]`.
+    let go_method = name_override.unwrap_or_else(|| pascalize(&method_ident.to_string()));
     let wire_method = format!("{}.{}", service_name.value(), go_method);
 
     // The receiver must be `&self`.
@@ -178,9 +264,10 @@ fn build_registration(
 
 /// Converts a snake_case Rust method ident to a PascalCase Go-style name:
 /// each `_` is dropped and the following letter uppercased, and the first
-/// letter is uppercased (`get_node_id` -> `GetNodeId`). Since the dispatch
-/// match is case-insensitive (the registry lowercases keys), the precise inner
-/// casing is immaterial — only the letters (no underscores) need to line up.
+/// letter is uppercased (`get_node_id` -> `GetNodeId`). Dispatch matches the
+/// registered name exactly after normalizing only its first letter, so for Go
+/// names whose inner casing differs from this mapping (acronyms such as
+/// `GetNodeID`) use the `#[rpc(name = "...")]` override instead.
 fn pascalize(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut upper_next = true;

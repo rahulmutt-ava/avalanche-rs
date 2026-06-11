@@ -9,9 +9,13 @@
 //! clients/SDKs are unaffected:
 //!
 //! - **Request** `{"jsonrpc":"2.0","id":1,"method":"<service>.<Method>",
-//!   "params":[{…}]}`. The method segment matches **case-insensitively**
-//!   (gorilla lowercases it), and `params` is a **single-element array**
-//!   wrapping the `Args` object; an absent / empty `params` maps to `null`.
+//!   "params":[{…}]}`. The **service** segment matches case-insensitively
+//!   (gorilla lowercases service names); the **method** segment is matched per
+//!   the `utils/json/codec.go` shim — its first letter is uppercased and the
+//!   remainder matched EXACTLY against the registered PascalCase name (a method
+//!   whose first letter is already uppercase is rejected as `-32601`). `params`
+//!   is a **single-element array** wrapping the `Args` object; an absent / empty
+//!   `params` maps to `null`.
 //! - **Success** `{"jsonrpc":"2.0","id":1,"result":{…}}`.
 //! - **Error** `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"…",
 //!   "data":null}}`.
@@ -123,13 +127,19 @@ impl From<JsonRpcError> for RpcError {
 pub type BoxedRpcMethod =
     Box<dyn Fn(Value) -> BoxFuture<'static, std::result::Result<Value, RpcError>> + Send + Sync>;
 
-/// The dispatch table mapping `"service.method"` (lowercased) to its handler
-/// (mirror gorilla's `serviceMap`). Built once at startup, then shared
-/// read-only behind an [`Arc`] in axum state.
+/// The dispatch table mapping `"service.Method"` to its handler (mirror
+/// gorilla's `serviceMap`). Built once at startup, then shared read-only behind
+/// an [`Arc`] in axum state.
+///
+/// The **service** segment of the key is lowercased (gorilla lowercases service
+/// names in its `serviceMap`, so the match is case-insensitive). The **method**
+/// segment is stored with its exact registered casing (the Go wire name, e.g.
+/// `GetNodeID`): dispatch normalizes only the incoming method's first letter and
+/// then matches the remainder exactly, mirroring `utils/json/codec.go` (14
+/// §16.1).
 #[derive(Default)]
 pub struct ServiceRegistry {
-    /// Lowercased `"service.method"` -> handler. Lowercasing the key is how the
-    /// case-insensitive method match (14 §1.1) is realized at lookup time.
+    /// `"<service-lowercased>.<Method-exact>"` -> handler.
     methods: HashMap<String, BoxedRpcMethod>,
 }
 
@@ -142,9 +152,11 @@ impl ServiceRegistry {
 
     /// Registers `handler` under the gorilla wire name `"<service>.<Method>"`.
     ///
-    /// The key is stored lowercased so dispatch matches the method segment
-    /// case-insensitively (14 §1.1). The `#[rpc_service]` macro calls this once
-    /// per `pub async fn`; manual registration is also supported.
+    /// The service segment of the key is lowercased (gorilla lowercases service
+    /// names), while the method segment is stored with its exact registered
+    /// casing — dispatch normalizes only the incoming method's first letter (14
+    /// §16.1). The `#[rpc_service]` macro calls this once per `pub async fn`;
+    /// manual registration is also supported.
     pub fn register<F>(&mut self, wire_method: impl Into<String>, handler: F)
     where
         F: Fn(Value) -> BoxFuture<'static, std::result::Result<Value, RpcError>>
@@ -152,18 +164,22 @@ impl ServiceRegistry {
             + Sync
             + 'static,
     {
-        let key = wire_method.into().to_ascii_lowercase();
+        let wire = wire_method.into();
+        let key = match wire.split_once('.') {
+            // Lowercase only the service segment; keep the method segment exact.
+            Some((service, method)) => format!("{}.{}", service.to_ascii_lowercase(), method),
+            None => wire.to_ascii_lowercase(),
+        };
         self.methods.insert(key, Box::new(handler));
     }
 
-    /// Looks up the handler for `service.method` (both segments lowercased).
+    /// Looks up the handler for `service.method`. The `service` is matched
+    /// case-insensitively (lowercased); `method` is matched **exactly** as
+    /// registered — callers must have already first-letter-normalized it per the
+    /// gorilla shim (see [`dispatch`]).
     #[must_use]
     pub fn lookup(&self, service: &str, method: &str) -> Option<&BoxedRpcMethod> {
-        let key = format!(
-            "{}.{}",
-            service.to_ascii_lowercase(),
-            method.to_ascii_lowercase()
-        );
+        let key = format!("{}.{}", service.to_ascii_lowercase(), method);
         self.methods.get(&key)
     }
 
@@ -235,10 +251,42 @@ impl Resp {
     }
 }
 
-/// gorilla extracts `params[0]` (the single Args object). A non-array `params`
-/// (e.g. an object some clients send directly) is passed through as-is; an
-/// empty array or a missing field becomes `null` (a `*struct{}` method accepts
-/// `[]` / absent / `[{}]`).
+/// The gorilla first-letter-uppercasing shim applied to the method segment
+/// (`utils/json/codec.go`):
+///
+/// - An empty segment (Go's `utf8.RuneError` branch) is returned unchanged — it
+///   is not an uppercase error; it simply fails to resolve to `-32601`.
+/// - A first rune that is uppercase returns `None` (the `errUppercaseMethod`
+///   rejection -> `-32601`).
+/// - Otherwise the first letter is uppercased and the remainder kept verbatim,
+///   yielding the name that must match a registered method EXACTLY.
+fn normalize_method(method: &str) -> Option<String> {
+    let mut chars = method.chars();
+    let Some(first) = chars.next() else {
+        // Empty method segment: Go returns it unchanged (no uppercase error).
+        return Some(String::new());
+    };
+    if first.is_uppercase() {
+        return None;
+    }
+    let mut out = String::with_capacity(method.len());
+    out.extend(first.to_uppercase());
+    out.push_str(chars.as_str());
+    Some(out)
+}
+
+/// Extracts the `Args` object from `params`, mirroring gorilla json2's
+/// `CodecRequest.ReadRequest` (`v2/json2/server.go`).
+///
+/// gorilla unmarshals `params` **directly** into the args object first
+/// (by-name / bare object), and only on failure falls back to treating it as a
+/// single-element by-position array (`[1]interface{}{args}`). So:
+/// - a single-element array `[ {…} ]` unwraps to its element 0 (the common
+///   avalanchego convention);
+/// - a **bare object** `{…}` is passed through as-is — this is a deliberate
+///   Go-faithful tolerance (gorilla's by-name path accepts it), NOT laxity;
+/// - an empty array or absent `params` becomes `null`, which a `*struct{}`
+///   method accepts (`[]` / absent / `[{}]` all succeed).
 fn first_param(params: Value) -> Value {
     match params {
         Value::Array(mut arr) => {
@@ -329,30 +377,42 @@ async fn dispatch_body(registry: &ServiceRegistry, body: &[u8]) -> Response {
         ));
     }
 
-    // gorilla splits on the FIRST '.': "service.method". A missing '.' yields an
-    // empty service, which never resolves -> -32601.
-    let (service, rpc_method) = match req.method.split_once('.') {
-        Some(parts) => parts,
-        None => ("", req.method.as_str()),
-    };
-
-    // Uppercase-service guard (`utils/json/codec.go::errUppercaseMethod`): the
-    // service segment must not begin with an uppercase letter. avalanchego
-    // registers lowercased service names, so an uppercase first letter is
-    // -32601 (14 §16.1). The method segment itself is matched case-insensitively
-    // (handled by `lookup` lowercasing), so it is NOT guarded here.
-    if service.chars().next().is_some_and(char::is_uppercase) {
+    // gorilla splits on the FIRST '.': "service.method". A missing '.' (the Go
+    // shim's `len(methodSections) != 2`) bypasses the uppercase guard and is
+    // passed through verbatim — it simply never resolves -> -32601.
+    let Some((service, rpc_method)) = req.method.split_once('.') else {
         return json_rpc_response(Resp::err(
             JsonRpcError {
                 code: json2_code::NO_METHOD,
-                message: format!("rpc: service/method ill-formed: \"{}\"", req.method),
+                message: format!("rpc: can't find method {}", req.method),
                 data: None,
             },
             req.id,
         ));
-    }
+    };
 
-    let Some(handler) = registry.lookup(service, rpc_method) else {
+    // Uppercase-METHOD guard (`utils/json/codec.go::errUppercaseMethod`): the
+    // shim inspects the METHOD segment's first rune. If it is uppercase, the
+    // request is rejected (`info.GetNodeID` -> -32601). Otherwise the first
+    // letter is uppercased and the method matched EXACTLY against the registered
+    // (PascalCase) name (only the first letter is normalized; the remainder must
+    // match byte-for-byte). The SERVICE segment is matched case-insensitively
+    // (gorilla lowercases service names), handled in `lookup` (14 §16.1).
+    let matched_method = match normalize_method(rpc_method) {
+        Some(name) => name,
+        None => {
+            return json_rpc_response(Resp::err(
+                JsonRpcError {
+                    code: json2_code::NO_METHOD,
+                    message: format!("rpc: service/method ill-formed: \"{}\"", req.method),
+                    data: None,
+                },
+                req.id,
+            ));
+        }
+    };
+
+    let Some(handler) = registry.lookup(service, &matched_method) else {
         return json_rpc_response(Resp::err(
             JsonRpcError {
                 code: json2_code::NO_METHOD,
@@ -395,11 +455,22 @@ fn json_rpc_response(resp: Resp) -> Response {
     }
 }
 
-/// Convenience alias so a domain error converts straight into an [`RpcError`]
-/// (the gorilla default: `-32000`, message = `to_string()`). Service handlers
-/// written by hand can therefore use `?` on any [`std::error::Error`].
-impl<E: std::error::Error> From<&E> for RpcError {
-    fn from(e: &E) -> Self {
+impl RpcError {
+    /// Builds an [`RpcError`] from any [`std::error::Error`] using the gorilla
+    /// default mapping (`-32000`, message = `to_string()`; see
+    /// [`IntoJsonRpcError`]). This is the honest surface for a hand-written
+    /// handler: `?` cannot be used directly (it needs an *owned* `From` impl,
+    /// which would be incoherent against the reflexive `From<RpcError>`), so map
+    /// the error explicitly:
+    ///
+    /// ```ignore
+    /// let height = self.height().map_err(|e| RpcError::from_error(&e))?;
+    /// ```
+    ///
+    /// A service whose error needs a non-default code provides its own
+    /// `From<MyError> for RpcError` and uses plain `?`.
+    #[must_use]
+    pub fn from_error(e: &impl std::error::Error) -> Self {
         let wire = e.to_json_rpc();
         Self {
             code: wire.code,
@@ -467,6 +538,10 @@ mod tests {
 
     #[rpc_service("info")]
     impl InfoService {
+        // The `#[rpc(name = ...)]` override registers the exact Go acronym wire
+        // name `GetNodeID`; the snake_case default would have been `GetNodeId`,
+        // which a client's `getNodeID` would NOT match (exact-remainder rule).
+        #[rpc(name = "GetNodeID")]
         pub async fn get_node_id(
             &self,
             _args: EmptyArgs,
@@ -544,12 +619,13 @@ mod tests {
         );
         assert!(body.get("error").is_none());
 
-        // Exact PascalCase also matches, and the single-element params array is
-        // unwrapped into the Args object.
+        // A lowercase-first method segment is first-letter-uppercased to the
+        // registered `Echo`, and the single-element params array is unwrapped
+        // into the Args object.
         let (status, body) = post_json(json!({
             "jsonrpc": "2.0",
             "id": "abc",
-            "method": "info.Echo",
+            "method": "info.echo",
             "params": [{ "value": 99 }],
         }))
         .await;
@@ -630,13 +706,77 @@ mod tests {
         assert_eq!(body["error"]["code"], json2_code::NO_METHOD);
     }
 
-    // The uppercase-SERVICE guard (errUppercaseMethod) => -32601 (14 §16.1).
+    // The uppercase-METHOD guard (`errUppercaseMethod`, `utils/json/codec.go`):
+    // the shim inspects the METHOD segment's first rune, NOT the service's. An
+    // uppercase-first METHOD is rejected; a mixed-case SERVICE is fine (gorilla
+    // lowercases service names) (14 §16.1).
     #[tokio::test]
-    async fn uppercase_service_guard_is_minus_32601() {
+    async fn uppercase_method_guard_is_minus_32601() {
+        // (a) Uppercase-first METHOD segment -> errUppercaseMethod -> -32601.
+        // `info.GetNodeID` is REJECTED (Go rejects it too).
         let (status, body) = post_json(json!({
             "jsonrpc": "2.0",
             "id": 1,
+            "method": "info.GetNodeID",
+            "params": [{}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["error"]["code"], json2_code::NO_METHOD);
+
+        // (b) The SERVICE segment is matched case-insensitively: `Info.getNodeID`
+        // SUCCEEDS (gorilla lowercases service names).
+        let (status, body) = post_json(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
             "method": "Info.getNodeID",
+            "params": [{}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["result"]["nodeID"],
+            "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg"
+        );
+
+        // (c) The canonical lowercase-first form still succeeds.
+        let (status, body) = post_json(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "info.getNodeID",
+            "params": [{}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["result"]["nodeID"],
+            "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg"
+        );
+    }
+
+    // The `#[rpc(name = "GetNodeID")]` override registers the exact Go acronym
+    // wire name: `info.getNodeID` resolves (first letter uppercased -> matches
+    // `GetNodeID`) but `info.getNodeId` does NOT (would normalize to `GetNodeId`,
+    // which is not registered) — proving exact-remainder matching.
+    #[tokio::test]
+    async fn rpc_name_override_is_exact_remainder() {
+        let (status, body) = post_json(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "info.getNodeID",
+            "params": [{}],
+        }))
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["result"]["nodeID"],
+            "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg"
+        );
+
+        let (status, body) = post_json(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "info.getNodeId",
             "params": [{}],
         }))
         .await;
@@ -725,10 +865,15 @@ mod tests {
         let mut reg = ServiceRegistry::new();
         Arc::new(InfoService).register_rpc(&mut reg);
         assert_eq!(reg.len(), 3);
+        // Keys store the EXACT registered method name; the service segment is
+        // lowercased (so a mixed-case service still resolves).
         assert!(reg.lookup("info", "GetNodeID").is_some());
-        assert!(reg.lookup("info", "getnodeid").is_some());
+        assert!(reg.lookup("INFO", "GetNodeID").is_some());
         assert!(reg.lookup("info", "Echo").is_some());
         assert!(reg.lookup("info", "Fail").is_some());
+        // The override name is exact: the snake_case-derived `GetNodeId` does NOT
+        // resolve.
+        assert!(reg.lookup("info", "GetNodeId").is_none());
         assert!(reg.lookup("info", "helper").is_none());
     }
 

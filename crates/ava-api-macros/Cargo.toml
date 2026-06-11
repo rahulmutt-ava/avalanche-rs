@@ -4,7 +4,7 @@
 # This crate exists solely so the registered JSON-RPC method set cannot drift
 # from the service trait: the macro reads each `pub async fn(&self, Args) ->
 # Result<Reply, RpcError>` on the annotated impl block and emits a
-# `register(self: Arc<Self>, registry: &mut ServiceRegistry)` that registers
+# `register_rpc(self: Arc<Self>, registry: &mut ServiceRegistry)` that registers
 # every method under `<name>.<MethodName>` (gorilla `Service.Method`).
 
 [package]
