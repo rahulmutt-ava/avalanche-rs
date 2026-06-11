@@ -179,14 +179,17 @@ pub struct AdminConfig {
 /// The admin API service (mirror Go `admin.Admin`).
 pub struct Admin {
     cfg: AdminConfig,
-    profiler: profiler::Profiler,
+    /// `Arc` so the profiler can move into `spawn_blocking` closures (the
+    /// pprof report build / protobuf encode and profile file writes are
+    /// blocking and must stay off the async executor).
+    profiler: Arc<profiler::Profiler>,
 }
 
 impl Admin {
     /// Builds the service from its dependencies (mirror Go `admin.NewService`).
     #[must_use]
     pub fn new(cfg: AdminConfig) -> Arc<Self> {
-        let profiler = profiler::Profiler::new(&cfg.profile_dir);
+        let profiler = Arc::new(profiler::Profiler::new(&cfg.profile_dir));
         Arc::new(Self { cfg, profiler })
     }
 
@@ -237,6 +240,12 @@ fn seam_err(e: SeamError) -> RpcError {
     RpcError::server(e.to_string())
 }
 
+/// A `spawn_blocking` task that panicked or was cancelled (it never is by
+/// this service) — surfaced as a `-32000` server error.
+fn join_err(e: tokio::task::JoinError) -> RpcError {
+    RpcError::server(format!("blocking task failed: {e}"))
+}
+
 /// Go `formatting.Decode(formatting.HexNC, …)`: the empty string is the empty
 /// key (nil bytes); otherwise a `0x` prefix is required (byte-exact
 /// `errMissingHexPrefix` message) and the remainder hex-decoded.
@@ -264,22 +273,29 @@ fn hex_nc_encode(bytes: &[u8]) -> String {
 #[rpc_service("admin")]
 impl Admin {
     /// `admin.startCPUProfiler` — starts a CPU profile writing to
-    /// `<profile-dir>/cpu.profile`.
+    /// `<profile-dir>/cpu.profile`. The directory/file creation is blocking
+    /// I/O, so it runs on the blocking pool.
     #[rpc(name = "StartCPUProfiler")]
     pub async fn start_cpu_profiler(&self, _args: EmptyArgs) -> Result<EmptyReply, RpcError> {
         tracing::debug!(service = "admin", method = "startCPUProfiler", "API called");
-        self.profiler
-            .start_cpu_profiler()
+        let profiler = Arc::clone(&self.profiler);
+        tokio::task::spawn_blocking(move || profiler.start_cpu_profiler())
+            .await
+            .map_err(join_err)?
             .map_err(|e| RpcError::from_error(&e))?;
         Ok(EmptyReply {})
     }
 
     /// `admin.stopCPUProfiler` — stops the CPU profile and writes it out.
+    /// Building the pprof report, encoding the protobuf, and writing the file
+    /// are blocking (CPU + I/O), so they run on the blocking pool.
     #[rpc(name = "StopCPUProfiler")]
     pub async fn stop_cpu_profiler(&self, _args: EmptyArgs) -> Result<EmptyReply, RpcError> {
         tracing::debug!(service = "admin", method = "stopCPUProfiler", "API called");
-        self.profiler
-            .stop_cpu_profiler()
+        let profiler = Arc::clone(&self.profiler);
+        tokio::task::spawn_blocking(move || profiler.stop_cpu_profiler())
+            .await
+            .map_err(join_err)?
             .map_err(|e| RpcError::from_error(&e))?;
         Ok(EmptyReply {})
     }
@@ -376,16 +392,22 @@ impl Admin {
     /// in the working directory. Rust has no all-task/all-thread dump on
     /// stable (tokio's task dump is unstable-only), so this writes the
     /// **calling thread's** backtrace — real, but partial — with a header
-    /// naming the limitation.
+    /// naming the limitation. The capture (symbolication) and file write are
+    /// blocking, so both run on the blocking pool.
     pub async fn stacktrace(&self, _args: EmptyArgs) -> Result<EmptyReply, RpcError> {
         tracing::debug!(service = "admin", method = "stacktrace", "API called");
-        let backtrace = std::backtrace::Backtrace::force_capture();
-        let content = format!(
-            "avalanche-rs best-effort stacktrace: Rust has no Go-style \
-             all-goroutine dump; this is the backtrace of the thread serving \
-             admin.stacktrace.\n{backtrace}\n"
-        );
-        std::fs::write(STACKTRACE_FILE, content).map_err(|e| RpcError::from_error(&e))?;
+        tokio::task::spawn_blocking(|| {
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            let content = format!(
+                "avalanche-rs best-effort stacktrace: Rust has no Go-style \
+                 all-goroutine dump; this is the backtrace of the thread serving \
+                 admin.stacktrace.\n{backtrace}\n"
+            );
+            std::fs::write(STACKTRACE_FILE, content)
+        })
+        .await
+        .map_err(join_err)?
+        .map_err(|e| RpcError::from_error(&e))?;
         Ok(EmptyReply {})
     }
 
