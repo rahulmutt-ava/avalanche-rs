@@ -184,14 +184,22 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [x] **Step 4 — Confirm green:** `cargo test -p ava-genesis bootstrappers:: recent_start::` passes.
 - [x] **Step 5 — Commit:** `ava-genesis: bootstrappers + sample + getRecentStartTime (23 §5)`
 
-### Task M8.15: ava-genesis C-Chain timestamp + round-trip rebuild parity
+### Task M8.15: ava-genesis C-Chain timestamp + round-trip rebuild parity ✅ DONE (69bdb33)
 **Crate:** ava-genesis  ·  **Depends on:** M8.8, M8.14, M6 ava-cchain (eth genesis parse for timestamp only)  ·  **Spec:** 23 §3.6, §7, §9.2/§9.6
 **Files:** `crates/ava-genesis/tests/golden_genesis_extras.rs`
-- [ ] **Step 1 — Red:** `golden_genesis_extras.rs::cchain_genesis_timestamp` — parse `cChainGenesis` (eth `core.Genesis` JSON via reth/alloy) and assert `Timestamp`: Mainnet 0, Fuji 0, Local = `unix(upgrade::InitiallyActiveTime)` (23 §3.6/§7). `rebuild_parity` — for each embedded config, `from_config` then re-serialize, assert byte-identity vs the committed Go dump (extends M8.8; guards the full intermediate orderings, 23 §9.2).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-genesis cchain_genesis_timestamp` → fails.
-- [ ] **Step 3 — Green:** Validate `cChainGenesis` non-empty + parseable JSON; extract timestamp via the ava-cchain genesis parser. Confirm round-trip byte-identity.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-genesis golden_genesis_extras` passes.
-- [ ] **Step 5 — Commit:** `ava-genesis: C-Chain timestamp + round-trip rebuild parity (23 §3.6)`
+- [x] **Step 1 — Red:** `golden_genesis_extras.rs::cchain_genesis_timestamp` — parse `cChainGenesis` (eth `core.Genesis` JSON via reth/alloy) and assert `Timestamp`: Mainnet 0, Fuji 0, Local = `unix(upgrade::InitiallyActiveTime)` (23 §3.6/§7). `rebuild_parity` — for each embedded config, `from_config` then re-serialize, assert byte-identity vs the committed Go dump (extends M8.8; guards the full intermediate orderings, 23 §9.2).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-genesis cchain_genesis_timestamp` → fails.
+- [x] **Step 3 — Green:** Validate `cChainGenesis` non-empty + parseable JSON; extract timestamp via the ava-cchain genesis parser. Confirm round-trip byte-identity.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-genesis golden_genesis_extras` passes.
+- [x] **Step 5 — Commit:** `ava-genesis: C-Chain timestamp + round-trip rebuild parity (23 §3.6)`
+
+> **AS-BUILT (M8.15).** `cchain_genesis_timestamp`: Local cChainGenesis timestamp `1607144400`
+> == `unix(ava_version::upgrade::initially_active_time())` (2020-12-05T05:00:00Z); Mainnet/Fuji = 0.
+> Parser = `ava_evm::chainspec::CChainGenesis::parse` (new additive `timestamp()` accessor on ava-evm).
+> `rebuild_parity` = the RE-SERIALIZATION delta (unparsed→parsed→re-serialize→re-parse Config equality +
+> identical from_config bytes + LazyLock-vs-fresh-parse identity) — the .bin byte-diff itself already lives
+> in M8.8's `genesis_p_chain_bytes_byte_identical`. Test-only deps silenced per-dep (`#[cfg(test)] use x as _;`,
+> ava-config precedent). 18 ava-genesis tests.
 
 ### Task M8.16: ava-api server — axum/h2c/CORS/allowed-hosts/node-id/timeouts/503 + ApiServer trait
 **Crate:** ava-api  ·  **Depends on:** M2/M3 (ConsensusContext, CommonVM trait, validators/network handles), M8.12 (HTTPConfig)  ·  **Spec:** 12 §3.1/§3.9, 14 §1.3/§16.3
