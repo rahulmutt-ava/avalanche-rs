@@ -1,0 +1,55 @@
+# ava-indexer — accepted-container indexer + index API (specs 12 §5, 14 §7,
+# 17 §2.2 #20 / §3). Mirrors avalanchego `indexer/`.
+#
+# Dependency direction: ava-indexer -> { ava-api (JSON-RPC shim / registry),
+# ava-snow (ConsensusContext + Acceptor), ava-database (versiondb/prefixdb),
+# ava-codec (linear codec for the persisted Container), ava-crypto
+# (formatting), ava-utils (Clock), ava-types }. The node (M8.29) wires the
+# indexer into the acceptor path and mounts the per-chain routes on the API
+# server through the narrow `PathAdder` seam.
+
+[package]
+name = "ava-indexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Accepted-container indexer and /ext/index API (specs 12 §5, 14 §7)."
+
+[dependencies]
+ava-api = { path = "../ava-api" }
+ava-codec = { path = "../ava-codec" }
+ava-crypto = { path = "../ava-crypto" }
+ava-database = { path = "../ava-database" }
+ava-snow = { path = "../ava-snow" }
+ava-types = { path = "../ava-types" }
+ava-utils = { path = "../ava-utils" }
+
+async-trait = { workspace = true }
+# axum is pinned per-crate (not a workspace dep) in lock-step with ava-api,
+# which owns the HTTP surface; ava-indexer only builds the per-index `Router`
+# handed to the `PathAdder` seam.
+axum = { version = "0.7" }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+ava-version = { path = "../ava-version" }
+hex = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+# tower drives the mounted axum routers in tests (`ServiceExt::oneshot`),
+# pinned per-crate in lock-step with ava-api.
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true
