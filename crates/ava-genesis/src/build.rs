@@ -229,7 +229,11 @@ impl ByEndTimeHeap {
     }
 
     /// `heap.Push` — append then sift up (mirrors Go `container/heap.up`).
+    /// Go's `txHeap.Add` skips a tx whose ID is already in the heap.
     fn add(&mut self, tx: PTx) {
+        if self.entries.iter().any(|e| e.id() == tx.id()) {
+            return;
+        }
         self.entries.push(tx);
         let mut j = self.entries.len().saturating_sub(1);
         while j > 0 {
