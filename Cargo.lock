@@ -1001,19 +1001,32 @@ name = "ava-api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "ava-api-macros",
  "ava-config",
  "ava-snow",
  "ava-types",
  "ava-version",
  "ava-vm",
  "axum",
+ "futures",
  "hyper-util",
  "parking_lot",
  "pretty_assertions",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tower 0.5.3",
  "tower-http",
+]
+
+[[package]]
+name = "ava-api-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

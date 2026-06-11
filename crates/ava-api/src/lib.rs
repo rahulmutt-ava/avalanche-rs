@@ -18,14 +18,21 @@
 //! - [`middleware`] — the individual `tower`/`axum` middleware mirroring Go's
 //!   `api/server` middleware one-for-one.
 //!
-//! The JSON-RPC 2.0 shim + service registry (M8.17) and full chain mounting
-//! (M8.22) build on this surface.
+//! Milestone **M8.17** adds the gorilla-`json2`-parity JSON-RPC 2.0 shim and
+//! service registry ([`jsonrpc`]) plus the error model ([`error::json2_code`],
+//! [`error::IntoJsonRpcError`]); the `#[rpc_service("name")]` macro
+//! ([`ava_api_macros::rpc_service`]) generates the method registration. Full
+//! chain mounting (M8.22) and the built-in `info`/`admin`/`health` services
+//! (M8.18–M8.20) build on this surface.
 
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod jsonrpc;
 pub mod middleware;
 pub mod server;
 
-pub use error::{ApiError, Result};
+pub use ava_api_macros::rpc_service;
+pub use error::{ApiError, IntoJsonRpcError, JsonRpcError, Result, json2_code};
+pub use jsonrpc::{BoxedRpcMethod, RpcError, ServiceRegistry, dispatch};
 pub use server::{ApiServer, BASE_URL, BoxedHandler, MAX_CONCURRENT_STREAMS, Server};
