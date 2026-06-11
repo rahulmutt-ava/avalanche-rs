@@ -15,7 +15,9 @@
 //! [`Health::start`] spawns one worker loop per set; each runs its checks
 //! immediately and then on every `health-check-frequency` tick (17 §2.2 #21).
 //! Results carry `contiguousFailures` / `timeOfFirstFailure` streak tracking
-//! (`api/health/worker.go::runCheck`).
+//! (`api/health/worker.go::runCheck`). A panicking checker never kills its
+//! worker loop: the panic is contained and reported as a failing result with
+//! the stable message `health check panicked: <payload>`.
 //!
 //! **Metrics (18 §2.13).** The shared `checks_failing` gauge (labels
 //! `check` = worker name, `tag`) registers against the *caller-provided* plain
@@ -36,11 +38,13 @@
 //! (Go `node/node.go::Shutdown`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use parking_lot::{Mutex, RwLock};
 use prometheus::IntGaugeVec;
@@ -334,10 +338,29 @@ impl Worker {
     /// Runs one check and folds the outcome into the results map, maintaining
     /// the `contiguousFailures` / `timeOfFirstFailure` streak and the
     /// transition logs + metrics (Go `worker.runCheck`).
+    ///
+    /// **Panic containment.** A panicking checker is converted into a failing
+    /// result with the stable message `health check panicked: <payload>` (no
+    /// Go parity string exists — a Go checker cannot kill the worker this
+    /// way), so the worker loop keeps running and the check reports unhealthy
+    /// with a growing `contiguousFailures` streak instead of freezing a
+    /// possibly-stale `healthy: true`.
     async fn run_check(&self, name: String, check: Arc<TaggedChecker>) {
         let start = Instant::now();
-        // No locks are held while the checker runs (see `run_checks`).
-        let outcome = check.checker.health_check().await;
+        // No locks are held while the checker runs (see `run_checks`). The
+        // async block defers the `health_check()` call into the polled future
+        // so `catch_unwind` contains panics both from constructing the future
+        // and from awaiting it.
+        let checker = Arc::clone(&check.checker);
+        let outcome = AssertUnwindSafe(async move { checker.health_check().await })
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|payload| {
+                Err(CheckError::new(format!(
+                    "health check panicked: {}",
+                    panic_message(payload.as_ref())
+                )))
+            });
         let end = Utc::now();
 
         let mut result = types::Result {
@@ -437,6 +460,18 @@ impl Worker {
             }
         }
     }
+}
+
+/// Renders a checker's panic payload as the `<payload>` part of the stable
+/// `health check panicked: <payload>` failure message: `&str` / `String`
+/// payloads (everything `panic!` with a message produces) verbatim, anything
+/// else a placeholder.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("<non-string panic payload>")
 }
 
 /// The health service: three check sets + their periodic worker loops (mirror
@@ -594,12 +629,275 @@ impl Health {
     /// Not part of Go's `health.Health` interface (Go's `Start` covers the
     /// immediate first run); exposed for deterministic tests and bootstrap
     /// probes that cannot wait for a tick.
+    ///
+    /// **Test/bootstrap-only: must not be called after [`Health::start`]** —
+    /// it is not serialized with the worker loops, so a concurrent run would
+    /// race them over the shared results and failure streaks (guarded by a
+    /// `debug_assert!`).
     pub async fn run_checks_now(&self) {
+        debug_assert!(
+            !self.started.load(Ordering::SeqCst),
+            "run_checks_now must not be called after start()"
+        );
         futures::future::join3(
             self.readiness.run_checks(),
             self.health.run_checks(),
             self.liveness.run_checks(),
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use assert_matches::assert_matches;
+    use futures::future::BoxFuture;
+    use pretty_assertions::assert_eq;
+    use prometheus::Registry;
+    use serde_json::{Value, json};
+
+    use super::{ALL_TAG, APPLICATION_TAG, CheckResult, Checker, Health, HealthError};
+
+    fn new_health() -> (Arc<Health>, Registry) {
+        let registry = Registry::new();
+        let health = Arc::new(Health::new(&registry).expect("Health::new()"));
+        (health, registry)
+    }
+
+    /// A checker that always passes with the given details and counts its
+    /// invocations.
+    fn counting(details: Value) -> (Arc<dyn Checker>, Arc<AtomicU64>) {
+        let runs = Arc::new(AtomicU64::new(0));
+        let checker = {
+            let runs = Arc::clone(&runs);
+            Arc::new(move || -> BoxFuture<'static, CheckResult> {
+                let details = details.clone();
+                let runs = Arc::clone(&runs);
+                Box::pin(async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    Ok(details)
+                })
+            }) as Arc<dyn Checker>
+        };
+        (checker, runs)
+    }
+
+    /// The current `checks_failing{check, tag}` gauge value in `registry`.
+    fn gauge_value(registry: &Registry, check: &str, tag: &str) -> f64 {
+        for family in registry.gather() {
+            if family.get_name() != "checks_failing" {
+                continue;
+            }
+            for metric in family.get_metric() {
+                let matches = |name: &str, value: &str| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|l| l.get_name() == name && l.get_value() == value)
+                };
+                if matches(super::CHECK_LABEL, check) && matches(super::TAG_LABEL, tag) {
+                    return metric.get_gauge().get_value();
+                }
+            }
+        }
+        panic!("checks_failing series (check={check:?}, tag={tag:?}) not found");
+    }
+
+    // ------------------------------------------------------------------
+    // Panic containment: a panicking checker (a) marks the check unhealthy
+    // with the stable `health check panicked: <payload>` message and a
+    // growing contiguousFailures streak, and (b) does not kill the worker
+    // loop — a sibling check keeps updating on later ticks.
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn panicking_checker_fails_without_killing_worker() {
+        let (health, _registry) = new_health();
+        let panicking = Arc::new(|| -> BoxFuture<'static, CheckResult> {
+            Box::pin(async { panic!("kaboom") })
+        }) as Arc<dyn Checker>;
+        health
+            .register_health_check("panicky", panicking, &[])
+            .expect("register_health_check(panicky)");
+        let (sibling, sibling_runs) = counting(Value::Null);
+        health
+            .register_health_check("sibling", sibling, &[])
+            .expect("register_health_check(sibling)");
+
+        health.start(Duration::from_millis(10));
+
+        // The sibling keeps updating across >= 3 ticks even though `panicky`
+        // panics on every one — the worker loop survived the panics.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while sibling_runs.load(Ordering::SeqCst) < 3 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("sibling check kept running after panics");
+
+        let (checks, healthy) = health.health(&[]);
+        assert!(!healthy, "panicking check must report unhealthy");
+        let panicky = checks.get("panicky").expect("panicky result");
+        assert_eq!(
+            panicky.error.as_deref(),
+            Some("health check panicked: kaboom"),
+            "stable panic failure message"
+        );
+        // Ticks are sequential (run_checks awaits all checks), so >= 3
+        // sibling runs imply panicky completed at least its first two runs.
+        assert!(
+            panicky.contiguous_failures >= 2,
+            "panics grow the contiguousFailures streak, got {}",
+            panicky.contiguous_failures
+        );
+        assert!(
+            panicky.time_of_first_failure.is_some(),
+            "panic streak pins timeOfFirstFailure"
+        );
+        let sibling = checks.get("sibling").expect("sibling result");
+        assert!(sibling.error.is_none(), "sibling unaffected by the panic");
+
+        health.stop().await;
+    }
+
+    // ------------------------------------------------------------------
+    // update_metrics: a (failing) application check counts against every tag
+    // series, and a tag created by a later registration folds in the
+    // currently failing application checks (Go worker.updateMetrics +
+    // numFailingApplicationChecks).
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn update_metrics_application_fanout_and_new_tag_fold_in() {
+        let (health, registry) = new_health();
+
+        // A new application check registers as failing against both the
+        // pre-set series: (health, all) and (health, application).
+        let (app, _) = counting(Value::Null);
+        health
+            .register_health_check("app", app, &[APPLICATION_TAG.to_string()])
+            .expect("register_health_check(app)");
+        assert_eq!(
+            gauge_value(&registry, "health", ALL_TAG),
+            1.0,
+            "(health, all) after registering the application check"
+        );
+        assert_eq!(
+            gauge_value(&registry, "health", APPLICATION_TAG),
+            1.0,
+            "(health, application) after registering the application check"
+        );
+
+        // Registering a check under a brand-new tag folds the currently
+        // failing application check into the new tag's series: 1 (the new
+        // failing check) + 1 (the failing application check) = 2.
+        let (tagged, _) = counting(Value::Null);
+        health
+            .register_health_check("x", tagged, &["newtag".to_string()])
+            .expect("register_health_check(x)");
+        assert_eq!(
+            gauge_value(&registry, "health", "newtag"),
+            2.0,
+            "(health, newtag) folds in the failing application check"
+        );
+        assert_eq!(
+            gauge_value(&registry, "health", ALL_TAG),
+            2.0,
+            "(health, all) counts both failing checks"
+        );
+        assert_eq!(
+            gauge_value(&registry, "health", APPLICATION_TAG),
+            1.0,
+            "(health, application) unchanged by the non-application check"
+        );
+
+        // Both checks passing: the application check decrements every tag
+        // series (fan-out), the tagged check its own tag + all.
+        health.run_checks_now().await;
+        assert_eq!(
+            gauge_value(&registry, "health", ALL_TAG),
+            0.0,
+            "(health, all) after a passing run"
+        );
+        assert_eq!(
+            gauge_value(&registry, "health", APPLICATION_TAG),
+            0.0,
+            "(health, application) after a passing run"
+        );
+        assert_eq!(
+            gauge_value(&registry, "health", "newtag"),
+            0.0,
+            "(health, newtag) after a passing run"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Monotonic (readiness) caching: once a readiness check passes WITH
+    // details the checker never runs again; one passing with no (null)
+    // details keeps re-running (Go RegisterMonotonicCheck semantics).
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn monotonic_readiness_caches_only_non_null_details() {
+        let (health, _registry) = new_health();
+        let (with_details, with_details_runs) = counting(json!({"ready": true}));
+        health
+            .register_readiness_check("with-details", with_details, &[])
+            .expect("register_readiness_check(with-details)");
+        let (no_details, no_details_runs) = counting(Value::Null);
+        health
+            .register_readiness_check("no-details", no_details, &[])
+            .expect("register_readiness_check(no-details)");
+
+        health.run_checks_now().await;
+        health.run_checks_now().await;
+        health.run_checks_now().await;
+
+        assert_eq!(
+            with_details_runs.load(Ordering::SeqCst),
+            1,
+            "a readiness check passing with details is cached and never re-run"
+        );
+        assert_eq!(
+            no_details_runs.load(Ordering::SeqCst),
+            3,
+            "a readiness check passing with null details keeps re-running"
+        );
+
+        // The cached check still reports passing with the cached details.
+        let (checks, healthy) = health.readiness(&[]);
+        assert!(healthy, "readiness report healthy");
+        assert_eq!(
+            checks.get("with-details").expect("with-details").details,
+            Some(json!({"ready": true})),
+            "cached details still reported"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Registration error paths: the reserved `all` tag is rejected
+    // (errRestrictedTag) and duplicate names are rejected (errDuplicateCheck).
+    // ------------------------------------------------------------------
+    #[test]
+    fn registration_rejects_all_tag_and_duplicates() {
+        let (health, _registry) = new_health();
+        let (checker, _) = counting(Value::Null);
+
+        assert_matches!(
+            health.register_health_check("c", Arc::clone(&checker), &[ALL_TAG.to_string()]),
+            Err(HealthError::RestrictedTag(tag)) if tag == ALL_TAG,
+            "registering with the reserved `all` tag must fail"
+        );
+
+        health
+            .register_health_check("c", Arc::clone(&checker), &[])
+            .expect("first registration of c");
+        assert_matches!(
+            health.register_health_check("c", checker, &[]),
+            Err(HealthError::DuplicateCheck(name)) if name == "c",
+            "duplicate registration must fail"
+        );
     }
 }

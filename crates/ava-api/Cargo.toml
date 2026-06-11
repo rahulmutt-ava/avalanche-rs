@@ -63,6 +63,7 @@ tracing = { workspace = true }
 # `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 ava-version = { path = "../ava-version" }
+assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
 tower = { version = "0.5", features = [ "util" ] }
