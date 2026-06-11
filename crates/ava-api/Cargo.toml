@@ -25,7 +25,15 @@ ava-api-macros = { path = "../ava-api-macros" }
 ava-config = { path = "../ava-config" }
 ava-snow = { path = "../ava-snow" }
 ava-types = { path = "../ava-types" }
+# info API (M8.18 / specs 12 §3.3, 14 §3): Application version + upgrade
+# schedule; chrono mirrors Go time.Time RFC3339 marshaling (serde feature);
+# hex encodes the BLS proof of possession (HexNC); tracing mirrors the Go
+# service's "API called" debug logs / getTxFee deprecation warning.
+ava-version = { path = "../ava-version" }
 ava-vm = { path = "../ava-vm" }
+chrono = { workspace = true, features = [ "serde" ] }
+hex = { workspace = true }
+tracing = { workspace = true }
 async-trait = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -54,7 +62,6 @@ hyper-util = { version = "0.1", features = [ "server-auto", "server-graceful", "
 [dev-dependencies]
 # `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
-ava-version = { path = "../ava-version" }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
 tower = { version = "0.5", features = [ "util" ] }
