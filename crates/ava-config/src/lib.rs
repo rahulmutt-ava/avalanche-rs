@@ -16,14 +16,16 @@
 // `unused_crate_dependencies` for the lib-test unit.
 #[cfg(test)]
 use proptest as _;
-#[cfg(test)]
-use serde as _;
 
+pub mod chain_config;
 pub mod defaults;
 pub mod duration;
 pub mod error;
 pub mod flags;
 pub mod keys;
+pub mod node;
+pub mod parse;
 pub mod precedence;
+pub mod subnets;
 
 pub use error::{ConfigError, Result};

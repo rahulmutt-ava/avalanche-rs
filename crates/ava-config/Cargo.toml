@@ -1,10 +1,11 @@
 # ava-config — node configuration (M8 / specs 12 §1, 13).
 #
-# Dependency direction: ava-config -> { ava-snow (snowball default params),
-# ava-network (outbound-throttler default constants), ava-version (clap
-# version string) }. The genesis-derived defaults (LocalParams fee/staking
-# economics) are local constants in src/defaults.rs until ava-genesis lands
-# (TODO(M8.12): re-source from ava-genesis).
+# Dependency direction: ava-config -> { ava-snow (snowball params),
+# ava-network (throttler constants, staking Identity), ava-version (clap
+# version string + upgrade schedule), ava-engine (timeout/targeter configs),
+# ava-genesis (bootstrappers, genesis bytes, per-network fee/staking params),
+# ava-crypto (staking cert generation), ava-logging (level/format),
+# ava-types (ids, network constants) }.
 
 [package]
 name = "ava-config"
@@ -18,11 +19,17 @@ publish.workspace = true
 description = "Node configuration: 206-flag catalog, clap command builder, and the viper-parity layered resolver (M8 / specs 12 §1, 13)."
 
 [dependencies]
+ava-crypto = { path = "../ava-crypto" }
+ava-engine = { path = "../ava-engine" }
+ava-genesis = { path = "../ava-genesis" }
+ava-logging = { path = "../ava-logging" }
 ava-network = { path = "../ava-network" }
 ava-snow = { path = "../ava-snow" }
+ava-types = { path = "../ava-types" }
 ava-version = { path = "../ava-version" }
 # `string` lets `Command::version` take the runtime `ava_version::CURRENT` string.
 clap = { workspace = true, features = [ "string" ] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 # Config-file formats (00 §4 sanctioned set) + the base64 `-content` flags
@@ -34,7 +41,6 @@ toml = "1"
 [dev-dependencies]
 assert_matches = { workspace = true }
 proptest = { workspace = true }
-serde = { workspace = true }
 tempfile = "3"
 
 [lints]
