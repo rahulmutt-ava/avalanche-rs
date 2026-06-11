@@ -235,7 +235,11 @@ impl MultiGatherer for PrefixGatherer {
 
 impl Gatherer for PrefixGatherer {
     fn gather(&self) -> Result<Vec<MetricFamily>, MetricsError> {
-        merge_gather(&self.inner.read().gatherers)
+        // Clone the children (cheap Arc clones) and gather outside the guard;
+        // diverges from Go's RLock-held-across-gather to avoid fair-RwLock
+        // scrape serialization behind a pending register.
+        let children: Vec<_> = { self.inner.read().gatherers.clone() };
+        merge_gather(&children)
     }
 }
 
@@ -304,7 +308,11 @@ impl MultiGatherer for LabelGatherer {
 
 impl Gatherer for LabelGatherer {
     fn gather(&self) -> Result<Vec<MetricFamily>, MetricsError> {
-        merge_gather(&self.inner.read().gatherers)
+        // Clone the children (cheap Arc clones) and gather outside the guard;
+        // diverges from Go's RLock-held-across-gather to avoid fair-RwLock
+        // scrape serialization behind a pending register.
+        let children: Vec<_> = { self.inner.read().gatherers.clone() };
+        merge_gather(&children)
     }
 }
 
@@ -387,7 +395,11 @@ fn merge_gather(children: &[Arc<dyn Gatherer>]) -> Result<Vec<MetricFamily>, Met
                     continue;
                 }
                 // Identity = family name + sorted label pairs (Go's metric
-                // hash); `\u{1}`/`\u{2}` separators cannot occur in names.
+                // hash). The `\u{1}`/`\u{2}` separators cannot occur in
+                // metric/label NAMES, but label VALUES are arbitrary UTF-8,
+                // so a value containing them could theoretically collide;
+                // client_golang's 0xff-separator hash accepts the same
+                // ambiguity, so this is parity-equivalent.
                 let mut identity = name.clone();
                 for label in &labels {
                     identity.push('\u{1}');
@@ -416,13 +428,14 @@ fn merge_gather(children: &[Arc<dyn Gatherer>]) -> Result<Vec<MetricFamily>, Met
         // Sort each family's metrics by their (sorted) label values, like
         // Go's NormalizeMetricFamilies metricSorter.
         family.mut_metric().sort_by(|a, b| {
-            let key = |m: &prometheus::proto::Metric| {
-                m.get_label()
-                    .iter()
-                    .map(|l| l.get_value().to_string())
-                    .collect::<Vec<_>>()
-            };
-            key(a).cmp(&key(b))
+            a.get_label()
+                .iter()
+                .map(prometheus::proto::LabelPair::get_value)
+                .cmp(
+                    b.get_label()
+                        .iter()
+                        .map(prometheus::proto::LabelPair::get_value),
+                )
         });
     }
     Ok(families)
