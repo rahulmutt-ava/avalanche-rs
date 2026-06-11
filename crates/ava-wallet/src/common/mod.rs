@@ -11,6 +11,7 @@ use ava_secp256k1fx::OutputOwners;
 use ava_types::short_id::ShortId;
 
 pub mod utxo_select;
+pub mod utxos;
 
 /// `common.MatchOwners` — the sig indices (in owner-address order, up to
 /// `threshold`) that `addrs` can sign for, or `None` if the owner is

@@ -57,9 +57,20 @@ pub enum Error {
     /// The owner for an authorization is missing from the backend snapshot.
     #[error("missing owner {0}")]
     MissingOwner(Id),
+    /// Go `wallet/chain/c` `errInsufficientFunds` — an `AcceptAtomicTx` export
+    /// debit exceeds the tracked EVM account balance.
+    #[error("insufficient funds")]
+    InsufficientEthBalance,
+    /// A chain / info / eth API client failure (the M8.27 issuance seam; the
+    /// live JSON-RPC transport is an `ava-api` milestone follow-up).
+    #[error("client: {0}")]
+    Client(Box<dyn std::error::Error + Send + Sync>),
     /// Codec (de)serialization failure.
     #[error("codec: {0}")]
     Codec(#[from] ava_codec::error::CodecError),
+    /// Warp payload parsing failure (`RegisterL1Validator` owner recording).
+    #[error("warp: {0}")]
+    Warp(#[from] ava_warp::error::Error),
     /// secp256k1 signing failure.
     #[error("crypto: {0}")]
     Crypto(#[from] ava_crypto::error::Error),

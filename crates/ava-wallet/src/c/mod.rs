@@ -12,6 +12,7 @@ use ava_types::id::Id;
 pub mod backend;
 pub mod builder;
 pub mod signer;
+pub mod wallet;
 
 pub use backend::{Backend, WalletBackend};
 pub use builder::{Builder, CBuilder};

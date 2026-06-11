@@ -10,6 +10,7 @@ pub mod backend;
 pub mod builder;
 pub mod fee;
 pub mod signer;
+pub mod wallet;
 
 pub use backend::{Backend, WalletBackend};
 pub use builder::{Builder, PBuilder};

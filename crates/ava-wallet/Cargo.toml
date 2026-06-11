@@ -25,6 +25,8 @@ ava-evm = { path = "../ava-evm" }
 # Warp message parsing for `fee::warp_complexity` (RegisterL1Validator /
 # SetL1ValidatorWeight intrinsic dimensions need the signer count).
 ava-warp = { path = "../ava-warp" }
+# The client trait seam (`client.rs`) the wallet facades issue over (M8.27).
+async-trait = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
@@ -32,6 +34,8 @@ assert_matches = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Async runtime for the wallet-facade / `make_wallet` tests.
+tokio = { workspace = true }
 
 [lints]
 workspace = true

@@ -12,18 +12,21 @@
 //!   credentials) over a [`keychain::Keychain`].
 //! * **Backend** — a *pure snapshot* of the UTXO set / owners; builders and
 //!   signers do no I/O (specs 12 §13).
-//!
-//! The wallet facades + primary `make_wallet` (issue over the API) are M8.27 and
-//! intentionally absent here.
+//! * **Wallet** facades (`{p,x,c}::wallet`) — build → sign → issue (over the
+//!   [`client`] trait seam) → record into a shared mutable backend, plus the
+//!   primary-network [`primary::make_wallet`] that fetches all state and wires
+//!   the three chains together (M8.27).
 
 #![forbid(unsafe_code)]
 
 pub mod c;
+pub mod client;
 pub mod common;
 pub mod error;
 pub mod keychain;
 pub mod options;
 pub mod p;
+pub mod primary;
 pub mod x;
 
 pub use error::{Error, Result};

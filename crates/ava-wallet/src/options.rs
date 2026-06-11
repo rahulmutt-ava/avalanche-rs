@@ -5,9 +5,10 @@
 //!
 //! Go threads a variadic `...common.Option` (function options); the Rust port
 //! uses a [`TxOption`] enum collected into [`Options`] (the spec's `Option_`).
-//! Only the build-affecting options are ported here; the issuance/polling
-//! options (`WithContext`, `WithPollFrequency`, handlers, `WithAssumeDecided`)
-//! belong to the M8.27 wallet facades.
+//! The build-affecting options plus the issuance option `WithAssumeDecided`
+//! are ported; `WithContext` / `WithPollFrequency` and the issuance /
+//! confirmation handlers are transport concerns deferred with the live
+//! `ava-api` clients (see `tests/PORTING.md`).
 
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +34,9 @@ pub enum TxOption {
     ChangeOwner(OutputOwners),
     /// `WithMemo` — the tx memo bytes.
     Memo(Vec<u8>),
+    /// `WithAssumeDecided` — skip polling for acceptance after issuance and
+    /// record the tx in the backend immediately.
+    AssumeDecided,
 }
 
 /// The collected options (Go `common.Options`).
@@ -45,6 +49,7 @@ pub struct Options {
     allow_stakeable_locked: bool,
     change_owner: Option<OutputOwners>,
     memo: Vec<u8>,
+    assume_decided: bool,
 }
 
 impl Options {
@@ -63,6 +68,7 @@ impl Options {
                 TxOption::AllowStakeableLocked => o.allow_stakeable_locked = true,
                 TxOption::ChangeOwner(owner) => o.change_owner = Some(owner.clone()),
                 TxOption::Memo(memo) => o.memo = memo.clone(),
+                TxOption::AssumeDecided => o.assume_decided = true,
             }
         }
         o
@@ -88,6 +94,14 @@ impl Options {
     #[must_use]
     pub fn base_fee(&self, default_base_fee: u128) -> u128 {
         self.base_fee.unwrap_or(default_base_fee)
+    }
+
+    /// `Options.BaseFee(nil)` — the custom base fee if one was set. The C
+    /// wallet facade estimates over the eth client when absent (Go
+    /// `wallet.baseFee`).
+    #[must_use]
+    pub fn base_fee_override(&self) -> Option<u128> {
+        self.base_fee
     }
 
     /// `Options.MinIssuanceTime` — defaults to the current unix time (matches
@@ -119,4 +133,20 @@ impl Options {
     pub fn memo(&self) -> &[u8] {
         &self.memo
     }
+
+    /// `Options.AssumeDecided`.
+    #[must_use]
+    pub fn assume_decided(&self) -> bool {
+        self.assume_decided
+    }
+}
+
+/// `common.UnionOptions` — `first` then `second` (later options win when
+/// folded by [`Options::new`]).
+#[must_use]
+pub fn union_options(first: &[TxOption], second: &[TxOption]) -> Vec<TxOption> {
+    let mut union = Vec::with_capacity(first.len().saturating_add(second.len()));
+    union.extend_from_slice(first);
+    union.extend_from_slice(second);
+    union
 }
