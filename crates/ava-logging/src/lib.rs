@@ -6,28 +6,406 @@
 //! Mirrors avalanchego's `utils/logging`: the eight named levels (with Go's
 //! distinctive `Trace`-above-`Debug` ordering), the plain/colors/json output
 //! formats with byte-exact key order, per-chain rolling files, and reloadable
-//! per-logger levels. Span names mirror Go log messages so operator greps keep
-//! working (specs/00 §7.3).
+//! per-logger levels. Span/field names mirror Go log messages so operator greps
+//! keep working (specs/00 §7.3).
 //!
-//! SCAFFOLD (tier-X task X.18): the level taxonomy + format enum are defined
-//! here so the model is pinned from M0. The custom `tracing` JSON format layer
-//! (exact key order, lowercased level, integer-nanosecond durations), the
-//! per-chain rolling file layer, the reload handles, and the OTLP exporter
-//! (deferred to M8) are filled in by X.18.
+//! The [`init_logging`] factory builds the global subscriber from a
+//! [`LogConfig`]: a display layer (stdout, at the display level) plus a rolling
+//! file layer per logger (file, at the file level). [`make_chain_logger`]
+//! returns an additional rolling file layer for a chain's `<alias>.log`. Both
+//! return [`ReloadHandle`]s so the admin `setLoggerLevel` endpoint (specs/12
+//! §3.5) can flip a per-logger level at runtime.
 
 #![forbid(unsafe_code)]
 
+mod format;
 mod level;
 
-pub use level::{AvaLevel, ParseLevelError};
+use std::path::{Path, PathBuf};
 
-/// Output format for a logging sink (specs/18 §5.2).
+use parking_lot::Mutex;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation as AppenderRotation};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{Layer, Registry, reload};
+
+pub use format::{AvaFormat, Format};
+pub use level::{AvaLevel, ParseLevelError};
+/// Re-export of the `tracing-subscriber` registry trait that
+/// [`make_chain_logger`] is generic over, so downstream crates can name the
+/// bound without a direct `tracing-subscriber` dependency.
+pub use tracing_subscriber::registry::LookupSpan;
+
+/// Errors raised while building or mutating the logging subscriber.
+#[derive(Debug, thiserror::Error)]
+pub enum LogError {
+    /// The global subscriber was already installed.
+    #[error("global tracing subscriber already installed")]
+    AlreadyInitialized,
+    /// Failed to create or open the log directory / file.
+    #[error("log directory I/O error: {0}")]
+    Io(String),
+    /// A reload handle could no longer reach its layer.
+    #[error("failed to reload logger level: {0}")]
+    Reload(String),
+}
+
+/// Convenience result alias for this crate.
+pub type Result<T> = std::result::Result<T, LogError>;
+
+/// Lumberjack-equivalent rotation policy (specs/18 §5.3).
+///
+/// Mirrors Go's `lumberjack.Logger` knobs. `tracing-appender` rotates on a time
+/// granularity rather than on size; this struct carries the Go knobs verbatim so
+/// the resolved [`ava_config`](https://docs.rs) `LoggingConfig` maps 1:1, and a
+/// future size-aware writer can honor them without an API change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    /// Human-readable, no ANSI colors.
-    Plain,
-    /// Human-readable with ANSI colors (TTY console).
-    Colors,
-    /// One JSON object per line (machine-ingestible; exact Go key order).
-    Json,
+pub struct Rotation {
+    /// `--log-rotater-max-size` (MiB, default 8).
+    pub max_size_mib: u32,
+    /// `--log-rotater-max-files` (default 7).
+    pub max_files: u32,
+    /// `--log-rotater-max-age` (days, default 0 = keep all).
+    pub max_age_days: u32,
+    /// `--log-rotater-compress-enabled` (gzip).
+    pub compress: bool,
+}
+
+impl Default for Rotation {
+    fn default() -> Self {
+        Self {
+            max_size_mib: 8,
+            max_files: 7,
+            max_age_days: 0,
+            compress: false,
+        }
+    }
+}
+
+/// The node-level logging configuration consumed by [`init_logging`].
+///
+/// This is the narrow shape `ava-node` maps its resolved `ava_config`
+/// `LoggingConfig` into. It is defined here (not in `ava-config`) because
+/// `ava-config` depends on `ava-logging`, not the reverse.
+#[derive(Debug, Clone)]
+pub struct LogConfig {
+    /// Expanded `--log-dir`.
+    pub directory: PathBuf,
+    /// `--log-level` (the file core level).
+    pub file_level: AvaLevel,
+    /// `--log-display-level` (the stdout core level).
+    pub display_level: AvaLevel,
+    /// `--log-format` (`auto` resolved against the tty at parse time).
+    pub format: Format,
+    /// Lumberjack-equivalent rotation knobs.
+    pub rotation: Rotation,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            directory: PathBuf::from("logs"),
+            file_level: AvaLevel::Info,
+            display_level: AvaLevel::Info,
+            format: Format::Plain,
+            rotation: Rotation::default(),
+        }
+    }
+}
+
+/// A type-erased setter that flips a single layer's `LevelFilter`.
+///
+/// Each layer's `reload::Handle` is parameterized by the subscriber it is
+/// attached to, so the typed handles are heterogeneous; we erase them behind a
+/// boxed closure to keep [`ReloadHandle`] uniform across the display layer, the
+/// `main.log` layer, and per-chain layers.
+type FilterSetter = Box<dyn Fn(LevelFilter) -> Result<()> + Send + Sync>;
+
+/// A reloadable per-logger level, exposed to the admin `setLoggerLevel`
+/// endpoint (specs/12 §3.5).
+///
+/// Wraps a `tracing_subscriber::reload` handle (type-erased) plus the current
+/// [`AvaLevel`] so the admin API can both read and flip the level.
+#[derive(Clone)]
+pub struct ReloadHandle {
+    setter: std::sync::Arc<FilterSetter>,
+    current: std::sync::Arc<Mutex<AvaLevel>>,
+}
+
+impl ReloadHandle {
+    fn new<S>(handle: reload::Handle<LevelFilter, S>, initial: AvaLevel) -> Self
+    where
+        S: 'static,
+    {
+        let setter: FilterSetter = Box::new(move |filter: LevelFilter| {
+            handle
+                .modify(|f| *f = filter)
+                .map_err(|e| LogError::Reload(e.to_string()))
+        });
+        Self {
+            setter: std::sync::Arc::new(setter),
+            current: std::sync::Arc::new(Mutex::new(initial)),
+        }
+    }
+
+    /// The level this logger is currently filtering at.
+    #[must_use]
+    pub fn level(&self) -> AvaLevel {
+        *self.current.lock()
+    }
+
+    /// Flip the logger to a new level at runtime (admin `setLoggerLevel`).
+    ///
+    /// # Errors
+    /// Returns [`LogError::Reload`] if the underlying layer has been dropped.
+    pub fn set_level(&self, level: AvaLevel) -> Result<()> {
+        (self.setter)(ava_to_level_filter(level))?;
+        *self.current.lock() = level;
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for ReloadHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReloadHandle")
+            .field("level", &self.level())
+            .finish()
+    }
+}
+
+/// The handles + writer guards returned by [`init_logging`].
+///
+/// The guards must be kept alive for the lifetime of the process — dropping a
+/// [`WorkerGuard`] flushes and stops the corresponding non-blocking appender.
+pub struct LogHandles {
+    /// The reloadable level for the stdout/display core.
+    pub display: ReloadHandle,
+    /// The reloadable level for the `main.log` file core.
+    pub main_file: ReloadHandle,
+    /// Worker guards for every non-blocking appender; keep until shutdown.
+    pub guards: Vec<WorkerGuard>,
+}
+
+impl std::fmt::Debug for LogHandles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogHandles")
+            .field("display", &self.display)
+            .field("main_file", &self.main_file)
+            .field("guards", &self.guards.len())
+            .finish()
+    }
+}
+
+/// Map an [`AvaLevel`] onto a `tracing` `LevelFilter`.
+///
+/// `tracing` has five levels to avalanchego's eight; `Verbo`/`Trace` collapse
+/// onto `TRACE`/`DEBUG` and `Fatal` onto `ERROR` (specs/18 §5.1). `Off` disables
+/// the layer entirely.
+#[must_use]
+pub fn ava_to_level_filter(level: AvaLevel) -> LevelFilter {
+    match level {
+        AvaLevel::Off => LevelFilter::OFF,
+        AvaLevel::Fatal | AvaLevel::Error => LevelFilter::ERROR,
+        AvaLevel::Warn => LevelFilter::WARN,
+        AvaLevel::Info => LevelFilter::INFO,
+        // Go's Trace sits above Debug; both map below INFO. Verbo is the most
+        // verbose and maps onto TRACE.
+        AvaLevel::Trace => LevelFilter::DEBUG,
+        AvaLevel::Debug => LevelFilter::DEBUG,
+        AvaLevel::Verbo => LevelFilter::TRACE,
+    }
+}
+
+fn ensure_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).map_err(|e| LogError::Io(e.to_string()))
+}
+
+/// Build a non-blocking rolling file appender writing `<dir>/<name>.log`.
+///
+/// `tracing-appender` rotates daily; the lumberjack size/age knobs in
+/// [`Rotation`] are carried on [`LogConfig`] for parity and consumed by a
+/// future size-aware writer.
+fn rolling_appender(
+    dir: &Path,
+    name: &str,
+) -> Result<(tracing_appender::non_blocking::NonBlocking, WorkerGuard)> {
+    ensure_dir(dir)?;
+    let appender = RollingFileAppender::builder()
+        .rotation(AppenderRotation::DAILY)
+        .filename_prefix(name)
+        .filename_suffix("log")
+        .build(dir)
+        .map_err(|e| LogError::Io(e.to_string()))?;
+    Ok(tracing_appender::non_blocking(appender))
+}
+
+/// Install the global logging subscriber (specs/18 §5.4).
+///
+/// Builds a stdout display layer at `cfg.display_level` plus a `main.log` rolling
+/// file layer at `cfg.file_level`, both using the configured [`Format`]. Returns
+/// [`LogHandles`] carrying the reload handles (admin `setLoggerLevel`) and the
+/// appender worker guards (keep alive until shutdown).
+///
+/// # Errors
+/// - [`LogError::Io`] if the log directory cannot be created or opened.
+/// - [`LogError::AlreadyInitialized`] if a global subscriber is already set.
+pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
+    let (display_filter, display_handle) =
+        reload::Layer::new(ava_to_level_filter(cfg.display_level));
+    let (file_filter, file_handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
+
+    let display_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_ansi(cfg.format.with_ansi())
+        .event_format(AvaFormat::new(cfg.format))
+        .with_filter(display_filter);
+
+    let (main_writer, main_guard) = rolling_appender(&cfg.directory, "main")?;
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(main_writer)
+        .with_ansi(false)
+        .event_format(AvaFormat::new(cfg.format))
+        .with_filter(file_filter);
+
+    Registry::default()
+        .with(display_layer)
+        .with(file_layer)
+        .try_init()
+        .map_err(|_| LogError::AlreadyInitialized)?;
+
+    Ok(LogHandles {
+        display: ReloadHandle::new(display_handle, cfg.display_level),
+        main_file: ReloadHandle::new(file_handle, cfg.file_level),
+        guards: vec![main_guard],
+    })
+}
+
+/// A per-chain file logger layer plus its reload handle and worker guard.
+///
+/// Returned by [`make_chain_logger`]; the caller adds `layer` to a layered
+/// subscriber (or registers it via `tracing_subscriber::reload`) and keeps
+/// `guard` alive for the chain's lifetime.
+pub struct ChainLogger<S> {
+    /// The rolling-file layer writing `<alias>.log`, filtered at the file level.
+    pub layer: Box<dyn Layer<S> + Send + Sync>,
+    /// The reloadable level for this chain logger.
+    pub handle: ReloadHandle,
+    /// The appender worker guard; keep alive for the chain's lifetime.
+    pub guard: WorkerGuard,
+}
+
+/// Build a per-chain rolling file logger writing `<log-dir>/<alias>.log`
+/// (specs/18 §5.3).
+///
+/// Events carrying a `chain = <alias>` field route to this layer (the caller
+/// installs a matching field filter). The returned [`ReloadHandle`] is what the
+/// admin endpoint flips for that chain's logger.
+///
+/// # Errors
+/// [`LogError::Io`] if the log directory cannot be created or opened.
+pub fn make_chain_logger<S>(alias: &str, cfg: &LogConfig) -> Result<ChainLogger<S>>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    let (filter, handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
+    let (writer, guard) = rolling_appender(&cfg.directory, alias)?;
+    let layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(false)
+        .event_format(AvaFormat::new(cfg.format))
+        .with_filter(filter)
+        .boxed();
+    Ok(ChainLogger {
+        layer,
+        handle: ReloadHandle::new(handle, cfg.file_level),
+        guard,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use assert_matches::assert_matches;
+
+    use super::*;
+
+    #[test]
+    fn ava_level_ordering_and_json_shape() {
+        // 8 levels with Go's severity ordering (specs/18 §5.1):
+        // Verbo < Debug < Trace < Info < Warn < Error < Fatal < Off.
+        let ordered = [
+            AvaLevel::Verbo,
+            AvaLevel::Debug,
+            AvaLevel::Trace,
+            AvaLevel::Info,
+            AvaLevel::Warn,
+            AvaLevel::Error,
+            AvaLevel::Fatal,
+            AvaLevel::Off,
+        ];
+        for pair in ordered.windows(2) {
+            if let [lo, hi] = pair {
+                assert_eq!(
+                    lo.cmp(hi),
+                    Ordering::Less,
+                    "{lo:?} should order below {hi:?}"
+                );
+            }
+        }
+
+        // Lowercased level strings (specs/18 §5.2).
+        assert_eq!(AvaLevel::Verbo.as_str(), "verbo");
+        assert_eq!(AvaLevel::Trace.as_str(), "trace");
+        assert_eq!(AvaLevel::Fatal.as_str(), "fatal");
+        assert_eq!(AvaLevel::Off.as_str(), "off");
+
+        // JSON line shape: keys in exact zap order, lowercased level, and
+        // integer-nanosecond durations — exercised through the real formatter
+        // helper (`format::json_line`) that the JSON layer emits.
+        let mut extra = vec![
+            ("height".to_owned(), serde_json::Value::from(1234_u64)),
+            // A duration field is rendered as integer nanoseconds.
+            (
+                "elapsed".to_owned(),
+                serde_json::Value::from(1_500_000_000_u64),
+            ),
+        ];
+        let line = format::json_line(
+            AvaLevel::Info,
+            "2026-06-04T12:00:00.000Z",
+            "C",
+            "chain/foo.go:42",
+            "accepted block",
+            &mut extra,
+        )
+        .expect("json_line");
+        assert_eq!(
+            line,
+            r#"{"level":"info","timestamp":"2026-06-04T12:00:00.000Z","logger":"C","caller":"chain/foo.go:42","msg":"accepted block","height":1234,"elapsed":1500000000}"#
+        );
+    }
+
+    #[test]
+    fn off_disables_the_layer() {
+        assert_eq!(ava_to_level_filter(AvaLevel::Off), LevelFilter::OFF);
+        assert_eq!(ava_to_level_filter(AvaLevel::Verbo), LevelFilter::TRACE);
+        assert_eq!(ava_to_level_filter(AvaLevel::Fatal), LevelFilter::ERROR);
+    }
+
+    #[test]
+    fn rotation_defaults_match_go() {
+        let r = Rotation::default();
+        assert_eq!(r.max_size_mib, 8);
+        assert_eq!(r.max_files, 7);
+        assert_eq!(r.max_age_days, 0);
+        assert!(!r.compress);
+    }
+
+    #[test]
+    fn unknown_level_string_is_rejected() {
+        assert_matches!("nope".parse::<AvaLevel>(), Err(_));
+    }
 }
