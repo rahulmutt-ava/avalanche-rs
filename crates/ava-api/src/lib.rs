@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod health;
 pub mod jsonrpc;
 pub mod middleware;
 pub mod server;
