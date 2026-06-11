@@ -1385,6 +1385,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-indexer"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ava-api",
+ "ava-codec",
+ "ava-crypto",
+ "ava-database",
+ "ava-snow",
+ "ava-types",
+ "ava-utils",
+ "ava-version",
+ "axum",
+ "chrono",
+ "hex",
+ "parking_lot",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tracing",
+]
+
+[[package]]
 name = "ava-logging"
 version = "0.1.0"
 dependencies = [
