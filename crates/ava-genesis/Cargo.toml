@@ -1,0 +1,33 @@
+[package]
+name = "ava-genesis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Network genesis construction (port of genesis/**; specs 23): embedded Mainnet/Fuji/Local configs, bootstrapper lists, the byte-exact FromConfig build pipeline (P-Chain genesis bytes + AVAX asset ID), per-VM CreateChainTx extraction, and the genesis block IDs — the early interop gate with the Go node."
+
+[dependencies]
+ava-types = { path = "../ava-types" }
+ava-codec = { path = "../ava-codec" }
+ava-crypto = { path = "../ava-crypto" }
+ava-platformvm = { path = "../ava-platformvm" }
+ava-avm = { path = "../ava-avm" }
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# gonum-parity MT19937-64 + uniform sampler for sample_bootstrappers (23 §5.2).
+ava-utils = { path = "../ava-utils" }
+serde = { workspace = true }
+# `--genesis-file-content` is base64(JSON) (Go `GetConfigContent`); pinned here
+# (not yet a workspace dep) — already in Cargo.lock transitively at 0.22.
+base64 = "0.22"
+serde_json = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+
+[lints]
+workspace = true
