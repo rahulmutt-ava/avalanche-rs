@@ -216,6 +216,13 @@ pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
 // gas (spec 10 §4/§17.6, 21 §4b). Aliased `ConsensusTx` so the crate never names
 // a bare `Transaction` that could collide with the atomic-tx `Tx` types (G0).
 pub use alloy_consensus::Transaction as ConsensusTx;
+// Transaction construction + signing surface for tests/tools (M6.31
+// `evm_factory` named test): build a `TxLegacy`/`TxEip1559`, take its
+// `signature_hash`, attach an `EvmSignature` via `into_signed`. The EIP-2930
+// `AccessList`/`AccessListItem` carry the warp predicate chunks (spec 20 §7.2).
+pub use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
+pub use alloy_eips::eip2930::{AccessList, AccessListItem};
+pub use alloy_primitives::Signature as EvmSignature;
 // EIP-2718 typed-envelope decode for a single signed tx (`TransactionSigned`)
 // — used by `ava-evm::block` to decode the txs out of a block body (spec 10
 // §9.3); reused by the M6.6 reexecute test to decode the recorded tx.
