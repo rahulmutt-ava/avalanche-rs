@@ -761,18 +761,36 @@ parity requires matching libevm's account encoding byte-for-byte.**
 > **base-fee-to-coinbase** half remains **M6.13** (`next_evm_env` recipient override). Both must land for the
 > real-mainnet `differential::cchain_state_root` exit gate (M6.29). 51 `ava-evm` tests green; no facade edits.
 
-### Task M6.31: Live `EvmFactory` install + base-fee-to-coinbase override + remaining ConfigKey precompiles ⟸ NEW (surfaced by M6.22)
+### Task M6.31: Live `EvmFactory` install + base-fee-to-coinbase override + remaining ConfigKey precompiles ⟸ NEW (surfaced by M6.22) ✅ DONE (50333f3, merge 160d20d)
 **Crate:** ava-evm (+ facade)  ·  **Depends on:** M6.21, M6.22, M6.13, M6.10  ·  **Blocks:** real-mainnet `differential::cchain_state_root` 3-account parity (M6.29)  ·  **Spec:** 10 §6.5/§8/§17.1/§17.5; 20 §7; 21 §7 (base-fee recipient)
 **Files:** `crates/ava-evm/src/evmconfig.rs` (custom `EvmFactory`/`ConfigureEvm`), `crates/ava-evm/src/precompile/{allowlist,feemanager,nativeminter,rewardmanager,gaspricemanager}.rs` (NEW), `crates/ava-evm-reth/src/lib.rs` (factory re-exports), `crates/ava-evm/tests/vectors/cchain/precompile/*.json`
 **Why:** M6.21 deferred the live install (it churns the M6.6 bare-executor path) and M6.22 deferred it again, supplying every primitive but not the factory. Three things are bundled here because they share the one custom-factory churn:
 - **(a) Live `EvmFactory` install (G4/G10).** `AvaEvmConfig::execute_batch` drives reth's *bare* executor; it does not install `AvaPrecompiles` + `AvaCtxExt` onto the revm `ContextTr::Chain` slot, nor run `precompile::warp::run_predicates` inside `apply_pre_execution_changes` against a live proposervm block ctx + `ava-validators::ValidatorState`. Wire: thread proposervm `PChainHeight` + `ValidatorState` into the next-block ctx, run the predicate pass pre-execution keyed by tx index → `PredicateResults::set_warp`, install the height-gated provider + extension, and route `WarpPrecompile::take_logs` → `WarpBackend::handle_precompile_accept` on block accept.
 - **(b) Base-fee-to-coinbase override (M6.6 finding #3).** Avalanche credits the AP3+ base fee to the coinbase; revm burns it. This needs the same custom revm handler/factory. Until this lands, `cchain_state_root` stays at M6.30's burn-model 5-field root (2 accounts), NOT coreth's 3-account on-chain root (`0x8b0bf834…`). Landing it re-points the fixture to the coreth root and is what makes block-1 coreth bytes verify (the M6.9/M6.10 lifecycle parity gap).
 - **(c) Remaining ConfigKey precompile bodies.** AllowList / FeeManager / NativeMinter / RewardManager / GasPriceManager — port each body faithfully from subnet-evm `precompile/contracts/{allowlist,feemanager,nativeminter,rewardmanager}` (role/fee-config/mint/reward-address storage slots), register as `StatefulPrecompile`s like warp, with golden vectors.
-- [ ] **Step 1 — Red:** `tests/evm_factory.rs` — a 1-tx block executed through the live `ConfigureEvm` path installs `AvaPrecompiles` (warp dispatches, predicate read works end-to-end through `execute_batch`, not the test-only seam) AND credits the base fee to the coinbase (assert coinbase balance ↑ by `base_fee·gas_used`, sender pays full). Re-point `cchain_state_root` fixture to the coreth 3-account root. Plus per-precompile golden tests (AllowList role gate, FeeManager set/get, NativeMinter mint, RewardManager reward address, GasPriceManager).
-- [ ] **Step 2 — Confirm red:** the named tests fail (bare-executor path / burn model / missing precompile bodies).
-- [ ] **Step 3 — Green:** Implement the custom `EvmFactory`/`ConfigureEvm` (precompile install + predicate pass + base-fee-recipient handler), the five ConfigKey precompile bodies, the accept-time log→backend routing. Commit precompile + re-pointed state-root vectors.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm` (single-threaded) all pass incl. re-pointed `cchain_state_root`; clippy `-D warnings` clean; G0 holds.
-- [ ] **Step 5 — Commit:** `ava-evm: live EvmFactory install + base-fee-to-coinbase + ConfigKey precompiles`
+- [x] **Step 1 — Red:** `tests/evm_factory.rs` — a 1-tx block executed through the live `ConfigureEvm` path installs `AvaPrecompiles` (warp dispatches, predicate read works end-to-end through `execute_batch`, not the test-only seam) AND credits the base fee to the coinbase (assert coinbase balance ↑ by `base_fee·gas_used`, sender pays full). Re-point `cchain_state_root` fixture to the coreth 3-account root. Plus per-precompile golden tests (AllowList role gate, FeeManager set/get, NativeMinter mint, RewardManager reward address, GasPriceManager).
+- [x] **Step 2 — Confirm red:** the named tests fail (bare-executor path / burn model / missing precompile bodies).
+- [x] **Step 3 — Green:** Implement the custom `EvmFactory`/`ConfigureEvm` (precompile install + predicate pass + base-fee-recipient handler), the five ConfigKey precompile bodies, the accept-time log→backend routing. Commit precompile + re-pointed state-root vectors.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-evm` (single-threaded) all pass incl. re-pointed `cchain_state_root`; clippy `-D warnings` clean; G0 holds.
+- [x] **Step 5 — Commit:** `ava-evm: live EvmFactory install + base-fee-to-coinbase + ConfigKey precompiles`
+
+> **AS-BUILT (M6.31, verified at merge 2026-06-11).** All three deliverables live (not seam-only):
+> (a) `impl EvmFactory for AvaEvmFactory` (evmconfig.rs) installs height-gated `AvaPrecompiles`
+> into revm's `PrecompilesMap` per block; `execute_batch` builds a per-block
+> `EthEvmConfig::new_with_evm_factory(...)` carrying `AvaExecCtx` (predicates + P-Chain height) and
+> drives `apply_pre_execution_changes → execute_transaction → apply_post_execution_changes`; tx-index
+> keying via a shared `AtomicU64` published by `AvaEvm::transact_raw`; predicate pass =
+> `build_block_predicates`/`run_predicates` (NOT the spec-prose name `prepare_block_predicates`)
+> verifying BLS aggregates against `ava_validators::ValidatorState`; `verify_with_predicates` →
+> `execute_batch_with_ctx` → `take_logs` drain → `WarpBackend::handle_precompile_accept` on accept.
+> (b) `AvaHandler::reward_beneficiary` credits coinbase full effective-gas-price×gas-used (refund
+> disabled AP1+); `genesis_to_1.json` re-pointed to the coreth 3-account root `0x8b0bf834…71a`
+> (old burn-model root preserved as `burn_model_post_state_root_5field`). (c) five ConfigKey
+> precompile bodies with subnet-evm-faithful storage layouts + byte-exact goldens
+> (`tests/vectors/cchain/precompile/configkey_golden.json`; Go emitters committed under
+> `tests/differential/go-oracle/`). 174 ava-evm tests single-threaded, clippy/fmt clean.
+> **M6 remaining: M6.29 exit gate only** (recorded-oracle mode was already runnable; full coreth
+> on-chain-root parity now unblocked by this task).
 
 ---
 
