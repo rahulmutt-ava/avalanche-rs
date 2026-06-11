@@ -27,5 +27,8 @@
 //!
 //! [`PrecompileProvider`]: ava_evm_reth::PrecompileProvider
 
+pub mod abi;
+pub mod allowlist;
+pub mod nativeminter;
 pub mod registry;
 pub mod warp;

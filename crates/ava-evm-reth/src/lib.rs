@@ -245,6 +245,52 @@ pub use revm::interpreter::InstructionResult;
 pub use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileSpecId, Precompiles};
 // revm's `SpecId` is already re-exported above (revm fork/spec id, G7).
 
+// --- M6.31: live `EvmFactory` / `AvaEvm` / base-fee-to-coinbase handler ----
+// The custom `EvmFactory` (`ava-evm::evmconfig::AvaEvmFactory`) builds an
+// `AvaEvm` mirroring alloy-evm's `EthEvm` (same revm `Evm` core over the
+// `EthEvmContext`), with TWO Avalanche deltas: (1) the Avalanche stateful
+// precompiles are installed into the `PrecompilesMap` as `DynPrecompile`s at
+// EVM-creation time (height-gated by the block timestamp, G4 §8.3), and (2)
+// `transact_raw` runs `AvaHandler` — a revm `Handler` whose
+// `reward_beneficiary` credits the FULL effective gas price (base fee + tip)
+// to the coinbase, coreth `state_transition.go` parity (Avalanche does not
+// burn the base fee — spec 21 §7, spec 10 §6.5).
+//
+// `EthEvmContext<DB>` is the revm context alloy's Ethereum EVM runs on
+// (`Context<BlockEnv, TxEnv, CfgEnv, DB>`); `RevmEvm` is revm's bare `Evm`
+// struct the wrapper holds; `MainBuilder`/`MainContext` build it
+// (`Context::mainnet()…build_mainnet_with_inspector`). `PrecompilesMap` is the
+// dynamic precompile map reth's `EthEvmConfig` pins as the factory
+// `Precompiles` type; `DynPrecompile`/`PrecompileInput` are its runtime-install
+// surface, and `EvmInternals` is the journal/state hook handle a dynamic
+// precompile receives (sload/sstore/balance_incr/log — the stateful-precompile
+// state access, G4). `PrecompileHalt` is the NON-fatal precompile failure
+// (consumes the call frame's gas, geth `vm.ErrOutOfGas`-style) as opposed to
+// the fatal `PrecompileError`.
+pub use alloy_evm::eth::EthEvmContext; // M6.31
+pub use alloy_evm::precompiles::{DynPrecompile, PrecompileInput, PrecompilesMap}; // M6.31
+pub use alloy_evm::{EvmInternals, EvmInternalsError}; // M6.31
+pub use revm::context::result::{EVMError, HaltReason, ResultAndState}; // M6.31
+pub use revm::context::{BlockEnv, CfgEnv, Context, ContextSetters, Evm as RevmEvm}; // M6.31
+// The env-trait views the handler reads (`block.basefee()`, `beneficiary()`,
+// `tx.effective_gas_price()`); aliased so they cannot collide with the alloy
+// consensus `Transaction`/`Block` names already crossing the facade.
+pub use revm::context_interface::context::ContextError; // M6.31
+pub use revm::context_interface::{Block as BlockEnvTr, JournalTr, Transaction as TxEnvTr}; // M6.31
+pub use revm::handler::instructions::EthInstructions; // M6.31
+pub use revm::handler::{
+    EthFrame, EvmTr, EvmTrError, FrameResult, FrameTr, Handler, MainBuilder, MainContext,
+    MainnetHandler, SystemCallEvm,
+}; // M6.31
+pub use revm::inspector::{Inspector, InspectorEvmTr, InspectorHandler, NoOpInspector}; // M6.31
+pub use revm::interpreter::interpreter::EthInterpreter; // M6.31
+pub use revm::interpreter::interpreter_action::FrameInit; // M6.31
+pub use revm::precompile::{PrecompileHalt, PrecompileId, PrecompileResult}; // M6.31
+pub use revm::state::EvmState; // M6.31
+// `Log`/`LogData` — the journal log record a stateful precompile emits
+// (`EvmInternals::log`), and the value carried into receipts.
+pub use alloy_primitives::{Log, LogData}; // M6.31
+
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the
 /// `UPGRADING.md` checklist.
