@@ -53,6 +53,13 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }
+# Metrics gatherer tree + /ext/metrics (M8.21 / specs 18 §1, 12 §3.6, 14 §6);
+# also the health API's `checks_failing` gauge (M8.20 / 18 §2.13), which
+# registers against a caller-provided plain `prometheus::Registry`.
+# The `process` feature adds the Linux-only `process_*` collector (18 §4); on
+# non-Linux targets it is inert (`procfs` is a Linux-target-only dependency of
+# the prometheus crate, and the module is gated on `target_os = "linux"`).
+prometheus = { workspace = true, features = [ "process" ] }
 # HTTP stack (specs 12 §3.1). Pinned per-crate (ava-api is the first consumer of
 # the axum/tower-http surface). axum 0.7 sits on hyper 1.x / http 1.x / tower
 # 0.5, matching the tonic 0.12 line already in the workspace lock. h2c (HTTP/2
@@ -75,10 +82,6 @@ hyper-util = { version = "0.1", features = [ "server-auto", "server-graceful", "
 # — we use the `pprof::protos::Message` re-export so the version mismatch
 # never leaks into this crate; the lockfile carries both (deny: warn).
 pprof = { version = "0.14", features = [ "prost-codec" ] }
-# Health API (M8.20 / specs 12 §3.4, 14 §5, 18 §2.13): the `checks_failing`
-# gauge registers against a caller-provided plain `prometheus::Registry`
-# (namespace/prefix wiring is M8.21/M8.29).
-prometheus = { workspace = true }
 
 [dev-dependencies]
 # `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.

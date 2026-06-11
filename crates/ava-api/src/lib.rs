@@ -24,6 +24,11 @@
 //! ([`ava_api_macros::rpc_service`]) generates the method registration. Full
 //! chain mounting (M8.22) and the built-in `info`/`admin`/`health` services
 //! (M8.18–M8.20) build on this surface.
+//!
+//! Milestone **M8.21** adds [`metrics`] — the gatherer tree mirroring Go
+//! `api/metrics/` ([`metrics::PrefixGatherer`] / [`metrics::LabelGatherer`] /
+//! [`metrics::make_and_register`]) and the `/ext/metrics` handler
+//! ([`metrics::metrics_handler`]; specs 18 §1, 12 §3.6, 14 §6).
 
 #![forbid(unsafe_code)]
 
@@ -32,10 +37,15 @@ pub mod error;
 pub mod health;
 pub mod info;
 pub mod jsonrpc;
+pub mod metrics;
 pub mod middleware;
 pub mod server;
 
 pub use ava_api_macros::rpc_service;
 pub use error::{ApiError, IntoJsonRpcError, JsonRpcError, Result, json2_code};
 pub use jsonrpc::{BoxedRpcMethod, RpcError, ServiceRegistry, dispatch};
+pub use metrics::{
+    CHAIN_LABEL, Gatherer, LabelGatherer, MetricsError, MultiGatherer, NAMESPACE_SEP,
+    PLATFORM_NAME, PrefixGatherer, make_and_register, metrics_handler,
+};
 pub use server::{ApiServer, BASE_URL, BoxedHandler, MAX_CONCURRENT_STREAMS, Server};

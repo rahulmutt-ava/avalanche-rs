@@ -1,0 +1,215 @@
+{
+  "avalanchego_commit": "5896c92fee23c2eff53d557dceeb89f1a6218224",
+  "emitter": "crates/ava-api/tests/go-oracle/metrics_schema_oracle_test.go",
+  "goos": "darwin",
+  "families": [
+    {
+      "name": "avalanche_network_peers",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_network_peers_subnet",
+      "type": "gauge",
+      "label_keys": [
+        "subnetID"
+      ]
+    },
+    {
+      "name": "avalanche_process_go_gc_duration_seconds",
+      "type": "summary",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_gc_gogc_percent",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_gc_gomemlimit_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_goroutines",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_info",
+      "type": "gauge",
+      "label_keys": [
+        "version"
+      ]
+    },
+    {
+      "name": "avalanche_process_go_memstats_alloc_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_alloc_bytes_total",
+      "type": "counter",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_buck_hash_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_frees_total",
+      "type": "counter",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_gc_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_heap_alloc_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_heap_idle_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_heap_inuse_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_heap_objects",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_heap_released_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_heap_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_last_gc_time_seconds",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_mallocs_total",
+      "type": "counter",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_mcache_inuse_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_mcache_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_mspan_inuse_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_mspan_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_next_gc_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_other_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_stack_inuse_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_stack_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_memstats_sys_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_sched_gomaxprocs_threads",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_go_threads",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_cpu_seconds_total",
+      "type": "counter",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_max_fds",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_open_fds",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_resident_memory_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_start_time_seconds",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_virtual_memory_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_process_process_virtual_memory_max_bytes",
+      "type": "gauge",
+      "label_keys": []
+    },
+    {
+      "name": "avalanche_snowman_polls_failed",
+      "type": "counter",
+      "label_keys": [
+        "chain"
+      ]
+    },
+    {
+      "name": "avalanche_snowman_polls_successful",
+      "type": "counter",
+      "label_keys": [
+        "chain"
+      ]
+    }
+  ]
+}
