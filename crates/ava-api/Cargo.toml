@@ -1,0 +1,63 @@
+# ava-api — node HTTP server, JSON-RPC 2.0 shim, and built-in APIs
+# (M8 / specs 12 §3, 14 §1/§16).
+#
+# Dependency direction: ava-api -> { ava-config (HttpConfig), ava-snow
+# (ConsensusContext / EngineState), ava-vm (Vm trait + HttpHandler), ava-types
+# (NodeId) }. This task (M8.16) implements only the transport layer: the axum
+# router under /ext with h2c, CORS, allowed-hosts, node-id header, per-chain
+# not-bootstrapped 503, and the HTTPConfig timeout layers, plus the `ApiServer`
+# trait. The JSON-RPC shim / service registry land in M8.17, chain mounting in
+# M8.22.
+
+[package]
+name = "ava-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Node HTTP server + middleware: axum/h2c/CORS/allowed-hosts/node-id/per-chain-503 and the ApiServer trait (M8 / specs 12 §3.1, 14 §1.3/§16.3)."
+
+[dependencies]
+ava-api-macros = { path = "../ava-api-macros" }
+ava-config = { path = "../ava-config" }
+ava-snow = { path = "../ava-snow" }
+ava-types = { path = "../ava-types" }
+ava-vm = { path = "../ava-vm" }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+# JSON-RPC 2.0 shim (M8.17 / specs 12 §3.2, 14 §1.1): the gorilla-json2 wire
+# shape is hand-rolled over serde_json; `futures::future::BoxFuture` is the
+# boxed handler return type stored in the registry.
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+# HTTP stack (specs 12 §3.1). Pinned per-crate (ava-api is the first consumer of
+# the axum/tower-http surface). axum 0.7 sits on hyper 1.x / http 1.x / tower
+# 0.5, matching the tonic 0.12 line already in the workspace lock. h2c (HTTP/2
+# cleartext) is served via the hyper-util auto connection builder.
+axum = { version = "0.7", features = [ "http2" ] }
+tower-http = { version = "0.6", features = [ "cors", "timeout" ] }
+# Connection-level HTTP settings (specs 12 §3.1): the h2c MaxConcurrentStreams=64
+# cap, the HTTP/1 header-read timeout, and graceful shutdown are configured on
+# `hyper-util`'s auto connection builder, which we drive from an explicit accept
+# loop (replacing `axum::serve`, which exposes none of these knobs). Pinned
+# per-crate; it already sits in the lock transitively under axum 0.7 / hyper 1.x.
+# (`hyper` itself is pulled in transitively via these features; we never name a
+# `hyper` type directly, so it is not a direct dependency.)
+hyper-util = { version = "0.1", features = [ "server-auto", "server-graceful", "service", "tokio", "http1", "http2" ] }
+
+[dev-dependencies]
+# `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
+ava-version = { path = "../ava-version" }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
+tower = { version = "0.5", features = [ "util" ] }
+
+[lints]
+workspace = true
