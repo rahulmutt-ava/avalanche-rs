@@ -1008,7 +1008,9 @@ dependencies = [
  "ava-version",
  "ava-vm",
  "axum",
+ "chrono",
  "futures",
+ "hex",
  "hyper-util",
  "parking_lot",
  "pretty_assertions",
@@ -1018,6 +1020,7 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tower-http",
+ "tracing",
 ]
 
 [[package]]
