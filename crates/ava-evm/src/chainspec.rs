@@ -1037,6 +1037,14 @@ impl CChainGenesis {
         self.chain_id
     }
 
+    /// The genesis header timestamp (unix seconds). Mainnet and Fuji embed `0`;
+    /// the Local/Default genesis embeds `unix(upgrade::InitiallyActiveTime)`
+    /// (specs 23 §3.6).
+    #[must_use]
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
     /// The parsed `precompileUpgrades` schedule (§8.3).
     #[must_use]
     pub fn precompile_upgrades(&self) -> &[PrecompileUpgrade] {
