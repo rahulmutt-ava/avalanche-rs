@@ -18,6 +18,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
+// Dev-dependencies exercised only by the integration tests
+// (`tests/golden_genesis_extras.rs`); silence `unused_crate_dependencies`
+// for the lib-test unit (per-dep, matching the ava-config precedent).
+#[cfg(test)]
+use ava_evm as _;
+#[cfg(test)]
+use ava_version as _;
+
 use ava_platformvm::txs::executor::StakingConfig;
 use ava_types::id::Id;
 

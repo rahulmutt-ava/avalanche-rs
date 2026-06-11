@@ -708,6 +708,11 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > `cargo check` (passes); the nightly fuzz build is the CI smoke entry. No existing src/facade/`rpc/mod.rs` touched.
 
 ### Task M6.29: Milestone exit gate
+> **FOLD-IN (found by M8.26 wallet differential, 2026-06-11):** `atomic/mempool.rs::gas_used`
+> uses SIGNED `tx.bytes()` but coreth `Metadata.Bytes()` returns the **unsigned** bytes (the Go
+> method name is misleading) — ~81-gas overcount per 1-input import, affecting mempool fee/gas-cap
+> decisions. Verify against the coreth oracle and fix as part of this gate. The wallet's
+> `c/builder.rs::gas_used` (unsigned marshal) is the verified-correct model.
 **Crate:** ava-evm (+ avalanchers binary)  ·  **Depends on:** all M6.1–M6.28, M6.30; **M6.31** for the base-fee-to-coinbase recipient override that gates real-mainnet `cchain_state_root` 3-account parity (see M6.30/M6.31 notes — recorded-oracle mode can run before M6.31 lands; full coreth on-chain-root parity needs it)  ·  **Spec:** 10 (all), 04 §4, 20 §7, 21; 02 §10.5/§11; BUILDABLE-&-GREEN INVARIANT
 **Files:** `crates/ava-evm/tests/PORTING.md` (final), workspace wiring for `avalanchers` to run C-Chain
 - [ ] **Step 1 — Red:** Ensure the four named exit tests exist and are wired into `cargo nextest --profile ci`: `golden::cchain_block_wire`, `golden::cchain_genesis_root`, `differential::cchain_state_root` (recorded-oracle/reexecute mode — deterministic, per-PR friendly, over a multi-block recorded mainnet range, 02 §10.5), `differential::atomic_xc` (recorded mode green per-PR; live mode `#[ignore]`/CI-gated, coordinate with cross-cutting harness X), `prop::evm_fee_schedule_per_fork`.
