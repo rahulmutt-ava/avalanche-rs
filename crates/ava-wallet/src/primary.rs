@@ -336,17 +336,21 @@ mod tests {
         awaited: Mutex<Vec<Id>>,
         owners: BTreeMap<Id, OutputOwners>,
         estimate_calls: Mutex<u32>,
+        fail_issue: Mutex<bool>,
     }
 
     impl Mock {
-        fn issue(&self, chain: char, tx_bytes: &[u8]) -> Id {
+        fn issue(&self, chain: char, tx_bytes: &[u8]) -> Result<Id> {
+            if *self.fail_issue.lock().expect("lock") {
+                return Err(Error::Client("injected issue failure".into()));
+            }
             self.issued
                 .lock()
                 .expect("lock")
                 .entry(chain)
                 .or_default()
                 .push(tx_bytes.to_vec());
-            Id::from(ava_crypto::hashing::sha256(tx_bytes))
+            Ok(Id::from(ava_crypto::hashing::sha256(tx_bytes)))
         }
 
         fn fetch(&self, chain: char, source_chain_id: Id) -> Vec<Vec<u8>> {
@@ -386,7 +390,7 @@ mod tests {
     #[async_trait]
     impl PChainClient for Mock {
         async fn issue_tx(&self, tx_bytes: &[u8]) -> Result<Id> {
-            Ok(self.issue('P', tx_bytes))
+            self.issue('P', tx_bytes)
         }
 
         async fn await_tx_accepted(&self, tx_id: Id) -> Result<()> {
@@ -437,7 +441,7 @@ mod tests {
     #[async_trait]
     impl XChainClient for Mock {
         async fn issue_tx(&self, tx_bytes: &[u8]) -> Result<Id> {
-            Ok(self.issue('X', tx_bytes))
+            self.issue('X', tx_bytes)
         }
 
         async fn await_tx_accepted(&self, tx_id: Id) -> Result<()> {
@@ -465,7 +469,7 @@ mod tests {
     #[async_trait]
     impl CChainClient for Mock {
         async fn issue_tx(&self, tx_bytes: &[u8]) -> Result<Id> {
-            Ok(self.issue('C', tx_bytes))
+            self.issue('C', tx_bytes)
         }
 
         async fn await_tx_accepted(&self, tx_id: Id) -> Result<()> {
@@ -581,6 +585,96 @@ mod tests {
             assert_eq!(utxo.asset_id, out.asset_id);
             assert_eq!(utxo.out, out.out);
         }
+    }
+
+    /// A failed submit must NOT record anything: the consumed UTXO stays in
+    /// the backend and acceptance is never polled (Go parity — recording
+    /// happens only after `IssueTx` succeeds).
+    #[tokio::test]
+    async fn issue_failure_does_not_record() {
+        let key = test_key();
+        let addr = key.public_key().address();
+        let mock = Arc::new(Mock::default());
+        mock.utxos.lock().expect("lock").insert(
+            ('P', PLATFORM_CHAIN_ID),
+            vec![p_utxo_bytes(1, 9 * AVAX, addr)],
+        );
+
+        let wallet = make_wallet(
+            &clients(&mock),
+            Keychain::new(vec![key]),
+            &WalletConfig::default(),
+        )
+        .await
+        .expect("make_wallet");
+        *mock.fail_issue.lock().expect("lock") = true;
+
+        let outputs = vec![ava_platformvm::txs::components::TransferableOutput {
+            asset_id: avax_asset_id(),
+            out: ava_platformvm::txs::components::Output::Transfer(TransferOutput::new(
+                AVAX,
+                OutputOwners::new(0, 1, vec![addr]),
+            )),
+        }];
+        assert_matches!(
+            wallet.p().issue_base_tx(outputs, &opts()).await,
+            Err(Error::Client(_))
+        );
+
+        // Nothing recorded: the spent UTXO is still there, nothing was
+        // produced, and acceptance was never polled.
+        let backend = wallet.p().backend();
+        let spent_id = Id::EMPTY.prefix(&[1]).prefix(&[1]);
+        assert_eq!(
+            backend
+                .get_utxo(PLATFORM_CHAIN_ID, spent_id)
+                .map(|u| u.input_id()),
+            Some(spent_id),
+        );
+        assert_eq!(backend.utxos(PLATFORM_CHAIN_ID).len(), 1);
+        assert!(mock.awaited.lock().expect("lock").is_empty());
+    }
+
+    /// `TxOption::AssumeDecided` skips the acceptance poll but still submits
+    /// and records (Go `common.WithAssumeDecided`).
+    #[tokio::test]
+    async fn assume_decided_skips_acceptance_poll() {
+        let key = test_key();
+        let addr = key.public_key().address();
+        let mock = Arc::new(Mock::default());
+        mock.utxos.lock().expect("lock").insert(
+            ('P', PLATFORM_CHAIN_ID),
+            vec![p_utxo_bytes(1, 9 * AVAX, addr)],
+        );
+
+        let wallet = make_wallet(
+            &clients(&mock),
+            Keychain::new(vec![key]),
+            &WalletConfig::default(),
+        )
+        .await
+        .expect("make_wallet");
+
+        let outputs = vec![ava_platformvm::txs::components::TransferableOutput {
+            asset_id: avax_asset_id(),
+            out: ava_platformvm::txs::components::Output::Transfer(TransferOutput::new(
+                AVAX,
+                OutputOwners::new(0, 1, vec![addr]),
+            )),
+        }];
+        let mut options = opts();
+        options.push(TxOption::AssumeDecided);
+        let tx = wallet
+            .p()
+            .issue_base_tx(outputs, &options)
+            .await
+            .expect("issue");
+
+        // Submitted + recorded, but never polled for acceptance.
+        assert_eq!(mock.issued('P'), vec![tx.signed_bytes.clone()]);
+        assert!(mock.awaited.lock().expect("lock").is_empty());
+        let backend = wallet.p().backend();
+        assert!(!backend.utxos(PLATFORM_CHAIN_ID).is_empty());
     }
 
     /// `make_wallet` fetches the chain contexts (network id, blockchain ids,
