@@ -1117,6 +1117,7 @@ name = "ava-config"
 version = "0.1.0"
 dependencies = [
  "assert_matches",
+ "ava-crypto",
  "ava-engine",
  "ava-genesis",
  "ava-logging",

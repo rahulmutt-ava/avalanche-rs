@@ -15,6 +15,10 @@ use ava_platformvm::reward;
 use ava_platformvm::txs::executor;
 use ava_types::constants::{FUJI_ID, MAINNET_ID};
 
+// Re-exported so `ava-config` can assemble the staking-economics block from
+// flags (custom networks) without a direct `ava-platformvm` dependency.
+pub use ava_platformvm::reward::{Config as RewardConfig, PERCENT_DENOMINATOR};
+
 /// `1 AVAX = 1e9 nAVAX` (`utils/units`).
 const AVAX: u64 = 1_000_000_000;
 /// `1 MilliAvax = 1e6 nAVAX`.
@@ -131,7 +135,7 @@ const MAINNET_TX_FEE_CONFIG: TxFeeConfig = TxFeeConfig {
     validator_fee_config: ValidatorFeeConfig {
         capacity: 20_000,
         target: 10_000,
-        min_price: 512, // 512 * NanoAvax
+        min_price: 512,                            // 512 * NanoAvax
         excess_conversion_constant: 1_246_488_515, // double every day
     },
 };
@@ -157,7 +161,7 @@ const LOCAL_TX_FEE_CONFIG: TxFeeConfig = TxFeeConfig {
     validator_fee_config: ValidatorFeeConfig {
         capacity: 20_000,
         target: 10_000,
-        min_price: 1, // 1 * NanoAvax
+        min_price: 1,                        // 1 * NanoAvax
         excess_conversion_constant: 865_617, // double every minute
     },
 };
@@ -256,7 +260,10 @@ mod tests {
         // genesis_fuji.go
         let f = get_tx_fee_config(FUJI_ID);
         assert_eq!(f.create_asset_tx_fee, 10_000_000);
-        assert_eq!(f.validator_fee_config.excess_conversion_constant, 51_937_021);
+        assert_eq!(
+            f.validator_fee_config.excess_conversion_constant,
+            51_937_021
+        );
 
         // genesis_local.go (also the fallback for custom ids)
         let l = get_tx_fee_config(LOCAL_ID);

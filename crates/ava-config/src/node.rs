@@ -138,7 +138,7 @@ pub struct StakingSignerConfig {
 /// Go `node.StakingConfig` (13 §5). The staking-economics block (`economics`)
 /// comes from the flags on custom networks and from
 /// `ava_genesis::params::get_staking_config` on Mainnet/Fuji.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StakingConfig {
     /// `--sybil-protection-enabled`.
     pub sybil_protection_enabled: bool,
@@ -384,7 +384,7 @@ pub struct NetworkConfig {
 
 /// Go `node.Config` — everything the node needs, resolved once at startup
 /// (`config/node/config.go`; field order follows `GetNodeConfig`).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     /// Expanded `--plugin-dir` (created when defaulted, asserted when set).
     pub plugin_dir: String,
