@@ -32,15 +32,23 @@ tokio = { workspace = true }
 # HTTP stack (specs 12 §3.1). Pinned per-crate (ava-api is the first consumer of
 # the axum/tower-http surface). axum 0.7 sits on hyper 1.x / http 1.x / tower
 # 0.5, matching the tonic 0.12 line already in the workspace lock. h2c (HTTP/2
-# cleartext) is served via axum's hyper-util auto connection builder.
+# cleartext) is served via the hyper-util auto connection builder.
 axum = { version = "0.7", features = [ "http2" ] }
 tower-http = { version = "0.6", features = [ "cors", "timeout" ] }
+# Connection-level HTTP settings (specs 12 §3.1): the h2c MaxConcurrentStreams=64
+# cap, the HTTP/1 header-read timeout, and graceful shutdown are configured on
+# `hyper-util`'s auto connection builder, which we drive from an explicit accept
+# loop (replacing `axum::serve`, which exposes none of these knobs). Pinned
+# per-crate; it already sits in the lock transitively under axum 0.7 / hyper 1.x.
+# (`hyper` itself is pulled in transitively via these features; we never name a
+# `hyper` type directly, so it is not a direct dependency.)
+hyper-util = { version = "0.1", features = [ "server-auto", "server-graceful", "service", "tokio", "http1", "http2" ] }
 
 [dev-dependencies]
 # `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 ava-version = { path = "../ava-version" }
-pretty_assertions = "1"
+pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
 tower = { version = "0.5", features = [ "util" ] }
 
