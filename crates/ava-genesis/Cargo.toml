@@ -28,6 +28,10 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+# M8.15: C-Chain genesis timestamp check (parse `cChainGenesis`; specs 23 §3.6).
+ava-evm = { path = "../ava-evm" }
+# M8.15: `initially_active_time()` for the Local timestamp golden.
+ava-version = { path = "../ava-version" }
 
 [lints]
 workspace = true

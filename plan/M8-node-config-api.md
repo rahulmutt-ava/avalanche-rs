@@ -184,14 +184,22 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [x] **Step 4 — Confirm green:** `cargo test -p ava-genesis bootstrappers:: recent_start::` passes.
 - [x] **Step 5 — Commit:** `ava-genesis: bootstrappers + sample + getRecentStartTime (23 §5)`
 
-### Task M8.15: ava-genesis C-Chain timestamp + round-trip rebuild parity
+### Task M8.15: ava-genesis C-Chain timestamp + round-trip rebuild parity ✅ DONE (69bdb33)
 **Crate:** ava-genesis  ·  **Depends on:** M8.8, M8.14, M6 ava-cchain (eth genesis parse for timestamp only)  ·  **Spec:** 23 §3.6, §7, §9.2/§9.6
 **Files:** `crates/ava-genesis/tests/golden_genesis_extras.rs`
-- [ ] **Step 1 — Red:** `golden_genesis_extras.rs::cchain_genesis_timestamp` — parse `cChainGenesis` (eth `core.Genesis` JSON via reth/alloy) and assert `Timestamp`: Mainnet 0, Fuji 0, Local = `unix(upgrade::InitiallyActiveTime)` (23 §3.6/§7). `rebuild_parity` — for each embedded config, `from_config` then re-serialize, assert byte-identity vs the committed Go dump (extends M8.8; guards the full intermediate orderings, 23 §9.2).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-genesis cchain_genesis_timestamp` → fails.
-- [ ] **Step 3 — Green:** Validate `cChainGenesis` non-empty + parseable JSON; extract timestamp via the ava-cchain genesis parser. Confirm round-trip byte-identity.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-genesis golden_genesis_extras` passes.
-- [ ] **Step 5 — Commit:** `ava-genesis: C-Chain timestamp + round-trip rebuild parity (23 §3.6)`
+- [x] **Step 1 — Red:** `golden_genesis_extras.rs::cchain_genesis_timestamp` — parse `cChainGenesis` (eth `core.Genesis` JSON via reth/alloy) and assert `Timestamp`: Mainnet 0, Fuji 0, Local = `unix(upgrade::InitiallyActiveTime)` (23 §3.6/§7). `rebuild_parity` — for each embedded config, `from_config` then re-serialize, assert byte-identity vs the committed Go dump (extends M8.8; guards the full intermediate orderings, 23 §9.2).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-genesis cchain_genesis_timestamp` → fails.
+- [x] **Step 3 — Green:** Validate `cChainGenesis` non-empty + parseable JSON; extract timestamp via the ava-cchain genesis parser. Confirm round-trip byte-identity.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-genesis golden_genesis_extras` passes.
+- [x] **Step 5 — Commit:** `ava-genesis: C-Chain timestamp + round-trip rebuild parity (23 §3.6)`
+
+> **AS-BUILT (M8.15).** `cchain_genesis_timestamp`: Local cChainGenesis timestamp `1607144400`
+> == `unix(ava_version::upgrade::initially_active_time())` (2020-12-05T05:00:00Z); Mainnet/Fuji = 0.
+> Parser = `ava_evm::chainspec::CChainGenesis::parse` (new additive `timestamp()` accessor on ava-evm).
+> `rebuild_parity` = the RE-SERIALIZATION delta (unparsed→parsed→re-serialize→re-parse Config equality +
+> identical from_config bytes + LazyLock-vs-fresh-parse identity) — the .bin byte-diff itself already lives
+> in M8.8's `genesis_p_chain_bytes_byte_identical`. Test-only deps silenced per-dep (`#[cfg(test)] use x as _;`,
+> ava-config precedent). 18 ava-genesis tests.
 
 ### Task M8.16: ava-api server — axum/h2c/CORS/allowed-hosts/node-id/timeouts/503 + ApiServer trait
 **Crate:** ava-api  ·  **Depends on:** M2/M3 (ConsensusContext, CommonVM trait, validators/network handles), M8.12 (HTTPConfig)  ·  **Spec:** 12 §3.1/§3.9, 14 §1.3/§16.3
@@ -274,24 +282,42 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-indexer` passes (recorded mode).
 - [ ] **Step 5 — Commit:** `ava-indexer: index + index API + differential::indexer_parity (12 §5, 14 §7)`
 
-### Task M8.25: ava-wallet — P-chain Builder/Signer/Backend + UTXO selection
+### Task M8.25: ava-wallet — P-chain Builder/Signer/Backend + UTXO selection ✅ DONE (530a882+f7266a4)
 **Crate:** ava-wallet  ·  **Depends on:** M4 ava-platformvm (tx/UTXO/Owner/SubnetValidator types), M1 ava-crypto (keychain, secp256k1, BLS PoP)  ·  **Spec:** 12 §13 (incl. the ACP-236 upstream-delta callout)
 **Files:** `crates/ava-wallet/Cargo.toml`, `crates/ava-wallet/src/lib.rs`, `crates/ava-wallet/src/p/{builder.rs,signer.rs,backend.rs,wallet.rs}`, `crates/ava-wallet/src/common/utxo_select.rs`
 > **UPSTREAM DELTA (Go `c84b906db6`, ACP-236 (3), #5202 — post-spec-snapshot, folded 2026-06-10).** The Go P-chain builder gained `NewAddAutoRenewedValidatorTx` / `NewSetAutoRenewedValidatorConfigTx` (+ `with_options` wrappers + `Wallet.Issue*` facades) — include them in the `PBuilder` port (12 §13 delta has the exact signatures; Go `wallet/chain/p/builder_test.go` gained the matching cases to mirror as golden tx vectors). Fee complexity for both txs is now implemented in Go (`08` §6 delta) — the M4 `complexityVisitor` port's `errUnimplemented` stubs (if mirrored) must be filled before these vectors can price correctly. Also: `platform.getCurrentValidators` replies now embed `AutoRenewedConfig{validatorAuthority, nextPeriod, autoCompoundRewardShares}` (`14` delta) — the API client/Backend structs (M8.18/M8.22 + M4 service) need the field for response parity.
-- [ ] **Step 1 — Red:** `common/utxo_select.rs::tests::deterministic_selection` — sort UTXOs, prefer locked-then-unlocked to satisfy `amount+fee`, respect locktime/threshold; output ordering deterministic (12 §13). `p/builder.rs::tests::new_base_tx_bytes_match_go` — fixed UTXO set/keys → built+signed `BaseTx` bytes byte-identical to a recorded Go wallet output (12 §12.5, golden tx vector).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-wallet p::builder::tests::new_base_tx_bytes_match_go` → fails.
-- [ ] **Step 3 — Green:** Implement the `PBuilder` trait (12 §13: `new_base_tx`, `new_add_permissionless_validator_tx`, `new_create_subnet_tx`, `new_create_chain_tx`, `new_import_tx`, `new_export_tx`, add/remove subnet validator, transfer/transform subnet, ACP-77 L1 conversion/register/set-weight/increase-balance/disable, ACP-236 `new_add_auto_renewed_validator_tx`/`new_set_auto_renewed_validator_config_tx` (upstream delta), `utxos`, `get_owner`, `get_balance`). UTXO selection mirroring Go `common` (deterministic). Signer: per-input secp256k1 credentials + BLS PoP for validator txs, keychain abstraction. Backend: UTXO set/owners + `with_options` overlays (memo, change owner, custom fee, min-issuance-time). Builders/signers pure (no I/O) given a Backend snapshot.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-wallet p::` passes.
-- [ ] **Step 5 — Commit:** `ava-wallet: P-chain builder/signer/backend + UTXO selection (12 §13)`
+- [x] **Step 1 — Red:** `common/utxo_select.rs::tests::deterministic_selection` — sort UTXOs, prefer locked-then-unlocked to satisfy `amount+fee`, respect locktime/threshold; output ordering deterministic (12 §13). `p/builder.rs::tests::new_base_tx_bytes_match_go` — fixed UTXO set/keys → built+signed `BaseTx` bytes byte-identical to a recorded Go wallet output (12 §12.5, golden tx vector).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-wallet p::builder::tests::new_base_tx_bytes_match_go` → fails.
+- [x] **Step 3 — Green:** Implement the `PBuilder` trait (12 §13: `new_base_tx`, `new_add_permissionless_validator_tx`, `new_create_subnet_tx`, `new_create_chain_tx`, `new_import_tx`, `new_export_tx`, add/remove subnet validator, transfer/transform subnet, ACP-77 L1 conversion/register/set-weight/increase-balance/disable, ACP-236 `new_add_auto_renewed_validator_tx`/`new_set_auto_renewed_validator_config_tx` (upstream delta), `utxos`, `get_owner`, `get_balance`). UTXO selection mirroring Go `common` (deterministic). Signer: per-input secp256k1 credentials + BLS PoP for validator txs, keychain abstraction. Backend: UTXO set/owners + `with_options` overlays (memo, change owner, custom fee, min-issuance-time). Builders/signers pure (no I/O) given a Backend snapshot.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-wallet p::` passes.
+- [x] **Step 5 — Commit:** `ava-wallet: P-chain builder/signer/backend + UTXO selection (12 §13)`
 
-### Task M8.26: ava-wallet — X-chain + C-chain (atomic) builders/signers
+> **AS-BUILT (M8.25).** Keychain/options/deterministic UTXO selection + P fee complexity table +
+> full `PBuilder` (incl. ACP-236 auto-renewed validator txs per the upstream delta) with golden
+> byte-parity vs live Go for ~10 P-chain tx types (`tests/vectors/wallet/p.json`). Built in a prior
+> session's worktree; verified + merged 2026-06-11 (merge 7afa24c).
+
+### Task M8.26: ava-wallet — X-chain + C-chain (atomic) builders/signers ✅ DONE (1b27f45+2ab7c82)
 **Crate:** ava-wallet  ·  **Depends on:** M8.25, M5 ava-avm (tx types), M6 ava-cchain (atomic import/export tx types)  ·  **Spec:** 12 §13
 **Files:** `crates/ava-wallet/src/x/{builder.rs,signer.rs,backend.rs,wallet.rs}`, `crates/ava-wallet/src/c/{builder.rs,signer.rs,backend.rs,wallet.rs}`
-- [ ] **Step 1 — Red:** `x/builder.rs::tests::x_base_tx_bytes_match_go` and `c/builder.rs::tests::c_import_export_bytes_match_go` — fixed UTXO sets/keys → signed X-Chain base tx and C-Chain atomic import/export bytes byte-identical to recorded Go outputs (12 §12.5).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-wallet x::builder::tests::x_base_tx_bytes_match_go` → fails.
-- [ ] **Step 3 — Green:** Implement X-Chain builder/signer/backend (base/import/export/create-asset/operation txs) and C-Chain atomic import/export between C and X/P (no EVM account txs — those go through reth RPC, 12 §13). Reuse the deterministic UTXO selection.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-wallet x:: c::` passes.
-- [ ] **Step 5 — Commit:** `ava-wallet: X-chain + C-chain atomic builders/signers (12 §13)`
+- [x] **Step 1 — Red:** `x/builder.rs::tests::x_base_tx_bytes_match_go` and `c/builder.rs::tests::c_import_export_bytes_match_go` — fixed UTXO sets/keys → signed X-Chain base tx and C-Chain atomic import/export bytes byte-identical to recorded Go outputs (12 §12.5).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-wallet x::builder::tests::x_base_tx_bytes_match_go` → fails.
+- [x] **Step 3 — Green:** Implement X-Chain builder/signer/backend (base/import/export/create-asset/operation txs) and C-Chain atomic import/export between C and X/P (no EVM account txs — those go through reth RPC, 12 §13). Reuse the deterministic UTXO selection.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-wallet x:: c::` passes.
+- [x] **Step 5 — Commit:** `ava-wallet: X-chain + C-chain atomic builders/signers (12 §13)`
+
+> **AS-BUILT (M8.26).** X base/base-memo/create-asset/import (incl. AVAX<fee local top-up branch)/
+> export + C import (X→C, P→C; non-AVAX UTXOs skipped)/export (C→X), all unsigned+signed byte-parity
+> vs live Go (12 new tests; 34 total). Go emitters now COMMITTED in-repo at
+> `crates/ava-wallet/tests/go-oracle/` (X, C, and the rescued P emitter) — copy → env-gated run →
+> delete, `AVAX_RS_GO_COMMIT` stamps provenance. Builders take `base_fee` verbatim (Go parity: the
+> WithBaseFee option resolves in the M8.27 facade, not the builder). **DEFERRED:** X `OperationTx`
+> (mint FT/NFT) — `ava-avm` has no typed fx-operation types (M5 §5.5 follow-up); signer returns
+> `UnsupportedTxType`. **CROSS-CRATE FINDING → M6.29/M6 follow-up:** `ava-evm`
+> `atomic/mempool.rs::gas_used` uses SIGNED `tx.bytes()` but coreth `Metadata.Bytes()` returns the
+> UNSIGNED bytes (~81-gas overcount per 1-input import; affects mempool fee/gas-cap decisions) —
+> verify against the coreth oracle and fix. Benign divergence: Go C `backend.Balance` errors
+> ErrNotFound on unknown accounts, Rust returns 0.
 
 ### Task M8.27: ava-wallet — Wallet facades + primary wallet (make_wallet over API)
 **Crate:** ava-wallet  ·  **Depends on:** M8.25, M8.26, M8.18/M8.22 (API client for state fetch)  ·  **Spec:** 12 §13
