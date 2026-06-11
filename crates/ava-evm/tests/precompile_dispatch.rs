@@ -14,7 +14,8 @@
 use std::sync::Arc;
 
 use ava_evm::precompile::registry::{
-    AvaPrecompiles, PrecompileCtx, PrecompileModule, PrecompileRegistry, StatefulPrecompile,
+    AvaPrecompiles, PrecompileCtx, PrecompileModule, PrecompileRegistry, PrecompileStateOps,
+    StatefulPrecompile,
 };
 use ava_evm_reth::{Address, InterpreterResult, PrecompileError};
 
@@ -29,6 +30,7 @@ impl StatefulPrecompile for DummyPrecompile {
         _input: &[u8],
         _gas_limit: u64,
         _ctx: &PrecompileCtx,
+        _state: &mut dyn PrecompileStateOps,
     ) -> Result<InterpreterResult, PrecompileError> {
         // Not exercised by M6.21 (no live revm context in this unit test).
         Err(PrecompileError::Fatal("dummy".into()))
