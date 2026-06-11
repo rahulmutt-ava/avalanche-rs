@@ -126,7 +126,10 @@ pub struct GetNodeVersionReply {
     pub database_version: String,
     /// `rpcProtocolVersion` — `version.RPCChainVMProtocol` (`json.Uint32` ⇒
     /// quoted string).
-    #[serde(rename = "rpcProtocolVersion", serialize_with = "avajson::serialize_u32")]
+    #[serde(
+        rename = "rpcProtocolVersion",
+        serialize_with = "avajson::serialize_u32"
+    )]
     pub rpc_protocol_version: u32,
     /// `gitCommit` — the build-time `version.GitCommit`.
     #[serde(rename = "gitCommit")]
@@ -563,7 +566,10 @@ pub struct GetTxFeeResponse {
     #[serde(rename = "createAssetTxFee", serialize_with = "avajson::serialize_u64")]
     pub create_asset_tx_fee: u64,
     /// `createSubnetTxFee`.
-    #[serde(rename = "createSubnetTxFee", serialize_with = "avajson::serialize_u64")]
+    #[serde(
+        rename = "createSubnetTxFee",
+        serialize_with = "avajson::serialize_u64"
+    )]
     pub create_subnet_tx_fee: u64,
     /// `transformSubnetTxFee`.
     #[serde(

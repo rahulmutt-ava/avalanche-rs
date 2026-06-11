@@ -428,7 +428,11 @@ impl Info {
     /// # Errors
     /// Infallible (`Result` for the RPC signature).
     pub async fn get_tx_fee(&self, _args: EmptyArgs) -> Result<GetTxFeeResponse, RpcError> {
-        tracing::warn!(service = "info", method = "getTxFee", "deprecated API called");
+        tracing::warn!(
+            service = "info",
+            method = "getTxFee",
+            "deprecated API called"
+        );
 
         let mut reply = match self.parameters.network_id {
             ava_types::constants::MAINNET_ID => mainnet_get_tx_fee_response(),
@@ -471,93 +475,146 @@ impl Info {
 }
 
 #[cfg(test)]
+// `serde_json::Value` indexing (`value["key"]`) returns `Value::Null` on a
+// missing key rather than panicking; it is the idiomatic way to assert on
+// JSON reply bodies (same allowance as `jsonrpc::tests`).
+#[allow(clippy::indexing_slicing)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::net::SocketAddr;
     use std::sync::Arc;
 
+    use chrono::TimeZone;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
-    use ava_types::constants::MAINNET_ID;
+    use ava_types::constants::{FUJI_ID, MAINNET_ID};
     use ava_types::id::Id;
     use ava_types::node_id::NodeId;
     use ava_version::CURRENT;
 
-    use super::types::{GetNodeVersionReply, ProofOfPossession};
+    use super::types::{GetNodeVersionReply, PeerInfo, ProofOfPossession, UptimeResult};
     use super::{Benchlist, ChainManager, Info, InfoNetwork, Parameters, ValidatorSet, VmManager};
+    use crate::error::json2_code;
     use crate::jsonrpc::ServiceRegistry;
 
     // ------------------------------------------------------------------
-    // Hand-rolled narrow mocks for the handle seams (repo convention).
+    // Hand-rolled narrow, configurable mocks for the handle seams (repo
+    // convention).
     // ------------------------------------------------------------------
 
-    struct MockChainManager;
+    #[derive(Default)]
+    struct MockChainManager {
+        /// alias -> chain ID (`Lookup`).
+        aliases: BTreeMap<String, Id>,
+        /// chain ID -> primary alias (`PrimaryAlias`).
+        primary: BTreeMap<Id, String>,
+        /// chain IDs that are done bootstrapping.
+        bootstrapped: BTreeSet<Id>,
+    }
 
     impl ChainManager for MockChainManager {
-        fn lookup(&self, _alias: &str) -> Result<Id, String> {
-            Err("there is no ID with alias: X".to_string())
+        fn lookup(&self, alias: &str) -> Result<Id, String> {
+            self.aliases
+                .get(alias)
+                .copied()
+                .ok_or_else(|| format!("there is no ID with alias: {alias}"))
         }
 
-        fn primary_alias(&self, _chain_id: Id) -> Result<String, String> {
-            Err("there is no alias for ID".to_string())
+        fn primary_alias(&self, chain_id: Id) -> Result<String, String> {
+            self.primary
+                .get(&chain_id)
+                .cloned()
+                .ok_or_else(|| format!("there is no alias for ID: {chain_id}"))
         }
 
-        fn is_bootstrapped(&self, _chain_id: Id) -> bool {
-            false
+        fn is_bootstrapped(&self, chain_id: Id) -> bool {
+            self.bootstrapped.contains(&chain_id)
         }
     }
 
-    struct MockNetwork;
+    struct MockNetwork {
+        peers: Vec<PeerInfo>,
+        uptime: Result<UptimeResult, String>,
+    }
+
+    impl Default for MockNetwork {
+        fn default() -> Self {
+            Self {
+                peers: Vec::new(),
+                uptime: Ok(UptimeResult::default()),
+            }
+        }
+    }
 
     impl InfoNetwork for MockNetwork {
-        fn peer_info(&self, _node_ids: &[NodeId]) -> Vec<super::types::PeerInfo> {
-            Vec::new()
+        fn peer_info(&self, node_ids: &[NodeId]) -> Vec<PeerInfo> {
+            if node_ids.is_empty() {
+                return self.peers.clone();
+            }
+            self.peers
+                .iter()
+                .filter(|p| node_ids.contains(&p.node_id))
+                .cloned()
+                .collect()
         }
 
-        fn node_uptime(&self) -> Result<super::types::UptimeResult, String> {
-            Ok(super::types::UptimeResult {
-                rewarding_stake_percentage: 0.0,
-                weighted_average_percentage: 0.0,
-            })
+        fn node_uptime(&self) -> Result<UptimeResult, String> {
+            self.uptime.clone()
         }
     }
 
-    struct MockBenchlist;
+    #[derive(Default)]
+    struct MockBenchlist {
+        benched: BTreeMap<NodeId, Vec<Id>>,
+    }
 
     impl Benchlist for MockBenchlist {
-        fn get_benched(&self, _node_id: NodeId) -> Vec<Id> {
-            Vec::new()
+        fn get_benched(&self, node_id: NodeId) -> Vec<Id> {
+            self.benched.get(&node_id).cloned().unwrap_or_default()
         }
     }
 
-    struct MockValidators;
+    #[derive(Default)]
+    struct MockValidators {
+        weights: BTreeMap<NodeId, u64>,
+        total: u64,
+    }
 
     impl ValidatorSet for MockValidators {
-        fn get_weight(&self, _subnet_id: Id, _node_id: NodeId) -> u64 {
-            0
+        fn get_weight(&self, _subnet_id: Id, node_id: NodeId) -> u64 {
+            self.weights.get(&node_id).copied().unwrap_or_default()
         }
 
         fn total_weight(&self, _subnet_id: Id) -> Result<u64, String> {
-            Ok(0)
+            Ok(self.total)
         }
     }
 
-    struct MockVmManager;
+    #[derive(Default)]
+    struct MockVmManager {
+        versions: BTreeMap<String, String>,
+        factories: Vec<Id>,
+        aliases: BTreeMap<Id, Vec<String>>,
+    }
 
     impl VmManager for MockVmManager {
         fn versions(&self) -> Result<BTreeMap<String, String>, String> {
-            Ok(BTreeMap::new())
+            Ok(self.versions.clone())
         }
 
         fn list_factories(&self) -> Result<Vec<Id>, String> {
-            Ok(Vec::new())
+            Ok(self.factories.clone())
         }
 
-        fn aliases(&self, _vm_id: Id) -> Vec<String> {
-            Vec::new()
+        fn aliases(&self, vm_id: Id) -> Vec<String> {
+            self.aliases.get(&vm_id).cloned().unwrap_or_default()
         }
     }
+
+    // ------------------------------------------------------------------
+    // Builders
+    // ------------------------------------------------------------------
 
     fn test_parameters() -> Parameters {
         Parameters {
@@ -572,17 +629,35 @@ mod tests {
         }
     }
 
-    fn test_info() -> Arc<Info> {
+    /// Bundles the handle mocks an `Info` is assembled from.
+    #[derive(Default)]
+    struct Handles {
+        validators: MockValidators,
+        chain_manager: MockChainManager,
+        vm_manager: MockVmManager,
+        network: MockNetwork,
+        benchlist: MockBenchlist,
+    }
+
+    fn info_with(parameters: Parameters, handles: Handles) -> Arc<Info> {
         let my_ip: SocketAddr = "127.0.0.1:9651".parse().expect("static addr");
         Arc::new(Info::new(
-            test_parameters(),
-            Arc::new(MockValidators),
-            Arc::new(MockChainManager),
-            Arc::new(MockVmManager),
+            parameters,
+            Arc::new(handles.validators),
+            Arc::new(handles.chain_manager),
+            Arc::new(handles.vm_manager),
             Arc::new(parking_lot::RwLock::new(my_ip)),
-            Arc::new(MockNetwork),
-            Arc::new(MockBenchlist),
+            Arc::new(handles.network),
+            Arc::new(handles.benchlist),
         ))
+    }
+
+    fn test_info() -> Arc<Info> {
+        info_with(test_parameters(), Handles::default())
+    }
+
+    fn empty() -> super::types::EmptyArgs {
+        super::types::EmptyArgs::default()
     }
 
     // ------------------------------------------------------------------
@@ -628,7 +703,13 @@ mod tests {
 
         // Acronym guard: the snake_case-derived names must NOT be registered —
         // Go's wire names carry consecutive capitals (`GetNodeID`, `GetVMs`).
-        for wrong in ["GetNodeId", "GetNodeIp", "GetNetworkId", "GetBlockchainId", "GetVms"] {
+        for wrong in [
+            "GetNodeId",
+            "GetNodeIp",
+            "GetNetworkId",
+            "GetBlockchainId",
+            "GetVms",
+        ] {
             assert!(
                 reg.lookup("info", wrong).is_none(),
                 "snake_case-derived {wrong} must NOT be registered (exact-remainder rule)"
@@ -668,6 +749,563 @@ mod tests {
                 },
             }),
             "GetNodeVersionReply json shape"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Per-method behavior + Go wire-shape parity
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_node_version_assembles_from_parameters_and_vm_manager() {
+        let handles = Handles {
+            vm_manager: MockVmManager {
+                versions: BTreeMap::from([("avm".to_string(), "v1.14.2".to_string())]),
+                ..MockVmManager::default()
+            },
+            ..Handles::default()
+        };
+        let reply = info_with(test_parameters(), handles)
+            .get_node_version(empty())
+            .await
+            .expect("info.getNodeVersion");
+        assert_eq!(
+            reply.version, "avalanchego/1.14.2",
+            "version.Application.String()"
+        );
+        assert_eq!(reply.database_version, "v1.4.5", "version.CurrentDatabase");
+        assert_eq!(reply.rpc_protocol_version, 45, "version.RPCChainVMProtocol");
+        assert_eq!(reply.git_commit, "de4da4de", "parameters git commit");
+        assert_eq!(
+            reply.vm_versions,
+            BTreeMap::from([("avm".to_string(), "v1.14.2".to_string())]),
+            "vmManager.Versions()"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_node_id_reply_shape() {
+        let reply = test_info()
+            .get_node_id(empty())
+            .await
+            .expect("info.getNodeID");
+        let value = serde_json::to_value(&reply).expect("serialize GetNodeIdReply");
+        assert_eq!(
+            value,
+            json!({
+                "nodeID": NodeId::from([7u8; 20]).to_string(),
+                "nodePOP": {
+                    // formatting.HexNC: 0x-prefixed hex, NO checksum.
+                    "publicKey": format!("0x{}", "01".repeat(48)),
+                    "proofOfPossession": format!("0x{}", "02".repeat(96)),
+                },
+            }),
+            "GetNodeIDReply json shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_node_ip_network_id_and_name() {
+        let info = test_info();
+
+        let ip = serde_json::to_value(info.get_node_ip(empty()).await.expect("info.getNodeIP"))
+            .expect("serialize GetNodeIpReply");
+        assert_eq!(
+            ip,
+            json!({ "ip": "127.0.0.1:9651" }),
+            "GetNodeIPReply json shape"
+        );
+
+        let id = serde_json::to_value(
+            info.get_network_id(empty())
+                .await
+                .expect("info.getNetworkID"),
+        )
+        .expect("serialize GetNetworkIdReply");
+        // json.Uint32 => quoted decimal string.
+        assert_eq!(
+            id,
+            json!({ "networkID": "1" }),
+            "GetNetworkIDReply json shape"
+        );
+
+        let name = serde_json::to_value(
+            info.get_network_name(empty())
+                .await
+                .expect("info.getNetworkName"),
+        )
+        .expect("serialize GetNetworkNameReply");
+        assert_eq!(
+            name,
+            json!({ "networkName": "mainnet" }),
+            "GetNetworkNameReply json shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_blockchain_id_resolves_alias_or_errors() {
+        let x_chain = Id::from([3u8; 32]);
+        let handles = Handles {
+            chain_manager: MockChainManager {
+                aliases: BTreeMap::from([("X".to_string(), x_chain)]),
+                ..MockChainManager::default()
+            },
+            ..Handles::default()
+        };
+        let info = info_with(test_parameters(), handles);
+
+        let reply = info
+            .get_blockchain_id(super::types::GetBlockchainIdArgs {
+                alias: "X".to_string(),
+            })
+            .await
+            .expect("info.getBlockchainID(X)");
+        assert_eq!(reply.blockchain_id, x_chain, "resolved chain ID");
+
+        // Unknown alias: the aliaser error surfaces verbatim as -32000.
+        let err = info
+            .get_blockchain_id(super::types::GetBlockchainIdArgs {
+                alias: "nope".to_string(),
+            })
+            .await
+            .expect_err("info.getBlockchainID(nope) must fail");
+        assert_eq!(err.code, json2_code::SERVER, "getBlockchainID error code");
+        assert_eq!(
+            err.message, "there is no ID with alias: nope",
+            "Go aliaser error message"
+        );
+    }
+
+    fn test_peer(node_id: NodeId) -> PeerInfo {
+        PeerInfo {
+            ip: "10.0.0.1:9651".parse().expect("static addr"),
+            public_ip: None,
+            node_id,
+            version: "avalanchego/1.14.2".to_string(),
+            upgrade_time: 1_607_144_400,
+            last_sent: chrono::Utc
+                .with_ymd_and_hms(2026, 6, 11, 12, 0, 0)
+                .single()
+                .expect("static time"),
+            last_received: chrono::Utc
+                .with_ymd_and_hms(2026, 6, 11, 12, 0, 1)
+                .single()
+                .expect("static time"),
+            observed_uptime: 100,
+            tracked_subnets: BTreeSet::new(),
+            supported_acps: BTreeSet::new(),
+            objected_acps: BTreeSet::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn peers_reply_shape_and_benched_aliases() {
+        let peer_id = NodeId::from([9u8; 20]);
+        let benched_chain = Id::from([4u8; 32]);
+        let subnet = Id::from([5u8; 32]);
+        let mut peer = test_peer(peer_id);
+        peer.tracked_subnets = BTreeSet::from([subnet]);
+        // Go set.Set marshals sorted by encoded bytes: "103" < "23" < "5".
+        peer.supported_acps = BTreeSet::from([23u32, 103u32, 5u32]);
+
+        let handles = Handles {
+            network: MockNetwork {
+                peers: vec![peer],
+                ..MockNetwork::default()
+            },
+            benchlist: MockBenchlist {
+                benched: BTreeMap::from([(peer_id, vec![benched_chain])]),
+            },
+            chain_manager: MockChainManager {
+                primary: BTreeMap::from([(benched_chain, "C".to_string())]),
+                ..MockChainManager::default()
+            },
+            ..Handles::default()
+        };
+        let reply = info_with(test_parameters(), handles)
+            .peers(super::types::PeersArgs::default())
+            .await
+            .expect("info.peers");
+        let value = serde_json::to_value(&reply).expect("serialize PeersReply");
+        assert_eq!(
+            value,
+            json!({
+                // json.Uint64 => quoted string.
+                "numPeers": "1",
+                "peers": [{
+                    "ip": "10.0.0.1:9651",
+                    // Zero netip.AddrPort marshals as "".
+                    "publicIP": "",
+                    "nodeID": peer_id.to_string(),
+                    "version": "avalanchego/1.14.2",
+                    // Plain Go uint64 => JSON number.
+                    "upgradeTime": 1_607_144_400u64,
+                    "lastSent": "2026-06-11T12:00:00Z",
+                    "lastReceived": "2026-06-11T12:00:01Z",
+                    // json.Uint32 => quoted string.
+                    "observedUptime": "100",
+                    "trackedSubnets": [subnet.to_string()],
+                    // Sorted by marshaled bytes: "103" < "23" < "5".
+                    "supportedACPs": [103, 23, 5],
+                    "objectedACPs": [],
+                    "benched": ["C"],
+                }],
+            }),
+            "PeersReply json shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn peers_primary_alias_failure_uses_go_message() {
+        let peer_id = NodeId::from([9u8; 20]);
+        let benched_chain = Id::from([4u8; 32]);
+        let handles = Handles {
+            network: MockNetwork {
+                peers: vec![test_peer(peer_id)],
+                ..MockNetwork::default()
+            },
+            benchlist: MockBenchlist {
+                benched: BTreeMap::from([(peer_id, vec![benched_chain])]),
+            },
+            // No primary alias registered for the benched chain.
+            ..Handles::default()
+        };
+        let err = info_with(test_parameters(), handles)
+            .peers(super::types::PeersArgs::default())
+            .await
+            .expect_err("info.peers must fail on missing primary alias");
+        assert_eq!(err.code, json2_code::SERVER, "peers error code");
+        assert_eq!(
+            err.message,
+            format!(
+                "failed to get primary alias for chain ID {benched_chain}: \
+                 there is no alias for ID: {benched_chain}"
+            ),
+            "Go peers error message"
+        );
+    }
+
+    #[tokio::test]
+    async fn is_bootstrapped_errors_and_success() {
+        let chain = Id::from([6u8; 32]);
+        let handles = Handles {
+            chain_manager: MockChainManager {
+                aliases: BTreeMap::from([("P".to_string(), chain)]),
+                bootstrapped: BTreeSet::from([chain]),
+                ..MockChainManager::default()
+            },
+            ..Handles::default()
+        };
+        let info = info_with(test_parameters(), handles);
+
+        // Missing `chain` argument.
+        let err = info
+            .is_bootstrapped(super::types::IsBootstrappedArgs::default())
+            .await
+            .expect_err("info.isBootstrapped({}) must fail");
+        assert_eq!(
+            err.message, "argument 'chain' not given",
+            "errNoChainProvided"
+        );
+
+        // Unknown chain: the lookup error is REPLACED with Go's message.
+        let err = info
+            .is_bootstrapped(super::types::IsBootstrappedArgs {
+                chain: "nope".to_string(),
+            })
+            .await
+            .expect_err("info.isBootstrapped(nope) must fail");
+        assert_eq!(
+            err.message, "there is no chain with alias/ID 'nope'",
+            "Go unknown-chain message"
+        );
+
+        let reply = info
+            .is_bootstrapped(super::types::IsBootstrappedArgs {
+                chain: "P".to_string(),
+            })
+            .await
+            .expect("info.isBootstrapped(P)");
+        assert!(reply.is_bootstrapped, "chain P is bootstrapped");
+    }
+
+    #[tokio::test]
+    async fn upgrades_reply_mirrors_upgrade_config_tags() {
+        let reply = test_info().upgrades(empty()).await.expect("info.upgrades");
+        let value = serde_json::to_value(&reply).expect("serialize UpgradesReply");
+
+        let keys: Vec<&str> = value
+            .as_object()
+            .expect("UpgradesReply is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut expected = vec![
+            "apricotPhase1Time",
+            "apricotPhase2Time",
+            "apricotPhase3Time",
+            "apricotPhase4Time",
+            "apricotPhase4MinPChainHeight",
+            "apricotPhase5Time",
+            "apricotPhasePre6Time",
+            "apricotPhase6Time",
+            "apricotPhasePost6Time",
+            "banffTime",
+            "cortinaTime",
+            "cortinaXChainStopVertexID",
+            "durangoTime",
+            "etnaTime",
+            "fortunaTime",
+            "graniteTime",
+            "graniteEpochDuration",
+            "heliconTime",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected, "upgrade.Config json tag set");
+
+        // Spot-check Go-parity values for the mainnet schedule.
+        assert_eq!(
+            value["apricotPhase1Time"],
+            json!("2021-03-31T14:00:00Z"),
+            "mainnet ApricotPhase1Time RFC3339"
+        );
+        assert_eq!(
+            value["apricotPhase4MinPChainHeight"],
+            json!(793_005),
+            "plain JSON number (not json.Uint64)"
+        );
+        assert_eq!(
+            value["cortinaXChainStopVertexID"],
+            json!("jrGWDh5Po9FMj54depyunNixpia5PN4aAYxfmNzU8n752Rjga"),
+            "mainnet CortinaXChainStopVertexID CB58"
+        );
+        assert!(
+            value["graniteEpochDuration"].is_number(),
+            "time.Duration marshals as a JSON number of nanoseconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn uptime_formats_four_decimal_strings() {
+        let handles = Handles {
+            network: MockNetwork {
+                uptime: Ok(UptimeResult {
+                    rewarding_stake_percentage: 91.5,
+                    weighted_average_percentage: 98.123_456,
+                }),
+                ..MockNetwork::default()
+            },
+            ..Handles::default()
+        };
+        let reply = info_with(test_parameters(), handles)
+            .uptime(empty())
+            .await
+            .expect("info.uptime");
+        let value = serde_json::to_value(reply).expect("serialize UptimeReply");
+        // json.Float64: strconv.FormatFloat(f, 'f', 4, 64) => quoted strings.
+        assert_eq!(
+            value,
+            json!({
+                "rewardingStakePercentage": "91.5000",
+                "weightedAveragePercentage": "98.1235",
+            }),
+            "UptimeResponse json shape"
+        );
+
+        let handles = Handles {
+            network: MockNetwork {
+                uptime: Err("boom".to_string()),
+                ..MockNetwork::default()
+            },
+            ..Handles::default()
+        };
+        let err = info_with(test_parameters(), handles)
+            .uptime(empty())
+            .await
+            .expect_err("info.uptime must fail");
+        assert_eq!(
+            err.message, "couldn't get node uptime: boom",
+            "Go uptime error message"
+        );
+    }
+
+    #[tokio::test]
+    async fn acps_tallies_weighted_support_and_objections() {
+        let validator_a = NodeId::from([1u8; 20]);
+        let validator_c = NodeId::from([3u8; 20]);
+        let non_validator = NodeId::from([2u8; 20]);
+
+        let mut peer_a = test_peer(validator_a);
+        peer_a.supported_acps = BTreeSet::from([23u32]);
+        peer_a.objected_acps = BTreeSet::from([77u32]);
+        let mut peer_b = test_peer(non_validator);
+        peer_b.supported_acps = BTreeSet::from([23u32]); // weight 0 => skipped
+        let mut peer_c = test_peer(validator_c);
+        peer_c.supported_acps = BTreeSet::from([23u32]);
+
+        let handles = Handles {
+            network: MockNetwork {
+                peers: vec![peer_a, peer_b, peer_c],
+                ..MockNetwork::default()
+            },
+            validators: MockValidators {
+                weights: BTreeMap::from([(validator_a, 10), (validator_c, 5)]),
+                total: 100,
+            },
+            ..Handles::default()
+        };
+        let reply = info_with(test_parameters(), handles)
+            .acps(empty())
+            .await
+            .expect("info.acps");
+        let value = serde_json::to_value(&reply).expect("serialize ACPsReply");
+
+        // CurrentACPs is empty at the pinned upstream, so abstainWeight stays 0
+        // for ACPs only seen from peers (Go only fills it for CurrentACPs).
+        let mut supporters = vec![validator_a.to_string(), validator_c.to_string()];
+        supporters.sort();
+        assert_eq!(
+            value,
+            json!({
+                "acps": {
+                    "23": {
+                        "supportWeight": "15",
+                        "supporters": supporters,
+                        "objectWeight": "0",
+                        "objectors": [],
+                        "abstainWeight": "0",
+                    },
+                    "77": {
+                        "supportWeight": "0",
+                        "supporters": [],
+                        "objectWeight": "10",
+                        "objectors": [validator_a.to_string()],
+                        "abstainWeight": "0",
+                    },
+                },
+            }),
+            "ACPsReply json shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_tx_fee_static_per_network_tables() {
+        // Mainnet table + the two Parameters-driven fields.
+        let value = serde_json::to_value(
+            test_info()
+                .get_tx_fee(empty())
+                .await
+                .expect("info.getTxFee mainnet"),
+        )
+        .expect("serialize GetTxFeeResponse");
+        assert_eq!(
+            value,
+            json!({
+                "txFee": "1000000",
+                "createAssetTxFee": "10000000",
+                "createSubnetTxFee": "1000000000",
+                "transformSubnetTxFee": "10000000000",
+                "createBlockchainTxFee": "1000000000",
+                "addPrimaryNetworkValidatorFee": "0",
+                "addPrimaryNetworkDelegatorFee": "0",
+                "addSubnetValidatorFee": "1000000",
+                "addSubnetDelegatorFee": "1000000",
+            }),
+            "mainnet GetTxFeeResponse"
+        );
+
+        // Fuji.
+        let mut parameters = test_parameters();
+        parameters.network_id = FUJI_ID;
+        let fuji = info_with(parameters, Handles::default())
+            .get_tx_fee(empty())
+            .await
+            .expect("info.getTxFee fuji");
+        assert_eq!(
+            fuji.create_subnet_tx_fee, 100_000_000,
+            "fuji createSubnetTxFee"
+        );
+        assert_eq!(
+            fuji.transform_subnet_tx_fee, 1_000_000_000,
+            "fuji transformSubnetTxFee"
+        );
+
+        // Default (any other network).
+        let mut parameters = test_parameters();
+        parameters.network_id = 1337;
+        let default = info_with(parameters, Handles::default())
+            .get_tx_fee(empty())
+            .await
+            .expect("info.getTxFee default");
+        assert_eq!(
+            default.transform_subnet_tx_fee, 100_000_000,
+            "default transformSubnetTxFee"
+        );
+        assert_eq!(
+            default.create_blockchain_tx_fee, 100_000_000,
+            "default createBlockchainTxFee"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_vms_filters_redundant_alias_and_lists_fxs() {
+        let avm_id = Id::from([8u8; 32]);
+        let handles = Handles {
+            vm_manager: MockVmManager {
+                factories: vec![avm_id],
+                // Go ids.GetRelevantAliases drops the alias == id.String().
+                aliases: BTreeMap::from([(avm_id, vec![avm_id.to_string(), "avm".to_string()])]),
+                ..MockVmManager::default()
+            },
+            ..Handles::default()
+        };
+        let reply = info_with(test_parameters(), handles)
+            .get_vms(empty())
+            .await
+            .expect("info.getVMs");
+        assert_eq!(
+            reply.vms,
+            BTreeMap::from([(avm_id.to_string(), vec!["avm".to_string()])]),
+            "redundant id-string alias filtered"
+        );
+        // The fx IDs are Go's zero-padded ASCII ids.ID constants — golden CB58
+        // strings from api/info/service.md.
+        assert_eq!(
+            reply.fxs,
+            BTreeMap::from([
+                (
+                    "spdxUxVJQbX85MGxMHbKw1sHxMnSqJ3QBzDyDYEP3h6TLuxqQ".to_string(),
+                    "secp256k1fx".to_string()
+                ),
+                (
+                    "qd2U4HDWUvMrVUeTcCHp6xH3Qpnn1XbU5MDdnBoiifFqvgXwT".to_string(),
+                    "nftfx".to_string()
+                ),
+                (
+                    "rXJsCSEYXg2TehWxCEEGj6JU2PWKTkd6cBdNLjoe2SpsKD9cy".to_string(),
+                    "propertyfx".to_string()
+                ),
+            ]),
+            "built-in fx IDs and names"
+        );
+    }
+
+    // End-to-end through the registry: the boxed handler deserializes
+    // params[0] and serializes the reply (macro plumbing).
+    #[tokio::test]
+    async fn dispatch_through_registry() {
+        let mut reg = ServiceRegistry::new();
+        test_info().register_rpc(&mut reg);
+        let handler = reg
+            .lookup("info", "GetNetworkName")
+            .expect("info.GetNetworkName registered");
+        let result = handler(serde_json::Value::Null)
+            .await
+            .expect("info.getNetworkName via registry");
+        assert_eq!(
+            result,
+            json!({ "networkName": "mainnet" }),
+            "registry handler result"
         );
     }
 }
