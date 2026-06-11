@@ -468,7 +468,8 @@ impl<D: Database + 'static> Inner<D> {
 /// The per-index acceptor task (17 §2.2 #20): drains the broadcast
 /// subscription in acceptance order and offloads each versioned-batch write
 /// to `spawn_blocking`. Any write error — and a `Lagged` receive, which means
-/// the index would gap (17 §3) — is fatal to the whole indexer.
+/// the index would gap (17 §3) — is fatal to the whole indexer. A write that
+/// fails only because shutdown was already initiated is a normal close.
 async fn run_index_acceptor<D: Database + 'static>(
     inner: Arc<Inner<D>>,
     index: Arc<Index<PrefixDb<D>>>,
@@ -494,6 +495,13 @@ async fn run_index_acceptor<D: Database + 'static>(
                     Err(e) => Some(e.to_string()),
                 };
                 if let Some(error) = fatal {
+                    // A write that failed because shutdown was already
+                    // initiated (close cancels the tasks and closes the
+                    // indices underneath any in-flight `spawn_blocking`
+                    // write) is a normal close, not a fault: return quietly.
+                    if cancel.is_cancelled() {
+                        return;
+                    }
                     tracing::error!(endpoint, error, "FATAL: failed to index accepted container");
                     if let Err(e) = inner.close() {
                         tracing::error!(error = %e, "failed to close indexer");
@@ -850,6 +858,99 @@ mod tests {
             indexer.is_closed(),
             "disabling indexing for a previously indexed chain is fatal"
         );
+    }
+
+    // A Lagged receive means accepts were dropped — the index would gap — so
+    // the acceptor task fatal-closes the whole indexer and shutdown_f fires
+    // (17 §3). Deterministic: a capacity-1 broadcast channel overflowed by
+    // two sends lags the subscriber before the task ever polls it.
+    #[tokio::test]
+    async fn lagged_receiver_is_fatal() {
+        let base = Arc::new(MemDb::new());
+        let chain1 = Id::from([0xC1; 32]);
+        let h = harness(&base);
+        let indexer =
+            ContainerIndexer::new(config(&h, true, false)).expect("ContainerIndexer::new()");
+        indexer.register_chain_sync(
+            "chain1",
+            &consensus_ctx(chain1, PRIMARY_NETWORK_ID, "chain1"),
+            VmType::Chain,
+        );
+        let index = indexer.block_index(&chain1).expect("block index exists");
+
+        let (sender, receiver) = tokio::sync::broadcast::channel(1);
+        for i in 0..2u8 {
+            sender
+                .send(crate::acceptor::AcceptedContainer {
+                    container_id: Id::from([i; 32]),
+                    bytes: Arc::from(&[i][..]),
+                })
+                .expect("broadcast::Sender::send()");
+        }
+        tokio::spawn(run_index_acceptor(
+            Arc::clone(&indexer.inner),
+            index,
+            receiver,
+            "block".to_string(),
+        ))
+        .await
+        .expect("acceptor task join");
+
+        assert!(
+            indexer.is_closed(),
+            "lagged receive fatal-closes the indexer"
+        );
+        tokio::time::timeout(Duration::from_secs(5), h.shutdown.notified())
+            .await
+            .expect("lagged fatal fires shutdown_f");
+    }
+
+    // A genuine write error with shutdown NOT initiated is fatal: the index's
+    // DB is closed underneath it (without cancelling the indexer), so the
+    // accept write fails, the indexer closes, and shutdown_f fires. This is
+    // the counterpart of the quiet write-abort on graceful close (which only
+    // triggers once `cancel` is already cancelled).
+    #[tokio::test]
+    async fn write_error_is_fatal() {
+        let base = Arc::new(MemDb::new());
+        let chain1 = Id::from([0xC1; 32]);
+        let h = harness(&base);
+        let indexer =
+            ContainerIndexer::new(config(&h, true, false)).expect("ContainerIndexer::new()");
+        indexer.register_chain_sync(
+            "chain1",
+            &consensus_ctx(chain1, PRIMARY_NETWORK_ID, "chain1"),
+            VmType::Chain,
+        );
+        let index = indexer.block_index(&chain1).expect("block index exists");
+
+        // Break the index without initiating shutdown.
+        index.close().expect("Index::close()");
+        assert!(
+            !indexer.inner.cancel.is_cancelled(),
+            "shutdown not initiated before the write error"
+        );
+
+        let (sender, receiver) = tokio::sync::broadcast::channel(1);
+        sender
+            .send(crate::acceptor::AcceptedContainer {
+                container_id: Id::from([0xB1; 32]),
+                bytes: Arc::from(&[1u8, 2, 3][..]),
+            })
+            .expect("broadcast::Sender::send()");
+        tokio::spawn(run_index_acceptor(
+            Arc::clone(&indexer.inner),
+            index,
+            receiver,
+            "block".to_string(),
+        ))
+        .await
+        .expect("acceptor task join");
+
+        assert!(indexer.is_closed(), "write error fatal-closes the indexer");
+        tokio::time::timeout(Duration::from_secs(5), h.shutdown.notified())
+            .await
+            .expect("write-error fatal fires shutdown_f");
     }
 
     // Non-Primary-Network chains are skipped (Go TestIgnoreNonDefaultChains).
