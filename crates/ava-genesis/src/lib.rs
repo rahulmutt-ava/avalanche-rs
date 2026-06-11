@@ -26,6 +26,7 @@ pub mod build;
 pub mod chains;
 pub mod config;
 pub mod error;
+pub mod params;
 pub mod recent_start;
 pub mod split;
 pub mod unparsed;

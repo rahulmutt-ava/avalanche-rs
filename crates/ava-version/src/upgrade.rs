@@ -146,6 +146,7 @@ impl Fork {
 /// check (matching Go's `upgrades` slice which only includes time fields).
 ///
 /// Mirrors `upgrade.Config` from Go (`upgrade/upgrade.go`).
+#[derive(Clone)]
 pub struct UpgradeConfig {
     /// `upgrade.go:ApricotPhase1Time` (`upgrade.go:20`)
     pub apricot_phase_1_time: DateTime<Utc>,

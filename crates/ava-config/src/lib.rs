@@ -23,6 +23,8 @@ pub mod duration;
 pub mod error;
 pub mod flags;
 pub mod keys;
+pub mod node;
+pub mod parse;
 pub mod precedence;
 pub mod subnets;
 
