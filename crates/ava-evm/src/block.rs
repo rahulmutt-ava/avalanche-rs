@@ -34,7 +34,7 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, Decodable2718, ExternalConsensusExecutor, Header, RLP_EMPTY_STRING_CODE,
+    Address, B256, Bytes, Decodable2718, Header, RLP_EMPTY_STRING_CODE,
     RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, State,
     StateBuilder, StateProviderDatabase, TransactionSigned, U256, keccak256,
 };
