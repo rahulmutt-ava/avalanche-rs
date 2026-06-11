@@ -36,17 +36,17 @@ ava-types = { path = "../ava-types" }
 # service's "API called" debug logs / getTxFee deprecation warning.
 ava-version = { path = "../ava-version" }
 ava-vm = { path = "../ava-vm" }
+# chrono mirrors Go time.Time RFC3339(Nano) marshaling for info + health
+# (serde feature for the info wire types); hex covers the BLS PoP (info) and
+# admin dbGet HexNC codec; tracing carries the Go-parity "API called" debug
+# lines + health worker transition logs (specs 00 §7.3).
 chrono = { workspace = true, features = [ "serde" ] }
 hex = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
-# admin dbGet key/value HexNC ("0x…", no checksum) codec (Go `utils/formatting`).
-hex = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-# Go-parity "API called" debug lines on the admin service (specs 00 §7.3).
-tracing = { workspace = true }
 # JSON-RPC 2.0 shim (M8.17 / specs 12 §3.2, 14 §1.1): the gorilla-json2 wire
 # shape is hand-rolled over serde_json; `futures::future::BoxFuture` is the
 # boxed handler return type stored in the registry.
@@ -75,10 +75,15 @@ hyper-util = { version = "0.1", features = [ "server-auto", "server-graceful", "
 # — we use the `pprof::protos::Message` re-export so the version mismatch
 # never leaks into this crate; the lockfile carries both (deny: warn).
 pprof = { version = "0.14", features = [ "prost-codec" ] }
+# Health API (M8.20 / specs 12 §3.4, 14 §5, 18 §2.13): the `checks_failing`
+# gauge registers against a caller-provided plain `prometheus::Registry`
+# (namespace/prefix wiring is M8.21/M8.29).
+prometheus = { workspace = true }
 
 [dev-dependencies]
 # `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
+assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 # Scratch profile-dir for the admin profiler/stacktrace tests (precedent:
 # ava-logging pins tempfile = "3" as a dev-dependency).

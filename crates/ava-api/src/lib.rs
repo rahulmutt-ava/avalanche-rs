@@ -29,6 +29,7 @@
 
 pub mod admin;
 pub mod error;
+pub mod health;
 pub mod info;
 pub mod jsonrpc;
 pub mod middleware;
