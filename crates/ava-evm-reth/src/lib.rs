@@ -147,6 +147,15 @@ pub use revm::primitives::TxKind;
 // revm `Database<Error = ProviderError>` so the bare reth executor can run over
 // Firewood-ethhash (spec 10 §17.1/§17.2).
 pub use revm::Database;
+// alloy-evm's OWN `Database` trait (= revm `Database<Error: Error + Send + Sync
+// + 'static> + Debug`) — the bound every alloy-evm `EvmFactory`/`Evm`
+// implementation requires. The M6.31 `AvaEvmFactory`/`AvaEvm` bound their
+// generics on THIS trait (not bare `revm::Database`) to satisfy the
+// factory/executor tower.
+pub use alloy_evm::Database as AlloyDatabase;
+// `incr_balance` & friends on the journal's per-account handle — needed in
+// scope for the `AvaHandler::reward_beneficiary` override (M6.31).
+pub use revm::context_interface::journaled_state::account::JournaledAccountTr;
 // The error type a revm `State<DB>` overlay surfaces — `EvmDatabaseError<E>`
 // wrapping the inner db error (here `ProviderError`). `PreExecutionHook` operates
 // on the `State` overlay, so its `dyn Database` bound names this error.

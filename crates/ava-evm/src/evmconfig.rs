@@ -53,7 +53,8 @@ use ava_evm_reth::{
     PrecompilesMap, RecoveredTx, ResultAndState, RevmEvm, State, StateDb, StateProviderDatabase,
     SystemCallEvm, TxEnv, TxEnvTr, U256, post_execution,
 };
-use ava_evm_reth::Database as RevmDatabase;
+use ava_evm_reth::AlloyDatabase as RevmDatabase;
+use ava_evm_reth::JournaledAccountTr as _;
 use ruint::aliases::U256 as RuintU256;
 
 use crate::chainspec::{AvaChainSpec, AvaPhase};
@@ -798,7 +799,8 @@ where
         self.executed_txs = self.executed_txs.saturating_add(1);
 
         self.inner.ctx.set_tx(tx);
-        let mut handler = AvaHandler::new(self.disable_refund);
+        let mut handler: AvaHandler<AvaRevmEvm<DB, I>, EVMError<DB::Error>, EthFrame> =
+            AvaHandler::new(self.disable_refund);
         let result = if self.inspect {
             handler.inspect_run(&mut self.inner)
         } else {
