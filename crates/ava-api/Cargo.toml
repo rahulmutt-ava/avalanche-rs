@@ -23,13 +23,22 @@ description = "Node HTTP server + middleware: axum/h2c/CORS/allowed-hosts/node-i
 [dependencies]
 ava-api-macros = { path = "../ava-api-macros" }
 ava-config = { path = "../ava-config" }
+# admin dbGet (M8.19 / specs 12 §3.5, 14 §4) reads the raw node DB through the
+# `KeyValueReader` trait and maps the sentinel errors onto the rpcdb error enum.
+ava-database = { path = "../ava-database" }
+# admin set/getLoggerLevel speak `AvaLevel` (Go `logging.Level` JSON parity).
+ava-logging = { path = "../ava-logging" }
 ava-snow = { path = "../ava-snow" }
 ava-types = { path = "../ava-types" }
 ava-vm = { path = "../ava-vm" }
 async-trait = { workspace = true }
+# admin dbGet key/value HexNC ("0x…", no checksum) codec (Go `utils/formatting`).
+hex = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+# Go-parity "API called" debug lines on the admin service (specs 00 §7.3).
+tracing = { workspace = true }
 # JSON-RPC 2.0 shim (M8.17 / specs 12 §3.2, 14 §1.1): the gorilla-json2 wire
 # shape is hand-rolled over serde_json; `futures::future::BoxFuture` is the
 # boxed handler return type stored in the registry.
@@ -50,12 +59,23 @@ tower-http = { version = "0.6", features = [ "cors", "timeout" ] }
 # (`hyper` itself is pulled in transitively via these features; we never name a
 # `hyper` type directly, so it is not a direct dependency.)
 hyper-util = { version = "0.1", features = [ "server-auto", "server-graceful", "service", "tokio", "http1", "http2" ] }
+# admin CPU profiler (M8.19 / specs 12 §3.5): the sampling profiler behind
+# admin.startCPUProfiler / stopCPUProfiler, writing Go-pprof-protobuf-format
+# `cpu.profile` files (`go tool pprof`-compatible). Pinned per-crate (the spec
+# names the `pprof` crate explicitly; precedent: axum/tower-http/hyper-util
+# above). `prost-codec` pins prost ^0.12 internally (vs the workspace's 0.13)
+# — we use the `pprof::protos::Message` re-export so the version mismatch
+# never leaks into this crate; the lockfile carries both (deny: warn).
+pprof = { version = "0.14", features = [ "prost-codec" ] }
 
 [dev-dependencies]
 # `testutil` exposes `ava_vm::testutil::TestVm` for the register_chain test.
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 ava-version = { path = "../ava-version" }
 pretty_assertions = { workspace = true }
+# Scratch profile-dir for the admin profiler/stacktrace tests (precedent:
+# ava-logging pins tempfile = "3" as a dev-dependency).
+tempfile = "3"
 tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
 tower = { version = "0.5", features = [ "util" ] }
 
