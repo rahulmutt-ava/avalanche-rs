@@ -29,10 +29,15 @@
 
 pub mod error;
 pub mod jsonrpc;
+pub mod metrics;
 pub mod middleware;
 pub mod server;
 
 pub use ava_api_macros::rpc_service;
 pub use error::{ApiError, IntoJsonRpcError, JsonRpcError, Result, json2_code};
 pub use jsonrpc::{BoxedRpcMethod, RpcError, ServiceRegistry, dispatch};
+pub use metrics::{
+    CHAIN_LABEL, Gatherer, LabelGatherer, MetricsError, MultiGatherer, NAMESPACE_SEP,
+    PLATFORM_NAME, PrefixGatherer, make_and_register, metrics_handler,
+};
 pub use server::{ApiServer, BASE_URL, BoxedHandler, MAX_CONCURRENT_STREAMS, Server};
