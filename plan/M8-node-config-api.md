@@ -367,14 +367,38 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > `UnsupportedTxType` (M8.26 deferral). 41 ava-wallet tests (incl. issue-failure-no-record +
 > AssumeDecided coverage). PORTING.md matrix added (28 Go wallet tests mapped).
 
-### Task M8.28: ava-node submodules — trace (OTel), nat, logging factory
+### Task M8.28: ava-node submodules — trace (OTel), nat, logging factory ✅ DONE (b674e19+48d55b1)
 **Crate:** ava-node  ·  **Depends on:** M8.12 (TraceConfig/LogConfig), M1 (tracing/opentelemetry crates)  ·  **Spec:** 12 §7/§8, 17 §2.2 (#23/#24), 18 §5/§6
 **Files:** `crates/ava-node/Cargo.toml`, `crates/ava-node/src/trace.rs`, `crates/ava-node/src/nat/{mod.rs,upnp.rs,pmp.rs,noop.rs}`, `crates/ava-logging/src/lib.rs` (`init_logging`, `make_chain_logger`, reload handles)
-- [ ] **Step 1 — Red:** `ava-logging::tests::ava_level_ordering_and_json_shape` — 8 levels with Go ordering (Verbo<Debug<Trace<Info<Warn<Error<Fatal<Off, 18 §5.1); JSON line shape `{"level","timestamp","logger","caller","msg",...}` lowercased level, integer-ns durations (18 §5.2). `trace.rs::tests::disabled_is_noop` — `tracing-exporter-type=disabled` ⇒ no OTel layer (12 §7). `nat::tests::noop_router_maps_nothing`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-logging tests::ava_level_ordering_and_json_shape` → fails.
-- [ ] **Step 3 — Green:** Implement `AvaLevel` (8 names + ordering), `init_logging` (display layer at display-level + per-logger rolling file layer at log-level; plain/colors/json formats; per-chain `<alias>.log` via `make_chain_logger`; lumberjack-equivalent rotation; reload handles for admin `setLoggerLevel`, 18 §5). `trace::new(TraceConfig)` → `opentelemetry-otlp` exporter (grpc/http, insecure, `TraceIdRatioBased(rate)`, headers) wrapped by `tracing-opentelemetry`; no-op when disabled (12 §7, 18 §6). NAT `Router` trait with upnp (`igd-next`)/pmp/noop + `Mapper` + dynamicip updater (12 §8).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-logging -p ava-node trace:: nat::` passes.
-- [ ] **Step 5 — Commit:** `ava-node: trace(OTel) + nat + logging factory (12 §7/§8, 18 §5/§6)`
+- [x] **Step 1 — Red:** `ava-logging::tests::ava_level_ordering_and_json_shape` — 8 levels with Go ordering (Verbo<Debug<Trace<Info<Warn<Error<Fatal<Off, 18 §5.1); JSON line shape `{"level","timestamp","logger","caller","msg",...}` lowercased level, integer-ns durations (18 §5.2). `trace.rs::tests::disabled_is_noop` — `tracing-exporter-type=disabled` ⇒ no OTel layer (12 §7). `nat::tests::noop_router_maps_nothing`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-logging tests::ava_level_ordering_and_json_shape` → fails.
+- [x] **Step 3 — Green:** Implement `AvaLevel` (8 names + ordering), `init_logging` (display layer at display-level + per-logger rolling file layer at log-level; plain/colors/json formats; per-chain `<alias>.log` via `make_chain_logger`; lumberjack-equivalent rotation; reload handles for admin `setLoggerLevel`, 18 §5). `trace::new(TraceConfig)` → `opentelemetry-otlp` exporter (grpc/http, insecure, `TraceIdRatioBased(rate)`, headers) wrapped by `tracing-opentelemetry`; no-op when disabled (12 §7, 18 §6). NAT `Router` trait with upnp (`igd-next`)/pmp/noop + `Mapper` + dynamicip updater (12 §8).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-logging -p ava-node trace:: nat::` passes.
+- [x] **Step 5 — Commit:** `ava-node: trace(OTel) + nat + logging factory (12 §7/§8, 18 §5/§6)`
+
+> **AS-BUILT (M8.28, merged 5319a70; spec+quality reviewed, fix pass 48d55b1).** 19 tests (12 ava-logging
+> + 7 ava-node). Key as-builts: (1) **NAT NOT re-implemented** — `ava-network::nat` already had
+> `NatRouter`/UPnP(igd-next)/`NoRouter`/`PortMapper`, so `ava-node::nat` RE-EXPORTS those (no
+> upnp.rs/noop.rs files) and adds only the two real gaps: a hand-rolled **RFC 6886 NAT-PMP client**
+> (`pmp.rs`; ava-network's `get_pmp_router` was a `None` stub) and the **dynamicip updater**
+> (CancellationToken + interval, fires sink only on IP change; resolvers = trait seam, concrete
+> opendns/http impls land with M8.29 wiring). `get_router` probe order UPnP→PMP→noop matches Go.
+> **PMP gateway discovery is a `.1`-on-/24 heuristic** (no portable route-table read; wrong guess ⇒
+> external_ip round-trip fails ⇒ falls through to noop — documented in-code, route-table read is a
+> follow-up). (2) `format::json_line` HAND-BUILDS the JSON line for exact zap key order
+> (`level,timestamp,logger,caller,msg,...`; serde_json Map doesn't preserve insertion order); all
+> escaping delegated to serde_json (edge-case tested). (3) **Lumberjack-equivalent rotation
+> implemented for real** (`rolling.rs::RollingWriter`): stable `<name>.log` live file, size-based
+> rotate to `<name>-<timestamp>.log`, prune to max_files, max_age_days drop, gzip on compress
+> (workspace flate2); wrapped by tracing-appender NonBlocking. (4) **Per-chain layers are attachable
+> post-init**: `init_logging` installs a `reload::Layer<Vec<Box<dyn Layer<Registry>>>>` slot;
+> `LogHandles::add_chain_logger(alias)` appends a `ChainFieldFilter`-guarded (`chain == alias` event
+> field) + level-filtered `<alias>.log` layer at runtime. `ReloadHandle` = type-erased boxed setter
+> (admin setLoggerLevel seam, M8.19). (5) OTel pins: opentelemetry/_sdk/otlp 0.27 + tracing-opentelemetry
+> 0.28 (rides workspace tonic 0.12); disabled ⇒ NO layer (provider None), grpc/http + insecure +
+> TraceIdRatioBased + headers covered. (6) M8.29 handoffs: invoke blocking `get_router()`/PMP from
+> spawn_blocking; Verbo/Trace/Fatal collapse to tracing's 5 levels until callers emit the `ava_level`
+> field; `deps-tidy`/`bazel-check-metadata` must run before push (new per-crate deps).
 
 ### Task M8.29: ava-node assembly — Node::new (init steps 1–26, exact order)
 **Crate:** ava-node  ·  **Depends on:** M8.12 (Config), M8.16–M8.22 (ApiServer), M8.24 (Indexer), M8.28 (trace/nat/logging), M2/M3 (Network/Router/validators/message::Creator/timeout/resource), M4–M7 (chain manager + VMs), M1 ava-database  ·  **Spec:** 12 §2.1/§2.2, 17 §1/§2/§7
