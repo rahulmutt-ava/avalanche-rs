@@ -2,8 +2,31 @@
 // See the file LICENSE for licensing terms.
 
 //! C-chain wallet — atomic import/export builder / signer / backend (port of
-//! `wallet/chain/c`). Implemented in M8.26.
+//! `wallet/chain/c`).
+//!
+//! Only the atomic txs (X/P ↔ C) are built here; EVM account txs go through
+//! reth's RPC (specs 12 §13).
 
-// Consumed from M8.26 (C-chain atomic tx types); referenced to satisfy
-// unused-crate-dependencies until the builder lands in the next task commit.
-use ava_evm as _;
+use ava_types::id::Id;
+
+pub mod backend;
+pub mod builder;
+pub mod signer;
+
+pub use backend::{Backend, WalletBackend};
+pub use builder::{Builder, CBuilder};
+pub use signer::{SignedTx, Signer};
+
+/// The C-chain's alias (`c.Alias`).
+pub const ALIAS: &str = "C";
+
+/// `wallet/chain/c.Context` — chain configuration.
+#[derive(Clone, Copy, Debug)]
+pub struct Context {
+    /// `NetworkID`.
+    pub network_id: u32,
+    /// `BlockchainID` — the C-chain id.
+    pub blockchain_id: Id,
+    /// `AVAXAssetID`.
+    pub avax_asset_id: Id,
+}
