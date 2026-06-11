@@ -142,9 +142,14 @@ impl StatefulPrecompile for RewardManagerPrecompile {
         let Some((selector, args)) = split_selector(input) else {
             return Ok(failure(gas_limit));
         };
-        if let Some(res) =
-            dispatch_allowlist(REWARD_MANAGER_ADDRESS, selector, args, gas_limit, ctx, state)
-        {
+        if let Some(res) = dispatch_allowlist(
+            REWARD_MANAGER_ADDRESS,
+            selector,
+            args,
+            gas_limit,
+            ctx,
+            state,
+        ) {
             return res;
         }
         match selector {

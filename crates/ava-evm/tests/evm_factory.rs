@@ -90,7 +90,9 @@ fn warp_predicate_bytes() -> Vec<u8> {
     let unsigned = UnsignedMessage {
         network_id: NETWORK_ID,
         source_chain_id: Id::from([0x5Au8; 32]),
-        payload: WarpPayload::AddressedCall(call).marshal_payload().expect("payload"),
+        payload: WarpPayload::AddressedCall(call)
+            .marshal_payload()
+            .expect("payload"),
     };
     let msg = Message {
         unsigned_message: unsigned,
@@ -104,9 +106,7 @@ fn warp_predicate_bytes() -> Vec<u8> {
 
 /// London-era calldata gas: 16 per nonzero byte, 4 per zero byte.
 fn calldata_gas(data: &[u8]) -> u64 {
-    data.iter()
-        .map(|&b| if b == 0 { 4u64 } else { 16 })
-        .sum()
+    data.iter().map(|&b| if b == 0 { 4u64 } else { 16 }).sum()
 }
 
 #[test]
@@ -232,7 +232,10 @@ fn evm_factory_live_path() {
     let receipts = &outcome.result.receipts;
     assert_eq!(receipts.len(), 2);
     assert!(receipts[0].success, "sendWarpMessage tx must succeed");
-    assert!(receipts[1].success, "getVerifiedWarpMessage tx must succeed");
+    assert!(
+        receipts[1].success,
+        "getVerifiedWarpMessage tx must succeed"
+    );
     assert_eq!(
         receipts[0].logs.len(),
         1,

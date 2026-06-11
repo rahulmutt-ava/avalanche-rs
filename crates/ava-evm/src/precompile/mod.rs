@@ -17,13 +17,15 @@
 //! source-subnet validator set at the proposervm-pinned P-Chain height and
 //! stashes a `Vec<bool>` into [`registry::PredicateResults`] (G4, spec 20 §7).
 //!
-//! **Deferred (→ M6.31):** the live `EvmFactory` that installs
-//! [`registry::AvaPrecompiles`] + [`registry::AvaCtxExt`] onto the revm context's
-//! `Chain` slot during `execute_batch` (the bare-executor path churn M6.21
-//! flagged), and the other ConfigKey precompile bodies
-//! (AllowList/FeeManager/NativeMinter/RewardManager/GasPriceManager). They
-//! register as [`registry::StatefulPrecompile`]s exactly like [`warp`] once
-//! ported.
+//! M6.31 lands the live `crate::evmconfig::AvaEvmFactory` that installs the
+//! registered modules into every EVM's `PrecompilesMap` during `execute_batch`
+//! (height-gated, predicate results threaded per tx index), plus the ConfigKey
+//! precompile bodies: [`allowlist`] (shared role machinery + the standalone
+//! Deployer/Tx allow lists), [`nativeminter`], [`feemanager`],
+//! [`rewardmanager`], and [`gaspricemanager`] — each a
+//! [`registry::StatefulPrecompile`] ported byte-exact from subnet-evm
+//! `precompile/contracts/*` (golden vectors:
+//! `tests/vectors/cchain/precompile/configkey_golden.json`).
 //!
 //! [`PrecompileProvider`]: ava_evm_reth::PrecompileProvider
 

@@ -39,6 +39,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use ava_evm_reth::AlloyDatabase as RevmDatabase;
+use ava_evm_reth::JournaledAccountTr as _;
 use ava_evm_reth::{
     Address, AvaEvmEnv, AvaEvmError, B256, BaseFeeParams, BlobParams, BlockEnv, BlockEnvTr,
     BlockExecutor, BundleRetention, Cfg, CfgEnv, Chain, ConfigureEvm, Context, ContextSetters,
@@ -47,14 +49,12 @@ use ava_evm_reth::{
     EthereumHardfork, EthereumHardforks, EvmEnv, EvmFactory, EvmState, EvmTr, EvmTrError,
     ExecOutcome, ExternalConsensusExecutor, ForkCondition, ForkFilter, ForkFilterKey, ForkHash,
     ForkId, FrameInit, FrameResult, FrameTr, Genesis, HaltReason, Handler, Hardfork, Hardforks,
-    Head, Header, Inspector, InspectorEvmTr, InspectorHandler, JournalTr, MainBuilder,
-    MainContext, NextBlockEnvAttributes, NoOpInspector, NodeRecord, PreExecutionHook,
-    PrecompileId, PrecompileInput, PrecompileResult, PrecompileSpecId, Precompiles,
-    PrecompilesMap, RecoveredTx, ResultAndState, RevmEvm, State, StateDb, StateProviderDatabase,
-    SystemCallEvm, TxEnv, TxEnvTr, U256, post_execution,
+    Head, Header, Inspector, InspectorEvmTr, InspectorHandler, JournalTr, MainBuilder, MainContext,
+    NextBlockEnvAttributes, NoOpInspector, NodeRecord, PreExecutionHook, PrecompileId,
+    PrecompileInput, PrecompileResult, PrecompileSpecId, Precompiles, PrecompilesMap, RecoveredTx,
+    ResultAndState, RevmEvm, State, StateDb, StateProviderDatabase, SystemCallEvm, TxEnv, TxEnvTr,
+    U256, post_execution,
 };
-use ava_evm_reth::AlloyDatabase as RevmDatabase;
-use ava_evm_reth::JournaledAccountTr as _;
 use ruint::aliases::U256 as RuintU256;
 
 use crate::chainspec::{AvaChainSpec, AvaPhase};
@@ -375,8 +375,11 @@ impl AvaEvmConfig {
         let chain_spec = Arc::new(chain_spec);
         let exec_spec = Arc::new(AvaExecutorSpec(chain_spec.clone()));
         let precompiles = Arc::new(PrecompileRegistry::new());
-        let factory =
-            AvaEvmFactory::new(chain_spec.clone(), precompiles.clone(), AvaExecCtx::default());
+        let factory = AvaEvmFactory::new(
+            chain_spec.clone(),
+            precompiles.clone(),
+            AvaExecCtx::default(),
+        );
         Self {
             inner: EthEvmConfig::new_with_evm_factory(exec_spec.clone(), factory),
             exec_spec,
@@ -655,8 +658,12 @@ pub struct AvaHandler<EVM, ERROR, FRAME> {
     /// Whether gas refunds are disabled (ApricotPhase1+ — always on mainnet).
     disable_refund: bool,
     /// Generic-parameter carrier (no data).
-    _phantom: PhantomData<fn() -> (EVM, ERROR, FRAME)>,
+    _phantom: AvaHandlerPhantom<EVM, ERROR, FRAME>,
 }
+
+/// The zero-sized generic carrier of [`AvaHandler`] (a covariant, `Send +
+/// Sync` `PhantomData` over a fn pointer — no ownership implied).
+type AvaHandlerPhantom<EVM, ERROR, FRAME> = PhantomData<fn() -> (EVM, ERROR, FRAME)>;
 
 impl<EVM, ERROR, FRAME> AvaHandler<EVM, ERROR, FRAME> {
     /// A handler with the AP1 refund switch set from the active fork.

@@ -13,9 +13,7 @@ use std::sync::Arc;
 
 use ava_evm::precompile::allowlist::{Role, allow_list_key};
 use ava_evm::precompile::feemanager::{FEE_MANAGER_ADDRESS, FeeManagerPrecompile};
-use ava_evm::precompile::gaspricemanager::{
-    GAS_PRICE_MANAGER_ADDRESS, GasPriceManagerPrecompile,
-};
+use ava_evm::precompile::gaspricemanager::{GAS_PRICE_MANAGER_ADDRESS, GasPriceManagerPrecompile};
 use ava_evm::precompile::nativeminter::{NATIVE_MINTER_ADDRESS, NativeMinterPrecompile};
 use ava_evm::precompile::registry::{
     AvaBlockCtx, MemStateOps, PrecompileCtx, PredicateResults, StatefulPrecompile,
@@ -148,7 +146,12 @@ fn feemanager_golden() {
     // setFeeConfig: success, Go gas (base + Durango event), storage + event
     // byte-exact.
     let out = fm
-        .run(&hex_bytes(&g.feemanager.set_fee_config_calldata), GAS, &ctx(caller), &mut ops)
+        .run(
+            &hex_bytes(&g.feemanager.set_fee_config_calldata),
+            GAS,
+            &ctx(caller),
+            &mut ops,
+        )
         .expect("setFeeConfig");
     assert_eq!(out.result, InstructionResult::Return);
     assert_eq!(
@@ -180,7 +183,10 @@ fn feemanager_golden() {
         .run(&[0x5f, 0xbb, 0xc0, 0xd2], GAS, &ctx(caller), &mut ops)
         .expect("getFeeConfig");
     assert_eq!(out.result, InstructionResult::Return);
-    assert_eq!(out.output.as_ref(), hex_bytes(&g.feemanager.get_fee_config_output));
+    assert_eq!(
+        out.output.as_ref(),
+        hex_bytes(&g.feemanager.get_fee_config_output)
+    );
     assert_eq!(out.gas.total_gas_spent(), g.feemanager.get_fee_config_gas);
 
     // getFeeConfigLastChangedAt.
@@ -191,12 +197,20 @@ fn feemanager_golden() {
         out.output.as_ref(),
         hex_bytes(&g.feemanager.get_last_changed_at_output_block7)
     );
-    assert_eq!(out.gas.total_gas_spent(), g.feemanager.get_last_changed_at_gas);
+    assert_eq!(
+        out.gas.total_gas_spent(),
+        g.feemanager.get_last_changed_at_gas
+    );
 
     // Allow-list role gate: a non-enabled caller cannot set the config.
     let stranger = Address::from([0x99u8; 20]);
     let out = fm
-        .run(&hex_bytes(&g.feemanager.set_fee_config_calldata), GAS, &ctx(stranger), &mut ops)
+        .run(
+            &hex_bytes(&g.feemanager.set_fee_config_calldata),
+            GAS,
+            &ctx(stranger),
+            &mut ops,
+        )
         .expect("setFeeConfig stranger");
     assert_eq!(out.result, InstructionResult::PrecompileError);
     assert_eq!(out.gas.total_gas_spent(), GAS, "failure consumes all gas");
@@ -216,7 +230,8 @@ fn rewardmanager_golden() {
     // Seed the OLD reward address the golden event encodes (0x3333…).
     let mut old_word = [0u8; 32];
     old_word[12..].copy_from_slice(&[0x33u8; 20]);
-    ops.storage.insert((REWARD_MANAGER_ADDRESS, rask), B256::new(old_word));
+    ops.storage
+        .insert((REWARD_MANAGER_ADDRESS, rask), B256::new(old_word));
 
     // setRewardAddress: storage + 4-topic event + gas.
     let out = rm
@@ -244,7 +259,10 @@ fn rewardmanager_golden() {
         .map(|t| b256(t))
         .collect();
     assert_eq!(topics, want);
-    assert_eq!(data, hex_bytes(&g.rewardmanager.reward_address_changed_data));
+    assert_eq!(
+        data,
+        hex_bytes(&g.rewardmanager.reward_address_changed_data)
+    );
 
     // currentRewardAddress.
     let out = rm
@@ -254,7 +272,10 @@ fn rewardmanager_golden() {
         out.output.as_ref(),
         hex_bytes(&g.rewardmanager.current_reward_address_output)
     );
-    assert_eq!(out.gas.total_gas_spent(), g.rewardmanager.current_reward_address_gas);
+    assert_eq!(
+        out.gas.total_gas_spent(),
+        g.rewardmanager.current_reward_address_gas
+    );
 
     // allowFeeRecipients: sentinel stored + 2-topic event; then the read
     // reports true.
@@ -369,7 +390,12 @@ fn gaspricemanager_golden() {
         b256(&g.gaspricemanager.get_last_changed_at_output_block7)
     );
     let (_, topics, data) = ops.logs.last().expect("GasPriceConfigUpdated log").clone();
-    let want: Vec<B256> = g.gaspricemanager.event_topics.iter().map(|t| b256(t)).collect();
+    let want: Vec<B256> = g
+        .gaspricemanager
+        .event_topics
+        .iter()
+        .map(|t| b256(t))
+        .collect();
     assert_eq!(topics, want);
     assert_eq!(data, hex_bytes(&g.gaspricemanager.event_data));
 
@@ -425,13 +451,19 @@ fn nativeminter_mint() {
         .run(&input, GAS, &ctx(caller), &mut ops)
         .expect("mintNativeCoin");
     assert_eq!(out.result, InstructionResult::Return);
-    assert_eq!(ops.balances[&to], U256::from(5u64), "minted balance credited");
+    assert_eq!(
+        ops.balances[&to],
+        U256::from(5u64),
+        "minted balance credited"
+    );
     let (log_addr, topics, _) = ops.logs.last().expect("NativeCoinMinted log").clone();
     assert_eq!(log_addr, NATIVE_MINTER_ADDRESS);
     assert_eq!(topics.len(), 3);
 
     // Role gate: stranger cannot mint.
     let stranger = Address::from([0x99u8; 20]);
-    let out = nm.run(&input, GAS, &ctx(stranger), &mut ops).expect("mint stranger");
+    let out = nm
+        .run(&input, GAS, &ctx(stranger), &mut ops)
+        .expect("mint stranger");
     assert_eq!(out.result, InstructionResult::PrecompileError);
 }
