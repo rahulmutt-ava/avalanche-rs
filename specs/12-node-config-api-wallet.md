@@ -343,6 +343,15 @@ including the order-sensitive derived values:
   on Mainnet/Fuji; ephemeral certs rejected on standard networks; staking key/cert
   generated if absent and not ephemeral.
 
+  > **CORRECTION (M8.12 as-built, verified against Go @ cc3b103b91):** the
+  > "ephemeral certs rejected on standard networks" clause above is wrong — Go
+  > `config.go:752-760` (`getStakingTLSCert`) generates an ephemeral cert
+  > unconditionally when `staking-ephemeral-cert-enabled` is set, with **no
+  > network-ID check anywhere** in `config/` or `node/`. The only public-network
+  > rejection in `getStakingConfig` is sybil-protection
+  > (`errSybilProtectionDisabledOnPublicNetwork`). The Rust port mirrors Go
+  > (no ephemeral rejection).
+
 `Config` (the resolved struct, `config/node/config.go`) is the **shared contract**
 read by `ava-node` and every subsystem. It is `#[derive(Clone)]`, not
 serde-serialized on the hot path; it embeds sub-configs owned by other crates:

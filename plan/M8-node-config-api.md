@@ -52,7 +52,13 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > - **Go snapshots @ `cc3b103b91`** (the reviewed-through upstream pin): `flags.json` via `cargo xtask gen-flags`; genesis vectors (incl. the 4.4 MB mainnet P-chain byte stream) via `cargo xtask gen-genesis`, emitted by the M7.29-pattern in-repo go-oracle test (`crates/ava-genesis/tests/go-oracle/`, env-gated, copied into `../avalanchego` to run).
 > - **`ByEndTimeHeap::add` dedups by tx ID** (a4c5dcb) — mirrors Go `txheap.Add`'s already-present skip; surfaced post-M8.8, byte-streams unaffected for the standard networks.
 > - `xtask` gained `gen-flags` + `gen-genesis` subcommands (separate files; main.rs dispatch).
-> - **`m8/wallet` branch in flight** (M8.25 ✅ on-branch + M8.26 mid-task uncommitted) — continuation dispatched as part of the next wave.
+> - ~~**`m8/wallet` branch in flight**~~ → M8.25+M8.26 merged @ 7afa24c (2026-06-11).
+>
+> **WAVE B+D MERGED 2026-06-11** (branches `m8/nodeconfig`, `m8.27/wallet-facade`): M8.12+M8.13
+> (get_node_config + subnet/chain loaders, 36 ava-config tests) and M8.27 (P/X/C facades +
+> make_wallet over the client-trait seam, 41 ava-wallet tests) — see the per-task AS-BUILT notes.
+> Remaining M8 frontier: **M8.16→M8.17 (ava-api server + JSON-RPC shim) ∥ M8.28 (trace/nat/logging)**,
+> then the per-service fan-out M8.18–M8.24.
 
 ---
 
@@ -157,23 +163,39 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-config config_precedence` passes (per-PR exit gate).
 - [x] **Step 5 — Commit:** `ava-config: prop::config_precedence (flag>env>file>default, 13 §25)`
 
-### Task M8.12: get_node_config — Config struct + network-dependent derived defaults + validation
+### Task M8.12: get_node_config — Config struct + network-dependent derived defaults + validation ✅ DONE (ed97658+2ede55c)
 **Crate:** ava-config  ·  **Depends on:** M8.10, M8.8 (ava-genesis bootstrappers/genesis), M2/M3 (NetworkConfig, ConsensusParams, BenchlistConfig), M1 ava-database (DatabaseConfig)  ·  **Spec:** 12 §1.6, 13 §3/§5/§7/§8/§13/§18/§19/§21 (network-dependent + validation)
 **Files:** `crates/ava-config/src/node.rs` (`pub struct Config`), `crates/ava-config/src/parse.rs` (`get_node_config`)
-- [ ] **Step 1 — Red:** `parse.rs::tests::network_allow_private_ips_dependence` — unset ⇒ false for Mainnet/Fuji, true for Local/custom; set ⇒ honored (13 §8). `sybil_protection_disabled_rejected_on_mainnet` (`assert_matches!(..., Err(ConfigError::SybilProtectionDisabledOnPublicNetwork))`, 13 §5). `bootstrappers_filled_from_genesis_when_unset` (both empty + standard net ⇒ `genesis::sample_bootstrappers(net,5)`; mismatched ip/id counts ⇒ error, 13 §13). `snow_quorum_overrides_alpha` (13 §7).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config parse::tests::network_allow_private_ips_dependence` → fails.
-- [ ] **Step 3 — Green:** Define `Config` (`#[derive(Clone)]`, 12 §1.6) embedding `NetworkConfig`, `ConsensusParams`/`BenchlistConfig`, `DatabaseConfig`, `LoggingConfig`, `HTTPConfig`, `TraceConfig`, `SubnetConfigs`, `ChainConfigs`, staking certs/signer, `GenesisBytes`+`AvaxAssetID`. Implement `get_node_config(&Layered)` mirroring `config.go::GetNodeConfig` order-sensitive derivations: parse network-id; resolve `network-allow-private-ips`; fill bootstrappers from `ava-genesis` when unset (both-or-neither, count match); genesis bytes from `--genesis-file(-content)` for custom else embedded; staking-economics/fee flags ignored on Mainnet/Fuji (use `genesis::GetStakingConfig`/`GetTxFeeConfig`); validation (sybil rejection, ephemeral-cert rejection, staking-signer one-of, public-ip vs resolution-service one-of, disk-space ranges, track-subnets ≠ Primary) → `ConfigError` variants (12 §11). `snow-quorum-size` override.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config parse::` passes.
-- [ ] **Step 5 — Commit:** `ava-config: get_node_config + network-dependent defaults + validation (12 §1.6)`
+- [x] **Step 1 — Red:** `parse.rs::tests::network_allow_private_ips_dependence` — unset ⇒ false for Mainnet/Fuji, true for Local/custom; set ⇒ honored (13 §8). `sybil_protection_disabled_rejected_on_mainnet` (`assert_matches!(..., Err(ConfigError::SybilProtectionDisabledOnPublicNetwork))`, 13 §5). `bootstrappers_filled_from_genesis_when_unset` (both empty + standard net ⇒ `genesis::sample_bootstrappers(net,5)`; mismatched ip/id counts ⇒ error, 13 §13). `snow_quorum_overrides_alpha` (13 §7).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config parse::tests::network_allow_private_ips_dependence` → fails.
+- [x] **Step 3 — Green:** Define `Config` (`#[derive(Clone)]`, 12 §1.6) embedding `NetworkConfig`, `ConsensusParams`/`BenchlistConfig`, `DatabaseConfig`, `LoggingConfig`, `HTTPConfig`, `TraceConfig`, `SubnetConfigs`, `ChainConfigs`, staking certs/signer, `GenesisBytes`+`AvaxAssetID`. Implement `get_node_config(&Layered)` mirroring `config.go::GetNodeConfig` order-sensitive derivations: parse network-id; resolve `network-allow-private-ips`; fill bootstrappers from `ava-genesis` when unset (both-or-neither, count match); genesis bytes from `--genesis-file(-content)` for custom else embedded; staking-economics/fee flags ignored on Mainnet/Fuji (use `genesis::GetStakingConfig`/`GetTxFeeConfig`); validation (sybil rejection, ephemeral-cert rejection, staking-signer one-of, public-ip vs resolution-service one-of, disk-space ranges, track-subnets ≠ Primary) → `ConfigError` variants (12 §11). `snow-quorum-size` override.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config parse::` passes.
+- [x] **Step 5 — Commit:** `ava-config: get_node_config + network-dependent defaults + validation (12 §1.6)`
 
-### Task M8.13: subnet & chain config dir/content loaders
+> **AS-BUILT (M8.12).** `get_node_config` = ~25 focused helpers named after their Go getters,
+> orchestrated in Go's exact order (staking before network; halflife threaded into router+network).
+> **PLAN-TEXT CORRECTION (review-verified): "ephemeral-cert rejection" does NOT exist in Go** —
+> `config.go:752-760` `getStakingTLSCert` generates an ephemeral cert unconditionally, no
+> network-ID check (the only public-net rejection in `getStakingConfig` is sybil-protection);
+> Rust mirrors Go (no rejection); spec 12 §1.6 carries the correction callout. Other as-builts:
+> `ACTIVATED_ACPS` (17 entries) + empty `SCHEDULED_ACPS` live as `parse.rs` consts (re-home if
+> ava-network needs them for handshakes); custom `--upgrade-file(-content)` carried raw in
+> `Config::custom_upgrade_bytes` (JSON-validated; `ava-version::UpgradeConfig` has no serde);
+> Go's vacuous `< 0` Duration checks elided (unsigned `Duration`); `provided_flags` renders
+> resolved values as strings over `FLAG_SPECS`; `ava-genesis/src/params.rs` =
+> `GetStakingConfig`/`GetTxFeeConfig` constants (review-verified vs `genesis_{mainnet,fuji,local}.go`;
+> `createSubnetTxFee` no longer exists at the cc3b103 pin). Quality follow-up 2ede55c added the
+> 13-row `validation_guard_matrix` (`ConflictingImplicitACPOpinion` uncoverable while
+> `SCHEDULED_ACPS` is empty — noted in the test header) + an env-layer smoke test. 36 ava-config tests.
+
+### Task M8.13: subnet & chain config dir/content loaders ✅ DONE (0aec4fd)
 **Crate:** ava-config  ·  **Depends on:** M8.12, M2/M3 (snowball::Parameters)  ·  **Spec:** 12 §1.7, 13 §14 (subnet/chain config schema + resolution)
 **Files:** `crates/ava-config/src/subnets.rs` (`subnets::Config`, loader), `crates/ava-config/src/chain_config.rs`
-- [ ] **Step 1 — Red:** `subnets.rs::tests::resolve_consensus_mode` — at-most-one of `consensusParameters`/`snowParameters`/`simplexParameters` (`ErrTooManyConsensusParameters`); none ⇒ primary-network snow config; `allowedNodes` non-empty requires `validatorOnly=true` (`AllowedNodesWithoutValidatorOnly`); deprecated `consensusParameters` migrates into `snowParameters` (13 §14). `chain_config.rs::tests::chain_config_dir_layout` — `<dir>/<alias>/{config,upgrade}.*` → `ChainConfig{config,upgrade}`; b64 `chain-config-content` map form; explicit-but-missing dir ⇒ `errCannotReadDirectory`, unset+missing ⇒ empty (13 §14).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config subnets::tests::resolve_consensus_mode` → fails.
-- [ ] **Step 3 — Green:** Implement `subnets::Config { validator_only, allowed_nodes: BTreeSet<NodeId>, consensus_parameters, proposer_num_historical_blocks }` (13 §14 — NOT the prompt's `gossipConfig`/`proposerMinBlockDelay`). Implement `getSubnetConfigFromBytes`→`applySubnetConfigDefaults`→`resolveConsensusMode`→`ValidParameters` (13 §14). Implement chain-config dir/content loaders and alias-file loaders (`map[ids.ID][]string`, 13 §14).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config subnets:: chain_config::` passes.
-- [ ] **Step 5 — Commit:** `ava-config: subnet/chain config + alias loaders (12 §1.7, 13 §14)`
+- [x] **Step 1 — Red:** `subnets.rs::tests::resolve_consensus_mode` — at-most-one of `consensusParameters`/`snowParameters`/`simplexParameters` (`ErrTooManyConsensusParameters`); none ⇒ primary-network snow config; `allowedNodes` non-empty requires `validatorOnly=true` (`AllowedNodesWithoutValidatorOnly`); deprecated `consensusParameters` migrates into `snowParameters` (13 §14). `chain_config.rs::tests::chain_config_dir_layout` — `<dir>/<alias>/{config,upgrade}.*` → `ChainConfig{config,upgrade}`; b64 `chain-config-content` map form; explicit-but-missing dir ⇒ `errCannotReadDirectory`, unset+missing ⇒ empty (13 §14).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config subnets::tests::resolve_consensus_mode` → fails.
+- [x] **Step 3 — Green:** Implement `subnets::Config { validator_only, allowed_nodes: BTreeSet<NodeId>, consensus_parameters, proposer_num_historical_blocks }` (13 §14 — NOT the prompt's `gossipConfig`/`proposerMinBlockDelay`). Implement `getSubnetConfigFromBytes`→`applySubnetConfigDefaults`→`resolveConsensusMode`→`ValidParameters` (13 §14). Implement chain-config dir/content loaders and alias-file loaders (`map[ids.ID][]string`, 13 §14).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config subnets:: chain_config::` passes.
+- [x] **Step 5 — Commit:** `ava-config: subnet/chain config + alias loaders (12 §1.7, 13 §14)`
 
 ### Task M8.14: ava-genesis bootstrappers + sample_bootstrappers + local start-time advance ✅ DONE (2be13f6+a4c5dcb)
 **Crate:** ava-genesis  ·  **Depends on:** M8.5, M2 (uniform sampler)  ·  **Spec:** 23 §5.1 (getRecentStartTime), §5.2 (bootstrappers/SampleBootstrappers)
@@ -319,14 +341,31 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > verify against the coreth oracle and fix. Benign divergence: Go C `backend.Balance` errors
 > ErrNotFound on unknown accounts, Rust returns 0.
 
-### Task M8.27: ava-wallet — Wallet facades + primary wallet (make_wallet over API)
+### Task M8.27: ava-wallet — Wallet facades + primary wallet (make_wallet over API) ✅ DONE (3a96772+6ce7f85)
 **Crate:** ava-wallet  ·  **Depends on:** M8.25, M8.26, M8.18/M8.22 (API client for state fetch)  ·  **Spec:** 12 §13
 **Files:** `crates/ava-wallet/src/{p,x,c}/wallet.rs`, `crates/ava-wallet/src/primary.rs` (`make_wallet`, `Wallet{p,x,c}`)
-- [ ] **Step 1 — Red:** `primary.rs::tests::issue_flow_records_in_backend` — `Wallet::issue_*_tx` = build→sign→`issue_tx`(submit)→record in backend; with a mock chain client, assert the submitted bytes equal the built+signed bytes and the backend reflects the consumed/created UTXOs (12 §13). `make_wallet` fetches UTXOs/subnets/owners and wires P/X/C.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-wallet primary::tests::issue_flow_records_in_backend` → fails.
-- [ ] **Step 3 — Green:** Implement per-chain `Wallet` facade (`issue_*_tx` build+sign+issue+record) and `wallet/subnet/primary::make_wallet(uri, keychain, config)` fetching state over the API (info/platform/avm clients) and wiring `Wallet{p,x,c}` + `NewWalletWithOptions` (12 §13).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-wallet primary::` passes.
-- [ ] **Step 5 — Commit:** `ava-wallet: P/X/C facades + primary make_wallet (12 §13)`
+- [x] **Step 1 — Red:** `primary.rs::tests::issue_flow_records_in_backend` — `Wallet::issue_*_tx` = build→sign→`issue_tx`(submit)→record in backend; with a mock chain client, assert the submitted bytes equal the built+signed bytes and the backend reflects the consumed/created UTXOs (12 §13). `make_wallet` fetches UTXOs/subnets/owners and wires P/X/C.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-wallet primary::tests::issue_flow_records_in_backend` → fails.
+- [x] **Step 3 — Green:** Implement per-chain `Wallet` facade (`issue_*_tx` build+sign+issue+record) and `wallet/subnet/primary::make_wallet(uri, keychain, config)` fetching state over the API (info/platform/avm clients) and wiring `Wallet{p,x,c}` + `NewWalletWithOptions` (12 §13).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-wallet primary::` passes.
+- [x] **Step 5 — Commit:** `ava-wallet: P/X/C facades + primary make_wallet (12 §13)`
+
+> **AS-BUILT (M8.27).** The M8.18/M8.22 API clients don't exist yet → `make_wallet(&Clients, keychain, config)`
+> takes narrow client TRAITS (`src/client.rs`: Info 2 / P 7 / X 5 / C 3 / Eth 3 methods; the
+> deferred-live-transport pattern, M7.20/M7.23 precedent) — live JSON-RPC-over-HTTP impls + the
+> Go `fetchLimit=1024` UTXO paging loop land with ava-api (M8.18/M8.22/M8.23). Fetch set mirrors
+> Go `MakeWallet`/`FetchState` (info + P/X/C contexts incl. the 2× gas price, 9 source×destination
+> UTXO views, owners, eth balance/nonce). `issue_*_tx` = build→sign→issue→await-accepted (unless
+> `TxOption::AssumeDecided`)→`Backend::accept_tx` (Go `backend_visitor.go` parity; export indexing
+> `len(outs)+i`; C credit `amount×10⁹` checked-u128). `WithBaseFee` resolves in the C facade
+> (estimate-or-override), per the M8.26 hand-off. Review-verified divergences (documented in
+> `tests/PORTING.md`): C `balance()`/`nonce()` return 0 for untracked accounts (Go: ErrNotFound);
+> typed per-chain UTXO store errors `UnknownOutputType` on cross-boundary StakeableLock/SecpMint
+> (Go stores untyped; wallet builders never produce these). Go's `AcceptAtomicTx` nonce handling is
+> an unconditional `input.Nonce+1` overwrite (a reviewer's `errInvalidNonce` claim was checked and
+> is WRONG — no such check exists in `wallet/chain/c`). X OperationTx facade surfaces
+> `UnsupportedTxType` (M8.26 deferral). 41 ava-wallet tests (incl. issue-failure-no-record +
+> AssumeDecided coverage). PORTING.md matrix added (28 Go wallet tests mapped).
 
 ### Task M8.28: ava-node submodules — trace (OTel), nat, logging factory
 **Crate:** ava-node  ·  **Depends on:** M8.12 (TraceConfig/LogConfig), M1 (tracing/opentelemetry crates)  ·  **Spec:** 12 §7/§8, 17 §2.2 (#23/#24), 18 §5/§6
