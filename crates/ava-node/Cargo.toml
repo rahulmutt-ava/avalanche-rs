@@ -1,0 +1,48 @@
+# ava-node — node assembly & lifecycle (M8 / specs 12 §2/§7/§8, 17 §2).
+#
+# This task (M8.28) lands three node submodules: the OpenTelemetry trace
+# wiring (§7), the NAT port-mapping seam (§8), and the bridge to the logging
+# factory in `ava-logging` (18 §5). Node::new / dispatch / shutdown / the admin
+# API arrive in later M8 tasks.
+
+[package]
+name = "ava-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Node assembly submodules: OTel trace wiring, NAT port mapping, and the logging factory bridge (M8 / specs 12 §7/§8, 17 §2, 18 §5/§6)."
+
+[dependencies]
+ava-config = { path = "../ava-config" }
+ava-logging = { path = "../ava-logging" }
+ava-network = { path = "../ava-network" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+# The subscriber registry/layer types the trace + logging seams compose against.
+# Pinned to match `ava-logging`'s 0.3 (the layered registry + reload handles).
+tracing-subscriber = { version = "0.3.20", features = [ "registry", "fmt" ] }
+# `tonic` (the workspace gRPC pin, 0.12.3) supplies the OTLP gRPC metadata /
+# TLS types for `--tracing-headers` / `--tracing-insecure`.
+tonic = { workspace = true }
+# OpenTelemetry stack (specs/12 §7, 18 §6). Pinned per-crate (ava-node is the
+# only consumer): the 0.27 line of `opentelemetry*` rides `tonic 0.12.3`, which
+# matches the workspace `tonic` pin, and `tracing-opentelemetry 0.28` bridges
+# the 0.27 SDK into the `tracing` subscriber. `tls-roots` enables the secure
+# (`--tracing-insecure=false`) gRPC path with system trust roots.
+opentelemetry = { version = "0.27", features = [ "trace" ] }
+opentelemetry_sdk = { version = "0.27", features = [ "trace", "rt-tokio" ] }
+opentelemetry-otlp = { version = "0.27", default-features = false, features = [ "trace", "grpc-tonic", "tls-roots", "http-proto", "reqwest-blocking-client" ] }
+tracing-opentelemetry = "0.28"
+
+[dev-dependencies]
+parking_lot = { workspace = true }
+
+[lints]
+workspace = true
