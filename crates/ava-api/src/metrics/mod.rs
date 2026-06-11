@@ -95,7 +95,9 @@ pub enum MetricsError {
 
     /// A label value was registered twice with the same [`LabelGatherer`] (Go
     /// `label_gatherer.go` `errDuplicateGatherer` + wrap).
-    #[error("attempt to register duplicate gatherer: for {label_name:?} with label {label_value:?}")]
+    #[error(
+        "attempt to register duplicate gatherer: for {label_name:?} with label {label_value:?}"
+    )]
     DuplicateGatherer {
         /// The gatherer's label key (e.g. `chain`).
         label_name: String,
@@ -205,19 +207,51 @@ impl PrefixGatherer {
 
 impl MultiGatherer for PrefixGatherer {
     fn register(&self, name: &str, gatherer: Arc<dyn Gatherer>) -> Result<(), MetricsError> {
-        let _ = (name, gatherer);
-        Ok(()) // STUB
+        let mut inner = self.inner.write();
+        for existing in &inner.names {
+            if either_is_prefix(name, existing) {
+                return Err(MetricsError::OverlappingNamespaces {
+                    prefix: name.to_string(),
+                    existing: existing.clone(),
+                });
+            }
+        }
+        inner.register(
+            name.to_string(),
+            Arc::new(PrefixedGatherer {
+                prefix: name.to_string(),
+                gatherer,
+            }),
+        );
+        Ok(())
     }
 
     fn deregister(&self, name: &str) -> bool {
-        let _ = name;
-        false // STUB
+        self.inner.write().deregister(name)
     }
 }
 
 impl Gatherer for PrefixGatherer {
     fn gather(&self) -> Result<Vec<MetricFamily>, MetricsError> {
-        Ok(Vec::new()) // STUB
+        merge_gather(&self.inner.read().gatherers)
+    }
+}
+
+/// A child of [`PrefixGatherer`]: renames every gathered family to
+/// `<prefix>_<name>` (Go `prefixedGatherer`).
+struct PrefixedGatherer {
+    prefix: String,
+    gatherer: Arc<dyn Gatherer>,
+}
+
+impl Gatherer for PrefixedGatherer {
+    fn gather(&self) -> Result<Vec<MetricFamily>, MetricsError> {
+        let mut families = self.gatherer.gather()?;
+        for family in &mut families {
+            let renamed = append_namespace(&self.prefix, family.get_name());
+            family.set_name(renamed);
+        }
+        Ok(families)
     }
 }
 
@@ -243,20 +277,153 @@ impl LabelGatherer {
 
 impl MultiGatherer for LabelGatherer {
     fn register(&self, name: &str, gatherer: Arc<dyn Gatherer>) -> Result<(), MetricsError> {
-        let _ = (name, gatherer);
-        Ok(()) // STUB
+        let mut inner = self.inner.write();
+        if inner.names.iter().any(|n| n == name) {
+            return Err(MetricsError::DuplicateGatherer {
+                label_name: self.label_name.clone(),
+                label_value: name.to_string(),
+            });
+        }
+        inner.register(
+            name.to_string(),
+            Arc::new(LabeledGatherer {
+                label_name: self.label_name.clone(),
+                label_value: name.to_string(),
+                gatherer,
+            }),
+        );
+        Ok(())
     }
 
     fn deregister(&self, name: &str) -> bool {
-        let _ = name;
-        false // STUB
+        self.inner.write().deregister(name)
     }
 }
 
 impl Gatherer for LabelGatherer {
     fn gather(&self) -> Result<Vec<MetricFamily>, MetricsError> {
-        Ok(Vec::new()) // STUB
+        merge_gather(&self.inner.read().gatherers)
     }
+}
+
+/// A child of [`LabelGatherer`]: appends `<label_name>="<label_value>"` to
+/// every gathered metric (Go `labeledGatherer`). A metric that already
+/// carries the label key is NOT rejected here — exactly like Go, the
+/// duplicate label name fails later, in the merge's consistency check.
+struct LabeledGatherer {
+    label_name: String,
+    label_value: String,
+    gatherer: Arc<dyn Gatherer>,
+}
+
+impl Gatherer for LabeledGatherer {
+    fn gather(&self) -> Result<Vec<MetricFamily>, MetricsError> {
+        let mut families = self.gatherer.gather()?;
+        for family in &mut families {
+            for metric in family.mut_metric() {
+                let mut pair = prometheus::proto::LabelPair::default();
+                pair.set_name(self.label_name.clone());
+                pair.set_value(self.label_value.clone());
+                let mut labels = metric.take_label();
+                labels.push(pair);
+                metric.set_label(labels);
+            }
+        }
+        Ok(families)
+    }
+}
+
+/// Gathers every child and folds same-name families together, mirroring Go's
+/// `prometheus.Gatherers.Gather` consistency checks: a type conflict, a
+/// metric with duplicate label names, or a duplicate metric (same family +
+/// same label values) is an error. Errors from multiple children/families
+/// are accumulated (Go's `MultiError`) and joined. The output is sorted by
+/// family name — with each family's metrics sorted by label values — for
+/// byte-stable scrapes (18 §7).
+fn merge_gather(children: &[Arc<dyn Gatherer>]) -> Result<Vec<MetricFamily>, MetricsError> {
+    let mut by_name: BTreeMap<String, MetricFamily> = BTreeMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut errs: Vec<String> = Vec::new();
+
+    for child in children {
+        let families = match child.gather() {
+            Ok(families) => families,
+            Err(err) => {
+                errs.push(err.to_string());
+                continue;
+            }
+        };
+        for mut family in families {
+            let name = family.get_name().to_string();
+            let metrics = family.take_metric();
+            let merged = match by_name.entry(name.clone()) {
+                Entry::Occupied(occupied) => {
+                    let existing = occupied.into_mut();
+                    if existing.get_field_type() != family.get_field_type() {
+                        errs.push(format!(
+                            "gathered metric family {name:?} has inconsistent types"
+                        ));
+                        continue;
+                    }
+                    existing
+                }
+                Entry::Vacant(vacant) => vacant.insert(family),
+            };
+            for mut metric in metrics {
+                // Sort label pairs by name (Go normalizes/hashes sorted
+                // labels; sorted output is also what the text encoder emits).
+                let mut labels = metric.take_label();
+                labels.sort_by(|a, b| a.get_name().cmp(b.get_name()));
+                if labels
+                    .iter()
+                    .zip(labels.iter().skip(1))
+                    .any(|(a, b)| a.get_name() == b.get_name())
+                {
+                    errs.push(format!(
+                        "gathered metric family {name:?} has two or more labels with the same name"
+                    ));
+                    continue;
+                }
+                // Identity = family name + sorted label pairs (Go's metric
+                // hash); `\u{1}`/`\u{2}` separators cannot occur in names.
+                let mut identity = name.clone();
+                for label in &labels {
+                    identity.push('\u{1}');
+                    identity.push_str(label.get_name());
+                    identity.push('\u{2}');
+                    identity.push_str(label.get_value());
+                }
+                if !seen.insert(identity) {
+                    errs.push(format!(
+                        "gathered metric family {name:?} was collected before with the same name and label values"
+                    ));
+                    continue;
+                }
+                metric.set_label(labels);
+                merged.mut_metric().push(metric);
+            }
+        }
+    }
+
+    if !errs.is_empty() {
+        return Err(MetricsError::Gather(errs.join("; ")));
+    }
+
+    let mut families: Vec<MetricFamily> = by_name.into_values().collect();
+    for family in &mut families {
+        // Sort each family's metrics by their (sorted) label values, like
+        // Go's NormalizeMetricFamilies metricSorter.
+        family.mut_metric().sort_by(|a, b| {
+            let key = |m: &prometheus::proto::Metric| {
+                m.get_label()
+                    .iter()
+                    .map(|l| l.get_value().to_string())
+                    .collect::<Vec<_>>()
+            };
+            key(a).cmp(&key(b))
+        });
+    }
+    Ok(families)
 }
 
 /// Mints a fresh [`Registry`], registers it with `gatherer` under `name`, and
@@ -284,10 +451,38 @@ pub fn make_and_register(
 /// families in Prometheus text exposition format ([`METRICS_CONTENT_TYPE`]),
 /// 500 on gather error (Go `promhttp.HandlerFor` with default
 /// `HTTPErrorOnError`; 12 §3.6, 14 §6).
-#[must_use]
 pub fn metrics_handler(gatherer: Arc<dyn Gatherer>) -> BoxedHandler {
-    let _ = gatherer;
-    Router::new().route("/", get(|| async { StatusCode::OK })) // STUB
+    Router::new().route(
+        "/",
+        get(move || {
+            let gatherer = Arc::clone(&gatherer);
+            async move { serve_metrics(gatherer.as_ref()) }
+        }),
+    )
+}
+
+/// Serves one scrape: gather, then encode with [`TextEncoder`]. A gather or
+/// encode failure yields a `500` whose body mirrors Go `promhttp`'s
+/// `HTTPErrorOnError` (`http.Error` appends the trailing newline).
+fn serve_metrics(gatherer: &dyn Gatherer) -> Response {
+    let result = gatherer.gather().and_then(|families| {
+        let mut buffer = Vec::new();
+        TextEncoder::new().encode(&families, &mut buffer)?;
+        Ok(buffer)
+    });
+    match result {
+        Ok(body) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, METRICS_CONTENT_TYPE)],
+            body,
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("An error has occurred while serving metrics:\n\n{err}\n"),
+        )
+            .into_response(),
+    }
 }
 
 /// Registers the `process_*` collector (`process_cpu_seconds_total`, …) on
@@ -321,8 +516,14 @@ pub fn register_process_collector(registry: &Registry) -> Result<(), MetricsErro
 /// boundary** (mirror Go `prefix_gatherer.go` `eitherIsPrefix`): `hello` is a
 /// prefix of `hello_world` but not of `helloworld`.
 fn either_is_prefix(a: &str, b: &str) -> bool {
-    let _ = (a, b);
-    false // STUB
+    let (short, long) = if a.len() > b.len() { (b, a) } else { (a, b) };
+    let (short, long) = (short.as_bytes(), long.as_bytes());
+    long.starts_with(short) // `short` is a byte-prefix of `long`, and …
+        && (short.is_empty() // … it is empty,
+            || short.len() == long.len() // … they are equal,
+            // … or it ends at a namespace boundary of `long`. The index is in
+            // bounds: the two `||` arms above ruled out len() >= long.len().
+            || long.get(short.len()) == Some(&NAMESPACE_SEP_BYTE))
 }
 
 #[cfg(test)]
@@ -401,8 +602,16 @@ mod tests {
             ("hello", "helloworld", false),
         ];
         for (a, b, expected) in cases {
-            assert_eq!(either_is_prefix(a, b), expected, "either_is_prefix({a:?}, {b:?})");
-            assert_eq!(either_is_prefix(b, a), expected, "either_is_prefix({b:?}, {a:?})");
+            assert_eq!(
+                either_is_prefix(a, b),
+                expected,
+                "either_is_prefix({a:?}, {b:?})"
+            );
+            assert_eq!(
+                either_is_prefix(b, a),
+                expected,
+                "either_is_prefix({b:?}, {a:?})"
+            );
         }
     }
 
@@ -419,16 +628,16 @@ mod tests {
         chains
             .register("P", Arc::new(p.clone()))
             .expect("register P");
-        let p_polls = IntCounter::new("polls_successful", "Number of successful polls")
-            .expect("counter");
+        let p_polls =
+            IntCounter::new("polls_successful", "Number of successful polls").expect("counter");
         p.register(Box::new(p_polls)).expect("register p counter");
 
         let x = Registry::new();
         chains
             .register("X", Arc::new(x.clone()))
             .expect("register X");
-        let x_polls = IntCounter::new("polls_successful", "Number of successful polls")
-            .expect("counter");
+        let x_polls =
+            IntCounter::new("polls_successful", "Number of successful polls").expect("counter");
         x_polls.inc();
         x.register(Box::new(x_polls)).expect("register x counter");
 
@@ -444,8 +653,9 @@ mod tests {
             .map(|m| {
                 let labels = m.get_label();
                 assert_eq!(labels.len(), 1, "exactly the injected label");
-                assert_eq!(labels[0].get_name(), CHAIN_LABEL);
-                (labels[0].get_value().to_string(), m.get_counter().get_value())
+                let label = labels.first().expect("one label pair");
+                assert_eq!(label.get_name(), CHAIN_LABEL);
+                (label.get_value().to_string(), m.get_counter().get_value())
             })
             .collect();
         values.sort_by(|a, b| a.0.cmp(&b.0));
@@ -505,8 +715,8 @@ mod tests {
             "the returned registry must be live in the parent tree"
         );
 
-        let err = make_and_register(&root, "avalanche_db")
-            .expect_err("duplicate name must be rejected");
+        let err =
+            make_and_register(&root, "avalanche_db").expect_err("duplicate name must be rejected");
         assert_eq!(
             err.to_string(),
             "couldn't register \"avalanche_db\" metrics: prefix could create overlapping namespaces: \"avalanche_db\" conflicts with \"avalanche_db\"",
@@ -539,15 +749,11 @@ mod tests {
         let root = PrefixGatherer::new();
         // Register in non-sorted order.
         let b = make_and_register(&root, "b").expect("b");
-        b.register(Box::new(
-            IntCounter::new("zz", "zz").expect("counter"),
-        ))
-        .expect("register");
+        b.register(Box::new(IntCounter::new("zz", "zz").expect("counter")))
+            .expect("register");
         let a = make_and_register(&root, "a").expect("a");
-        a.register(Box::new(
-            IntCounter::new("yy", "yy").expect("counter"),
-        ))
-        .expect("register");
+        a.register(Box::new(IntCounter::new("yy", "yy").expect("counter")))
+            .expect("register");
 
         let names: Vec<String> = root
             .gather()

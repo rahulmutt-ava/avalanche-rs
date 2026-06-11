@@ -17,6 +17,8 @@
 //! - `…process_*` off Linux: the Rust `process_*` collector is Linux-only
 //!   (the production target); on macOS dev machines those rows are skipped.
 
+#![allow(unused_crate_dependencies, clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -139,6 +141,14 @@ fn waived(name: &str) -> Option<&'static str> {
     // Go-runtime collector families (no Rust equivalent on any platform).
     if name.starts_with("go_") || name.starts_with("avalanche_process_go_") {
         return Some("go_* runtime collector (18 §4 waiver)");
+    }
+    // The Rust prometheus crate's Linux process collector emits
+    // process_{cpu_seconds_total,open_fds,max_fds,virtual_memory_bytes,
+    // resident_memory_bytes,start_time_seconds,threads} but NOT Go's
+    // process_virtual_memory_max_bytes — a known crate gap, waived
+    // explicitly rather than silently dropped.
+    if name == "avalanche_process_process_virtual_memory_max_bytes" {
+        return Some("not emitted by the Rust prometheus process collector (documented gap)");
     }
     // The Rust process collector is Linux-only.
     #[cfg(not(target_os = "linux"))]
