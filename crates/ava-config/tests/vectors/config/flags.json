@@ -1,0 +1,1452 @@
+{
+  "_provenance": {
+    "generator": "avalanche-rs `cargo xtask gen-flags` (specs/13 §25, plan M8.4)",
+    "go_commit": "cc3b103b91173f5e8b89b1b31aea0816766c8ada",
+    "pinned_symbolic_defaults": "fd-limit=DefaultFDLimit (32768 linux/bsd, 10240 darwin); throttler-inbound-cpu-validator-alloc=NumCPU; throttler-inbound-cpu-max-non-validator-usage=0.8*NumCPU; throttler-inbound-cpu-max-non-validator-node-usage=NumCPU/8",
+    "source": "github.com/ava-labs/avalanchego config.BuildFlagSet() + deprecateFlags (config/{flags,keys,config}.go)"
+  },
+  "flags": [
+    {
+      "name": "acp-object",
+      "type": "intSlice",
+      "default": "[]",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "acp-support",
+      "type": "intSlice",
+      "default": "[]",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "api-admin-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "api-health-enabled",
+      "type": "bool",
+      "default": "true",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "api-info-enabled",
+      "type": "bool",
+      "default": "true",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "api-metrics-enabled",
+      "type": "bool",
+      "default": "true",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "benchlist-bench-probability",
+      "type": "float64",
+      "default": "0.5",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "benchlist-duration",
+      "type": "duration",
+      "default": "5m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "benchlist-halflife",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "benchlist-unbench-probability",
+      "type": "float64",
+      "default": "0.2",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "bootstrap-ancestors-max-containers-received",
+      "type": "uint",
+      "default": "2000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "bootstrap-ancestors-max-containers-sent",
+      "type": "uint",
+      "default": "2000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "bootstrap-beacon-connection-timeout",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "bootstrap-ids",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "bootstrap-ips",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "bootstrap-max-time-get-ancestors",
+      "type": "duration",
+      "default": "50ms",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "chain-aliases-file",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/configs/chains/aliases.json",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "chain-aliases-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "chain-config-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "chain-config-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/configs/chains",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "chain-data-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/chainData",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "config-file",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "config-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "config-file-content-type",
+      "type": "string",
+      "default": "json",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "consensus-app-concurrency",
+      "type": "uint",
+      "default": "2",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "consensus-frontier-poll-frequency",
+      "type": "duration",
+      "default": "100ms",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "consensus-shutdown-timeout",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "create-asset-tx-fee",
+      "type": "uint64",
+      "default": "1000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "data-dir",
+      "type": "string",
+      "default": "$HOME/.avalanchego",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "db-config-file",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "db-config-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "db-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/db",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "db-read-only",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "db-type",
+      "type": "string",
+      "default": "leveldb",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-bandwidth-weight",
+      "type": "uint64",
+      "default": "1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-compute-weight",
+      "type": "uint64",
+      "default": "4",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-db-read-weight",
+      "type": "uint64",
+      "default": "1000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-db-write-weight",
+      "type": "uint64",
+      "default": "1000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-excess-conversion-constant",
+      "type": "uint64",
+      "default": "2164043",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-max-gas-capacity",
+      "type": "uint64",
+      "default": "1000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-max-gas-per-second",
+      "type": "uint64",
+      "default": "100000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-min-gas-price",
+      "type": "uint64",
+      "default": "1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "dynamic-fees-target-gas-per-second",
+      "type": "uint64",
+      "default": "50000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "fd-limit",
+      "type": "uint64",
+      "default": "DefaultFDLimit",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "genesis-file",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "genesis-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "health-check-averager-halflife",
+      "type": "duration",
+      "default": "10s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "health-check-frequency",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-allowed-hosts",
+      "type": "stringSlice",
+      "default": "[localhost]",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-allowed-origins",
+      "type": "string",
+      "default": "*",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-host",
+      "type": "string",
+      "default": "127.0.0.1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-idle-timeout",
+      "type": "duration",
+      "default": "2m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-port",
+      "type": "uint",
+      "default": "9650",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-read-header-timeout",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-read-timeout",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-shutdown-timeout",
+      "type": "duration",
+      "default": "10s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-shutdown-wait",
+      "type": "duration",
+      "default": "0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-tls-cert-file",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-tls-cert-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-tls-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-tls-key-file",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-tls-key-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "http-write-timeout",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "index-allow-incomplete",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "index-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/logs",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-disable-display-plugin-logs",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-display-level",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-format",
+      "type": "string",
+      "default": "auto",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-level",
+      "type": "string",
+      "default": "info",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-rotater-compress-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-rotater-max-age",
+      "type": "uint",
+      "default": "0",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-rotater-max-files",
+      "type": "uint",
+      "default": "7",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "log-rotater-max-size",
+      "type": "uint",
+      "default": "8",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "max-stake-duration",
+      "type": "duration",
+      "default": "8760h0m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "max-validator-stake",
+      "type": "uint64",
+      "default": "3000000000000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "meter-vms-enabled",
+      "type": "bool",
+      "default": "true",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "min-delegation-fee",
+      "type": "uint64",
+      "default": "20000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "min-delegator-stake",
+      "type": "uint64",
+      "default": "25000000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "min-stake-duration",
+      "type": "duration",
+      "default": "24h0m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "min-validator-stake",
+      "type": "uint64",
+      "default": "2000000000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-allow-private-ips",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-compression-type",
+      "type": "string",
+      "default": "zstd",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-health-max-outstanding-request-duration",
+      "type": "duration",
+      "default": "5m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-health-max-portion-send-queue-full",
+      "type": "float64",
+      "default": "0.9",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-health-max-send-fail-rate",
+      "type": "float64",
+      "default": "0.9",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-health-max-time-since-msg-received",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-health-max-time-since-msg-sent",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-health-min-conn-peers",
+      "type": "uint",
+      "default": "1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-id",
+      "type": "string",
+      "default": "mainnet",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-inbound-connection-throttling-cooldown",
+      "type": "duration",
+      "default": "10s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-inbound-connection-throttling-max-conns-per-sec",
+      "type": "float64",
+      "default": "256",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-initial-reconnect-delay",
+      "type": "duration",
+      "default": "1s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-initial-timeout",
+      "type": "duration",
+      "default": "5s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-max-clock-difference",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-max-reconnect-delay",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-maximum-inbound-timeout",
+      "type": "duration",
+      "default": "10s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-maximum-timeout",
+      "type": "duration",
+      "default": "10s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-minimum-timeout",
+      "type": "duration",
+      "default": "2s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-no-ingress-connections-grace-period",
+      "type": "duration",
+      "default": "10m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-outbound-connection-throttling-rps",
+      "type": "uint",
+      "default": "50",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-outbound-connection-timeout",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-peer-list-bloom-reset-frequency",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-peer-list-num-validator-ips",
+      "type": "uint",
+      "default": "15",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-peer-list-pull-gossip-frequency",
+      "type": "duration",
+      "default": "2s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-peer-read-buffer-size",
+      "type": "uint",
+      "default": "8192",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-peer-write-buffer-size",
+      "type": "uint",
+      "default": "8192",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-ping-frequency",
+      "type": "duration",
+      "default": "22.5s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-ping-timeout",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-read-handshake-timeout",
+      "type": "duration",
+      "default": "15s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-require-validator-to-connect",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-tcp-proxy-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-tcp-proxy-read-timeout",
+      "type": "duration",
+      "default": "3s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-timeout-coefficient",
+      "type": "float64",
+      "default": "2",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-timeout-halflife",
+      "type": "duration",
+      "default": "5m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "network-tls-key-log-file-unsafe",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "partial-sync-primary-network",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "plugin-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/plugins",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "process-context-file",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/process.json",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "profile-continuous-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "profile-continuous-freq",
+      "type": "duration",
+      "default": "15m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "profile-continuous-max-files",
+      "type": "int",
+      "default": "5",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "profile-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/profiles",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "proposervm-min-block-delay",
+      "type": "duration",
+      "default": "1s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "proposervm-use-current-height",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "public-ip",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "public-ip-resolution-frequency",
+      "type": "duration",
+      "default": "5m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "public-ip-resolution-service",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "router-health-max-drop-rate",
+      "type": "float64",
+      "default": "1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "router-health-max-outstanding-requests",
+      "type": "uint",
+      "default": "1024",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "simplex-max-network-delay",
+      "type": "duration",
+      "default": "5s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "simplex-max-rebroadcast-wait",
+      "type": "duration",
+      "default": "5s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-commit-threshold",
+      "type": "int",
+      "default": "20",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-concurrent-repolls",
+      "type": "int",
+      "default": "4",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-confidence-quorum-size",
+      "type": "int",
+      "default": "15",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-max-processing",
+      "type": "int",
+      "default": "256",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-max-time-processing",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-optimal-processing",
+      "type": "int",
+      "default": "10",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-preference-quorum-size",
+      "type": "int",
+      "default": "15",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-quorum-size",
+      "type": "int",
+      "default": "15",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "snow-sample-size",
+      "type": "int",
+      "default": "20",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "stake-max-consumption-rate",
+      "type": "uint64",
+      "default": "120000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "stake-min-consumption-rate",
+      "type": "uint64",
+      "default": "100000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "stake-minting-period",
+      "type": "duration",
+      "default": "8760h0m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "stake-supply-cap",
+      "type": "uint64",
+      "default": "720000000000000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-ephemeral-cert-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-ephemeral-signer-enabled",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-host",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-port",
+      "type": "uint",
+      "default": "9651",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-rpc-signer-endpoint",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-signer-key-file",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/staking/signer.key",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-signer-key-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-tls-cert-file",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/staking/staker.crt",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-tls-cert-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-tls-key-file",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/staking/staker.key",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "staking-tls-key-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "state-sync-ids",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "state-sync-ips",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "subnet-config-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "subnet-config-dir",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/configs/subnets",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "sybil-protection-disabled-weight",
+      "type": "uint64",
+      "default": "100",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "sybil-protection-enabled",
+      "type": "bool",
+      "default": "true",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "system-tracker-cpu-halflife",
+      "type": "duration",
+      "default": "15s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "system-tracker-disk-halflife",
+      "type": "duration",
+      "default": "1m0s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "system-tracker-disk-required-available-space",
+      "type": "uint64",
+      "default": "0",
+      "deprecated": true,
+      "deprecation_msg": "Use system-tracker-disk-required-available-space-percentage instead"
+    },
+    {
+      "name": "system-tracker-disk-required-available-space-percentage",
+      "type": "uint64",
+      "default": "3",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "system-tracker-disk-warning-available-space-percentage",
+      "type": "uint64",
+      "default": "10",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "system-tracker-disk-warning-threshold-available-space",
+      "type": "uint64",
+      "default": "0",
+      "deprecated": true,
+      "deprecation_msg": "Use system-tracker-disk-warning-available-space-percentage instead"
+    },
+    {
+      "name": "system-tracker-frequency",
+      "type": "duration",
+      "default": "500ms",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "system-tracker-processing-halflife",
+      "type": "duration",
+      "default": "15s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-at-large-alloc-size",
+      "type": "uint64",
+      "default": "6291456",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-bandwidth-max-burst-size",
+      "type": "uint64",
+      "default": "2097152",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-bandwidth-refill-rate",
+      "type": "uint64",
+      "default": "524288",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-cpu-max-non-validator-node-usage",
+      "type": "float64",
+      "default": "NumCPU/8",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-cpu-max-non-validator-usage",
+      "type": "float64",
+      "default": "0.8*NumCPU",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-cpu-max-recheck-delay",
+      "type": "duration",
+      "default": "5s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-cpu-validator-alloc",
+      "type": "float64",
+      "default": "NumCPU",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-disk-max-non-validator-node-usage",
+      "type": "float64",
+      "default": "1.073741824e+12",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-disk-max-non-validator-usage",
+      "type": "float64",
+      "default": "1.073741824e+12",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-disk-max-recheck-delay",
+      "type": "duration",
+      "default": "5s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-disk-validator-alloc",
+      "type": "float64",
+      "default": "1.073741824e+12",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-node-max-at-large-bytes",
+      "type": "uint64",
+      "default": "2097152",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-node-max-processing-msgs",
+      "type": "uint64",
+      "default": "1024",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-inbound-validator-alloc-size",
+      "type": "uint64",
+      "default": "33554432",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-outbound-at-large-alloc-size",
+      "type": "uint64",
+      "default": "33554432",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-outbound-node-max-at-large-bytes",
+      "type": "uint64",
+      "default": "2097152",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "throttler-outbound-validator-alloc-size",
+      "type": "uint64",
+      "default": "33554432",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "tracing-endpoint",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "tracing-exporter-type",
+      "type": "string",
+      "default": "disabled",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "tracing-headers",
+      "type": "stringToString",
+      "default": "[]",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "tracing-insecure",
+      "type": "bool",
+      "default": "true",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "tracing-sample-rate",
+      "type": "float64",
+      "default": "0.1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "track-subnets",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "tx-fee",
+      "type": "uint64",
+      "default": "1000000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "upgrade-file",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "upgrade-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "uptime-metric-freq",
+      "type": "duration",
+      "default": "30s",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "uptime-requirement",
+      "type": "float64",
+      "default": "0.8",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "validator-fees-capacity",
+      "type": "uint64",
+      "default": "20000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "validator-fees-excess-conversion-constant",
+      "type": "uint64",
+      "default": "865617",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "validator-fees-min-price",
+      "type": "uint64",
+      "default": "1",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "validator-fees-target",
+      "type": "uint64",
+      "default": "10000",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "version",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "version-json",
+      "type": "bool",
+      "default": "false",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "vm-aliases-file",
+      "type": "string",
+      "default": "$AVALANCHEGO_DATA_DIR/configs/vms/aliases.json",
+      "deprecated": false,
+      "deprecation_msg": ""
+    },
+    {
+      "name": "vm-aliases-file-content",
+      "type": "string",
+      "default": "",
+      "deprecated": false,
+      "deprecation_msg": ""
+    }
+  ]
+}

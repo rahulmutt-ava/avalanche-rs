@@ -1,0 +1,42 @@
+{
+  "avalanchegoCommit": "cc3b103b91173f5e8b89b1b31aea0816766c8ada",
+  "emitter": "avalanche-rs crates/ava-genesis/tests/go-oracle/genesis_dump_oracle_test.go (M8.8)",
+  "networks": {
+    "custom_9999": {
+      "networkID": 9999,
+      "pChainGenesisBlockID": "2EGSBaevV4q65sd44yDALbZNPjEzmhwRXZ5zMRqdxBkaajQzSw",
+      "xBlockchainID": "LFpazZbQAEPx89q6dV3dKVzhTNBvDRVvYW1Yk2Lxqgs21qgxa",
+      "cBlockchainID": "Fdrxuyje3oeFqSJtYntN2ithFeofmf4ZNz3zGn1pvDEhFVWmg",
+      "avaxAssetID": "2eeoeu1VTc81MYnHHRkfobFCFtZeZpUzTYLT1F7aqTVBfh6vH2",
+      "pChainBytesSha256Hex": "a1d1838586db85fe94ab1143560c3356df9ba2445794b796bba050be89f4fcb4",
+      "pChainBytesLen": 3655
+    },
+    "fuji": {
+      "networkID": 5,
+      "pChainGenesisBlockID": "MSj6o9TpezwsQx4Tv7SHqpVvCbJ8of1ikjsqPZ1bKRjc9zBy3",
+      "xBlockchainID": "2JVSBoinj9C2J33VntvzYtVJNZdN2NKiwwKjcumHUWEb5DbBrm",
+      "cBlockchainID": "yH8D7ThNJkxmtkuv2jgBa4P1Rn3Qpr4pPr7QYNfcdoS6k6HWp",
+      "avaxAssetID": "U8iRqJoiJm8xZHAacmvYyZVwqQx6uDNtQeP3CQ6fcgQk3JqnK",
+      "pChainBytesSha256Hex": "2e6b699298a664793bff42dae9c1af8d9c54645d8b376fd331e0b67475578e0a",
+      "pChainBytesLen": 7106
+    },
+    "local_unmodified": {
+      "networkID": 12345,
+      "pChainGenesisBlockID": "2nRRoR76HuEk1JjDpRdN8FKvZFvUXWxY3b9C5rZRPFjcgEh7S7",
+      "xBlockchainID": "2eNy1mUFdmaxXNj1eQHUe7Np4gju9sJsEtWQ4MX3ToiNKuADed",
+      "cBlockchainID": "2owdGqyG6FFzTHy5qhenDXQcEghvr571KZE3gSfRJERSJinuwC",
+      "avaxAssetID": "2fombhL7aGPwj3KH4bfrmJwW6PVnMobf9Y2fn9GwxiAAJyFDbe",
+      "pChainBytesSha256Hex": "ead4959a97aff56a3c7e3153143036183c9d18bbbe44a658b459a524e1ad74f2",
+      "pChainBytesLen": 4141
+    },
+    "mainnet": {
+      "networkID": 1,
+      "pChainGenesisBlockID": "UUvXi6j7QhVvgpbKM89MP5HdrxKm9CaJeHc187TsDNf8nZdLk",
+      "xBlockchainID": "2oYMBNV4eNHyqk2fjjV5nVQLDbtmNJzq5s3qs3Lo6ftnC6FByM",
+      "cBlockchainID": "2q9e4r6Mu3U68nU1fYjgbR6JvwrRx36CohpAX5UQxse55x1Q5",
+      "avaxAssetID": "FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z",
+      "pChainBytesSha256Hex": "3e6662fdbd88bcf4c7dd82cb4699c0807f1d7315d493bc38532697e11b226276",
+      "pChainBytesLen": 4402540
+    }
+  }
+}

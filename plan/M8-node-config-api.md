@@ -47,108 +47,115 @@ These are deterministic pure-function checks: fast, no I/O, no network — they 
 
 Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `differential::indexer_parity` with the cross-cutting differential harness X (02 §9): per-PR they run in **recorded-oracle** mode against committed `tests/vectors/api/`; live mode is CI-gated.
 
+> **WAVE A + M8.14 MERGED 2026-06-11** (branches `m8/config` 810e1cb, `m8/genesis` 6b2dd67). As-built notes:
+> - **ava-config carries NO ava-genesis dep** — defaults source from `ava-network`/`ava-snow`/`ava-version` constants; staking/fee defaults that Go pulls from `genesis.LocalParams` are pinned values guarded by the `golden::flag_parity` snapshot diff (drift cannot land silently). Wire the genesis-derived values properly in M8.12 (`get_node_config` already needs ava-genesis for bootstrappers/genesis bytes).
+> - **Go snapshots @ `cc3b103b91`** (the reviewed-through upstream pin): `flags.json` via `cargo xtask gen-flags`; genesis vectors (incl. the 4.4 MB mainnet P-chain byte stream) via `cargo xtask gen-genesis`, emitted by the M7.29-pattern in-repo go-oracle test (`crates/ava-genesis/tests/go-oracle/`, env-gated, copied into `../avalanchego` to run).
+> - **`ByEndTimeHeap::add` dedups by tx ID** (a4c5dcb) — mirrors Go `txheap.Add`'s already-present skip; surfaced post-M8.8, byte-streams unaffected for the standard networks.
+> - `xtask` gained `gen-flags` + `gen-genesis` subcommands (separate files; main.rs dispatch).
+> - **`m8/wallet` branch in flight** (M8.25 ✅ on-branch + M8.26 mid-task uncommitted) — continuation dispatched as part of the next wave.
+
 ---
 
 ## Tasks
 
-### Task M8.1: ava-config crate skeleton + FlagSpec model + KEY_* constants
+### Task M8.1: ava-config crate skeleton + FlagSpec model + KEY_* constants ✅ DONE (5a3c4a4)
 **Crate:** ava-config  ·  **Depends on:** M1 ava-version, ava-consensus (snowball defaults), ava-genesis (will be wired in M8.4)  ·  **Spec:** 12 §1.2–§1.4, 13 §0/§24
 **Files:** `crates/ava-config/Cargo.toml`, `crates/ava-config/src/lib.rs` (`#![forbid(unsafe_code)]` + license header), `crates/ava-config/src/keys.rs`, `crates/ava-config/src/flags.rs` (`FlagSpec`, `FlagKind`, `DefaultVal`), `crates/ava-config/src/error.rs` (`ConfigError` thiserror)
-- [ ] **Step 1 — Red:** In `crates/ava-config/src/keys.rs` add `#[cfg(test)] mod tests { #[test] fn key_count_matches_go() { assert_eq!(super::ALL_KEYS.len(), 206); } }` (13 §24: 205 const block + `http-write-timeout` = 206). Also add `flags.rs::tests::flag_kind_maps_to_go_type_string` asserting `FlagKind::Duration.go_type_str() == "duration"`, etc. (the 10 pflag type strings in 13 §25).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config keys::tests::key_count_matches_go` → fails (module/const absent: compile error is acceptable here since the type doesn't exist yet, then iterate to a value-mismatch failure).
-- [ ] **Step 3 — Green:** Define `pub const KEY_NETWORK_ID: &str = "network-id";` … one const per row in 13 §1–§22 (verbatim flag strings). Define `pub static ALL_KEYS: &[&str]` listing all 206. Define `FlagKind { Bool, String, U64, I64, F64, Duration, StringSlice, IntSlice, StringMap }` with `go_type_str()` → `{bool,string,uint64/uint/int,float64,duration,stringSlice,intSlice,stringToString}` per 13 §25 (note `uint`→`u32`/`u16` map to Go `uint`; `int`→`i32`). Define `FlagSpec { key, kind, default: DefaultVal, help, deprecated }` and `DefaultVal { Static(&str) | Lazy(fn() -> String) }` per 12 §1.4.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config keys::` passes; `cargo build -p ava-config`.
-- [ ] **Step 5 — Commit:** `ava-config: KEY_* constants + FlagSpec/FlagKind model (206 keys, 13 §24)`
+- [x] **Step 1 — Red:** In `crates/ava-config/src/keys.rs` add `#[cfg(test)] mod tests { #[test] fn key_count_matches_go() { assert_eq!(super::ALL_KEYS.len(), 206); } }` (13 §24: 205 const block + `http-write-timeout` = 206). Also add `flags.rs::tests::flag_kind_maps_to_go_type_string` asserting `FlagKind::Duration.go_type_str() == "duration"`, etc. (the 10 pflag type strings in 13 §25).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config keys::tests::key_count_matches_go` → fails (module/const absent: compile error is acceptable here since the type doesn't exist yet, then iterate to a value-mismatch failure).
+- [x] **Step 3 — Green:** Define `pub const KEY_NETWORK_ID: &str = "network-id";` … one const per row in 13 §1–§22 (verbatim flag strings). Define `pub static ALL_KEYS: &[&str]` listing all 206. Define `FlagKind { Bool, String, U64, I64, F64, Duration, StringSlice, IntSlice, StringMap }` with `go_type_str()` → `{bool,string,uint64/uint/int,float64,duration,stringSlice,intSlice,stringToString}` per 13 §25 (note `uint`→`u32`/`u16` map to Go `uint`; `int`→`i32`). Define `FlagSpec { key, kind, default: DefaultVal, help, deprecated }` and `DefaultVal { Static(&str) | Lazy(fn() -> String) }` per 12 §1.4.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config keys::` passes; `cargo build -p ava-config`.
+- [x] **Step 5 — Commit:** `ava-config: KEY_* constants + FlagSpec/FlagKind model (206 keys, 13 §24)`
 
-### Task M8.2: FLAG_SPECS table — every flag with name/type/default/help/deprecation
+### Task M8.2: FLAG_SPECS table — every flag with name/type/default/help/deprecation ✅ DONE (b1f0e5b)
 **Crate:** ava-config  ·  **Depends on:** M8.1  ·  **Spec:** 13 §1–§22 (the verbatim catalog), 12 §1.3
 **Files:** `crates/ava-config/src/flags.rs` (`pub static FLAG_SPECS: &[FlagSpec]`), `crates/ava-config/src/defaults.rs` (lazy defaults pulling from ava-genesis::LocalParams / ava-consensus / ava-network constants / OS-dependent fd-limit)
-- [ ] **Step 1 — Red:** `flags.rs::tests::every_key_has_one_spec` — assert `FLAG_SPECS.len() == 206` and that `FLAG_SPECS.iter().map(|s| s.key).collect::<HashSet>()` equals `keys::ALL_KEYS` set (no orphans, no dupes — 13 §24). Add `defaults.rs::tests::fd_limit_default_is_os_dependent` (32768 non-macOS, 10240 macOS via `cfg!(target_os="macos")`, 13 §2), and `network_allow_private_ips_registered_default_is_false` (13 §8 note — registered default false; effective default resolved later in parse).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config flags::tests::every_key_has_one_spec` → fails (length/set mismatch).
-- [ ] **Step 3 — Green:** Populate `FLAG_SPECS` row-for-row from 13: process flags §1, paths §2, network/ACP §3, fees §4, staking §5, HTTP+API-enable §6, snow/simplex/proposervm §7, networking §8, throttlers §9, benchlist §10, router §11, health §12, bootstrap §13, subnets/chain-config/aliases §14, logging §15, indexer §16, profiling §17, system-tracker §18 (mark the two deprecated keys §0/§18), public-ip/nat §19, db §20, genesis/upgrade §21, tracing §22. Defaults that are constants → `Static`; defaults from `genesis::LocalParams.*` / `snowball::DefaultParameters` / `constants::Default*` → `Lazy` (sourced so they cannot drift, 12 §1.3). `fd-limit` default via `cfg!`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config flags::` passes.
-- [ ] **Step 5 — Commit:** `ava-config: full FLAG_SPECS table (206 flags) sourced from 13`
+- [x] **Step 1 — Red:** `flags.rs::tests::every_key_has_one_spec` — assert `FLAG_SPECS.len() == 206` and that `FLAG_SPECS.iter().map(|s| s.key).collect::<HashSet>()` equals `keys::ALL_KEYS` set (no orphans, no dupes — 13 §24). Add `defaults.rs::tests::fd_limit_default_is_os_dependent` (32768 non-macOS, 10240 macOS via `cfg!(target_os="macos")`, 13 §2), and `network_allow_private_ips_registered_default_is_false` (13 §8 note — registered default false; effective default resolved later in parse).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config flags::tests::every_key_has_one_spec` → fails (length/set mismatch).
+- [x] **Step 3 — Green:** Populate `FLAG_SPECS` row-for-row from 13: process flags §1, paths §2, network/ACP §3, fees §4, staking §5, HTTP+API-enable §6, snow/simplex/proposervm §7, networking §8, throttlers §9, benchlist §10, router §11, health §12, bootstrap §13, subnets/chain-config/aliases §14, logging §15, indexer §16, profiling §17, system-tracker §18 (mark the two deprecated keys §0/§18), public-ip/nat §19, db §20, genesis/upgrade §21, tracing §22. Defaults that are constants → `Static`; defaults from `genesis::LocalParams.*` / `snowball::DefaultParameters` / `constants::Default*` → `Lazy` (sourced so they cannot drift, 12 §1.3). `fd-limit` default via `cfg!`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config flags::` passes.
+- [x] **Step 5 — Commit:** `ava-config: full FLAG_SPECS table (206 flags) sourced from 13`
 
-### Task M8.3: build_command() — clap Command from FLAG_SPECS (names as data)
+### Task M8.3: build_command() — clap Command from FLAG_SPECS (names as data) ✅ DONE (a2ad11f)
 **Crate:** ava-config  ·  **Depends on:** M8.2  ·  **Spec:** 12 §1.4, 13 §0 (pflag bool/duration grammar)
 **Files:** `crates/ava-config/src/flags.rs` (`build_command`), `crates/ava-config/src/duration.rs` (`parse_go_duration`)
-- [ ] **Step 1 — Red:** `duration.rs::tests::parse_go_duration_grammar` — table over `{"30s"→30s, "5m"→300s, "120ms", "22.5s", "1h", "1m0.5s"}` matching `time.ParseDuration` (12 §1.4 note). `flags.rs::tests::build_command_accepts_bool_forms` — assert `build_command(FLAG_SPECS).try_get_matches_from(["avalanchers","--sybil-protection-enabled"])` and `=true` both parse (pflag bools accept `--x` and `--x=true`, 12 §1.4).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config duration::tests::parse_go_duration_grammar` → fails.
-- [ ] **Step 3 — Green:** Implement `parse_go_duration` accepting Go's `ns,us,µs,ms,s,m,h` grammar (not humantime). Implement `build_command(specs) -> clap::Command` per the 12 §1.4 sketch: `disable_help_flag(false)`, `arg_required_else_help(false)`, Bool→`num_args(0..=1)`+`default_missing_value("true")`, Duration→`value_parser(parse_go_duration)`, StringSlice→`value_delimiter(',')`, deprecated→`DEPRECATED:` help prefix. Version from `ava_version::CURRENT`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config duration:: flags::tests::build_command_accepts_bool_forms` passes.
-- [ ] **Step 5 — Commit:** `ava-config: build_command + parse_go_duration (pflag parity)`
+- [x] **Step 1 — Red:** `duration.rs::tests::parse_go_duration_grammar` — table over `{"30s"→30s, "5m"→300s, "120ms", "22.5s", "1h", "1m0.5s"}` matching `time.ParseDuration` (12 §1.4 note). `flags.rs::tests::build_command_accepts_bool_forms` — assert `build_command(FLAG_SPECS).try_get_matches_from(["avalanchers","--sybil-protection-enabled"])` and `=true` both parse (pflag bools accept `--x` and `--x=true`, 12 §1.4).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config duration::tests::parse_go_duration_grammar` → fails.
+- [x] **Step 3 — Green:** Implement `parse_go_duration` accepting Go's `ns,us,µs,ms,s,m,h` grammar (not humantime). Implement `build_command(specs) -> clap::Command` per the 12 §1.4 sketch: `disable_help_flag(false)`, `arg_required_else_help(false)`, Bool→`num_args(0..=1)`+`default_missing_value("true")`, Duration→`value_parser(parse_go_duration)`, StringSlice→`value_delimiter(',')`, deprecated→`DEPRECATED:` help prefix. Version from `ava_version::CURRENT`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config duration:: flags::tests::build_command_accepts_bool_forms` passes.
+- [x] **Step 5 — Commit:** `ava-config: build_command + parse_go_duration (pflag parity)`
 
-### Task M8.4: golden::flag_parity — generated flag list diffed vs Go snapshot  ⟵ TDD ENTRY POINT
+### Task M8.4: golden::flag_parity — generated flag list diffed vs Go snapshot  ⟵ TDD ENTRY POINT ✅ DONE (51d7e99)
 **Crate:** ava-config  ·  **Depends on:** M8.3  ·  **Spec:** 13 §25, 12 §1.8, 02 §6
 **Files:** `crates/ava-config/tests/golden_flag_parity.rs`, `crates/ava-config/tests/vectors/config/flags.json` (committed Go snapshot), `xtask/src/gen_flags.rs` (regenerates the Go snapshot; mirror `config.BuildFlagSet()` dump), `crates/ava-config/tests/PORTING.md`
-- [ ] **Step 1 — Red:** `tests/golden_flag_parity.rs::flag_parity` — load `tests/vectors/config/flags.json` (records `{name,type,default,deprecated,deprecation_msg}` sorted by name, with a pinned-env header for `fd-limit`/`NumCPU`-derived defaults per 13 §25). Serialize `build_command(FLAG_SPECS)` into the same record shape (FlagKind→Go type string; default→`DefaultVal` resolved string, Duration round-tripped through `parse_go_duration`; symbolic-form for `NumCPU`/`fd-limit`). Assert: (a) **set-equality of names**, (b) **per-flag type equality**, (c) **per-flag default-string equality**, (d) **deprecated-set + message equality** (13 §25 step 2).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-config flag_parity` → fails (snapshot absent / diff). Commit the failing test + an initial Go-extracted `flags.json` first.
-- [ ] **Step 3 — Green:** Add `xtask gen-flags` (extracts `name,type,default,deprecated,deprecation_msg` from the Go tree, sorted, with the pinned `GOOS`/`GOMAXPROCS` header) and commit `tests/vectors/config/flags.json`. Reconcile any FLAG_SPECS drift surfaced by the diff (fix names/types/defaults until green). Document the regen command + symbolic-default normalization in PORTING.md.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-config flag_parity` passes (this is the per-PR exit gate).
-- [ ] **Step 5 — Commit:** `ava-config: golden::flag_parity + committed Go flags.json snapshot (13 §25)`
+- [x] **Step 1 — Red:** `tests/golden_flag_parity.rs::flag_parity` — load `tests/vectors/config/flags.json` (records `{name,type,default,deprecated,deprecation_msg}` sorted by name, with a pinned-env header for `fd-limit`/`NumCPU`-derived defaults per 13 §25). Serialize `build_command(FLAG_SPECS)` into the same record shape (FlagKind→Go type string; default→`DefaultVal` resolved string, Duration round-tripped through `parse_go_duration`; symbolic-form for `NumCPU`/`fd-limit`). Assert: (a) **set-equality of names**, (b) **per-flag type equality**, (c) **per-flag default-string equality**, (d) **deprecated-set + message equality** (13 §25 step 2).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-config flag_parity` → fails (snapshot absent / diff). Commit the failing test + an initial Go-extracted `flags.json` first.
+- [x] **Step 3 — Green:** Add `xtask gen-flags` (extracts `name,type,default,deprecated,deprecation_msg` from the Go tree, sorted, with the pinned `GOOS`/`GOMAXPROCS` header) and commit `tests/vectors/config/flags.json`. Reconcile any FLAG_SPECS drift surfaced by the diff (fix names/types/defaults until green). Document the regen command + symbolic-default normalization in PORTING.md.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-config flag_parity` passes (this is the per-PR exit gate).
+- [x] **Step 5 — Commit:** `ava-config: golden::flag_parity + committed Go flags.json snapshot (13 §25)`
 
-### Task M8.5: ava-genesis crate skeleton + Config/Allocation/Staker types + embedded JSON
+### Task M8.5: ava-genesis crate skeleton + Config/Allocation/Staker types + embedded JSON ✅ DONE (a3c2963)
 **Crate:** ava-genesis  ·  **Depends on:** M1 ava-ids, ava-crypto (bech32/ShortId/NodeId/ProofOfPossession), ava-codec  ·  **Spec:** 23 §1, §5.1, 12 §6.1
 **Files:** `crates/ava-genesis/Cargo.toml`, `crates/ava-genesis/src/lib.rs`, `crates/ava-genesis/src/config.rs` (`Config`,`Allocation`,`LockedAmount`,`Staker`), `crates/ava-genesis/src/unparsed.rs` (JSON ⇄ parsed), `crates/ava-genesis/src/error.rs` (`GenesisError`), `crates/ava-genesis/data/genesis_{mainnet,fuji,local}.json`, `crates/ava-genesis/data/bootstrappers.json`, `crates/ava-genesis/data/checkpoints.json`
-- [ ] **Step 1 — Red:** `config.rs::tests::parse_embedded_configs` — `include_str!` each JSON, parse unparsed→parsed for Mainnet/Fuji/Local; assert `network_id` ∈ {1,5,12345}, `initial_supply()` > 0 (checked-add, 23 §1), HRP via `constants::get_hrp`, and at least one staker each. `unparsed.rs::tests::ethaddr_avaxaddr_roundtrip`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-genesis config::tests::parse_embedded_configs` → fails.
-- [ ] **Step 3 — Green:** Copy the three genesis JSONs + `bootstrappers.json` + `checkpoints.json` verbatim from the Go tree into `data/`. Define `Config`/`Allocation`/`LockedAmount`/`Staker` with exact JSON tags (23 §1). Implement unparsed→parsed: `ethAddr` = `0x`+hex(20), `avaxAddr`/`rewardAddress`/`initialStakedFunds[i]` = bech32 (strip alias+HRP → 20-byte ShortId). Implement `initial_supply()` (checked sum), `GenesisError` variants (23 §6.1, one per Go sentinel).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-genesis config::` passes.
-- [ ] **Step 5 — Commit:** `ava-genesis: Config/Allocation/Staker + embedded network JSON (23 §1/§5)`
+- [x] **Step 1 — Red:** `config.rs::tests::parse_embedded_configs` — `include_str!` each JSON, parse unparsed→parsed for Mainnet/Fuji/Local; assert `network_id` ∈ {1,5,12345}, `initial_supply()` > 0 (checked-add, 23 §1), HRP via `constants::get_hrp`, and at least one staker each. `unparsed.rs::tests::ethaddr_avaxaddr_roundtrip`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-genesis config::tests::parse_embedded_configs` → fails.
+- [x] **Step 3 — Green:** Copy the three genesis JSONs + `bootstrappers.json` + `checkpoints.json` verbatim from the Go tree into `data/`. Define `Config`/`Allocation`/`LockedAmount`/`Staker` with exact JSON tags (23 §1). Implement unparsed→parsed: `ethAddr` = `0x`+hex(20), `avaxAddr`/`rewardAddress`/`initialStakedFunds[i]` = bech32 (strip alias+HRP → 20-byte ShortId). Implement `initial_supply()` (checked sum), `GenesisError` variants (23 §6.1, one per Go sentinel).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-genesis config::` passes.
+- [x] **Step 5 — Commit:** `ava-genesis: Config/Allocation/Staker + embedded network JSON (23 §1/§5)`
 
-### Task M8.6: validate_config parity + split_allocations
+### Task M8.6: validate_config parity + split_allocations ✅ DONE (1e8e182)
 **Crate:** ava-genesis  ·  **Depends on:** M8.5, M1 ava-consensus (StakingConfig)  ·  **Spec:** 23 §2, §3.3.1
 **Files:** `crates/ava-genesis/src/validate.rs`, `crates/ava-genesis/src/split.rs`
-- [ ] **Step 1 — Red:** `validate.rs::tests::validate_config_table` — mirror Go `TestValidateConfig`: each of the 10 checks (23 §2) maps to a `GenesisError` variant matched by `assert_matches!`; plus the "duplicate avaxAddr across allocations is allowed" and "empty message allowed" cases. `split.rs::tests::split_allocations_vectors` — fixed staked-allocation sets × num_splits → per-bucket unlock schedules + weights match Go (23 §9.4).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-genesis validate::tests::validate_config_table` → fails.
-- [ ] **Step 3 — Green:** Implement `validate_config` (the 10 ordered checks, 23 §2) and `split_allocations` (greedy split, `node_weight = total/num_splits`, remainder to last bucket, splitting an `unlock.amount` across bucket boundary — reproduce the loop verbatim, 23 §3.3.1). `from_file`/`from_flag` reject std network IDs (`OverridesStandardNetworkConfig`).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-genesis validate:: split::` passes.
-- [ ] **Step 5 — Commit:** `ava-genesis: validate_config + split_allocations (23 §2/§3.3.1)`
+- [x] **Step 1 — Red:** `validate.rs::tests::validate_config_table` — mirror Go `TestValidateConfig`: each of the 10 checks (23 §2) maps to a `GenesisError` variant matched by `assert_matches!`; plus the "duplicate avaxAddr across allocations is allowed" and "empty message allowed" cases. `split.rs::tests::split_allocations_vectors` — fixed staked-allocation sets × num_splits → per-bucket unlock schedules + weights match Go (23 §9.4).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-genesis validate::tests::validate_config_table` → fails.
+- [x] **Step 3 — Green:** Implement `validate_config` (the 10 ordered checks, 23 §2) and `split_allocations` (greedy split, `node_weight = total/num_splits`, remainder to last bucket, splitting an `unlock.amount` across bucket boundary — reproduce the loop verbatim, 23 §3.3.1). `from_file`/`from_flag` reject std network IDs (`OverridesStandardNetworkConfig`).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-genesis validate:: split::` passes.
+- [x] **Step 5 — Commit:** `ava-genesis: validate_config + split_allocations (23 §2/§3.3.1)`
 
-### Task M8.7: from_config — byte-exact P-Chain genesis bytes + AVAX asset ID
+### Task M8.7: from_config — byte-exact P-Chain genesis bytes + AVAX asset ID ✅ DONE (97ced54)
 **Crate:** ava-genesis  ·  **Depends on:** M8.6, M4 ava-platformvm (genesis/tx/UTXO types), M5 ava-avm (genesis/CreateAssetTx types), M1 ava-codec (linear codec, MaxInt32 manager)  ·  **Spec:** 23 §3 (load-bearing order)
 **Files:** `crates/ava-genesis/src/build.rs` (`from_config`, `avax_asset_id`, `vm_genesis`), `crates/ava-genesis/src/chains.rs` (fixed chain list)
-- [ ] **Step 1 — Red:** `build.rs::tests::avax_asset_id_matches_go` — for Mainnet/Fuji/Local assert `from_config(cfg).1.to_string()` equals the 23 §7 AVAX-asset-ID table (`FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z` etc.). This exercises the X-Chain genesis sort + asset-tx hash (23 §3.1) without yet asserting the P-Chain block ID.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-genesis build::tests::avax_asset_id_matches_go` → fails.
-- [ ] **Step 3 — Green:** Implement §3.1 (AVM genesis: `AssetDefinition AVAX denom 9`; collect `initial_amount>0` allocations; sort by `(initial_amount, avax_addr)`; FixedCap holders + memo = concatenated eth addrs; `new_genesis`; sort `InitialState.outs` by codec bytes; marshal v0; `avax_asset_id` = hash of initialized CreateAssetTx bytes). §3.2 P-Chain UTXO allocations (config order, skip initially-staked). §3.3 validators (end-time math, `split_allocations`, PoP signer). §3.4 `platformvm/genesis::New` (UTXOs, validators via **ByEndTime heap**, chains). §3.5 fixed chain list (X first, C second). Marshal P-Chain genesis with linear codec v0, MaxInt32 manager. Implement `vm_genesis(p_bytes, vm_id)` and `avax_asset_id(avm_bytes)`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-genesis build::tests::avax_asset_id_matches_go` passes.
-- [ ] **Step 5 — Commit:** `ava-genesis: from_config byte-exact build + AVAX asset ID (23 §3)`
+- [x] **Step 1 — Red:** `build.rs::tests::avax_asset_id_matches_go` — for Mainnet/Fuji/Local assert `from_config(cfg).1.to_string()` equals the 23 §7 AVAX-asset-ID table (`FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z` etc.). This exercises the X-Chain genesis sort + asset-tx hash (23 §3.1) without yet asserting the P-Chain block ID.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-genesis build::tests::avax_asset_id_matches_go` → fails.
+- [x] **Step 3 — Green:** Implement §3.1 (AVM genesis: `AssetDefinition AVAX denom 9`; collect `initial_amount>0` allocations; sort by `(initial_amount, avax_addr)`; FixedCap holders + memo = concatenated eth addrs; `new_genesis`; sort `InitialState.outs` by codec bytes; marshal v0; `avax_asset_id` = hash of initialized CreateAssetTx bytes). §3.2 P-Chain UTXO allocations (config order, skip initially-staked). §3.3 validators (end-time math, `split_allocations`, PoP signer). §3.4 `platformvm/genesis::New` (UTXOs, validators via **ByEndTime heap**, chains). §3.5 fixed chain list (X first, C second). Marshal P-Chain genesis with linear codec v0, MaxInt32 manager. Implement `vm_genesis(p_bytes, vm_id)` and `avax_asset_id(avm_bytes)`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-genesis build::tests::avax_asset_id_matches_go` passes.
+- [x] **Step 5 — Commit:** `ava-genesis: from_config byte-exact build + AVAX asset ID (23 §3)`
 
-### Task M8.8: golden::genesis_block_id — P/X/C IDs == Go (Mainnet+Fuji+Local+custom)  ⟵ TDD ENTRY POINT
+### Task M8.8: golden::genesis_block_id — P/X/C IDs == Go (Mainnet+Fuji+Local+custom)  ⟵ TDD ENTRY POINT ✅ DONE (4236aea)
 **Crate:** ava-genesis  ·  **Depends on:** M8.7  ·  **Spec:** 23 §4, §7, 12 §6.4, 02 §6.2
 **Files:** `crates/ava-genesis/src/lib.rs` (`genesis_block_id`, `genesis_bytes`, `Chain` enum), `crates/ava-genesis/tests/golden_genesis_block_id.rs`, `crates/ava-genesis/tests/vectors/genesis/{block_ids.json,p_chain_bytes_{mainnet,fuji,local}.bin}` (Go dumps), `crates/ava-genesis/tests/PORTING.md`
-- [ ] **Step 1 — Red:** `tests/golden_genesis_block_id.rs::genesis_block_id` — table over {Mainnet, Fuji, Local-unmodified, custom(9999)}: assert `genesis_block_id(net, Chain::P)` (= `ComputeHash256Array(p_bytes)`, 23 §4.1) equals 23 §7 P-Chain table; `vm_genesis(p_bytes, AVM_ID).id()` and `EVM_ID` equal the X/C blockchain-ID table; `avax_asset_id` equals the asset table; custom-config hex hash == `a1d1838586db85fe94ab1143560c3356df9ba2445794b796bba050be89f4fcb4`. Second test `genesis_p_chain_bytes_byte_identical` diffs the **full byte stream** against the committed Go `.bin` dumps (23 §9.2 — guards intermediate orderings).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-genesis genesis_block_id` → fails.
-- [ ] **Step 3 — Green:** Implement `Chain { P, X, C }`, `genesis_bytes(network_id, custom)`, `genesis_block_id(network_id, chain)` (P = `ApricotCommitBlock{parent_id: hash(p_bytes), height:0}` → its id is the hash per 23 §4.1; X/C via `vm_genesis(...).id()`). Commit the Go-dumped vectors (`xtask gen-genesis`). Fix any ordering drift (X-alloc sort, validator end-time heap, reward-addr sort, chain order) until byte-identical.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-genesis genesis_block_id` passes (per-PR exit gate).
-- [ ] **Step 5 — Commit:** `ava-genesis: golden::genesis_block_id (P/X/C IDs + byte streams, 23 §7)`
+- [x] **Step 1 — Red:** `tests/golden_genesis_block_id.rs::genesis_block_id` — table over {Mainnet, Fuji, Local-unmodified, custom(9999)}: assert `genesis_block_id(net, Chain::P)` (= `ComputeHash256Array(p_bytes)`, 23 §4.1) equals 23 §7 P-Chain table; `vm_genesis(p_bytes, AVM_ID).id()` and `EVM_ID` equal the X/C blockchain-ID table; `avax_asset_id` equals the asset table; custom-config hex hash == `a1d1838586db85fe94ab1143560c3356df9ba2445794b796bba050be89f4fcb4`. Second test `genesis_p_chain_bytes_byte_identical` diffs the **full byte stream** against the committed Go `.bin` dumps (23 §9.2 — guards intermediate orderings).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-genesis genesis_block_id` → fails.
+- [x] **Step 3 — Green:** Implement `Chain { P, X, C }`, `genesis_bytes(network_id, custom)`, `genesis_block_id(network_id, chain)` (P = `ApricotCommitBlock{parent_id: hash(p_bytes), height:0}` → its id is the hash per 23 §4.1; X/C via `vm_genesis(...).id()`). Commit the Go-dumped vectors (`xtask gen-genesis`). Fix any ordering drift (X-alloc sort, validator end-time heap, reward-addr sort, chain order) until byte-identical.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-genesis genesis_block_id` passes (per-PR exit gate).
+- [x] **Step 5 — Commit:** `ava-genesis: golden::genesis_block_id (P/X/C IDs + byte streams, 23 §7)`
 
-### Task M8.9: ava-config env snapshot + config-file loader (json/yaml/toml + base64 content)
+### Task M8.9: ava-config env snapshot + config-file loader (json/yaml/toml + base64 content) ✅ DONE (f95d10c)
 **Crate:** ava-config  ·  **Depends on:** M8.3  ·  **Spec:** 12 §1.5, 13 §0 (env derivation, config file), §23
 **Files:** `crates/ava-config/src/precedence.rs` (env snapshot, `load_config_file`), Cargo deps: `serde_json`, `serde_yaml`, `toml`, `base64`
-- [ ] **Step 1 — Red:** `precedence.rs::tests::env_var_name_mapping` — `AVAGO_NETWORK_ID`→`network-id`, `AVAGO_HTTP_PORT`→`http-port`, `AVAGO_NETWORK_TLS_KEY_LOG_FILE_UNSAFE`→`network-tls-key-log-file-unsafe` (13 §0 rule: strip `AVAGO_`, lowercase, `_`→`-`). `config_file_content_overrides_path` — when both `--config-file` and `--config-file-content` (b64) are set, the content wins (13 §0). Parse json/yaml/toml content into one `serde_json::Value`.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config precedence::tests::env_var_name_mapping` → fails.
-- [ ] **Step 3 — Green:** Snapshot `std::env::vars()` filtering `AVAGO_*` (strip, lowercase, `_`→`-`) into a `HashMap` once. Implement `load_config_file(&ArgMatches)`: `--config-file-content` (b64-decode, parse by `--config-file-content-type` ∈ json/yaml/toml default json) overrides `--config-file` path; return `Value::Null` if neither; all parsers funnel into `serde_json::Value`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config precedence::` passes.
-- [ ] **Step 5 — Commit:** `ava-config: env snapshot + config-file/content loader (12 §1.5)`
+- [x] **Step 1 — Red:** `precedence.rs::tests::env_var_name_mapping` — `AVAGO_NETWORK_ID`→`network-id`, `AVAGO_HTTP_PORT`→`http-port`, `AVAGO_NETWORK_TLS_KEY_LOG_FILE_UNSAFE`→`network-tls-key-log-file-unsafe` (13 §0 rule: strip `AVAGO_`, lowercase, `_`→`-`). `config_file_content_overrides_path` — when both `--config-file` and `--config-file-content` (b64) are set, the content wins (13 §0). Parse json/yaml/toml content into one `serde_json::Value`.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config precedence::tests::env_var_name_mapping` → fails.
+- [x] **Step 3 — Green:** Snapshot `std::env::vars()` filtering `AVAGO_*` (strip, lowercase, `_`→`-`) into a `HashMap` once. Implement `load_config_file(&ArgMatches)`: `--config-file-content` (b64-decode, parse by `--config-file-content-type` ∈ json/yaml/toml default json) overrides `--config-file` path; return `Value::Null` if neither; all parsers funnel into `serde_json::Value`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config precedence::` passes.
+- [x] **Step 5 — Commit:** `ava-config: env snapshot + config-file/content loader (12 §1.5)`
 
-### Task M8.10: Layered resolver — viper precedence + is_set + path expansion
+### Task M8.10: Layered resolver — viper precedence + is_set + path expansion ✅ DONE (0ddec25)
 **Crate:** ava-config  ·  **Depends on:** M8.9  ·  **Spec:** 12 §1.5, 13 §0/§23 (precedence + getExpandedArg)
 **Files:** `crates/ava-config/src/precedence.rs` (`Layered`, getters, `is_set`, path expander)
-- [ ] **Step 1 — Red:** `precedence.rs::tests::data_dir_expansion` — a path-typed value `$AVALANCHEGO_DATA_DIR/db` expands to `<resolved data-dir>/db`; other `$VAR` via env (13 §0 `getExpandedArg`). `is_set_layers` — `is_set` true when CLI `ValueSource::CommandLine` OR env key present OR file lookup hits (13 §23).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-config precedence::tests::data_dir_expansion` → fails.
-- [ ] **Step 3 — Green:** Implement `Layered { cli, env, file, specs }` with `build(cmd, args, specs)` (12 §1.5 sketch). `is_set(key)` per 13 §23. `get_string/get_bool/get_u64/get_i64/get_f64/get_duration/get_string_slice/get_int_slice/get_string_map` walking CLI(CommandLine)→env→file→default. Key normalization (lowercase, dash form) before lookup. Path expansion applied on read for path-typed keys.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-config precedence::` passes.
-- [ ] **Step 5 — Commit:** `ava-config: Layered viper-parity resolver + path expansion (12 §1.5)`
+- [x] **Step 1 — Red:** `precedence.rs::tests::data_dir_expansion` — a path-typed value `$AVALANCHEGO_DATA_DIR/db` expands to `<resolved data-dir>/db`; other `$VAR` via env (13 §0 `getExpandedArg`). `is_set_layers` — `is_set` true when CLI `ValueSource::CommandLine` OR env key present OR file lookup hits (13 §23).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-config precedence::tests::data_dir_expansion` → fails.
+- [x] **Step 3 — Green:** Implement `Layered { cli, env, file, specs }` with `build(cmd, args, specs)` (12 §1.5 sketch). `is_set(key)` per 13 §23. `get_string/get_bool/get_u64/get_i64/get_f64/get_duration/get_string_slice/get_int_slice/get_string_map` walking CLI(CommandLine)→env→file→default. Key normalization (lowercase, dash form) before lookup. Path expansion applied on read for path-typed keys.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-config precedence::` passes.
+- [x] **Step 5 — Commit:** `ava-config: Layered viper-parity resolver + path expansion (12 §1.5)`
 
-### Task M8.11: prop::config_precedence — flag>env>file>default proptest
+### Task M8.11: prop::config_precedence — flag>env>file>default proptest ✅ DONE (6a4006b)
 **Crate:** ava-config  ·  **Depends on:** M8.10  ·  **Spec:** 13 §25 step 4, 02 §4
 **Files:** `crates/ava-config/tests/prop_config_precedence.rs`, `crates/ava-config/proptest-regressions/` (committed)
-- [ ] **Step 1 — Red:** `tests/prop_config_precedence.rs::config_precedence` — proptest over a matrix `{present-on-CLI?, present-in-env?, present-in-file?}` per a sampled key/type: assert the resolved value picks the highest present layer (CLI>env>file>default) and `is_set` is true iff any non-default layer present. Include the explicit unit cases: `snow-quorum-size` overrides preference+confidence when set (13 §7/§23), `-content` overrides `-file` (13 §23), `network-allow-private-ips` network-dependence is NOT resolved here (that is parse-time, M8.12).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-config config_precedence` → fails.
-- [ ] **Step 3 — Green:** Implement the proptest strategy building synthetic CLI args + env map + file Value and a `Layered`; assert ordering + `is_set`. Commit `proptest-regressions/`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-config config_precedence` passes (per-PR exit gate).
-- [ ] **Step 5 — Commit:** `ava-config: prop::config_precedence (flag>env>file>default, 13 §25)`
+- [x] **Step 1 — Red:** `tests/prop_config_precedence.rs::config_precedence` — proptest over a matrix `{present-on-CLI?, present-in-env?, present-in-file?}` per a sampled key/type: assert the resolved value picks the highest present layer (CLI>env>file>default) and `is_set` is true iff any non-default layer present. Include the explicit unit cases: `snow-quorum-size` overrides preference+confidence when set (13 §7/§23), `-content` overrides `-file` (13 §23), `network-allow-private-ips` network-dependence is NOT resolved here (that is parse-time, M8.12).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-config config_precedence` → fails.
+- [x] **Step 3 — Green:** Implement the proptest strategy building synthetic CLI args + env map + file Value and a `Layered`; assert ordering + `is_set`. Commit `proptest-regressions/`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-config config_precedence` passes (per-PR exit gate).
+- [x] **Step 5 — Commit:** `ava-config: prop::config_precedence (flag>env>file>default, 13 §25)`
 
 ### Task M8.12: get_node_config — Config struct + network-dependent derived defaults + validation
 **Crate:** ava-config  ·  **Depends on:** M8.10, M8.8 (ava-genesis bootstrappers/genesis), M2/M3 (NetworkConfig, ConsensusParams, BenchlistConfig), M1 ava-database (DatabaseConfig)  ·  **Spec:** 12 §1.6, 13 §3/§5/§7/§8/§13/§18/§19/§21 (network-dependent + validation)
@@ -168,14 +175,14 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [ ] **Step 4 — Confirm green:** `cargo test -p ava-config subnets:: chain_config::` passes.
 - [ ] **Step 5 — Commit:** `ava-config: subnet/chain config + alias loaders (12 §1.7, 13 §14)`
 
-### Task M8.14: ava-genesis bootstrappers + sample_bootstrappers + local start-time advance
+### Task M8.14: ava-genesis bootstrappers + sample_bootstrappers + local start-time advance ✅ DONE (2be13f6+a4c5dcb)
 **Crate:** ava-genesis  ·  **Depends on:** M8.5, M2 (uniform sampler)  ·  **Spec:** 23 §5.1 (getRecentStartTime), §5.2 (bootstrappers/SampleBootstrappers)
 **Files:** `crates/ava-genesis/src/bootstrappers.rs`, `crates/ava-genesis/src/recent_start.rs`
-- [ ] **Step 1 — Red:** `bootstrappers.rs::tests::bootstrapper_parity` — per network count + IDs + IPs match `bootstrappers.json` (23 §9.5); `sample_bootstrappers(net,5)` selection determinism vs the gonum-parity sampler. `recent_start.rs::tests::get_recent_start_time` — fixed `now` → embedded `startTime` advanced by 9-month chunks (`9*30*24h`) until `<= now` (23 §5.1).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-genesis bootstrappers::tests::bootstrapper_parity` → fails.
-- [ ] **Step 3 — Green:** Embed `bootstrappers.json` as `map<network_name, Vec<Bootstrapper{id,ip}>>`; `bootstrappers(network_id)` by name; `sample_bootstrappers` via the M2 uniform sampler. `get_recent_start_time` loop. Provide both `UNMODIFIED_LOCAL_CONFIG` (golden) and advanced `LOCAL_CONFIG` (live), and wire `get_config(network_id)` (23 §5.1).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-genesis bootstrappers:: recent_start::` passes.
-- [ ] **Step 5 — Commit:** `ava-genesis: bootstrappers + sample + getRecentStartTime (23 §5)`
+- [x] **Step 1 — Red:** `bootstrappers.rs::tests::bootstrapper_parity` — per network count + IDs + IPs match `bootstrappers.json` (23 §9.5); `sample_bootstrappers(net,5)` selection determinism vs the gonum-parity sampler. `recent_start.rs::tests::get_recent_start_time` — fixed `now` → embedded `startTime` advanced by 9-month chunks (`9*30*24h`) until `<= now` (23 §5.1).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-genesis bootstrappers::tests::bootstrapper_parity` → fails.
+- [x] **Step 3 — Green:** Embed `bootstrappers.json` as `map<network_name, Vec<Bootstrapper{id,ip}>>`; `bootstrappers(network_id)` by name; `sample_bootstrappers` via the M2 uniform sampler. `get_recent_start_time` loop. Provide both `UNMODIFIED_LOCAL_CONFIG` (golden) and advanced `LOCAL_CONFIG` (live), and wire `get_config(network_id)` (23 §5.1).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-genesis bootstrappers:: recent_start::` passes.
+- [x] **Step 5 — Commit:** `ava-genesis: bootstrappers + sample + getRecentStartTime (23 §5)`
 
 ### Task M8.15: ava-genesis C-Chain timestamp + round-trip rebuild parity
 **Crate:** ava-genesis  ·  **Depends on:** M8.8, M8.14, M6 ava-cchain (eth genesis parse for timestamp only)  ·  **Spec:** 23 §3.6, §7, §9.2/§9.6
