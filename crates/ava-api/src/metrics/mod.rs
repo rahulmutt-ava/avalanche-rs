@@ -21,11 +21,13 @@
 //!   registers it under a name, and hands it back for the subsystem to
 //!   populate (Go `metrics.MakeAndRegister`).
 //!
-//! The merge semantics mirror Go's `prometheus.Gatherers.Gather`: same-name
-//! families are folded together (rejecting type conflicts, duplicate label
-//! names, and duplicate metrics), and the output is sorted by family name —
-//! with metrics within a family sorted by label values — for byte-stable
-//! scrapes (18 §7).
+//! The merge follows Go's `prometheus.Gatherers.Gather` shape: same-name
+//! families are folded together, rejecting type conflicts and duplicate label
+//! sets, and the output is sorted by family name — with metrics within a
+//! family sorted by label values — for byte-stable scrapes (18 §7).
+//! Intentionally NOT ported from Go's `Gatherers.Gather` (unreachable or
+//! error-path-only in a correctly assembled node): the help-text mismatch
+//! check, `checkSuffixCollisions`, and empty-family filtering.
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};

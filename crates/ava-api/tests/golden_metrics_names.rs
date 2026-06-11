@@ -150,6 +150,17 @@ fn waived(name: &str) -> Option<&'static str> {
     if name == "avalanche_process_process_virtual_memory_max_bytes" {
         return Some("not emitted by the Rust prometheus process collector (documented gap)");
     }
+    // client_golang v1.23.0's Linux (procfs) process collector additionally
+    // emits process_network_{receive,transmit}_bytes_total — absent on darwin
+    // (where the committed snapshot was generated) AND absent from the Rust
+    // prometheus 0.13 process collector on any platform. Waived explicitly so
+    // a snapshot regenerated on Linux stays green (documented crate gap, same
+    // as virtual_memory_max_bytes above).
+    if name == "avalanche_process_process_network_receive_bytes_total"
+        || name == "avalanche_process_process_network_transmit_bytes_total"
+    {
+        return Some("not emitted by the Rust prometheus process collector (documented gap)");
+    }
     // The Rust process collector is Linux-only.
     #[cfg(not(target_os = "linux"))]
     if name.starts_with("process_") || name.starts_with("avalanche_process_process_") {

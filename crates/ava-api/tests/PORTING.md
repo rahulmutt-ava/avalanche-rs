@@ -39,6 +39,10 @@ names):
   Linux (the production target).
 - `avalanche_process_process_virtual_memory_max_bytes` — not emitted by the
   Rust `prometheus` 0.13 process collector (crate gap), on any platform.
+- `avalanche_process_process_network_{receive,transmit}_bytes_total` — emitted
+  only by client_golang v1.23.0's **Linux** procfs collector (not on darwin);
+  not emitted by the Rust `prometheus` 0.13 collector on any platform (crate
+  gap).
 
 **Regenerate** (avalanchego checkout required; leaves the Go tree clean):
 
@@ -54,9 +58,24 @@ rm $AG/api/metrics/metrics_schema_oracle_test.go
 ```
 
 Current snapshot provenance: avalanchego `5896c92fee23c2eff53d557dceeb89f1a6218224`,
-emitted on `darwin` (the Go process collector emits the same 7 `process_*`
-families on darwin as on linux since client_golang v1.20; `go_*` families are
-waived regardless).
+emitted on `darwin`. Note the collectors are **not** platform-identical:
+client_golang v1.23.0's Linux (procfs) process collector emits 2 extra
+families — `process_network_receive_bytes_total` and
+`process_network_transmit_bytes_total` — that the darwin collector does not;
+the Rust `prometheus` 0.13.4 process collector emits neither, on any platform.
+Both are therefore explicitly waived in the test, so a snapshot regenerated on
+Linux stays green (`go_*` families are waived regardless).
 
 Keep the Rust tree in `golden_metrics_names.rs::rust_schema()` and the Go tree
 in the oracle **in sync** — they must build the same namespaces/families.
+
+**Known Go-observable divergences (error paths only):**
+
+- Gather-error message strings differ from client_golang's (Rust error text is
+  not a transliteration of `prometheus.Gatherers.Gather`'s).
+- Non-GET `/ext/metrics` returns 405 (Go's promhttp serves any method; spec 14
+  §6 prescribes GET).
+- No gzip content-negotiation (Go's promhttp gzips on `Accept-Encoding`; the
+  plain text output is spec-compliant either way).
+- Empty metric families are not filtered from the merged output (Go's
+  `NormalizeMetricFamilies` drops them).
