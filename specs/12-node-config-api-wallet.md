@@ -551,6 +551,17 @@ under base `/ext`. Requirements preserved:
   with `403` (mirror `allowed_hosts.go::filterInvalidHosts`).
 - **`node-id` response header** set on every response.
 - **Timeouts** from `HTTPConfig` (read/read-header/write/idle) via a `tower` layer.
+
+  > **As-built correction (M8.16, 2026-06-11).** Only two of the four map faithfully onto the
+  > Rust stack: `write_timeout` → request-level `tower` `TimeoutLayer` (408) and
+  > `read_header_timeout` → hyper-util `.http1().header_read_timeout(..)` on the explicit
+  > `auto::Builder` accept loop (which also applies the real
+  > `.http2().max_concurrent_streams(64)` h2c cap). Go's `ReadTimeout` (whole-request read
+  > deadline incl. body) and `IdleTimeout` (close idle keep-alive conns) have **no faithful
+  > hyper-util equivalent** (no whole-request read deadline — handlers stream bodies lazily;
+  > no HTTP/1 idle-close timer; h2 keep-alive PING is a liveness probe, not idle-close).
+  > Both are parsed/carried in `HttpConfig` but unwired — documented at the `serve` loop in
+  > `crates/ava-api/src/server.rs`; revisit if hyper-util grows the knobs.
 - **Per-chain reject middleware**: until a chain's consensus state is `NormalOp`,
   its routes return `503 "API call rejected because chain is not done
   bootstrapping"`.

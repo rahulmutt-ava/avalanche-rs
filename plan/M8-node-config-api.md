@@ -59,6 +59,13 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > make_wallet over the client-trait seam, 41 ava-wallet tests) — see the per-task AS-BUILT notes.
 > Remaining M8 frontier: **M8.16→M8.17 (ava-api server + JSON-RPC shim) ∥ M8.28 (trace/nat/logging)**,
 > then the per-service fan-out M8.18–M8.24.
+>
+> **WAVE C-HEAD + M8.28 MERGED 2026-06-11** (branches `m8/api` 276d008, `m8/node-trace` 5319a70;
+> M6.31 also landed this wave, 160d20d): M8.16+M8.17 (ava-api server + JSON-RPC shim + macros, 28
+> tests) and M8.28 (ava-node trace/nat + ava-logging factory, 19 tests) — see per-task AS-BUILTs.
+> Remaining M8 frontier: **per-service fan-out M8.18 (info) ∥ M8.19 (admin) ∥ M8.20 (health) ∥
+> M8.21 (metrics) ∥ M8.24 (indexer)** (all parallel on the M8.17 shim; M8.19 needs M8.28's reload
+> handles — landed), then M8.22 (register_chain) → M8.23 (api_parity) → Wave E (M8.29–M8.31).
 
 ---
 
@@ -223,23 +230,56 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > in M8.8's `genesis_p_chain_bytes_byte_identical`. Test-only deps silenced per-dep (`#[cfg(test)] use x as _;`,
 > ava-config precedent). 18 ava-genesis tests.
 
-### Task M8.16: ava-api server — axum/h2c/CORS/allowed-hosts/node-id/timeouts/503 + ApiServer trait
+### Task M8.16: ava-api server — axum/h2c/CORS/allowed-hosts/node-id/timeouts/503 + ApiServer trait ✅ DONE (5eb8269+cd15906)
 **Crate:** ava-api  ·  **Depends on:** M2/M3 (ConsensusContext, CommonVM trait, validators/network handles), M8.12 (HTTPConfig)  ·  **Spec:** 12 §3.1/§3.9, 14 §1.3/§16.3
 **Files:** `crates/ava-api/Cargo.toml` (axum, hyper http2, tower, tower-http cors, tokio-tungstenite, tonic, tonic-web), `crates/ava-api/src/lib.rs`, `crates/ava-api/src/server.rs` (`ApiServer` trait + impl), `crates/ava-api/src/middleware.rs` (allowed-hosts, node-id header, per-chain-503, metrics/trace wrappers)
-- [ ] **Step 1 — Red:** `middleware.rs::tests::allowed_hosts_filter` — Host not in `http-allowed-hosts` ⇒ 403 "invalid host specified"; `*` accepts all; bare-IP/empty accepted (14 §16.3). `server.rs::tests::node_id_header_on_every_response` (incl. error responses, 14 §16.3). `not_bootstrapped_503` — chain not `NormalOp` ⇒ 503 "API call rejected because chain is not done bootstrapping" (14 §16.3).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-api middleware::tests::allowed_hosts_filter` → fails.
-- [ ] **Step 3 — Green:** Build the axum router under base `/ext` with h2c (`MaxConcurrentStreams=64`), `tower-http::cors` (origins from `http-allowed-origins` default `*`, allow-credentials), allowed-hosts middleware (403), `node-id` response-header layer, per-chain not-bootstrapped 503 layer, and read/read-header/write/idle timeout layers from `HTTPConfig` (12 §3.1). Define the `ApiServer` trait (`add_route`, `add_aliases`, `register_chain`, `add_header_route`, `serve`, `shutdown`) per 12 §3.1.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-api middleware:: server::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: HTTP server + middleware (h2c/CORS/allowed-hosts/503/node-id, 12 §3.1)`
+- [x] **Step 1 — Red:** `middleware.rs::tests::allowed_hosts_filter` — Host not in `http-allowed-hosts` ⇒ 403 "invalid host specified"; `*` accepts all; bare-IP/empty accepted (14 §16.3). `server.rs::tests::node_id_header_on_every_response` (incl. error responses, 14 §16.3). `not_bootstrapped_503` — chain not `NormalOp` ⇒ 503 "API call rejected because chain is not done bootstrapping" (14 §16.3).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-api middleware::tests::allowed_hosts_filter` → fails.
+- [x] **Step 3 — Green:** Build the axum router under base `/ext` with h2c (`MaxConcurrentStreams=64`), `tower-http::cors` (origins from `http-allowed-origins` default `*`, allow-credentials), allowed-hosts middleware (403), `node-id` response-header layer, per-chain not-bootstrapped 503 layer, and read/read-header/write/idle timeout layers from `HTTPConfig` (12 §3.1). Define the `ApiServer` trait (`add_route`, `add_aliases`, `register_chain`, `add_header_route`, `serve`, `shutdown`) per 12 §3.1.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-api middleware:: server::` passes.
+- [x] **Step 5 — Commit:** `ava-api: HTTP server + middleware (h2c/CORS/allowed-hosts/503/node-id, 12 §3.1)`
 
-### Task M8.17: JSON-RPC 2.0 shim (gorilla json2 wire shape) + error model + #[rpc_service] macro
+> **AS-BUILT (M8.16, merged 276d008; spec+quality reviewed, fix pass cd15906).** 15 tests. axum 0.7 +
+> explicit hyper-util `auto::Builder` accept loop (NOT `axum::serve`): h2c + HTTP/1.1 on one port,
+> `.http2().max_concurrent_streams(64)` real, `.http1().header_read_timeout(read_header_timeout)`;
+> `write_timeout` = request-level `TimeoutLayer` (408). **Go `ReadTimeout`/`IdleTimeout` are NOT
+> faithfully mappable on hyper-util** (no whole-request read deadline; no HTTP/1 idle-close timer;
+> h2 keep-alive PING ≠ idle-close) — left unwired, documented in `serve` (revisit if hyper-util grows
+> the knobs). Review fixes worth knowing: per-chain 503 layer wraps each chain's actual mounted
+> sub-router (the naive `Router::new().layer().merge()` form is a NO-OP — axum `.layer()` only wraps
+> already-present routes); `node_id_header` applied LAST = outermost so 403s carry it; CORS
+> credentials+wildcard uses `AllowHeaders::mirror_request()` (tower-http panics on `Any`+credentials;
+> mirrors Go rs/cors); `add_aliases` is alias-before-route like Go `router.AddAlias` (reserves names,
+> propagates on later `add_route`); `shutdown` uses `Notify::notify_one()` (notify_waiters loses a
+> pre-serve shutdown). `register_chain` records ctx+mount prefix only (full mounting M8.22).
+
+### Task M8.17: JSON-RPC 2.0 shim (gorilla json2 wire shape) + error model + #[rpc_service] macro ✅ DONE (0ebacce+2c517e8)
 **Crate:** ava-api  ·  **Depends on:** M8.16  ·  **Spec:** 12 §3.2/§11, 14 §1.1/§16.1/§16.5
 **Files:** `crates/ava-api/src/jsonrpc.rs` (`Req`/`Resp`/`JsonRpcError`, `ServiceRegistry`, `dispatch`), `crates/ava-api/src/error.rs` (`json2_code`, `IntoJsonRpcError`), `crates/ava-api-macros/` (`#[rpc_service("name")]`)
-- [ ] **Step 1 — Red:** `jsonrpc.rs::tests::gorilla_wire_shape` — request `{"jsonrpc":"2.0","id":1,"method":"info.getNodeID","params":[{}]}` dispatches to service `info` method `GetNodeID` (case-insensitive method segment, single-element `params` array); success → `{"jsonrpc":"2.0","id":1,"result":{...}}`. `domain_error_is_minus_32000_http_200` — a handler-returned error → body `{code:-32000, message: err.to_string(), data: null}` with **HTTP 200** (14 §16.1 nuance); malformed JSON → -32700; unknown method → -32601; uppercase guard → -32601 (14 §16.1).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-api jsonrpc::tests::gorilla_wire_shape` → fails.
-- [ ] **Step 3 — Green:** Implement `Req{jsonrpc,method,params,id}`/`Resp`, `ServiceRegistry`, axum `dispatch` (POST, Content-Type `application/json[;charset=UTF-8]`; split `method` on `.`; `first_param(params)` = `params[0]`; 200+error-body for domain errors; 405 non-POST, 415 bad content-type pre-dispatch per 14 §16.3). `json2_code` consts (−32700/−32600/−32601/−32602/−32603/−32000) and the blanket `IntoJsonRpcError` (default → −32000, message = `to_string()`, `data: null`, 14 §16.5). Implement `#[rpc_service("name")]` derive registering `async fn(&self, Args) -> Result<Reply, RpcError>` methods so the registered method set cannot drift from the trait (12 §3.2).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-api jsonrpc:: error::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: gorilla-json2 JSON-RPC shim + error model + rpc_service macro (12 §3.2, 14 §16)`
+- [x] **Step 1 — Red:** `jsonrpc.rs::tests::gorilla_wire_shape` — request `{"jsonrpc":"2.0","id":1,"method":"info.getNodeID","params":[{}]}` dispatches to service `info` method `GetNodeID` (case-insensitive method segment, single-element `params` array); success → `{"jsonrpc":"2.0","id":1,"result":{...}}`. `domain_error_is_minus_32000_http_200` — a handler-returned error → body `{code:-32000, message: err.to_string(), data: null}` with **HTTP 200** (14 §16.1 nuance); malformed JSON → -32700; unknown method → -32601; uppercase guard → -32601 (14 §16.1).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-api jsonrpc::tests::gorilla_wire_shape` → fails.
+- [x] **Step 3 — Green:** Implement `Req{jsonrpc,method,params,id}`/`Resp`, `ServiceRegistry`, axum `dispatch` (POST, Content-Type `application/json[;charset=UTF-8]`; split `method` on `.`; `first_param(params)` = `params[0]`; 200+error-body for domain errors; 405 non-POST, 415 bad content-type pre-dispatch per 14 §16.3). `json2_code` consts (−32700/−32600/−32601/−32602/−32603/−32000) and the blanket `IntoJsonRpcError` (default → −32000, message = `to_string()`, `data: null`, 14 §16.5). Implement `#[rpc_service("name")]` derive registering `async fn(&self, Args) -> Result<Reply, RpcError>` methods so the registered method set cannot drift from the trait (12 §3.2).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-api jsonrpc:: error::` passes.
+- [x] **Step 5 — Commit:** `ava-api: gorilla-json2 JSON-RPC shim + error model + rpc_service macro (12 §3.2, 14 §16)`
+
+> **AS-BUILT (M8.17, merged 276d008; spec+quality reviewed, fix pass 2c517e8).** 28 ava-api tests +
+> compile_fail doctest. Wire envelope verified byte-faithful to 14 §1.1 (`jsonrpc:"2.0"` present;
+> result/error mutually exclusive via skip; error `data` ALWAYS explicit null per §16.5). ★ **The
+> uppercase guard is on the METHOD segment, inverted from the first implementation's guess** (Go
+> `utils/json/codec.go::errUppercaseMethod`): service folds case-insensitively (`Info.getNodeID` OK),
+> method first-rune-uppercase ⇒ -32601 (`info.GetNodeID` REJECTED), then first letter uppercased and
+> the REMAINDER matched EXACTLY — caught by spec review; the original fully-case-insensitive method
+> matching + service-segment guard was a parity break. Consequence: the macro registers exact Go
+> method names; **`#[rpc(name = "GetNodeID")]` per-method override exists for acronym names — every
+> acronym method in M8.18–M8.24 MUST carry it** (pascalize gives `GetNodeId` ≠ Go `GetNodeID`).
+> Macro contract: only `pub async fn(&self, Args) -> Result<Reply, RpcError>` registers; `pub fn`
+> non-async = compile error (typo guard); private helpers skipped. Bare-object `params` passthrough
+> is Go-faithful (gorilla json2 ReadRequest unmarshals params directly into args first, falls back to
+> `[1]interface{}` — verified in gorilla source). `RpcError::from_error(&impl Error)` replaces the
+> misleading `From<&E>` blanket (an owned blanket is incoherent with reflexive From). Dispatch core
+> split as pure `dispatch_body(&registry, &[u8])` (HTTP-free, testable); registry immutable-after-build
+> behind Arc. NOTE for M8.22/M8.31: no BUILD.bazel committed for ava-api/ava-api-macros/ava-node yet —
+> run `bazel-gazelle-generate` + `deps-tidy` before any push upstream.
 
 ### Task M8.18: info API — 13 methods (`/ext/info`)
 **Crate:** ava-api  ·  **Depends on:** M8.17, M2/M3 (network/validators/benchlist/chainManager handles), M8.12 (Config), M1 ava-version  ·  **Spec:** 12 §3.3, 14 §3
