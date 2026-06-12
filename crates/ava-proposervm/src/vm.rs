@@ -21,11 +21,12 @@
 //! ## Scope notes (see `tests/PORTING.md`)
 //!
 //! This port covers the fork-regime selection, the height index + inner-VM
-//! delegation, and the slot-wait sign/build path. The full Go VM additionally
-//! implements oracle/option wrapping, the verified-block graph + inner-block
-//! cache, height-repair/pruning (`NumHistoricalBlocks`), epoch (ACP-181)
-//! selection, and the HTTP/RPC service — those are explicit deferrals recorded
-//! in `tests/PORTING.md`.
+//! delegation, the slot-wait sign/build path, and the proposervm API service
+//! (M8.22: `create_handlers`/`new_http_handler`, Go `vm.go:255-311`). The full
+//! Go VM additionally implements oracle/option wrapping, the verified-block
+//! graph + inner-block cache, height-repair/pruning (`NumHistoricalBlocks`),
+//! and epoch (ACP-181) selection on the build path — those are explicit
+//! deferrals recorded in `tests/PORTING.md`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
