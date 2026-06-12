@@ -123,7 +123,10 @@ struct BlsChecker {
 
 impl Checker for BlsChecker {
     fn health_check(&self) -> BoxFuture<'static, CheckResult> {
-        let result = match self.validators.get_validator(PRIMARY_NETWORK_ID, self.node_id) {
+        let result = match self
+            .validators
+            .get_validator(PRIMARY_NETWORK_ID, self.node_id)
+        {
             None => Ok(json!("node is not a validator")),
             Some(vdr) => match vdr.public_key {
                 None => Ok(json!("validator doesn't have a BLS key")),

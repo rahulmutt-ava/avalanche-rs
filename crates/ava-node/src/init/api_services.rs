@@ -61,7 +61,10 @@ impl ava_api::admin::LoggerLevels for FactoryLoggerLevels {
     }
 
     fn log_level(&self, name: &str) -> std::result::Result<AvaLevel, SeamError> {
-        let handle = self.0.log_handle(name).ok_or_else(|| unknown_logger(name))?;
+        let handle = self
+            .0
+            .log_handle(name)
+            .ok_or_else(|| unknown_logger(name))?;
         Ok(handle.level())
     }
 
@@ -75,8 +78,13 @@ impl ava_api::admin::LoggerLevels for FactoryLoggerLevels {
     }
 
     fn set_log_level(&self, name: &str, level: AvaLevel) -> std::result::Result<(), SeamError> {
-        let handle = self.0.log_handle(name).ok_or_else(|| unknown_logger(name))?;
-        handle.set_level(level).map_err(|e| SeamError::from(e.to_string()))
+        let handle = self
+            .0
+            .log_handle(name)
+            .ok_or_else(|| unknown_logger(name))?;
+        handle
+            .set_level(level)
+            .map_err(|e| SeamError::from(e.to_string()))
     }
 
     fn set_display_level(&self, name: &str, level: AvaLevel) -> std::result::Result<(), SeamError> {
@@ -137,7 +145,10 @@ impl ava_api::admin::VmRegistry for AdminVmRegistry {
             .into_iter()
             .map(|(vm_id, e)| (vm_id, e.to_string()))
             .collect();
-        Ok(VmReload { new_vms, failed_vms })
+        Ok(VmReload {
+            new_vms,
+            failed_vms,
+        })
     }
 }
 
@@ -179,8 +190,8 @@ pub fn init_admin_api(deps: &AdminDeps) -> Result<()> {
 
     tracing::info!("initializing admin API");
 
-    let node_config = serde_json::to_value(&deps.config.provided_flags)
-        .unwrap_or(serde_json::Value::Null);
+    let node_config =
+        serde_json::to_value(&deps.config.provided_flags).unwrap_or(serde_json::Value::Null);
 
     let admin = Admin::new(AdminConfig {
         profile_dir: PathBuf::from(&deps.config.profiler_config.dir),
@@ -277,9 +288,7 @@ impl ava_api::info::InfoNetwork for InfoNet {
             .collect()
     }
 
-    fn node_uptime(
-        &self,
-    ) -> std::result::Result<ava_api::info::types::UptimeResult, String> {
+    fn node_uptime(&self) -> std::result::Result<ava_api::info::types::UptimeResult, String> {
         let uptime = Network::node_uptime(self.0.as_ref()).map_err(|e| e.to_string())?;
         Ok(ava_api::info::types::UptimeResult {
             rewarding_stake_percentage: uptime.rewarding_stake_percentage,

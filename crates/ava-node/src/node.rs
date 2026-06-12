@@ -215,7 +215,8 @@ impl Node {
 
         // 5. Bootstrap beacons.
         record("bootstrappers");
-        let bootstrappers = init::bootstrappers::new_bootstrappers(&config.bootstrap_config.bootstrappers)?;
+        let bootstrappers =
+            init::bootstrappers::new_bootstrappers(&config.bootstrap_config.bootstrappers)?;
 
         // 6. Tracer.
         record("tracer");
@@ -558,6 +559,9 @@ mod tests {
             "init_chain_manager() fills the RouterBridge engine-router slot"
         );
         assert_eq!(node.exit_code(), 0, "no shutdown demanded during init");
-        assert!(!node.shutting_down(), "node is not shutting down after init");
+        assert!(
+            !node.shutting_down(),
+            "node is not shutting down after init"
+        );
     }
 }

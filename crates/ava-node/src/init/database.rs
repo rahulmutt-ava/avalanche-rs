@@ -128,7 +128,10 @@ fn db_folder_name(name: &str) -> &'static str {
 /// Open the configured backend. `memdb` is in-memory; every on-disk name
 /// (`leveldb` / `pebbledb` / `rocksdb`) opens the RocksDB backend (the Rust
 /// node's single on-disk engine, 04 §2.1) under the Go-compatible folder.
-fn open_backend(db_config: &DatabaseConfig, meter_registry: &prometheus::Registry) -> Result<Arc<dyn DynDatabase>> {
+fn open_backend(
+    db_config: &DatabaseConfig,
+    meter_registry: &prometheus::Registry,
+) -> Result<Arc<dyn DynDatabase>> {
     if db_config.name == "memdb" {
         let metered = MeterDb::new(meter_registry, MemDb::new()).map_err(Error::Database)?;
         return Ok(Arc::new(metered));
@@ -136,8 +139,7 @@ fn open_backend(db_config: &DatabaseConfig, meter_registry: &prometheus::Registr
 
     #[cfg(feature = "rocksdb")]
     {
-        let full_path =
-            std::path::Path::new(&db_config.path).join(db_folder_name(&db_config.name));
+        let full_path = std::path::Path::new(&db_config.path).join(db_folder_name(&db_config.name));
         let db = ava_database::RocksDb::open(full_path).map_err(Error::Database)?;
         let metered = MeterDb::new(meter_registry, db).map_err(Error::Database)?;
         Ok(Arc::new(metered))
@@ -204,7 +206,8 @@ pub fn init_database(config: &Config, metrics: &NodeMetrics) -> Result<Arc<dyn D
     if ungraceful {
         tracing::warn!("detected previous ungraceful shutdown");
     }
-    db.put(UNGRACEFUL_SHUTDOWN_KEY, &[]).map_err(Error::Database)?;
+    db.put(UNGRACEFUL_SHUTDOWN_KEY, &[])
+        .map_err(Error::Database)?;
 
     Ok(db)
 }
@@ -214,7 +217,9 @@ pub fn init_database(config: &Config, metrics: &NodeMetrics) -> Result<Arc<dyn D
 #[must_use]
 pub fn init_shared_memory(db: &Arc<dyn DynDatabase>) -> Arc<Memory> {
     tracing::info!("initializing SharedMemory");
-    let prefixed: Arc<dyn DynDatabase> =
-        Arc::new(PrefixDb::new(SHARED_MEMORY_PREFIX, DynDb::new(Arc::clone(db))));
+    let prefixed: Arc<dyn DynDatabase> = Arc::new(PrefixDb::new(
+        SHARED_MEMORY_PREFIX,
+        DynDb::new(Arc::clone(db)),
+    ));
     Memory::new(prefixed)
 }

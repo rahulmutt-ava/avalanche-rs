@@ -49,10 +49,14 @@ pub fn init_chain_aliases(
             .map_err(Error::ChainAlias)?;
     }
     for alias in X_CHAIN_ALIASES {
-        manager.alias(x_chain_id, alias).map_err(Error::ChainAlias)?;
+        manager
+            .alias(x_chain_id, alias)
+            .map_err(Error::ChainAlias)?;
     }
     for alias in C_CHAIN_ALIASES {
-        manager.alias(c_chain_id, alias).map_err(Error::ChainAlias)?;
+        manager
+            .alias(c_chain_id, alias)
+            .map_err(Error::ChainAlias)?;
     }
     for (chain_id, aliases) in config_aliases {
         for alias in aliases {
@@ -80,11 +84,7 @@ fn api_aliases_of(aliases: [&str; 2]) -> Vec<String> {
 ///
 /// # Errors
 /// [`crate::error::Error::ApiServer`] when an alias path is already taken.
-pub fn init_api_aliases(
-    api_server: &dyn ApiServer,
-    x_chain_id: Id,
-    c_chain_id: Id,
-) -> Result<()> {
+pub fn init_api_aliases(api_server: &dyn ApiServer, x_chain_id: Id, c_chain_id: Id) -> Result<()> {
     tracing::info!("initializing API aliases");
 
     for (chain_id, aliases) in [

@@ -110,8 +110,16 @@ pub struct InsecureValidatorManager {
 impl InsecureValidatorManager {
     /// Wrap `inner`, registering peers on `vdrs` at `weight`.
     #[must_use]
-    pub fn new(inner: Arc<dyn ExternalHandler>, vdrs: Arc<dyn ValidatorManager>, weight: u64) -> Self {
-        Self { inner, vdrs, weight }
+    pub fn new(
+        inner: Arc<dyn ExternalHandler>,
+        vdrs: Arc<dyn ValidatorManager>,
+        weight: u64,
+    ) -> Self {
+        Self {
+            inner,
+            vdrs,
+            weight,
+        }
     }
 }
 
@@ -129,9 +137,9 @@ impl ExternalHandler for InsecureValidatorManager {
             // Sybil protection is disabled: a fake TxID (the padded NodeID,
             // like Go) marks the connection-derived registration.
             let tx_id = padded_node_id(node_id);
-            if let Err(e) = self
-                .vdrs
-                .add_staker(PRIMARY_NETWORK_ID, node_id, None, tx_id, self.weight)
+            if let Err(e) =
+                self.vdrs
+                    .add_staker(PRIMARY_NETWORK_ID, node_id, None, tx_id, self.weight)
             {
                 tracing::debug!(%node_id, error = %e, "failed to add insecure validator");
             }
@@ -206,7 +214,10 @@ impl ExternalHandler for BeaconManager {
         if subnet_id == PRIMARY_NETWORK_ID
             && self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0
         {
-            let conns = self.num_conns.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+            let conns = self
+                .num_conns
+                .fetch_add(1, Ordering::AcqRel)
+                .saturating_add(1);
             if conns >= self.required_conns {
                 let _ = self.on_sufficiently_connected.send(true);
             }
@@ -306,10 +317,10 @@ pub async fn init_networking(
             let router = Arc::clone(&nat.router);
             let resolved = tokio::task::spawn_blocking(move || router.external_ip()).await?;
             let addr = resolved.map_err(|e| {
-                Error::Networking(format!(
-                    "public IP / IP resolution service not given and failed to resolve IP with NAT: {e}"
-                ))
-            })?;
+            Error::Networking(format!(
+                "public IP / IP resolution service not given and failed to resolve IP with NAT: {e}"
+            ))
+        })?;
             (addr, None)
         };
 
@@ -390,19 +401,23 @@ pub async fn init_networking(
     let outbound = OutboundMsgThrottler::new(OutboundMsgThrottlerConfig {
         vdr_alloc_size: config.network_config.outbound_throttler_vdr_alloc_size,
         at_large_alloc_size: config.network_config.outbound_throttler_at_large_alloc_size,
-        node_max_at_large_bytes: config.network_config.outbound_throttler_node_max_at_large_bytes,
+        node_max_at_large_bytes: config
+            .network_config
+            .outbound_throttler_node_max_at_large_bytes,
     });
     let inbound = Arc::new(InboundMsgByteThrottler::new(
         config.network_config.inbound_throttler_vdr_alloc_size,
         config.network_config.inbound_throttler_at_large_alloc_size,
-        config.network_config.inbound_throttler_node_max_at_large_bytes,
+        config
+            .network_config
+            .inbound_throttler_node_max_at_large_bytes,
     ));
 
-    let net_metrics = NetworkMetrics::new(network_registry)
-        .map_err(|e| Error::Networking(e.to_string()))?;
+    let net_metrics =
+        NetworkMetrics::new(network_registry).map_err(|e| Error::Networking(e.to_string()))?;
     inbound.set_metrics(&net_metrics);
-    let peer_metrics = PeerMetrics::new(network_registry)
-        .map_err(|e| Error::Networking(e.to_string()))?;
+    let peer_metrics =
+        PeerMetrics::new(network_registry).map_err(|e| Error::Networking(e.to_string()))?;
 
     let mut peer_config = PeerConfig::new(
         config.network_id,
@@ -421,8 +436,18 @@ pub async fn init_networking(
     )
     .with_peer_metrics(peer_metrics);
     peer_config.my_tracked_subnets = config.tracked_subnets.iter().copied().collect();
-    peer_config.my_supported_acps = config.network_config.supported_acps.iter().copied().collect();
-    peer_config.my_objected_acps = config.network_config.objected_acps.iter().copied().collect();
+    peer_config.my_supported_acps = config
+        .network_config
+        .supported_acps
+        .iter()
+        .copied()
+        .collect();
+    peer_config.my_objected_acps = config
+        .network_config
+        .objected_acps
+        .iter()
+        .copied()
+        .collect();
     peer_config.ping_frequency = config.network_config.ping_frequency;
     peer_config.pong_timeout = config.network_config.ping_pong_timeout;
 
@@ -445,7 +470,9 @@ pub async fn init_networking(
 fn chrono_to_system_time(t: chrono::DateTime<chrono::Utc>) -> std::time::SystemTime {
     let secs = t.timestamp();
     if secs >= 0 {
-        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs.unsigned_abs())
+        std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs(secs.unsigned_abs()))
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
     } else {
         std::time::SystemTime::UNIX_EPOCH
     }
