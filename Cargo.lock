@@ -1309,6 +1309,7 @@ dependencies = [
  "arc-swap",
  "assert_matches",
  "async-trait",
+ "ava-api",
  "ava-avm",
  "ava-codec",
  "ava-codec-derive",

@@ -107,7 +107,10 @@ impl EthHttpService {
             return error_envelope(id, code::INVALID_REQUEST, "invalid request");
         };
         let empty = Vec::new();
-        let params = req.get("params").and_then(Value::as_array).unwrap_or(&empty);
+        let params = req
+            .get("params")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
         match self.call(method, params) {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
             Err(f) => error_envelope(id, f.code, f.message),
@@ -224,7 +227,7 @@ fn error_envelope(id: Value, error_code: i32, message: impl Into<String>) -> Val
 // ─── Positional-param decoding helpers ────────────────────────────────────────
 
 /// The string at `params[i]`, or `-32602` naming the missing/mistyped slot.
-fn str_param<'a>(params: &'a [Value], i: usize) -> Result<&'a str, Failure> {
+fn str_param(params: &[Value], i: usize) -> Result<&str, Failure> {
     params
         .get(i)
         .and_then(Value::as_str)
@@ -723,8 +726,7 @@ mod tests {
         .await;
         assert_eq!(body["error"]["code"], -32601, "unknown method code");
         assert_eq!(
-            body["error"]["message"],
-            "the method eth_nope does not exist/is not available",
+            body["error"]["message"], "the method eth_nope does not exist/is not available",
             "geth message shape"
         );
         assert_eq!(body["id"], 1, "request id echoed");
