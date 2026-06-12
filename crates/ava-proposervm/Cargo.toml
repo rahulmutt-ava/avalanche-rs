@@ -14,6 +14,12 @@ workspace = true
 
 [dependencies]
 ava-types = { path = "../ava-types" }
+# The proposervm API service (M8.22 / Go `vms/proposervm/service.go`): the
+# gorilla-parity JSON-RPC shim (`ServiceRegistry` + `#[rpc_service]`) and the
+# `Avalanche-Api-Route` header constant. Mirrors Go's dependency direction —
+# `vms/proposervm` imports `api/server` + gorilla (`vm.go:255-311`); no cycle
+# (ava-api does not depend on ava-proposervm).
+ava-api = { path = "../ava-api" }
 ava-codec = { path = "../ava-codec" }
 ava-crypto = { path = "../ava-crypto" }
 ava-utils = { path = "../ava-utils" }
@@ -33,10 +39,22 @@ sha2 = { workspace = true }
 tokio-util = { workspace = true }
 # `tokio::time::sleep` for the virtual-time slot wait (honors `start_paused`).
 tokio = { workspace = true }
-# `serde_json::Value` health-check return type (delegated to the inner VM).
+# `serde_json::Value` health-check return type (delegated to the inner VM) +
+# the JSON-RPC / Connect-JSON wire bodies (M8.22).
 serde_json = { workspace = true }
+# The JSON-RPC reply types (`GetHeightResponse` / `GetEpochResponse`, Go
+# `api.GetHeightResponse` / `service.go:GetEpochResponse`) serialize with
+# `json.Uint64` quoted-string parity (M8.22).
+serde = { workspace = true }
+# The generated `proposervm` Connect message types (`src/pb.rs`; M8.22).
+prost = { workspace = true }
 # Block timestamps (`i64` unix secs) → `DateTime<Utc>` for the fork gates.
 chrono = { workspace = true }
+
+[build-dependencies]
+# Generates the prost message types from `proto/proposervm/service.proto`
+# (messages only — no tonic client/server stubs; see `build.rs`).
+tonic-build = { workspace = true }
 
 [features]
 # Exposes the in-memory test inner VM helpers so the integration test (and

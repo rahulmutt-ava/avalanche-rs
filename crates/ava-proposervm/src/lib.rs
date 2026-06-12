@@ -27,10 +27,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod acp181;
 pub mod block;
+pub mod connect;
 pub mod error;
 pub mod height_index;
+pub mod pb;
 pub mod proposer;
+pub mod service;
 pub mod state;
 pub mod vm;
 
