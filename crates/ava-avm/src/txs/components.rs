@@ -30,6 +30,7 @@ use ava_codec::Serializable;
 use ava_codec::packer::Packer;
 use ava_secp256k1fx::{MintOutput, TransferInput, TransferOutput};
 use ava_types::id::Id;
+use ava_types::short_id::ShortId;
 
 /// The maximum number of bytes in a tx memo field (`avax.MaxMemoSize`).
 pub const MAX_MEMO_SIZE: usize = 256;
@@ -75,6 +76,18 @@ impl Output {
         match self {
             Output::SecpMint(o) => verify_fx(o),
             Output::SecpTransfer(o) => verify_fx(o),
+        }
+    }
+
+    /// `avax.Addressable.Addresses()` — the owning addresses of this output
+    /// (the `OutputOwners.Addrs` of the concrete fx output; Go
+    /// `vms/components/avax/utxo_state.go` uses this to maintain the
+    /// address → UTXO index).
+    #[must_use]
+    pub fn addresses(&self) -> &[ShortId] {
+        match self {
+            Output::SecpMint(o) => &o.owners.addrs,
+            Output::SecpTransfer(o) => &o.owners.addrs,
         }
     }
 }
