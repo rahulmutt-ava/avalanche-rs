@@ -1,0 +1,452 @@
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
+//! Init step 16 (specs/12 §2.2): the P2P networking layer (mirror Go
+//! `initNetworking`).
+//!
+//! Includes the Rust ports of the two node-local `ExternalHandler` wrappers
+//! from Go (`node/insecure_validator_manager.go`, `node/beacon_manager.go`)
+//! and the [`RouterBridge`] seam that will hand decoded wire messages to the
+//! `06` ChainRouter once the wire→engine op conversion lands (M8.30,
+//! `tests/PORTING.md`).
+
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, OnceLock};
+
+use parking_lot::RwLock;
+use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+use ava_config::node::Config;
+use ava_crypto::bls::Signer;
+use ava_engine::networking::router::Router as EngineRouter;
+use ava_message::builder::Creator;
+use ava_message::codec::InboundMessage;
+use ava_network::config::PeerConfig;
+use ava_network::identity::Identity;
+use ava_network::metrics::Metrics as NetworkMetrics;
+use ava_network::network::NetworkImpl;
+use ava_network::network::ip_tracker::IpTracker;
+use ava_network::peer::ip_signer::{Clock as PeerClock, IpSigner, SystemClock};
+use ava_network::peer::metrics::PeerMetrics;
+use ava_network::router::{AppVersion, ExternalHandler, InboundHandler};
+use ava_network::throttling::inbound_msg_byte::InboundMsgByteThrottler;
+use ava_network::throttling::outbound_msg::{OutboundMsgThrottler, OutboundMsgThrottlerConfig};
+use ava_types::constants::PRIMARY_NETWORK_ID;
+use ava_types::id::Id;
+use ava_types::node_id::NodeId;
+use ava_validators::ValidatorManager;
+
+use crate::error::{Error, Result};
+use crate::init::nat::Nat;
+use crate::nat::NatRouter;
+
+/// The name Go maps the staking port under (`constants.AppName + "-staking"`).
+const STAKING_PORT_NAME: &str = "avalanchego-staking";
+
+/// The network→consensus bridge (the base `ExternalHandler` the peer actors
+/// call). **Narrow seam (M8.29, `tests/PORTING.md`):** the decoded
+/// wire-message → engine `InboundOp` conversion does not exist yet, so
+/// `handle_inbound` drops messages (debug-logged) until M8.30 wires the slot
+/// set by [`RouterBridge::set_engine_router`]. Peer lifecycle events are
+/// forwarded to nothing — the engine `ChainRouter` has no peer surface yet.
+#[derive(Default)]
+pub struct RouterBridge {
+    engine_router: OnceLock<Arc<dyn EngineRouter>>,
+}
+
+impl RouterBridge {
+    /// A bridge with an empty engine-router slot.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fill the engine-router slot (init step 20). Idempotent: the first call
+    /// wins, matching the single chain-router of the node.
+    pub fn set_engine_router(&self, router: Arc<dyn EngineRouter>) {
+        let _ = self.engine_router.set(router);
+    }
+
+    /// The engine router, once step 20 has filled the slot.
+    #[must_use]
+    pub fn engine_router(&self) -> Option<Arc<dyn EngineRouter>> {
+        self.engine_router.get().cloned()
+    }
+}
+
+#[async_trait::async_trait]
+impl InboundHandler for RouterBridge {
+    async fn handle_inbound(&self, _ctx: &CancellationToken, msg: InboundMessage) {
+        // Wire-op → engine-op conversion lands with dispatch (M8.30); until
+        // then inbound consensus traffic is dropped here, exactly like Go's
+        // router would drop messages for unknown chains (no chains exist yet).
+        tracing::debug!(op = ?msg.op, "dropping inbound message (chain dispatch lands in M8.30)");
+    }
+}
+
+#[async_trait::async_trait]
+impl ExternalHandler for RouterBridge {
+    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
+        tracing::debug!(%node_id, %version, %subnet_id, "peer connected");
+    }
+
+    fn disconnected(&self, node_id: NodeId) {
+        tracing::debug!(%node_id, "peer disconnected");
+    }
+}
+
+/// Port of Go `node/insecure_validator_manager.go`: with sybil protection off,
+/// every connecting peer is registered as a primary-network validator with the
+/// configured disabled weight, and deregistered on disconnect.
+pub struct InsecureValidatorManager {
+    inner: Arc<dyn ExternalHandler>,
+    vdrs: Arc<dyn ValidatorManager>,
+    weight: u64,
+}
+
+impl InsecureValidatorManager {
+    /// Wrap `inner`, registering peers on `vdrs` at `weight`.
+    #[must_use]
+    pub fn new(inner: Arc<dyn ExternalHandler>, vdrs: Arc<dyn ValidatorManager>, weight: u64) -> Self {
+        Self { inner, vdrs, weight }
+    }
+}
+
+#[async_trait::async_trait]
+impl InboundHandler for InsecureValidatorManager {
+    async fn handle_inbound(&self, ctx: &CancellationToken, msg: InboundMessage) {
+        self.inner.handle_inbound(ctx, msg).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl ExternalHandler for InsecureValidatorManager {
+    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
+        if subnet_id == PRIMARY_NETWORK_ID {
+            // Sybil protection is disabled: a fake TxID (the padded NodeID,
+            // like Go) marks the connection-derived registration.
+            let tx_id = padded_node_id(node_id);
+            if let Err(e) = self
+                .vdrs
+                .add_staker(PRIMARY_NETWORK_ID, node_id, None, tx_id, self.weight)
+            {
+                tracing::debug!(%node_id, error = %e, "failed to add insecure validator");
+            }
+        }
+        self.inner.connected(node_id, version, subnet_id);
+    }
+
+    fn disconnected(&self, node_id: NodeId) {
+        if let Err(e) = self
+            .vdrs
+            .remove_weight(PRIMARY_NETWORK_ID, node_id, self.weight)
+        {
+            tracing::debug!(%node_id, error = %e, "failed to remove insecure validator");
+        }
+        self.inner.disconnected(node_id);
+    }
+}
+
+/// Pad a 20-byte NodeID into a 32-byte Id (Go's dummy TxID for
+/// sybil-protection-off registrations).
+#[must_use]
+pub fn padded_node_id(node_id: NodeId) -> Id {
+    let mut bytes = [0u8; 32];
+    let src = node_id.as_bytes();
+    let len = src.len().min(32);
+    if let (Some(dst), Some(src)) = (bytes.get_mut(..len), src.get(..len)) {
+        dst.copy_from_slice(src);
+    }
+    Id::from(bytes)
+}
+
+/// Port of Go `node/beacon_manager.go`: counts handshaken connections to the
+/// bootstrap-beacon set and fires `on_sufficiently_connected` once ≥ the
+/// required count ((3·beacons + 3) / 4).
+pub struct BeaconManager {
+    inner: Arc<dyn ExternalHandler>,
+    beacons: Arc<dyn ValidatorManager>,
+    num_conns: AtomicI64,
+    required_conns: i64,
+    on_sufficiently_connected: tokio::sync::watch::Sender<bool>,
+}
+
+impl BeaconManager {
+    /// Wrap `inner`, tracking connections against `beacons`.
+    #[must_use]
+    pub fn new(
+        inner: Arc<dyn ExternalHandler>,
+        beacons: Arc<dyn ValidatorManager>,
+        required_conns: i64,
+        on_sufficiently_connected: tokio::sync::watch::Sender<bool>,
+    ) -> Self {
+        Self {
+            inner,
+            beacons,
+            num_conns: AtomicI64::new(0),
+            required_conns,
+            on_sufficiently_connected,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl InboundHandler for BeaconManager {
+    async fn handle_inbound(&self, ctx: &CancellationToken, msg: InboundMessage) {
+        self.inner.handle_inbound(ctx, msg).await;
+    }
+}
+
+#[async_trait::async_trait]
+impl ExternalHandler for BeaconManager {
+    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
+        if subnet_id == PRIMARY_NETWORK_ID
+            && self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0
+        {
+            let conns = self.num_conns.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+            if conns >= self.required_conns {
+                let _ = self.on_sufficiently_connected.send(true);
+            }
+        }
+        self.inner.connected(node_id, version, subnet_id);
+    }
+
+    fn disconnected(&self, node_id: NodeId) {
+        if self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0 {
+            self.num_conns.fetch_sub(1, Ordering::AcqRel);
+        }
+        self.inner.disconnected(node_id);
+    }
+}
+
+/// Everything step 16 hands back to `Node::new`.
+pub struct Networking {
+    /// The P2P runtime.
+    pub net: Arc<NetworkImpl>,
+    /// The bound staking listener address (process.json `stakingAddress`).
+    pub staking_address: SocketAddr,
+    /// The advertised public IP:staking-port, updated by the dynamic-IP
+    /// updater (shared with the info API).
+    pub my_ip: Arc<RwLock<SocketAddr>>,
+    /// The network→consensus bridge (its engine-router slot is filled by init
+    /// step 20).
+    pub router_bridge: Arc<RouterBridge>,
+    /// Receives `true` once sufficiently many beacons are connected (Go
+    /// `onSufficientlyConnected`; consumed by the M8.30 dispatch warn task).
+    pub on_sufficiently_connected: tokio::sync::watch::Receiver<bool>,
+    /// The dynamic-IP updater task, when a resolution service is configured.
+    pub ip_updater: Option<JoinHandle<()>>,
+    /// The staking-port keep-alive mapping task.
+    pub port_mapping: JoinHandle<()>,
+}
+
+/// Whether `ip` is publicly routable (shared with the API-server step).
+fn is_public(ip: IpAddr) -> bool {
+    super::api_server::ip_is_public(ip)
+}
+
+/// Step 16: bind the staking listener, resolve the advertised public IP,
+/// assemble the peer config, and build the network (mirror Go
+/// `initNetworking`). Assumes validators, CPU/disk targeters, the message
+/// creator, and NAT are initialized (the Go comment).
+///
+/// # Errors
+/// - Listener bind / address-parse failures.
+/// - [`Error::UnsupportedResolver`] when `--public-ip-resolution-service`
+///   names a service with no Rust resolver yet (deferral).
+/// - NAT external-IP resolution failure when neither a public IP nor a
+///   resolution service is configured and the router cannot answer.
+#[allow(clippy::too_many_arguments)]
+pub async fn init_networking(
+    config: &Config,
+    node_id: NodeId,
+    identity: &Identity,
+    staking_signer: &Arc<dyn Signer>,
+    creator: &Arc<Creator>,
+    network_registry: &prometheus::Registry,
+    validators: &Arc<dyn ValidatorManager>,
+    bootstrappers: &Arc<dyn ValidatorManager>,
+    nat: &Nat,
+    net_token: &CancellationToken,
+) -> Result<Networking> {
+    let listen_addr = format!(
+        "{}:{}",
+        if config.ip_config.listen_host.is_empty() {
+            "0.0.0.0"
+        } else {
+            config.ip_config.listen_host.as_str()
+        },
+        config.ip_config.listen_port
+    );
+    let listener = TcpListener::bind(&listen_addr).await?;
+    let staking_address = listener.local_addr()?;
+    let staking_port = staking_address.port();
+
+    // The three-way public-IP switch (Go initNetworking).
+    let (public_addr, ip_updater): (IpAddr, Option<JoinHandle<()>>) =
+        if !config.ip_config.public_ip.is_empty() {
+            let addr: IpAddr = config.ip_config.public_ip.parse().map_err(|e| {
+                Error::Networking(format!(
+                    "invalid public IP address {:?}: {e}",
+                    config.ip_config.public_ip
+                ))
+            })?;
+            (addr, None)
+        } else if !config.ip_config.public_ip_resolution_service.is_empty() {
+            // Concrete opendns/http resolvers are a documented deferral
+            // (M8.28 left the `Resolver` trait seam; an HTTP client dependency
+            // decision is needed first — `tests/PORTING.md`).
+            return Err(Error::UnsupportedResolver(
+                config.ip_config.public_ip_resolution_service.clone(),
+            ));
+        } else {
+            let router = Arc::clone(&nat.router);
+            let resolved = tokio::task::spawn_blocking(move || router.external_ip()).await?;
+            let addr = resolved.map_err(|e| {
+                Error::Networking(format!(
+                    "public IP / IP resolution service not given and failed to resolve IP with NAT: {e}"
+                ))
+            })?;
+            (addr, None)
+        };
+
+    if !is_public(public_addr) {
+        tracing::warn!(ip = %public_addr, "P2P IP is private, you will not be publicly discoverable");
+    }
+
+    let my_ip = Arc::new(RwLock::new(SocketAddr::new(public_addr, staking_port)));
+
+    // Keep the staking port mapped (no-op on a NAT-less router).
+    let port_mapping = nat.mapper.start(
+        staking_port,
+        staking_port,
+        STAKING_PORT_NAME,
+        net_token.child_token(),
+    );
+
+    tracing::info!(ip = %*my_ip.read(), "initializing networking");
+
+    if !config.network_config.tls_key_log_file.is_empty() {
+        tracing::warn!(
+            filename = %config.network_config.tls_key_log_file,
+            "TLS key logging is configured but not supported yet (tests/PORTING.md)"
+        );
+    }
+
+    // The consensus router chain: bridge → (insecure validators) → (beacons).
+    let router_bridge = Arc::new(RouterBridge::new());
+    let mut consensus_router: Arc<dyn ExternalHandler> =
+        Arc::clone(&router_bridge) as Arc<dyn ExternalHandler>;
+
+    if !config.staking_config.sybil_protection_enabled {
+        // Register ourselves with a dummy TxID (the padded NodeID, Go parity).
+        validators
+            .add_staker(
+                PRIMARY_NETWORK_ID,
+                node_id,
+                Some(staking_signer.public_key().clone()),
+                padded_node_id(node_id),
+                config.staking_config.sybil_protection_disabled_weight,
+            )
+            .map_err(|e| Error::Networking(e.to_string()))?;
+        consensus_router = Arc::new(InsecureValidatorManager::new(
+            consensus_router,
+            Arc::clone(validators),
+            config.staking_config.sybil_protection_disabled_weight,
+        ));
+    }
+
+    let (connected_tx, connected_rx) = tokio::sync::watch::channel(false);
+    let num_beacons = bootstrappers.num_validators(PRIMARY_NETWORK_ID);
+    let required_conns = i64::try_from(num_beacons)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(3)
+        .saturating_add(3)
+        / 4;
+    if required_conns > 0 {
+        consensus_router = Arc::new(BeaconManager::new(
+            consensus_router,
+            Arc::clone(bootstrappers),
+            required_conns,
+            connected_tx,
+        ));
+    } else {
+        let _ = connected_tx.send(true);
+    }
+
+    let clock: Arc<dyn PeerClock> = Arc::new(SystemClock);
+    let compatibility = Arc::new(ava_version::compatibility::get_compatibility(
+        chrono_to_system_time(config.upgrade_config.granite_time),
+    ));
+    let ip_signer = Arc::new(IpSigner::new(
+        identity.clone(),
+        Arc::clone(staking_signer),
+        Arc::clone(&clock),
+    ));
+
+    let outbound = OutboundMsgThrottler::new(OutboundMsgThrottlerConfig {
+        vdr_alloc_size: config.network_config.outbound_throttler_vdr_alloc_size,
+        at_large_alloc_size: config.network_config.outbound_throttler_at_large_alloc_size,
+        node_max_at_large_bytes: config.network_config.outbound_throttler_node_max_at_large_bytes,
+    });
+    let inbound = Arc::new(InboundMsgByteThrottler::new(
+        config.network_config.inbound_throttler_vdr_alloc_size,
+        config.network_config.inbound_throttler_at_large_alloc_size,
+        config.network_config.inbound_throttler_node_max_at_large_bytes,
+    ));
+
+    let net_metrics = NetworkMetrics::new(network_registry)
+        .map_err(|e| Error::Networking(e.to_string()))?;
+    inbound.set_metrics(&net_metrics);
+    let peer_metrics = PeerMetrics::new(network_registry)
+        .map_err(|e| Error::Networking(e.to_string()))?;
+
+    let mut peer_config = PeerConfig::new(
+        config.network_id,
+        node_id,
+        identity.clone(),
+        *my_ip.read(),
+        ava_version::CURRENT.clone(),
+        Arc::clone(creator),
+        consensus_router,
+        compatibility,
+        ip_signer,
+        outbound,
+        inbound,
+        Arc::new(IpTracker::new()),
+        clock,
+    )
+    .with_peer_metrics(peer_metrics);
+    peer_config.my_tracked_subnets = config.tracked_subnets.iter().copied().collect();
+    peer_config.my_supported_acps = config.network_config.supported_acps.iter().copied().collect();
+    peer_config.my_objected_acps = config.network_config.objected_acps.iter().copied().collect();
+    peer_config.ping_frequency = config.network_config.ping_frequency;
+    peer_config.pong_timeout = config.network_config.ping_pong_timeout;
+
+    let net = NetworkImpl::new_with_metrics(Arc::new(peer_config), listener, net_metrics)
+        .map_err(|e| Error::Networking(e.to_string()))?;
+
+    Ok(Networking {
+        net,
+        staking_address,
+        my_ip,
+        router_bridge,
+        on_sufficiently_connected: connected_rx,
+        ip_updater,
+        port_mapping,
+    })
+}
+
+/// Convert a `chrono` UTC time into a `SystemTime` (saturating at the epoch
+/// for pre-1970 values, which the upgrade schedule never contains).
+fn chrono_to_system_time(t: chrono::DateTime<chrono::Utc>) -> std::time::SystemTime {
+    let secs = t.timestamp();
+    if secs >= 0 {
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs.unsigned_abs())
+    } else {
+        std::time::SystemTime::UNIX_EPOCH
+    }
+}
