@@ -97,6 +97,19 @@ dispatched via the `X-Avalanche-Vm-Route` header (`HTTPHeaderRoute`). Chain
 **aliases** `P`,`X`,`C` are registered so `/ext/bc/P`, `/ext/bc/X`, `/ext/bc/C`
 resolve to the primary-network chain IDs.
 
+> **CORRECTION (M8.22, verified at the pin).** The wire header is
+> **`Avalanche-Api-Route`** (`api/server/router.go:17 HTTPHeaderRoute`), not
+> `X-Avalanche-Vm-Route` as written above and in §11.1. Dispatch decision table
+> (`router.ServeHTTP`, router.go:53-75): header absent → legacy path routing;
+> header key present with no usable value → `400` (empty body); value with no
+> registered handler → `404` (empty body); otherwise dispatch by the **first**
+> value, request passed unchanged. A **second** value routes *within* the VM's
+> header handler (e.g. proposervm: `len(route) == 2 && route[1] == "proposervm"`
+> selects the Connect mux, `vms/proposervm/vm.go:297-309`). Path mounts are
+> **exact-path** matches (`mux.Handle`, router.go:135) — `/ext/bc/<id>/unknown`
+> is `404`, never the chain-root handler. Alias registration force-adds every
+> endpoint under the aliased base, pre-existing and future (router.go:142-178).
+
 ### 1.3 Transport, CORS, allowed-hosts, auth
 
 - **HTTP server** (`api/server`): `gorilla/mux` + `h2c.NewHandler`
@@ -454,6 +467,17 @@ service name `proposervm`:
 Connect requests are routed by the `X-Avalanche-Vm-Route` header on the chain's
 header-route mount (the same h2c port). This is the open-risk **R5** Connect
 enumeration item from `00` §11.2 — resolved here for proposervm.
+
+> **CORRECTION (M8.22):** header name is `Avalanche-Api-Route` (see §1.2
+> callout); proposervm's Connect mux is selected by a SECOND header value
+> `proposervm`. As-built, the Connect unary wire was implemented hand-rolled
+> (2 empty-request methods over the buffered in-process seam) with
+> connect-go-verified protojson semantics: lowerCamelCase names, 64-bit ints
+> as quoted strings, zero-valued fields omitted, unknown JSON fields
+> discarded; errors `{"code","message"}` (unknown→500, invalid_argument→400);
+> 405+Allow on non-POST, 415+Accept-Post on unknown content-type. The Go
+> JSON-RPC twin service replies are `json.Uint64` quoted strings, and
+> `startTime` is Go `json.Uint64(int64)` (wraps negative to u64).
 
 ### 11.2 xsvm Connect Ping (`connectproto/xsvm/service.proto`)
 

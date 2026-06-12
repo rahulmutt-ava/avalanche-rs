@@ -333,14 +333,51 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > health checker-panic containment + monotonic/registration tests (f020d7e); admin wraps profiler/stacktrace
 > blocking I/O in `spawn_blocking` (11ca82d).
 
-### Task M8.22: register_chain mounting contract (P/X/C/proposervm) + header-route + aliases
+### Task M8.22: register_chain mounting contract (P/X/C/proposervm) + header-route + aliases ✅ DONE (16 commits, merge 92a2639)
 **Crate:** ava-api  ·  **Depends on:** M8.16, M8.17, M4 ava-platformvm::service (31 methods), M5 ava-avm::service (11 methods), M6 ava-evm (rpc/ws/avax/admin header-routes), M7/proposervm::service  ·  **Spec:** 12 §3.1/§3.7/§3.8, 14 §1.2/§8/§9/§10/§11/§13
 **Files:** `crates/ava-api/src/register.rs` (`register_chain` impl), `crates/ava-api/src/header_route.rs` (`X-Avalanche-Vm-Route` dispatch + WS upgrade), `crates/ava-api/src/connect.rs` (tonic/tonic-web/Connect compat for proposervm)
-- [ ] **Step 1 — Red:** `register.rs::tests::mounts_create_handlers_under_chain_id` — `register_chain` mounts each `create_handlers()` extension at `/ext/bc/<chainID>/<ext>` (`""`⇒`/ext/bc/<chainID>`, extension validated like `url.ParseRequestURI`); header-route handler registered for `<chainID>`; `P`/`X`/`C` path aliases resolve (14 §1.2/§13). `header_route.rs::tests::route_by_header` — `X-Avalanche-Vm-Route: proposervm` → proposervm handler; empty value → 400; missing handler → 404 (14 §16.3). Method-set assertions: P-Chain 31 (14 §8), X-Chain 11 (14 §9), proposervm 2 JSON-RPC + 2 Connect (14 §11.1).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-api register::tests::mounts_create_handlers_under_chain_id` → fails.
-- [ ] **Step 3 — Green:** Implement `register_chain(name, ctx, vm)` per 12 §3.1 / 14 §13: (1) `vm.create_handlers()` → mount each at `/ext/bc/<chainID>/<ext>`; (2) `vm.new_http_handler()` → header-route handler for the EVM `/rpc`,`/ws`,`/avax`,`/admin` mounts and proposervm Connect; (3) register `P`/`X`/`C` aliases; (4) wrap in per-chain metrics + OTel + 503 middleware (`wrapMiddleware`). WS upgrade via `tokio-tungstenite` on the header-route handler (12 §3.8). Connect proposervm via tonic + tonic-web + Connect-unary compat (`proposervm.ProposerVM` GetProposedHeight/GetCurrentEpoch, 14 §11.1). The per-chain `platform.*`/`avm.*`/`eth_*` handlers themselves come from M4/M5/M6 services; this task wires their mounting + the gorilla wire contract.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-api register:: header_route::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: register_chain mounting + header-route + proposervm Connect (12 §3.1, 14 §1.2/§13)`
+- [x] **Step 1 — Red:** `register.rs::tests::mounts_create_handlers_under_chain_id` — `register_chain` mounts each `create_handlers()` extension at `/ext/bc/<chainID>/<ext>` (`""`⇒`/ext/bc/<chainID>`, extension validated like `url.ParseRequestURI`); header-route handler registered for `<chainID>`; `P`/`X`/`C` path aliases resolve (14 §1.2/§13). `header_route.rs::tests::route_by_header` — `X-Avalanche-Vm-Route: proposervm` → proposervm handler; empty value → 400; missing handler → 404 (14 §16.3). Method-set assertions: P-Chain 31 (14 §8), X-Chain 11 (14 §9), proposervm 2 JSON-RPC + 2 Connect (14 §11.1).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-api register::tests::mounts_create_handlers_under_chain_id` → fails.
+- [x] **Step 3 — Green:** Implement `register_chain(name, ctx, vm)` per 12 §3.1 / 14 §13: (1) `vm.create_handlers()` → mount each at `/ext/bc/<chainID>/<ext>`; (2) `vm.new_http_handler()` → header-route handler for the EVM `/rpc`,`/ws`,`/avax`,`/admin` mounts and proposervm Connect; (3) register `P`/`X`/`C` aliases; (4) wrap in per-chain metrics + OTel + 503 middleware (`wrapMiddleware`). WS upgrade via `tokio-tungstenite` on the header-route handler (12 §3.8). Connect proposervm via tonic + tonic-web + Connect-unary compat (`proposervm.ProposerVM` GetProposedHeight/GetCurrentEpoch, 14 §11.1). The per-chain `platform.*`/`avm.*`/`eth_*` handlers themselves come from M4/M5/M6 services; this task wires their mounting + the gorilla wire contract.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-api register:: header_route::` passes.
+- [x] **Step 5 — Commit:** `ava-api: register_chain mounting + header-route + proposervm Connect (12 §3.1, 14 §1.2/§13)`
+
+> **AS-BUILT (M8.22, merged 92a2639, 2026-06-12; spec+quality reviewed with fix passes fd0588e/ec562f6).**
+> Workspace 1444/1444 on the branch (+43 vs main baseline). Key design decisions:
+> - **In-process handler seam:** `ava-vm::HttpHandler` gained an optional `service: Option<Arc<dyn VmHttpService>>`
+>   (buffered async request/response trait; opaque rpcchainvm `Vec<u8>` descriptor retained for wire parity).
+>   ava-api adapts via `vm_service_router` (EXACT-path mount — Go `mux.Handle`, router.go:135) /
+>   `vm_service_fallback_router` (all paths, for header routes — Go dispatches the request unchanged, router.go:74).
+>   Body cap 5 MiB → 413 (geth `maxRequestContentLength`; axum's extractor limit doesn't cover raw `Request`).
+> - **★ Header is `Avalanche-Api-Route`, NOT the plan/spec's `X-Avalanche-Vm-Route`** (Go `server.HTTPHeaderRoute`,
+>   router.go:17) — spec 14 carries the correction. Decision table: no header → path routing; key-no-value → 400;
+>   unknown → 404; FIRST value dispatches; a SECOND value routes within the VM (proposervm mux selector,
+>   vm.go:297-309). axum gotcha: `Router::layer` middleware doesn't run on unmatched paths — an explicit 404
+>   fallback BEFORE the header layer makes the dispatch see every request.
+> - **Alias fan-out** mirrors `forceAddRouter`/`AddAlias` (router.go:142-178): every endpoint under an aliased
+>   base — pre-existing AND future — is mirrored; collisions keep the directly-registered route.
+> - **proposervm service** (NEW, was missing): JSON-RPC `getProposedHeight`/`getCurrentEpoch` (json.Uint64
+>   strings; int64→u64 StartTime wrap) via `#[rpc_service]` + HAND-ROLLED Connect unary (justified: 2
+>   empty-request methods on a buffered seam; tonic/tonic-web would bridge for zero reuse) with
+>   connect-go-verified protojson semantics (camelCase, 64-bit-as-string, zero-omission, DiscardUnknown);
+>   `proto/proposervm/service.proto` verbatim from Go. `PreferredMeta` snapshot ≡ Go's request-time read
+>   (refreshed at the only two mutation points). Additive `impl ValidatorState for Arc<T>` in ava-validators.
+> - **EVM bridging:** `/rpc`,`/ws`,`/avax`,`/admin` from the existing rpc/ bodies (coreth vm.go:1029-1067);
+>   `new_http_handler` = None (coreth returns nil at the pin, vm.go:1079). `/ws` = same dispatch (request/
+>   response only; eth_subscribe push deferred). Admin gating (AdminAPIEnabled) deferred — no config plumbed.
+> - **★ DEPENDENCY CYCLE: `ava-api → ava-config → ava-genesis → ava-{platformvm,avm}`** — the P/X crates CANNOT
+>   import ava-api (evm/proposervm can; ava-genesis doesn't reach them). The shared `#[rpc_service]` macro
+>   (leaf crate ava-api-macros) guards wire names; each P/X crate carries a parity-tested local `jsonrpc.rs`
+>   (pub(crate)); **M8.23 follow-up: consolidate into a shim crate below ava-config**.
+> - **P/X bridged sets:** platform 16/31 (reads + getStakingAssetID + getProposedHeight; 15 missing with named
+>   blocking seams — address→UTXO index, mempool issueTx, subnet-owner reads, sampler, staking-config… —
+>   inventory in `crates/ava-platformvm/tests/PORTING.md`); avm 10/11 (incl. LIVE issueTx through the exact
+>   gossip admission path; getUTXOs/getBalance/getAllBalances = informative -32000 stubs; missing getTxFee;
+>   inventory in `crates/ava-avm/tests/PORTING.md`). Full method-set parity owned by **M8.23**.
+> - **M8.23 follow-ups from quality review (latent until node wiring):** live router swap for
+>   register-after-serve (Go registers chains after Dispatch; path router currently builds once at serve);
+>   `spawn_blocking` around synchronous EVM dispatch (eth_call/estimateGas on the shared runtime); per-chain
+>   HTTP-metrics + OTel wrap (Go `wrapMiddleware`) still deferred; gRPC reflection deferred.
 
 ### Task M8.23: differential::api_parity — every endpoint structural-JSON-equal vs Go
 **Crate:** ava-api (test harness coordinated with cross-cutting harness X)  ·  **Depends on:** M8.18–M8.22  ·  **Spec:** 14 §14/§16.6, 12 §12.4, 02 §9/§11.4

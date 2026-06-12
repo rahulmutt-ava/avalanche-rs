@@ -589,7 +589,22 @@ for `/rpc`, `/ws`) via `add_header_route(chainID, handler)`. Chain aliases
 (`X`,`C`,`P`) are registered as path aliases so `/ext/bc/X` works. This matches
 `chains.Manager` → `server.RegisterChain` in 07.
 
-### 3.2 JSON-RPC 2.0 shim (replaces `gorilla/rpc/v2` + `json` codec)
+> **AS-BUILT (M8.22).** (1) In-process handlers ride a buffered
+> `ava_vm::VmHttpService` seam carried on `HttpHandler.service` (the opaque
+> rpcchainvm byte descriptor is retained for wire parity); ava-api adapts it
+> onto axum with EXACT-path mounts (Go `mux.Handle`) for path routes and an
+> all-paths adapter for header routes, request bodies capped at 5 MiB → 413
+> (geth `maxRequestContentLength`). WS upgrade uses axum's built-in `ws`
+> (tungstenite-based) bridging frames as buffered POSTs — request/response
+> JSON-RPC only; `eth_subscribe` push is deferred. (2) **Dependency cycle
+> constraint:** `ava-api → ava-config → ava-genesis → ava-{platformvm,avm}`,
+> so the P/X crates cannot import this shim — the `#[rpc_service]` macro
+> lives in the leaf crate `ava-api-macros` (shared by all), and P/X carry
+> parity-tested local copies of the dispatch core until a shim crate below
+> ava-config exists (M8.23 follow-up). ava-evm and ava-proposervm import
+> ava-api directly (Go's own dependency direction). (3) The path router is
+> built once at `serve()`; Go registers chains after `Dispatch` — a live
+> router swap is an M8.23 wiring follow-up (header routes are already live).
 
 Go registers a service object with method-per-exported-method, dispatched as
 `{"jsonrpc":"2.0","method":"<service>.<Method>","params":[{…}],"id":N}`. We
