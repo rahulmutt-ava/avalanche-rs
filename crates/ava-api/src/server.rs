@@ -465,16 +465,26 @@ impl ApiServer for Server {
             });
         }
 
-        // Propagate now if the canonical route already exists.
-        if let Some(handler) = registry
+        // Propagate every endpoint already registered at or beneath the
+        // canonical base (Go `AddAlias` force-adds each `routes[base]` endpoint
+        // under every alias, router.go:171-178; a collision keeps the
+        // directly-registered route, like `reserve_locked`'s fan-out).
+        let existing: Vec<(String, BoxedHandler)> = registry
             .routes
             .iter()
-            .find(|r| r.path == canonical)
-            .map(|r| r.handler.clone())
-        {
-            for alias_path in alias_paths {
+            .filter(|r| alias_route_path(&canonical, "", &r.path).is_some())
+            .map(|r| (r.path.clone(), r.handler.clone()))
+            .collect();
+        for alias_path in &alias_paths {
+            for (path, handler) in &existing {
+                let Some(copy) = alias_route_path(&canonical, alias_path, path) else {
+                    continue;
+                };
+                if registry.routes.iter().any(|r| r.path == copy) {
+                    continue;
+                }
                 registry.routes.push(Route {
-                    path: alias_path,
+                    path: copy,
                     handler: handler.clone(),
                 });
             }
@@ -783,6 +793,29 @@ mod tests {
             .expect("alias");
         let registry = srv.registry.lock();
         assert!(registry.routes.iter().any(|r| r.path == "/ext/bc/X"));
+    }
+
+    // Go's `AddAlias` force-adds EVERY endpoint already registered under the
+    // canonical base — not just the base itself — under each alias
+    // (router.go:171-178). A pre-existing sub-endpoint must be reachable via
+    // the alias too.
+    #[test]
+    fn add_aliases_propagates_preexisting_sub_endpoints() {
+        let srv = server();
+        srv.add_route(Router::new(), "bc/2x...", "").expect("base");
+        srv.add_route(Router::new(), "bc/2x...", "/rpc")
+            .expect("sub-endpoint");
+        srv.add_aliases("bc/2x...", &["bc/X".to_string()])
+            .expect("alias");
+        let registry = srv.registry.lock();
+        assert!(
+            registry.routes.iter().any(|r| r.path == "/ext/bc/X"),
+            "alias of the base mount"
+        );
+        assert!(
+            registry.routes.iter().any(|r| r.path == "/ext/bc/X/rpc"),
+            "alias of the pre-existing sub-endpoint"
+        );
     }
 
     // Go's `router.AddAlias` does NOT require the canonical route to pre-exist:

@@ -38,7 +38,7 @@ use ava_api::HTTP_HEADER_ROUTE;
 use ava_vm::vm::{VmHttpService, VmRequest, VmResponse};
 
 use crate::pb;
-use crate::service::{ApiError, ProposerApi};
+use crate::service::ProposerApi;
 
 /// The second `Avalanche-Api-Route` value selecting the proposervm Connect mux
 /// (Go `HTTPHeaderRoute`, `vm.go:47`).
@@ -97,7 +97,7 @@ impl ConnectService {
                     Codec::Proto => proto_response(reply.encode_to_vec()),
                 }
             }
-            Err(e) => connect_error(&e),
+            Err(e) => connect_error(e.to_string()),
         }
     }
 
@@ -132,7 +132,10 @@ impl ConnectService {
                     Codec::Proto => proto_response(reply.encode_to_vec()),
                 }
             }
-            Err(e) => connect_error(&e),
+            // Go's connect service wraps the seam error (`fmt.Errorf("couldn't
+            // get current epoch: %w", err)`, service.go:69) — the JSON-RPC path
+            // carries the same wrap.
+            Err(e) => connect_error(format!("couldn't get current epoch: {e}")),
         }
     }
 }
@@ -227,8 +230,8 @@ fn proto_response(body: Vec<u8>) -> VmResponse {
 /// of the request codec) with the code's HTTP status. A plain handler error is
 /// `unknown` ⇒ HTTP 500 (connect-go wraps non-`*connect.Error`s as
 /// `CodeUnknown`).
-fn connect_error(e: &ApiError) -> VmResponse {
-    let body = json!({ "code": "unknown", "message": e.to_string() });
+fn connect_error(message: String) -> VmResponse {
+    let body = json!({ "code": "unknown", "message": message });
     VmResponse {
         status: 500,
         headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -309,6 +312,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::block::Epoch;
+    use crate::service::ApiError;
 
     use super::*;
 
@@ -501,6 +505,20 @@ mod tests {
         assert_eq!(
             body["message"], "failed to get preferred block: not found",
             "Go connectrpcService wrap (service.go:46)"
+        );
+
+        let resp = svc
+            .serve_http(post(
+                GET_CURRENT_EPOCH_PATH,
+                "application/json",
+                b"{}".to_vec(),
+            ))
+            .await;
+        assert_eq!(resp.status, 500, "epoch error status");
+        let body: Value = serde_json::from_slice(&resp.body).expect("json");
+        assert_eq!(
+            body["message"], "couldn't get current epoch: couldn't get preferred block: not found",
+            "Go connectrpcService wrap (service.go:69)"
         );
     }
 
