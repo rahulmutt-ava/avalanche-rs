@@ -501,6 +501,19 @@ impl Service {
         Ok(GetHeightResponse { height })
     }
 
+    /// `getProposedHeight` — the P-Chain height a new proposal would embed.
+    /// Go's body is exactly `vm.GetMinimumHeight(ctx)` (`service.go:105-117`),
+    /// which is [`ValidatorState::get_minimum_height`] — the recently-accepted
+    /// windower floor the manager already serves to the proposervm.
+    pub async fn get_proposed_height(&self) -> Result<GetHeightResponse> {
+        let height = self
+            .validators
+            .get_minimum_height()
+            .await
+            .map_err(|e| Error::Service(format!("get minimum height: {e}")))?;
+        Ok(GetHeightResponse { height })
+    }
+
     /// `getTimestamp` — the current chain timestamp.
     pub fn get_timestamp(&self) -> GetTimestampReply {
         GetTimestampReply {
@@ -908,6 +921,20 @@ impl RpcService {
         _args: EmptyArgs,
     ) -> std::result::Result<GetHeightResponse, RpcError> {
         self.service.get_height().await.map_err(server_err)
+    }
+
+    /// `platform.getProposedHeight` (Go `Service.GetProposedHeight`,
+    /// `service.go:105`): a justified trivial delegation — Go's body is
+    /// exactly `vm.GetMinimumHeight`, the `ValidatorState` seam the service
+    /// already holds (see [`Service::get_proposed_height`]).
+    ///
+    /// # Errors
+    /// `-32000` on a validator-manager read failure.
+    pub async fn get_proposed_height(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetHeightResponse, RpcError> {
+        self.service.get_proposed_height().await.map_err(server_err)
     }
 
     /// `platform.getTimestamp` (Go `Service.GetTimestamp`, `service.go:1798`).
@@ -1385,8 +1412,9 @@ mod conformance {
     fn platform_method_set_matches_bridged() {
         let (service, ..) = seeded_service();
         let reg = registry(Arc::new(service), Id::from([0x42; 32]));
-        const BRIDGED: [&str; 15] = [
+        const BRIDGED: [&str; 16] = [
             "GetHeight",
+            "GetProposedHeight",
             "GetTimestamp",
             "GetCurrentSupply",
             "GetCurrentValidators",

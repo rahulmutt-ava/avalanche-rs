@@ -506,14 +506,15 @@ extension `""` (Go `vm.go:451-466`), served through the in-process
 `ava-api → ava-config → ava-genesis → ava-platformvm` is a package cycle; the
 `#[rpc_service]` macro is shared via the leaf `ava-api-macros` crate and the
 dispatch core is pinned to `ava-api`'s by parity tests). The Go set is the 31
-exported `Service` methods; **15 are bridged**, 16 are missing. Full parity is
+exported `Service` methods; **16 are bridged**, 15 are missing. Full parity is
 owned by M8.23.
 
-### Bridged (15) — exact Go wire names
+### Bridged (16) — exact Go wire names
 
 | Method | Notes |
 |---|---|
 | `getHeight` | |
+| `getProposedHeight` | justified trivial delegation: Go's body is exactly `vm.GetMinimumHeight` = the `ValidatorState::get_minimum_height` seam the service already holds |
 | `getTimestamp` | |
 | `getCurrentSupply` | |
 | `getCurrentValidators` | PARTIAL reply shape: no delegator/uptime/owner attributes yet (needs the staker-attributes cache + owner formatting) |
@@ -529,11 +530,10 @@ owned by M8.23.
 | `getBlockByHeight` | same encoding note |
 | `getStakingAssetID` | justified trivial addition: primary network = `ctx.AVAXAssetID` (already on the chain context); a non-primary subnet surfaces Go's `failed fetching subnet transformation…: not found` (elastic-subnet transform state not ported) |
 
-### Missing (16) — blocking seam per method
+### Missing (15) — blocking seam per method
 
 | Method | Blocking seam |
 |---|---|
-| `getProposedHeight` | preferred-block/proposer height seam (Go `vm.manager.Preferred()`) |
 | `getBalance` | address→UTXO index (`avax.GetAllUTXOs`) |
 | `getUTXOs` | address→UTXO index + shared-memory atomic UTXOs (`avax.GetPaginatedUTXOs`/`GetAtomicUTXOs`) |
 | `getSubnet` | subnet owner / transform-subnet state reads (`state.GetSubnetOwner`) |
