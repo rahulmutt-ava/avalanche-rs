@@ -174,7 +174,7 @@ fn parse_request_uri_ok(extension: &str) -> bool {
 /// WebSocket upgrade, 12 §3.8). Path mounts are EXACT in Go — `mux.Handle(url,
 /// handler)`, `router.go:135` — so `/ext/bc/<id>/unknown` must 404, not fall
 /// through to the chain-root handler.
-pub fn vm_service_router(service: Arc<dyn VmHttpService>) -> Router {
+pub(crate) fn vm_service_router(service: Arc<dyn VmHttpService>) -> Router {
     Router::new().route("/", vm_method_router(service))
 }
 
@@ -182,7 +182,7 @@ pub fn vm_service_router(service: Arc<dyn VmHttpService>) -> Router {
 /// EVERY path. Header-routed handlers receive the request unchanged regardless
 /// of its path (Go `router.ServeHTTP` calls `handler.ServeHTTP` directly,
 /// `router.go:74`) — the EVM routes `/rpc`/`/ws`/… internally.
-pub fn vm_service_fallback_router(service: Arc<dyn VmHttpService>) -> Router {
+pub(crate) fn vm_service_fallback_router(service: Arc<dyn VmHttpService>) -> Router {
     Router::new().fallback_service(vm_method_router(service))
 }
 
@@ -225,13 +225,21 @@ fn copy_headers(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The request-body cap for VM mounts. geth caps HTTP bodies at 5 MiB
+/// (`rpc/http.go maxRequestContentLength`); axum's default 2 MB extractor
+/// limit does not apply here (the raw `Request` bypasses `FromRequest`
+/// limiting), so the cap is enforced explicitly — over it ⇒ `413`.
+const MAX_VM_REQUEST_BODY: usize = 5 * 1024 * 1024;
+
 /// Buffers an axum request, dispatches it through the [`VmHttpService`] seam,
 /// and rebuilds the response.
 async fn buffered_call(service: &dyn VmHttpService, uri: String, req: Request) -> Response {
     let (parts, body) = req.into_parts();
-    let body = match axum::body::to_bytes(body, usize::MAX).await {
+    let body = match axum::body::to_bytes(body, MAX_VM_REQUEST_BODY).await {
+        // `to_bytes` errors both on a body over the cap and on a transport
+        // failure mid-read; the cap is by far the common case.
         Ok(bytes) => bytes.to_vec(),
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
     let vm_req = VmRequest {
         method: parts.method.as_str().to_string(),

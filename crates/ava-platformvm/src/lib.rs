@@ -47,7 +47,7 @@ pub mod error;
 pub mod factory;
 pub mod fx;
 pub mod genesis;
-pub mod jsonrpc;
+pub(crate) mod jsonrpc;
 pub mod network;
 pub mod reward;
 pub mod service;
