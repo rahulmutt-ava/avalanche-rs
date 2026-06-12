@@ -6,10 +6,20 @@
 //!
 //! This module ports the request/response *shapes* (serde types matching Go's
 //! JSON field names + encodings) and the read-method *logic* over the live
-//! [`State`](crate::state::state::State) / [`PChainValidatorManager`]
-//! (M4.20/M4.21/M4.25) seams. It deliberately does **not** wire an HTTP /
-//! JSON-RPC server: that transport lands with `ava-api` (M8/M12). Write methods
-//! (`issueTx`, …) are out of scope for read-only sync and are not ported here.
+//! [`State`](crate::state::state::State) / `PChainValidatorManager`
+//! (M4.20/M4.21/M4.25) seams. Write methods (`issueTx`, …) are out of scope for
+//! read-only sync and are not ported here (see `tests/PORTING.md` for the
+//! method inventory vs Go).
+//!
+//! ## Transport (M8.22)
+//!
+//! [`RpcService`] bridges these typed bodies onto `ava-api`'s gorilla-json2
+//! [`ServiceRegistry`] under the Go service name `platform` (Go
+//! `vms/platformvm/vm.go:451-466` `CreateHandlers` registers `&Service{…}` as
+//! `"platform"` at extension `""`); `PlatformVm::create_handlers` mounts the
+//! [`registry`] through the in-process `HttpHandler` seam. The service reads
+//! state through the [`ServiceState`] seam so the same bodies serve both an
+//! owned snapshot (tests) and the VM's lock-guarded live state (`vm.rs`).
 //!
 //! ## Encodings (match Go exactly)
 //!
@@ -33,20 +43,24 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ava_api_macros::rpc_service;
 use ava_crypto::address;
 use ava_crypto::bls::PublicKey;
+use ava_crypto::hashing::checksum;
 use ava_database::Database;
 use ava_types::constants::get_hrp;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_validators::state::ValidatorState;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{Error, Result};
+use crate::jsonrpc::{RpcError, ServiceRegistry};
 use crate::state::chain::Chain;
+use crate::state::l1_validator::L1Validator;
 use crate::state::state::State;
 use crate::status::Status;
-use crate::validators::manager::PChainValidatorManager;
+use crate::txs::fee::gas::GasState;
 
 /// avalanchego `utils/json` numeric encodings: integers as quoted decimal
 /// strings (`json.Uint64` ⇒ `"1234"`).
@@ -376,26 +390,93 @@ pub struct GetTxStatusResponse {
 }
 
 // ---------------------------------------------------------------------------
-// The read service
+// The state seam + the read service
 // ---------------------------------------------------------------------------
 
-/// The P-Chain read service over a [`State`] + [`PChainValidatorManager`].
+/// The state reads the P-Chain service performs, abstracted so the service can
+/// run over either an owned [`State`] snapshot (tests) or the VM's live,
+/// lock-guarded state (`vm.rs` forwards each call under the block-manager
+/// mutex — the moral equivalent of Go's per-method `vm.ctx.Lock`).
+pub trait ServiceState: Send + Sync {
+    /// [`Chain::timestamp`] — the current chain timestamp.
+    fn timestamp(&self) -> SystemTime;
+    /// [`Chain::current_supply`] — the AVAX supply upper bound of `subnet`.
+    ///
+    /// # Errors
+    /// Propagates the state read error.
+    fn current_supply(&self, subnet: Id) -> Result<u64>;
+    /// [`Chain::fee_state`] — the dynamic gas fee state.
+    fn fee_state(&self) -> GasState;
+    /// [`Chain::l1_validator_excess`] — the ACP-77 validator-fee excess.
+    fn l1_validator_excess(&self) -> u64;
+    /// [`Chain::get_l1_validator`] — the L1 validator with `validation_id`.
+    ///
+    /// # Errors
+    /// Propagates the state read error (absent validator included).
+    fn get_l1_validator(&self, validation_id: Id) -> Result<L1Validator>;
+    /// [`Chain::chains`] — the blockchains validated by `subnet`.
+    fn chains(&self, subnet: Id) -> Vec<Id>;
+    /// [`Chain::get_tx`] — the stored signed-tx bytes of `tx_id`.
+    ///
+    /// # Errors
+    /// Propagates the state read error (absent tx included).
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>>;
+    /// `State::get_block` — the stored bytes of the accepted block `id`.
+    ///
+    /// # Errors
+    /// Propagates the state read error (absent block included).
+    fn get_block(&self, id: Id) -> Result<Vec<u8>>;
+    /// `State::get_block_id_at_height` — the accepted block id at `height`.
+    fn get_block_id_at_height(&self, height: u64) -> Option<Id>;
+}
+
+impl<D: Database + 'static> ServiceState for State<D> {
+    fn timestamp(&self) -> SystemTime {
+        Chain::timestamp(self)
+    }
+    fn current_supply(&self, subnet: Id) -> Result<u64> {
+        Chain::current_supply(self, subnet)
+    }
+    fn fee_state(&self) -> GasState {
+        Chain::fee_state(self)
+    }
+    fn l1_validator_excess(&self) -> u64 {
+        Chain::l1_validator_excess(self)
+    }
+    fn get_l1_validator(&self, validation_id: Id) -> Result<L1Validator> {
+        Chain::get_l1_validator(self, validation_id)
+    }
+    fn chains(&self, subnet: Id) -> Vec<Id> {
+        Chain::chains(self, subnet)
+    }
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>> {
+        Chain::get_tx(self, tx_id)
+    }
+    fn get_block(&self, id: Id) -> Result<Vec<u8>> {
+        State::get_block(self, id)
+    }
+    fn get_block_id_at_height(&self, height: u64) -> Option<Id> {
+        State::get_block_id_at_height(self, height)
+    }
+}
+
+/// The P-Chain read service over a [`ServiceState`] + a [`ValidatorState`]
+/// (the M4.21 `PChainValidatorManager` in production).
 ///
-/// Mirrors the read methods of Go's `platformvm.Service`. The HTTP/JSON-RPC
-/// transport that would dispatch onto these is deferred to `ava-api` (M8/M12);
-/// each method here is the typed handler body.
-pub struct Service<D: Database + 'static> {
-    state: Arc<State<D>>,
-    validators: Arc<PChainValidatorManager<D>>,
+/// Mirrors the read methods of Go's `platformvm.Service`; each method here is
+/// the typed handler body, served on the wire by [`RpcService`]/[`registry`].
+pub struct Service {
+    state: Arc<dyn ServiceState>,
+    validators: Arc<dyn ValidatorState>,
     network_id: u32,
 }
 
-impl<D: Database + 'static> Service<D> {
-    /// Builds a service over a shared state snapshot + validator manager.
+impl Service {
+    /// Builds a service over a shared state view + validator manager.
     #[must_use]
     pub fn new(
-        state: Arc<State<D>>,
-        validators: Arc<PChainValidatorManager<D>>,
+        state: Arc<dyn ServiceState>,
+        validators: Arc<dyn ValidatorState>,
         network_id: u32,
     ) -> Self {
         Self {
@@ -630,6 +711,406 @@ impl<D: Database + 'static> Service<D> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The JSON-RPC wire layer (M8.22) — gorilla `platform.*` over ava-api
+// ---------------------------------------------------------------------------
+
+/// The empty gorilla args object (Go `*struct{}`): `[]` / absent / `[{}]` all
+/// accept.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EmptyArgs {}
+
+/// Deserializes Go `platformapi.Height` (`vms/platformvm/api/height.go`): a
+/// `json.Uint64` (quoted decimal or bare number) or the literal `"proposed"`
+/// (= `math.MaxUint64`).
+fn de_height<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .ok_or_else(|| serde::de::Error::custom("height out of range")),
+        serde_json::Value::String(s) if s == "proposed" => Ok(u64::MAX),
+        serde_json::Value::String(s) => s.parse::<u64>().map_err(serde::de::Error::custom),
+        _ => Err(serde::de::Error::custom(
+            "height must be a number, quoted number, or \"proposed\"",
+        )),
+    }
+}
+
+/// `platformvm.GetValidatorsAtArgs` — `{"height", "subnetID"}` (`service.go`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct GetValidatorsAtArgs {
+    /// The queried height (`platformapi.Height`: `json.Uint64` or `"proposed"`).
+    #[serde(deserialize_with = "de_height")]
+    pub height: u64,
+    /// The queried subnet (defaults to the primary network).
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+impl Default for GetValidatorsAtArgs {
+    fn default() -> Self {
+        Self {
+            height: 0,
+            subnet_id: Id::EMPTY,
+        }
+    }
+}
+
+/// `platformvm.ValidatedByArgs` — `{"blockchainID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ValidatedByArgs {
+    /// The blockchain whose validating subnet is queried.
+    #[serde(rename = "blockchainID")]
+    pub blockchain_id: Id,
+}
+
+/// `platformvm.ValidatesArgs` — `{"subnetID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ValidatesArgs {
+    /// The subnet whose blockchains are queried.
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+/// `platformvm.GetTxStatusArgs` — `{"txID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetTxStatusArgs {
+    /// The queried tx id (absent → the nil id, Go's zero `ids.ID`).
+    #[serde(rename = "txID")]
+    pub tx_id: Id,
+}
+
+/// `api.GetTxArgs` — `{"txID", "encoding"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetTxArgs {
+    /// The queried tx id.
+    #[serde(rename = "txID")]
+    pub tx_id: Id,
+    /// The reply encoding (`hex` default / `hexnc`; `json` is deferred).
+    pub encoding: String,
+}
+
+/// `api.GetTxReply` — `{"tx", "encoding"}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GetTxReply {
+    /// The tx bytes under the requested encoding.
+    pub tx: String,
+    /// The encoding used.
+    pub encoding: String,
+}
+
+/// `api.GetBlockArgs` — `{"blockID", "encoding"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetBlockArgs {
+    /// The queried block id.
+    #[serde(rename = "blockID")]
+    pub block_id: Id,
+    /// The reply encoding (`hex` default / `hexnc`; `json` is deferred).
+    pub encoding: String,
+}
+
+/// `api.GetBlockByHeightArgs` — `{"height", "encoding"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetBlockByHeightArgs {
+    /// The queried height (`json.Uint64`: quoted decimal or bare number).
+    #[serde(deserialize_with = "de_height")]
+    pub height: u64,
+    /// The reply encoding (`hex` default / `hexnc`; `json` is deferred).
+    pub encoding: String,
+}
+
+/// `api.GetBlockResponse` — `{"block", "encoding"}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GetBlockResponse {
+    /// The block bytes under the requested encoding.
+    pub block: String,
+    /// The encoding used.
+    pub encoding: String,
+}
+
+/// `platformvm.GetStakingAssetIDArgs` — `{"subnetID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetStakingAssetIDArgs {
+    /// The subnet whose staking asset is queried (default: primary network).
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+/// `platformvm.GetStakingAssetIDResponse` — `{"assetID"}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GetStakingAssetIDResponse {
+    /// The staking asset id (AVAX for the primary network).
+    #[serde(rename = "assetID")]
+    pub asset_id: Id,
+}
+
+/// Encodes reply bytes per Go `formatting.Encode(args.Encoding, bytes)`:
+/// `hex` (default, zero value) appends the 4-byte sha256 checksum before
+/// hex-encoding with a `0x` prefix; `hexnc` skips the checksum. Returns the
+/// encoded string + the canonical encoding name echoed in the reply.
+///
+/// `json` (Go marshals the typed tx/block) is a recorded deferral — the typed
+/// JSON shapes are M8.23 — and surfaces as a `-32000` server error.
+fn encode_reply_bytes(
+    bytes: &[u8],
+    encoding: &str,
+) -> std::result::Result<(String, String), RpcError> {
+    match encoding {
+        "" | "hex" => {
+            let cs = checksum(bytes, 4);
+            let mut combined = bytes.to_vec();
+            combined.extend_from_slice(&cs);
+            Ok((format!("0x{}", hex::encode(&combined)), "hex".to_string()))
+        }
+        "hexnc" => Ok((format!("0x{}", hex::encode(bytes)), "hexnc".to_string())),
+        "json" => Err(RpcError::server(
+            "json encoding is not yet supported (deferred: typed tx/block JSON shapes, M8.23)",
+        )),
+        other => Err(RpcError::invalid_params(format!(
+            "invalid encoding: {other}"
+        ))),
+    }
+}
+
+/// Maps a P-Chain domain error onto the gorilla `-32000` server error (the
+/// `utils/rpc` handler surfaces Go handler errors the same way, 14 §16.1).
+fn server_err(e: Error) -> RpcError {
+    RpcError::server(e.to_string())
+}
+
+/// The gorilla `platform` service wrapper over [`Service`] (Go
+/// `platformvm.Service`, registered as `"platform"` by `CreateHandlers`,
+/// `vm.go:462`). Bridges the typed read bodies; the full Go method set is
+/// inventoried in `tests/PORTING.md` (M8.23 owns full parity).
+pub struct RpcService {
+    service: Arc<Service>,
+    /// `ctx.AVAXAssetID` — the primary network's staking asset
+    /// (Go `GetStakingAssetID`, `service.go:612`).
+    avax_asset_id: Id,
+}
+
+#[rpc_service("platform")]
+impl RpcService {
+    /// `platform.getHeight` (Go `Service.GetHeight`, `service.go:89`).
+    ///
+    /// # Errors
+    /// `-32000` on a validator-manager read failure.
+    pub async fn get_height(&self, _args: EmptyArgs) -> std::result::Result<GetHeightResponse, RpcError> {
+        self.service.get_height().await.map_err(server_err)
+    }
+
+    /// `platform.getTimestamp` (Go `Service.GetTimestamp`, `service.go:1798`).
+    ///
+    /// # Errors
+    /// Infallible today (typed body reads the in-memory chain time).
+    pub async fn get_timestamp(&self, _args: EmptyArgs) -> std::result::Result<GetTimestampReply, RpcError> {
+        Ok(self.service.get_timestamp())
+    }
+
+    /// `platform.getCurrentSupply` (Go `Service.GetCurrentSupply`,
+    /// `service.go:1105`).
+    ///
+    /// # Errors
+    /// `-32000` on a state/height read failure.
+    pub async fn get_current_supply(
+        &self,
+        args: GetCurrentSupplyArgs,
+    ) -> std::result::Result<GetCurrentSupplyReply, RpcError> {
+        self.service
+            .get_current_supply(&args)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.getCurrentValidators` (Go `Service.GetCurrentValidators`,
+    /// `service.go:717`). Reply carries the read-relevant field subset (the
+    /// delegator/uptime/owner attributes are an M8.23 deferral; see
+    /// [`ApiValidator`]).
+    ///
+    /// # Errors
+    /// `-32000` on a validator-set read failure.
+    pub async fn get_current_validators(
+        &self,
+        args: GetCurrentValidatorsArgs,
+    ) -> std::result::Result<GetCurrentValidatorsReply, RpcError> {
+        self.service
+            .get_current_validators(&args)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.getL1Validator` (Go `Service.GetL1Validator`,
+    /// `service.go:1010`). The snake_case ident pascalizes to the exact Go
+    /// wire name `GetL1Validator` (no override needed).
+    ///
+    /// # Errors
+    /// `-32000` for an absent validator / read failure.
+    pub async fn get_l1_validator(
+        &self,
+        args: GetL1ValidatorArgs,
+    ) -> std::result::Result<GetL1ValidatorReply, RpcError> {
+        self.service.get_l1_validator(&args).await.map_err(server_err)
+    }
+
+    /// `platform.getValidatorsAt` (Go `Service.GetValidatorsAt`,
+    /// `service.go:1934`). The reply marshals as the bare
+    /// `nodeID → {publicKey, weight}` map (Go `GetValidatorsAtReply.MarshalJSON`).
+    ///
+    /// # Errors
+    /// `-32000` on a validator-set-at-height read failure.
+    pub async fn get_validators_at(
+        &self,
+        args: GetValidatorsAtArgs,
+    ) -> std::result::Result<GetValidatorsAtReply, RpcError> {
+        self.service
+            .get_validators_at(args.height, args.subnet_id)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.getFeeState` (Go `Service.GetFeeState`, `service.go:2051`).
+    ///
+    /// # Errors
+    /// Infallible today (`price` is the recorded `0` sentinel until the
+    /// fee-config seam lands; see [`Service::get_fee_state`]).
+    pub async fn get_fee_state(&self, _args: EmptyArgs) -> std::result::Result<GetFeeStateReply, RpcError> {
+        Ok(self.service.get_fee_state())
+    }
+
+    /// `platform.getValidatorFeeState` (Go `Service.GetValidatorFeeState`,
+    /// `service.go:2088`).
+    ///
+    /// # Errors
+    /// Infallible today (same `price` sentinel note as `getFeeState`).
+    pub async fn get_validator_fee_state(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetValidatorFeeStateReply, RpcError> {
+        Ok(self.service.get_validator_fee_state())
+    }
+
+    /// `platform.validatedBy` (Go `Service.ValidatedBy`, `service.go:1289`).
+    ///
+    /// # Errors
+    /// `-32000` on a subnet-id read failure.
+    pub async fn validated_by(
+        &self,
+        args: ValidatedByArgs,
+    ) -> std::result::Result<ValidatedByResponse, RpcError> {
+        self.service
+            .validated_by(args.blockchain_id)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.validates` (Go `Service.Validates`, `service.go:1315`).
+    ///
+    /// # Errors
+    /// Infallible today (state list read).
+    pub async fn validates(&self, args: ValidatesArgs) -> std::result::Result<ValidatesResponse, RpcError> {
+        Ok(self.service.validates(args.subnet_id))
+    }
+
+    /// `platform.getTxStatus` (Go `Service.GetTxStatus`, `service.go:1500`).
+    /// Accepted-state only: a found tx is `Committed`, an absent one `Unknown`
+    /// (the mempool/preferred-block `Processing`/`Dropped` walk needs the
+    /// builder seam; see [`Service::get_tx_status`]).
+    ///
+    /// # Errors
+    /// Infallible today.
+    pub async fn get_tx_status(
+        &self,
+        args: GetTxStatusArgs,
+    ) -> std::result::Result<GetTxStatusResponse, RpcError> {
+        Ok(self.service.get_tx_status(args.tx_id))
+    }
+
+    /// `platform.getTx` (Go `Service.GetTx`, `service.go:1458`).
+    ///
+    /// # Errors
+    /// `-32000` for an absent tx; `json` encoding is a recorded deferral.
+    pub async fn get_tx(&self, args: GetTxArgs) -> std::result::Result<GetTxReply, RpcError> {
+        let bytes = self.service.get_tx_bytes(args.tx_id).map_err(server_err)?;
+        let (tx, encoding) = encode_reply_bytes(&bytes, &args.encoding)?;
+        Ok(GetTxReply { tx, encoding })
+    }
+
+    /// `platform.getBlock` (Go `Service.GetBlock`, `service.go:1959`).
+    ///
+    /// # Errors
+    /// `-32000` for an absent block; `json` encoding is a recorded deferral.
+    pub async fn get_block(&self, args: GetBlockArgs) -> std::result::Result<GetBlockResponse, RpcError> {
+        let bytes = self.service.get_block(args.block_id).map_err(server_err)?;
+        let (block, encoding) = encode_reply_bytes(&bytes, &args.encoding)?;
+        Ok(GetBlockResponse { block, encoding })
+    }
+
+    /// `platform.getBlockByHeight` (Go `Service.GetBlockByHeight`,
+    /// `service.go:1992`).
+    ///
+    /// # Errors
+    /// `-32000` for a missing height; `json` encoding is a recorded deferral.
+    pub async fn get_block_by_height(
+        &self,
+        args: GetBlockByHeightArgs,
+    ) -> std::result::Result<GetBlockResponse, RpcError> {
+        let bytes = self
+            .service
+            .get_block_by_height(args.height)
+            .map_err(server_err)?;
+        let (block, encoding) = encode_reply_bytes(&bytes, &args.encoding)?;
+        Ok(GetBlockResponse { block, encoding })
+    }
+
+    /// `platform.getStakingAssetID` (Go `Service.GetStakingAssetID`,
+    /// `service.go:612`): the primary network's staking asset is
+    /// `ctx.AVAXAssetID` — a trivial delegation over the chain context already
+    /// held by the VM (justified addition; the elastic-subnet
+    /// `GetSubnetTransformation` branch needs the subnet-transform state seam,
+    /// so a non-primary subnet surfaces Go's wrap with `not found`).
+    ///
+    /// # Errors
+    /// `-32000` for a non-primary subnet (no transform-subnet state yet).
+    #[rpc(name = "GetStakingAssetID")]
+    pub async fn get_staking_asset_id(
+        &self,
+        args: GetStakingAssetIDArgs,
+    ) -> std::result::Result<GetStakingAssetIDResponse, RpcError> {
+        // Go: `args.SubnetID == constants.PrimaryNetworkID` (the empty id).
+        if args.subnet_id != Id::EMPTY {
+            return Err(RpcError::server(format!(
+                "failed fetching subnet transformation for {}: not found",
+                args.subnet_id
+            )));
+        }
+        Ok(GetStakingAssetIDResponse {
+            asset_id: self.avax_asset_id,
+        })
+    }
+}
+
+/// Builds the registry serving the bridged `platform.*` methods (the body of
+/// Go's `server.RegisterService(service, "platform")`, `vm.go:462`).
+/// `avax_asset_id` is the chain context's AVAX asset id (`GetStakingAssetID`).
+#[must_use]
+pub fn registry(service: Arc<Service>, avax_asset_id: Id) -> ServiceRegistry {
+    let mut registry = ServiceRegistry::new();
+    Arc::new(RpcService {
+        service,
+        avax_asset_id,
+    })
+    .register_rpc(&mut registry);
+    registry
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -659,6 +1140,7 @@ mod conformance {
     use crate::txs::Priority;
     use crate::txs::executor::{Backend, StakingConfig, UpgradeSchedule};
     use crate::txs::fee::simple_calculator::StaticFeeConfig;
+    use crate::validators::manager::PChainValidatorManager;
 
     const AVAX: u64 = 1_000_000_000;
 
@@ -705,7 +1187,7 @@ mod conformance {
 
     /// Builds a manager + state with two primary-network validators added at
     /// height 1, and returns a `Service` over them.
-    fn seeded_service() -> (Service<MemDb>, NodeId, NodeId, PublicKey, PublicKey) {
+    fn seeded_service() -> (Service, NodeId, NodeId, PublicKey, PublicKey) {
         let node_a = NodeId::from([0x0A; 20]);
         let node_b = NodeId::from([0x0B; 20]);
         let key_a = pk(0x11);
@@ -871,5 +1353,186 @@ mod conformance {
         // validator snapshot); a missing height yields an error, not a panic.
         let err = service.get_block_by_height(99).unwrap_err();
         let _ = err; // shape only: it is the Custom "no block" sentinel path.
+    }
+
+    // -----------------------------------------------------------------------
+    // M8.22 wire layer: the bridged `platform.*` method set + gorilla envelope
+    // -----------------------------------------------------------------------
+
+    /// The bridged method set is EXACTLY the 15 Go wire names (incl. the
+    /// `GetStakingAssetID`/`GetL1Validator` casings); nothing unbridged leaks
+    /// in (full parity vs the 31-method Go set is M8.23 — see
+    /// `tests/PORTING.md`).
+    #[test]
+    fn platform_method_set_matches_bridged() {
+        let (service, ..) = seeded_service();
+        let reg = registry(Arc::new(service), Id::from([0x42; 32]));
+        const BRIDGED: [&str; 15] = [
+            "GetHeight",
+            "GetTimestamp",
+            "GetCurrentSupply",
+            "GetCurrentValidators",
+            "GetL1Validator",
+            "GetValidatorsAt",
+            "GetFeeState",
+            "GetValidatorFeeState",
+            "ValidatedBy",
+            "Validates",
+            "GetTxStatus",
+            "GetTx",
+            "GetBlock",
+            "GetBlockByHeight",
+            "GetStakingAssetID",
+        ];
+        assert_eq!(reg.len(), BRIDGED.len(), "exactly the bridged set");
+        for m in BRIDGED {
+            assert!(reg.lookup("platform", m).is_some(), "platform.{m} registered");
+        }
+        // Exact-remainder matching: the pascalized (non-Go) casing must miss.
+        assert!(reg.lookup("platform", "GetStakingAssetId").is_none());
+        // Unbridged Go methods (M8.23) are NOT registered.
+        for m in ["IssueTx", "GetUTXOs", "GetBalance", "SampleValidators"] {
+            assert!(reg.lookup("platform", m).is_none(), "platform.{m} unbridged");
+        }
+    }
+
+    /// Drives the gorilla envelope end-to-end through `registry_service`.
+    async fn post_platform(service: Service, body: serde_json::Value) -> serde_json::Value {
+        use ava_vm::vm::VmRequest;
+        let reg = std::sync::Arc::new(registry(
+            std::sync::Arc::new(service),
+            Id::from([0x42; 32]),
+        ));
+        let svc = crate::jsonrpc::registry_service(reg);
+        let resp = svc
+            .serve_http(VmRequest {
+                method: "POST".to_string(),
+                uri: String::new(),
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: serde_json::to_vec(&body).expect("serialize"),
+            })
+            .await;
+        assert_eq!(resp.status, 200, "JSON-RPC always answers HTTP 200");
+        serde_json::from_slice(&resp.body).expect("json body")
+    }
+
+    // getHeight + getTxStatus + getStakingAssetID over the gorilla wire.
+    #[tokio::test]
+    async fn platform_wire_shapes() {
+        let (service, ..) = seeded_service();
+        let body = post_platform(
+            service,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "platform.getHeight",
+                "params": [{}],
+                "id": 1,
+            }),
+        )
+        .await;
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": { "height": "1" },
+                "id": 1,
+            }),
+            "platform.getHeight envelope (json.Uint64 quoted string)"
+        );
+
+        let (service, ..) = seeded_service();
+        let body = post_platform(
+            service,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "platform.getTxStatus",
+                "params": [{ "txID": Id::from([0xEE; 32]).to_string() }],
+                "id": 2,
+            }),
+        )
+        .await;
+        assert_eq!(
+            body["result"]["status"], "Unknown",
+            "absent tx is Unknown (accepted-state-only walk)"
+        );
+
+        // getStakingAssetID: primary network echoes ctx.AVAXAssetID; a
+        // non-primary subnet surfaces the Go transform-subnet wrap.
+        let (service, ..) = seeded_service();
+        let body = post_platform(
+            service,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "platform.getStakingAssetID",
+                "params": [{}],
+                "id": 3,
+            }),
+        )
+        .await;
+        assert_eq!(
+            body["result"]["assetID"],
+            Id::from([0x42; 32]).to_string(),
+            "primary-network staking asset is ctx.AVAXAssetID"
+        );
+
+        let (service, ..) = seeded_service();
+        let subnet = Id::from([0x07; 32]);
+        let body = post_platform(
+            service,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "platform.getStakingAssetID",
+                "params": [{ "subnetID": subnet.to_string() }],
+                "id": 4,
+            }),
+        )
+        .await;
+        assert_eq!(body["error"]["code"], -32000, "gorilla server error code");
+        assert_eq!(
+            body["error"]["message"],
+            format!("failed fetching subnet transformation for {subnet}: not found"),
+            "Go GetStakingAssetID wrap for a non-transformed subnet"
+        );
+    }
+
+    // platformapi.Height: bare number, quoted decimal, and "proposed".
+    #[test]
+    fn height_arg_accepts_go_forms() {
+        let a: GetValidatorsAtArgs =
+            serde_json::from_value(serde_json::json!({ "height": "7" })).expect("quoted");
+        assert_eq!(a.height, 7);
+        let a: GetValidatorsAtArgs =
+            serde_json::from_value(serde_json::json!({ "height": 7 })).expect("bare");
+        assert_eq!(a.height, 7);
+        let a: GetValidatorsAtArgs =
+            serde_json::from_value(serde_json::json!({ "height": "proposed" })).expect("proposed");
+        assert_eq!(a.height, u64::MAX, "Go ProposedHeight = MaxUint64");
+    }
+
+    // formatting.Encode parity: hex appends the 4-byte checksum, hexnc skips
+    // it, json defers, anything else is -32602.
+    #[test]
+    fn encode_reply_bytes_matches_go_formatting() {
+        let raw = b"hello platform";
+        let (hex_s, enc) = encode_reply_bytes(raw, "").expect("hex default");
+        assert_eq!(enc, "hex");
+        let decoded = hex::decode(hex_s.trim_start_matches("0x")).expect("hex");
+        assert_eq!(decoded.len(), raw.len() + 4, "4-byte checksum appended");
+        assert_eq!(&decoded[raw.len()..], checksum(raw, 4).as_slice());
+
+        let (nc, enc) = encode_reply_bytes(raw, "hexnc").expect("hexnc");
+        assert_eq!(enc, "hexnc");
+        assert_eq!(nc, format!("0x{}", hex::encode(raw)));
+
+        assert_eq!(
+            encode_reply_bytes(raw, "json").unwrap_err().code,
+            -32000,
+            "json encoding is a recorded deferral"
+        );
+        assert_eq!(
+            encode_reply_bytes(raw, "cb58").unwrap_err().code,
+            -32602,
+            "unknown encodings are invalid params"
+        );
     }
 }

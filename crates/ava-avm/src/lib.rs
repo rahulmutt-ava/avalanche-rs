@@ -53,6 +53,7 @@ pub mod error;
 pub mod factory;
 pub mod fx;
 pub mod fx_index;
+pub mod jsonrpc;
 pub mod mempool;
 pub mod network;
 pub mod nftfx;
