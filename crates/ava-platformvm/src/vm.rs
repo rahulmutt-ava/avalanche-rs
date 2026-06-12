@@ -115,7 +115,10 @@ impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
     fn l1_validator_excess(&self) -> u64 {
         Chain::l1_validator_excess(self.shared.manager.lock().state())
     }
-    fn get_l1_validator(&self, validation_id: Id) -> Result<crate::state::l1_validator::L1Validator> {
+    fn get_l1_validator(
+        &self,
+        validation_id: Id,
+    ) -> Result<crate::state::l1_validator::L1Validator> {
         Chain::get_l1_validator(self.shared.manager.lock().state(), validation_id)
     }
     fn chains(&self, subnet: Id) -> Vec<Id> {
@@ -128,7 +131,11 @@ impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
         self.shared.manager.lock().state().get_block(id)
     }
     fn get_block_id_at_height(&self, height: u64) -> Option<Id> {
-        self.shared.manager.lock().state().get_block_id_at_height(height)
+        self.shared
+            .manager
+            .lock()
+            .state()
+            .get_block_id_at_height(height)
     }
 }
 
@@ -927,10 +934,7 @@ mod conformance {
                     .serve_http(VmRequest {
                         method: "POST".to_string(),
                         uri: String::new(),
-                        headers: vec![(
-                            "content-type".to_string(),
-                            "application/json".to_string(),
-                        )],
+                        headers: vec![("content-type".to_string(), "application/json".to_string())],
                         body: serde_json::to_vec(&body).expect("serialize"),
                     })
                     .await;

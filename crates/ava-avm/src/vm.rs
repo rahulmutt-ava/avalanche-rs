@@ -94,7 +94,7 @@ use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
-use ava_vm::vm::{HttpHandler, Vm, VmEvent};
+use ava_vm::vm::{HttpHandler, LockOptions, Vm, VmEvent};
 
 use crate::block::builder::BuildBlockParams;
 use crate::block::executor::{BlockManager, BlockManagerConfig};
@@ -102,9 +102,10 @@ use crate::block::{Block, build_block};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::fx::dispatch::Dispatch;
+use crate::jsonrpc::registry_service;
 use crate::mempool::Mempool;
 use crate::network::atomic::{AppGossipHandler, AtomicAppHandler};
-use crate::network::gossip::{TxGossipHandler, TxMarshaller};
+use crate::network::gossip::{DropReason, HandleOutcome, TxGossipHandler, TxMarshaller};
 use crate::network::tx_verifier::SyntacticTxVerifier;
 use crate::state::State;
 use crate::state::chain::ReadOnlyChain;
@@ -129,6 +130,60 @@ struct Shared {
     manager: Mutex<BlockManager<DynDb>>,
     /// The decision-tx mempool, shared with the gossip handler ([`AvmGossipHandler`]).
     mempool: Arc<Mutex<Mempool>>,
+}
+
+/// The [`ReadOnlyChain`] view over the VM's live state: every read locks the
+/// block manager (the moral equivalent of Go's per-request `vm.ctx.Lock` in
+/// `service.go`) and forwards to the persisted [`State`]. Backs the M8.22
+/// `avm.*` API service.
+struct VmChainReader {
+    shared: Arc<Shared>,
+}
+
+impl ReadOnlyChain for VmChainReader {
+    fn get_utxo(&self, utxo_id: Id) -> Result<Vec<u8>> {
+        self.shared.manager.lock().state().get_utxo(utxo_id)
+    }
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>> {
+        self.shared.manager.lock().state().get_tx(tx_id)
+    }
+    fn get_block_id_at_height(&self, height: u64) -> Option<Id> {
+        self.shared
+            .manager
+            .lock()
+            .state()
+            .get_block_id_at_height(height)
+    }
+    fn get_block(&self, blk_id: Id) -> Result<Vec<u8>> {
+        self.shared.manager.lock().state().get_block(blk_id)
+    }
+    fn get_last_accepted(&self) -> Id {
+        self.shared.manager.lock().state().get_last_accepted()
+    }
+    fn get_timestamp(&self) -> SystemTime {
+        self.shared.manager.lock().state().get_timestamp()
+    }
+}
+
+/// The [`crate::service::TxIssuer`] seam over the shared mempool: `issueTx`
+/// admits through the SAME dedupe → verify → add path inbound gossip uses
+/// ([`TxGossipHandler::handle_gossiped_tx`] with the [`SyntacticTxVerifier`]),
+/// so RPC submission and gossip admission cannot diverge. Outbound re-gossip
+/// of the admitted tx is a recorded deferral (live `Network::gossip`, M8).
+struct VmTxIssuer {
+    shared: Arc<Shared>,
+}
+
+impl crate::service::TxIssuer for VmTxIssuer {
+    fn issue_tx(&self, tx: Tx) -> std::result::Result<(), String> {
+        let mut pool = self.shared.mempool.lock();
+        match TxGossipHandler::new().handle_gossiped_tx(&mut pool, &SyntacticTxVerifier, tx) {
+            HandleOutcome::Added => Ok(()),
+            HandleOutcome::Dropped(DropReason::Duplicate) => Err("duplicate tx".to_string()),
+            HandleOutcome::Dropped(DropReason::Verification(reason)) => Err(reason),
+            HandleOutcome::Dropped(DropReason::Mempool(e)) => Err(e.to_string()),
+        }
+    }
 }
 
 /// `avm.VM` — the X-Chain Snowman VM over the [`DynDb`]-adapted engine database
@@ -639,12 +694,39 @@ impl Vm for AvmVm {
         Ok("avm/0.0.0".to_string())
     }
 
+    /// Go `CreateHandlers` (`vms/avm/vm.go:293-318`): the gorilla JSON-RPC
+    /// server at extension `""` with the service registered as `"avm"`. Go
+    /// also mounts the keystore-backed `"/wallet"` server — out of scope for
+    /// the Rust port's key-management boundary (recorded in
+    /// `tests/PORTING.md`), as is the `vm.metrics` request-interceptor wrap
+    /// (the proposervm M8.22 precedent).
     async fn create_handlers(
         &mut self,
         _token: &CancellationToken,
     ) -> VmResult<HashMap<String, HttpHandler>> {
-        // The JSON-RPC service is M5.21.
-        Ok(HashMap::new())
+        let shared = self.shared().map_err(VmError::from)?;
+        let ctx = self
+            .ctx
+            .as_ref()
+            .ok_or(VmError::from(Error::NotInitialized))?;
+        let service = Arc::new(crate::service::Service::new(
+            Arc::new(VmChainReader {
+                shared: Arc::clone(shared),
+            }),
+            ctx.network_id,
+        ));
+        let issuer = Arc::new(VmTxIssuer {
+            shared: Arc::clone(shared),
+        });
+        let registry = Arc::new(crate::service::registry(service, issuer));
+        let mut handlers = HashMap::new();
+        handlers.insert(
+            String::new(),
+            // Go's modern CreateHandlers map carries no lock semantics; the
+            // service locks the block manager per read (VmChainReader).
+            HttpHandler::in_process(LockOptions::NoLock, registry_service(registry)),
+        );
+        Ok(handlers)
     }
 
     async fn new_http_handler(
@@ -1006,5 +1088,90 @@ mod tests {
         let vm = AvmVm::new();
         let token = CancellationToken::new();
         assert!(vm.last_accepted(&token).await.is_err());
+    }
+
+    /// M8.22 end-to-end: `create_handlers` mounts the gorilla `avm.*` service
+    /// at extension `""` (Go `vm.go:314-317`, minus the out-of-scope
+    /// `"/wallet"` keystore mount) and serves `avm.getHeight` /
+    /// `avm.issueTx` through the in-process `HttpHandler` seam — issueTx
+    /// lands the tx in the live shared mempool via the gossip admission path.
+    #[tokio::test]
+    #[allow(clippy::indexing_slicing)] // Value indexing yields Null, not a panic
+    async fn create_handlers_serves_avm_service() {
+        use ava_crypto::hashing::checksum;
+        use ava_vm::vm::VmRequest;
+
+        let token = CancellationToken::new();
+        let mut vm = init_vm().await;
+        let handlers = vm.create_handlers(&token).await.expect("create_handlers");
+        assert_eq!(handlers.len(), 1, "the root extension only (no /wallet)");
+        let handler = handlers.get("").expect("root extension (Go key \"\")");
+        let service = handler
+            .service
+            .as_ref()
+            .expect("in-process VmHttpService handler");
+
+        let post = |body: serde_json::Value| {
+            let service = Arc::clone(service);
+            async move {
+                let resp = service
+                    .serve_http(VmRequest {
+                        method: "POST".to_string(),
+                        uri: String::new(),
+                        headers: vec![("content-type".to_string(), "application/json".to_string())],
+                        body: serde_json::to_vec(&body).expect("serialize"),
+                    })
+                    .await;
+                assert_eq!(resp.status, 200, "JSON-RPC always answers HTTP 200");
+                serde_json::from_slice::<serde_json::Value>(&resp.body).expect("json body")
+            }
+        };
+
+        // getHeight over the genesis state: height 0, json.Uint64 string.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.getHeight",
+            "params": [{}],
+            "id": 1,
+        }))
+        .await;
+        assert_eq!(
+            body["result"]["height"], "0",
+            "avm.getHeight serves the genesis height"
+        );
+
+        // issueTx: checksummed-hex wire bytes (Go formatting.Hex) of a
+        // well-formed tx land it in the live shared mempool.
+        let tx = gossip_tx(7);
+        let mut wire = tx.bytes().to_vec();
+        let cs = checksum(&wire, 4);
+        wire.extend_from_slice(&cs);
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.issueTx",
+            "params": [{ "tx": format!("0x{}", hex::encode(&wire)), "encoding": "hex" }],
+            "id": 2,
+        }))
+        .await;
+        assert_eq!(
+            body["result"]["txID"],
+            tx.id().to_string(),
+            "avm.issueTx echoes the parsed txID"
+        );
+        assert!(
+            vm.shared().unwrap().mempool.lock().contains(&tx.id()),
+            "issueTx admits the tx to the live mempool (gossip admission path)"
+        );
+
+        // Re-issuing the same tx is the duplicate drop (Go mempool error).
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.issueTx",
+            "params": [{ "tx": format!("0x{}", hex::encode(&wire)), "encoding": "hex" }],
+            "id": 3,
+        }))
+        .await;
+        assert_eq!(body["error"]["code"], -32000, "duplicate is a server error");
+        assert_eq!(body["error"]["message"], "duplicate tx");
     }
 }

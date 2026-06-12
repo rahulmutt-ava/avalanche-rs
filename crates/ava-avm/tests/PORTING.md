@@ -269,3 +269,49 @@ as a single named Go test function:
 | `fx_secp` module | `TestFxVerifyTransfer`, `TestFxVerifyMintOperation`, `TestFxVerifyTransferOperation` (secp256k1fx) — the avm secp fx uses the shared `ava-secp256k1fx` crate, tested here with the avm clock wrapper |
 | `service::conformance` (inline, 29 tests) | All `TestService*` tests from `service_test.go` — shape, error codes, encodings |
 | `mempool::tests::mempool_dedupe_fifo` + `mempool::prop::mempool_no_loss` | `TestMempoolAdd` / `TestMempoolDuplicate` / `TestMempool_Drop` / `TestMempool_Remove` / `TestMempool_Iterate` (no direct Go AVM mempool tests; the P-Chain tests were the reference) |
+
+## M8.22 — `avm.*` JSON-RPC method inventory vs Go (`vms/avm/service.go`)
+
+`AvmVm::create_handlers` mounts the gorilla service `avm` at extension `""`
+(Go `vm.go:293-318`), served through the in-process `HttpHandler` seam by
+`service::RpcService` + the crate-local `jsonrpc.rs` shim (`ava-api` is
+unreachable from this crate: `ava-api → ava-config → ava-genesis → ava-avm` is
+a package cycle; the `#[rpc_service]` macro is shared via the leaf
+`ava-api-macros` crate and the dispatch core is pinned to `ava-api`'s by
+parity tests). The Go set is the 11 exported `Service` methods (14 §9);
+**10 are registered** (7 functional + 3 stubs), 1 is missing. Full parity is
+owned by M8.23.
+
+### Bridged & functional (7) — exact Go wire names
+
+| Method | Notes |
+|---|---|
+| `getHeight` | |
+| `getBlock` | reply encoding fixed to checksummed `hex` (Go honors `hexnc`/`json` too — encoding plumb + typed block JSON are M8.23) |
+| `getBlockByHeight` | same encoding note |
+| `getTx` | same encoding note |
+| `getTxStatus` | accepted-state only: `Accepted`/`Unknown` (mempool `Processing` needs the VM mempool read) |
+| `issueTx` | justified trivial delegation: decode/parse (typed body) + submit through the `TxIssuer` seam — the SAME dedupe → verify → mempool-add path inbound gossip uses (`TxGossipHandler::handle_gossiped_tx` + `SyntacticTxVerifier`, the seam `AvmVm` already owns). Outbound re-gossip of the admitted tx is the recorded live-`Network::gossip` M8 handoff |
+| `getAssetDescription` | CB58 asset id only (the Go alias lookup needs the VM alias store) |
+
+### Bridged stubs (3) — registered, always `-32000` "not yet implemented"
+
+| Method | Blocking seam |
+|---|---|
+| `getUTXOs` | address→UTXO index (`avax.GetPaginatedUTXOs`) + shared-memory atomic UTXOs (`avax.GetAtomicUTXOs`) |
+| `getBalance` | address→UTXO index (`avax.GetAllUTXOs`) |
+| `getAllBalances` | address→UTXO index (`avax.GetAllUTXOs`) |
+
+Registered-but-stubbed keeps the wire surface honest: the method exists (Go
+clients get a `-32000` body naming the deferral) rather than `-32601`.
+
+### Missing (1) + out-of-scope extensions
+
+| Method / mount | Blocking seam |
+|---|---|
+| `getTxFee` | VM fee-config exposure to the service (`vm.txFee`/`createAssetTxFee`; Go-deprecated method) |
+| `"/wallet"` extension (`wallet.issueTx`, `wallet.send*`) | out of scope: keystore / key-management boundary of the Rust port |
+
+Recorded transport deferral: Go wraps each handler with the `vm.metrics`
+request interceptor (`vm.go:299-300`) — deferred with the proposervm M8.22
+precedent.

@@ -521,7 +521,10 @@ mod tests {
                 body: b"{}".to_vec(),
             })
             .await;
-        assert_eq!(resp.status, 415, "bad content-type is rejected pre-dispatch");
+        assert_eq!(
+            resp.status, 415,
+            "bad content-type is rejected pre-dispatch"
+        );
 
         let resp = svc
             .serve_http(VmRequest {

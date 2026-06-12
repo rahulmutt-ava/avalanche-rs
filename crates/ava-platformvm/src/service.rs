@@ -903,7 +903,10 @@ impl RpcService {
     ///
     /// # Errors
     /// `-32000` on a validator-manager read failure.
-    pub async fn get_height(&self, _args: EmptyArgs) -> std::result::Result<GetHeightResponse, RpcError> {
+    pub async fn get_height(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetHeightResponse, RpcError> {
         self.service.get_height().await.map_err(server_err)
     }
 
@@ -911,7 +914,10 @@ impl RpcService {
     ///
     /// # Errors
     /// Infallible today (typed body reads the in-memory chain time).
-    pub async fn get_timestamp(&self, _args: EmptyArgs) -> std::result::Result<GetTimestampReply, RpcError> {
+    pub async fn get_timestamp(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetTimestampReply, RpcError> {
         Ok(self.service.get_timestamp())
     }
 
@@ -957,7 +963,10 @@ impl RpcService {
         &self,
         args: GetL1ValidatorArgs,
     ) -> std::result::Result<GetL1ValidatorReply, RpcError> {
-        self.service.get_l1_validator(&args).await.map_err(server_err)
+        self.service
+            .get_l1_validator(&args)
+            .await
+            .map_err(server_err)
     }
 
     /// `platform.getValidatorsAt` (Go `Service.GetValidatorsAt`,
@@ -981,7 +990,10 @@ impl RpcService {
     /// # Errors
     /// Infallible today (`price` is the recorded `0` sentinel until the
     /// fee-config seam lands; see [`Service::get_fee_state`]).
-    pub async fn get_fee_state(&self, _args: EmptyArgs) -> std::result::Result<GetFeeStateReply, RpcError> {
+    pub async fn get_fee_state(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetFeeStateReply, RpcError> {
         Ok(self.service.get_fee_state())
     }
 
@@ -1015,7 +1027,10 @@ impl RpcService {
     ///
     /// # Errors
     /// Infallible today (state list read).
-    pub async fn validates(&self, args: ValidatesArgs) -> std::result::Result<ValidatesResponse, RpcError> {
+    pub async fn validates(
+        &self,
+        args: ValidatesArgs,
+    ) -> std::result::Result<ValidatesResponse, RpcError> {
         Ok(self.service.validates(args.subnet_id))
     }
 
@@ -1047,7 +1062,10 @@ impl RpcService {
     ///
     /// # Errors
     /// `-32000` for an absent block; `json` encoding is a recorded deferral.
-    pub async fn get_block(&self, args: GetBlockArgs) -> std::result::Result<GetBlockResponse, RpcError> {
+    pub async fn get_block(
+        &self,
+        args: GetBlockArgs,
+    ) -> std::result::Result<GetBlockResponse, RpcError> {
         let bytes = self.service.get_block(args.block_id).map_err(server_err)?;
         let (block, encoding) = encode_reply_bytes(&bytes, &args.encoding)?;
         Ok(GetBlockResponse { block, encoding })
@@ -1386,23 +1404,26 @@ mod conformance {
         ];
         assert_eq!(reg.len(), BRIDGED.len(), "exactly the bridged set");
         for m in BRIDGED {
-            assert!(reg.lookup("platform", m).is_some(), "platform.{m} registered");
+            assert!(
+                reg.lookup("platform", m).is_some(),
+                "platform.{m} registered"
+            );
         }
         // Exact-remainder matching: the pascalized (non-Go) casing must miss.
         assert!(reg.lookup("platform", "GetStakingAssetId").is_none());
         // Unbridged Go methods (M8.23) are NOT registered.
         for m in ["IssueTx", "GetUTXOs", "GetBalance", "SampleValidators"] {
-            assert!(reg.lookup("platform", m).is_none(), "platform.{m} unbridged");
+            assert!(
+                reg.lookup("platform", m).is_none(),
+                "platform.{m} unbridged"
+            );
         }
     }
 
     /// Drives the gorilla envelope end-to-end through `registry_service`.
     async fn post_platform(service: Service, body: serde_json::Value) -> serde_json::Value {
         use ava_vm::vm::VmRequest;
-        let reg = std::sync::Arc::new(registry(
-            std::sync::Arc::new(service),
-            Id::from([0x42; 32]),
-        ));
+        let reg = std::sync::Arc::new(registry(std::sync::Arc::new(service), Id::from([0x42; 32])));
         let svc = crate::jsonrpc::registry_service(reg);
         let resp = svc
             .serve_http(VmRequest {
