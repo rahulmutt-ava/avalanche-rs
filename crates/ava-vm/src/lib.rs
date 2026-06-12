@@ -49,7 +49,7 @@ pub use error::{Error, Result};
 pub use fx::{CodecRegistry, Fx, FxInstance, FxVm, UnsignedTx};
 pub use health::HealthCheck;
 pub use middleware::{BlockMetrics, MeterVm, TracedVm};
-pub use vm::{HttpHandler, LockOptions, Vm, VmEvent};
+pub use vm::{HttpHandler, LockOptions, Vm, VmEvent, VmHttpService, VmRequest, VmResponse};
 
 // Re-export the consensus context + engine phase the VM consumes at the
 // boundary (specs 06 §3), so downstream VM crates depend only on `ava-vm`.
@@ -110,6 +110,52 @@ mod tests {
         let c = AppError::new(8, "a");
         assert!(a.is(&b));
         assert!(!a.is(&c));
+    }
+
+    /// The in-process HTTP seam (M8.22): header lookup is case-insensitive and
+    /// multiplicity-preserving (Go `r.Header[key]` is a `[]string`), and the
+    /// `HttpHandler` constructors set the transport fields as documented.
+    #[test]
+    fn vm_request_headers_and_http_handler() {
+        use std::sync::Arc;
+
+        let req = VmRequest {
+            method: "POST".to_string(),
+            uri: "/".to_string(),
+            headers: vec![
+                ("Avalanche-Api-Route".to_string(), "chain".to_string()),
+                ("avalanche-api-route".to_string(), "proposervm".to_string()),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: Vec::new(),
+        };
+        let values: Vec<&str> = req.header_values("AVALANCHE-API-ROUTE").collect();
+        assert_eq!(values, ["chain", "proposervm"], "VmRequest::header_values");
+        assert_eq!(
+            req.header("content-type"),
+            Some("application/json"),
+            "VmRequest::header"
+        );
+
+        struct S;
+        #[async_trait::async_trait]
+        impl VmHttpService for S {
+            async fn serve_http(&self, _req: VmRequest) -> VmResponse {
+                VmResponse::ok("text/plain", b"ok".to_vec())
+            }
+        }
+        let svc: Arc<dyn VmHttpService> = Arc::new(S);
+        let wire = HttpHandler::new(LockOptions::WriteLock, vec![1]);
+        assert_eq!(wire.service.as_ref().map(|_| ()), None, "HttpHandler::new");
+        let in_proc = HttpHandler::in_process(LockOptions::NoLock, svc.clone());
+        assert!(in_proc.handler.is_empty(), "HttpHandler::in_process");
+        // Identity-based equality on the in-process service.
+        assert_eq!(
+            in_proc,
+            HttpHandler::in_process(LockOptions::NoLock, svc),
+            "HttpHandler PartialEq (same Arc)"
+        );
+        assert_ne!(wire, in_proc, "HttpHandler PartialEq (wire vs in-process)");
     }
 
     /// `Vm` (and its supertraits) must be object-safe so the engine can hold

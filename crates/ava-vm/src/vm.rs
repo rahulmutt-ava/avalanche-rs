@@ -58,31 +58,163 @@ pub enum LockOptions {
     NoLock = 2,
 }
 
+/// A buffered in-process HTTP request handed to a VM handler (the Rust
+/// equivalent of Go's `http.Request` as seen by `common.VM` handlers).
+///
+/// `ava-vm` deliberately carries no `http`/`tower`/`hyper` dependency, so the
+/// node's HTTP server (`ava-api`) adapts its transport request into this
+/// buffered form before handing it to the VM (mirroring the buffered
+/// `proto/http` semantics the Go rpcchainvm plugin uses for non-hijacked
+/// handlers).
+#[derive(Clone, Debug, Default)]
+pub struct VmRequest {
+    /// The HTTP method (e.g. `POST`), uppercase.
+    pub method: String,
+    /// The request URI (path + optional query), e.g. `/ext/bc/C/rpc`.
+    pub uri: String,
+    /// The request headers. Names are case-insensitive on lookup; a repeated
+    /// header appears once per value (preserving multiplicity, which the
+    /// proposervm header-route contract relies on — Go `vm.go:297` reads
+    /// `r.Header[server.HTTPHeaderRoute]` as a `[]string`).
+    pub headers: Vec<(String, String)>,
+    /// The buffered request body.
+    pub body: Vec<u8>,
+}
+
+impl VmRequest {
+    /// All values of header `name` (case-insensitive), in order of appearance
+    /// (Go `r.Header[textproto.CanonicalMIMEHeaderKey(name)]`).
+    pub fn header_values<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a str> {
+        self.headers
+            .iter()
+            .filter(move |(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The first value of header `name` (case-insensitive), if present.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.header_values(name).next()
+    }
+}
+
+/// A buffered in-process HTTP response produced by a VM handler (the Rust
+/// equivalent of what a Go handler writes to its `http.ResponseWriter`).
+#[derive(Clone, Debug)]
+pub struct VmResponse {
+    /// The HTTP status code (e.g. `200`).
+    pub status: u16,
+    /// The response headers (e.g. `content-type`).
+    pub headers: Vec<(String, String)>,
+    /// The buffered response body.
+    pub body: Vec<u8>,
+}
+
+impl VmResponse {
+    /// A `200 OK` response with the given `content-type` and body.
+    #[must_use]
+    pub fn ok(content_type: &str, body: Vec<u8>) -> Self {
+        Self {
+            status: 200,
+            headers: vec![("content-type".to_string(), content_type.to_string())],
+            body,
+        }
+    }
+
+    /// A bare status-code response with no headers and an empty body
+    /// (Go `w.WriteHeader(code)` with nothing written).
+    #[must_use]
+    pub fn status_only(status: u16) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+}
+
+impl Default for VmResponse {
+    fn default() -> Self {
+        Self::status_only(200)
+    }
+}
+
+/// The in-process HTTP service seam — the Rust mirror of Go's `http.Handler`
+/// as returned by `common.VM.CreateHandlers` / `NewHTTPHandler`.
+///
+/// In-process VMs implement this directly; the rpcchainvm host adapts the
+/// plugin's gRPC `proto/http` service onto it (follow-up; see
+/// `tests/PORTING.md`).
+#[async_trait]
+pub trait VmHttpService: Send + Sync {
+    /// Serves one buffered request (Go `handler.ServeHTTP(w, r)`).
+    async fn serve_http(&self, req: VmRequest) -> VmResponse;
+}
+
 /// `snow/engine/common.HTTPHandler` — an HTTP handler the VM exposes under
 /// `/ext/bc/[chainID]/[extension]`, paired with its [`LockOptions`].
 ///
-/// The root workspace pulls in no `tower`/`http`/`hyper` dependency, so (per the
-/// task's design note) this is modelled as a plain descriptor rather than a
-/// boxed `tower::Service`. The `handler` bytes are an opaque, transport-specific
-/// reference to the registered service (e.g. a gRPC server id for the
-/// rpcchainvm guest); a richer in-process service type is a follow-up once the
-/// HTTP stack lands (see `tests/PORTING.md`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Two transports share this descriptor:
+/// - **in-process** VMs set [`HttpHandler::service`] (the [`VmHttpService`]
+///   seam the node's HTTP server mounts directly, M8.22);
+/// - the **rpcchainvm** plugin path keeps `service: None` and carries an
+///   opaque, transport-specific reference in [`HttpHandler::handler`] (e.g. a
+///   gRPC server id for the guest), preserving `proto/vm` wire parity.
+#[derive(Clone)]
 pub struct HttpHandler {
     /// The lock semantics the handler expects (wire-parity only here).
     pub lock_options: LockOptions,
     /// Opaque, transport-specific reference to the registered handler.
     pub handler: Vec<u8>,
+    /// The in-process handler, when the VM runs inside the node process.
+    pub service: Option<Arc<dyn VmHttpService>>,
 }
+
+impl std::fmt::Debug for HttpHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpHandler")
+            .field("lock_options", &self.lock_options)
+            .field("handler", &self.handler)
+            .field("service", &self.service.as_ref().map(|_| "<dyn>"))
+            .finish()
+    }
+}
+
+impl PartialEq for HttpHandler {
+    /// Wire-field equality plus in-process handler **identity** (`Arc::ptr_eq`;
+    /// a `dyn` service has no structural equality).
+    fn eq(&self, other: &Self) -> bool {
+        self.lock_options == other.lock_options
+            && self.handler == other.handler
+            && match (&self.service, &other.service) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for HttpHandler {}
 
 impl HttpHandler {
     /// Builds an `HttpHandler` with the given lock options and opaque handler
-    /// reference.
+    /// reference (the rpcchainvm wire form; no in-process service).
     #[must_use]
     pub fn new(lock_options: LockOptions, handler: Vec<u8>) -> Self {
         Self {
             lock_options,
             handler,
+            service: None,
+        }
+    }
+
+    /// Builds an `HttpHandler` over an in-process [`VmHttpService`].
+    #[must_use]
+    pub fn in_process(lock_options: LockOptions, service: Arc<dyn VmHttpService>) -> Self {
+        Self {
+            lock_options,
+            handler: Vec::new(),
+            service: Some(service),
         }
     }
 }
