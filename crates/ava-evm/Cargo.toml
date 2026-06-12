@@ -103,6 +103,11 @@ hex = { workspace = true }
 # `ava_snow::Block`s; `ava-snow` supplies `EngineState` + `ChainContext` directly
 # (the avm/platformvm precedent imports both crates the same way).
 ava-snow = { path = "../ava-snow" }
+# M8.22 `create_handlers` bridging (spec 14 §13): the gorilla-json2 service
+# registry + `#[rpc_service]` macro + the `registry_service` adapter that wraps
+# a registry as an in-process `VmHttpService` (the proposervm precedent;
+# ava-api does not depend on ava-evm, so no cycle).
+ava-api = { path = "../ava-api" }
 async-trait = { workspace = true }
 tokio-util = { workspace = true }
 # `verified: DashMap<Id, _>` (the processing/verified block tree) + the

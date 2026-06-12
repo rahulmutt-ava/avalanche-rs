@@ -74,7 +74,7 @@ use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
-use ava_vm::vm::{HttpHandler, Vm, VmEvent};
+use ava_vm::vm::{HttpHandler, LockOptions, Vm, VmEvent, VmHttpService};
 
 use crate::atomic::mempool::AtomicMempool;
 use crate::block::{EvmBlock, EvmBlockContext, decode_ava_evm_block};
@@ -82,6 +82,13 @@ use crate::builder::BlockBuilderDriver;
 use crate::canonical::CanonicalStore;
 use crate::error::Error;
 use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use crate::rpc::admin::AdminRpc;
+use crate::rpc::avax::{AcceptedAtomicTxIndex, AvaxRpc};
+use crate::rpc::eth::EthRpc;
+use crate::rpc::service::{
+    ADMIN_ENDPOINT, AVAX_ENDPOINT, ETH_RPC_ENDPOINT, ETH_WS_ENDPOINT, EthHttpService,
+    admin_service, avax_service,
+};
 use crate::state::FirewoodStateProvider;
 
 /// Maps a `B256` block hash to a consensus [`Id`]. The C-Chain block ID is
@@ -259,6 +266,12 @@ pub struct EvmVm {
     /// The currently preferred (leaf) block id (Go `vm.preferred`). Record-only:
     /// Snowman owns fork choice, so `set_preference` does no reorg work (G6).
     preferred: ArcSwap<Id>,
+    /// The accepted-atomic-tx index the `avax.*` handlers read (coreth
+    /// `AtomicRepository`). The accept-side writer wiring (recording each
+    /// accepted block's atomic txs) is the M8 follow-up noted in
+    /// [`AcceptedAtomicTxIndex`]; the VM owns the index so `create_handlers`
+    /// and the (future) accept path share one instance.
+    accepted_atomic_txs: Arc<AcceptedAtomicTxIndex>,
     /// The immutable chain identity/handles received at `initialize`.
     ctx: Option<Arc<ChainContext>>,
     /// The current engine phase (Go `vm.bootstrapped`).
@@ -308,9 +321,17 @@ impl EvmVm {
             txpool,
             builder,
             preferred: ArcSwap::from_pointee(tip.0),
+            accepted_atomic_txs: Arc::new(AcceptedAtomicTxIndex::new()),
             ctx: None,
             engine_state: EngineState::Initializing,
         }
+    }
+
+    /// The accepted-atomic-tx index shared with the `avax.*` handlers (the
+    /// accept-side writer records into it; coreth `AtomicRepository`).
+    #[must_use]
+    pub fn accepted_atomic_txs(&self) -> Arc<AcceptedAtomicTxIndex> {
+        Arc::clone(&self.accepted_atomic_txs)
     }
 
     /// The current committed Firewood state root (test/inspection helper).
@@ -464,14 +485,64 @@ impl Vm for EvmVm {
         &mut self,
         _token: &CancellationToken,
     ) -> VmResult<HashMap<String, HttpHandler>> {
-        // The eth_*/avax.* JSON-RPC services are M6.23/M6.24.
-        Ok(HashMap::new())
+        // coreth `CreateHandlers` (graft/coreth/plugin/evm/vm.go:1029-1075)
+        // plus the atomic wrapper (atomic/vm/vm.go:337-355): "/rpc" and "/ws"
+        // serve the SAME geth rpc.Server (vm.go:1067-1068; the node's WS
+        // adapter bridges frames as buffered POSTs, so one dispatch covers
+        // both — eth_subscribe push is a documented deferral), "/admin" the
+        // coreth admin API, "/avax" the atomic AvaxAPI. The Go map carries no
+        // lock semantics (plain http.Handler), hence NoLock.
+        let chain_id = {
+            use ava_evm_reth::EthChainSpec;
+            self.evm_config.chain_spec().chain().id()
+        };
+        let eth: Arc<dyn VmHttpService> = Arc::new(EthHttpService::new(EthRpc::new(
+            Arc::clone(&self.shared.state),
+            Arc::clone(&self.shared.blocks),
+            self.evm_config.clone(),
+            chain_id,
+        )));
+        let avax = avax_service(AvaxRpc::new(
+            Arc::clone(&self.txpool),
+            Arc::clone(&self.shared.blocks),
+            Arc::clone(&self.accepted_atomic_txs),
+        ));
+        // TODO(M8.23/M8.29): Go exposes "/admin" only when the chain config
+        // sets admin-api-enabled (coreth vm.go:1046 `if
+        // vm.config.AdminAPIEnabled`). EvmVm has no per-chain config plumbed
+        // yet (initialize ignores config_bytes), so the handler is exposed
+        // unconditionally until that plumbing lands.
+        let admin = admin_service(AdminRpc::new());
+
+        let mut handlers = HashMap::new();
+        handlers.insert(
+            ETH_RPC_ENDPOINT.to_string(),
+            HttpHandler::in_process(LockOptions::NoLock, Arc::clone(&eth)),
+        );
+        handlers.insert(
+            ETH_WS_ENDPOINT.to_string(),
+            HttpHandler::in_process(LockOptions::NoLock, eth),
+        );
+        handlers.insert(
+            AVAX_ENDPOINT.to_string(),
+            HttpHandler::in_process(LockOptions::NoLock, avax),
+        );
+        handlers.insert(
+            ADMIN_ENDPOINT.to_string(),
+            HttpHandler::in_process(LockOptions::NoLock, admin),
+        );
+        Ok(handlers)
     }
 
     async fn new_http_handler(
         &mut self,
         _token: &CancellationToken,
     ) -> VmResult<Option<HttpHandler>> {
+        // coreth `NewHTTPHandler` returns `(nil, nil)` at this pin
+        // (graft/coreth/plugin/evm/vm.go:1079-1081): the C-Chain has no
+        // header-routed handler; clients reach the EVM via the "/rpc"/"/ws"/
+        // "/avax"/"/admin" PATH extensions mounted by `create_handlers`
+        // (14 §10). `None` is the wire-faithful answer.
         Ok(None)
     }
 
