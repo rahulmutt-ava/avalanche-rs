@@ -32,4 +32,5 @@ pub mod error;
 pub mod init;
 pub mod logging;
 pub mod nat;
+pub mod node;
 pub mod trace;
