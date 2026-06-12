@@ -84,3 +84,41 @@ pub trait ValidatorState: Send + Sync {
     /// The warp-signing validator sets at `height`, keyed by subnet id.
     async fn get_warp_validator_sets(&self, height: u64) -> Result<HashMap<Id, WarpSet>>;
 }
+
+/// Delegating impl so a shared handle (`Arc<S>`) is itself a
+/// [`ValidatorState`] — Go passes `validators.State` by interface reference;
+/// the proposervm API service (M8.22) holds such a shared handle alongside the
+/// windower.
+#[async_trait]
+impl<T: ValidatorState + ?Sized> ValidatorState for std::sync::Arc<T> {
+    async fn get_minimum_height(&self) -> Result<u64> {
+        (**self).get_minimum_height().await
+    }
+
+    async fn get_current_height(&self) -> Result<u64> {
+        (**self).get_current_height().await
+    }
+
+    async fn get_subnet_id(&self, chain: Id) -> Result<Id> {
+        (**self).get_subnet_id(chain).await
+    }
+
+    async fn get_validator_set(
+        &self,
+        height: u64,
+        subnet: Id,
+    ) -> Result<BTreeMap<NodeId, GetValidatorOutput>> {
+        (**self).get_validator_set(height, subnet).await
+    }
+
+    async fn get_current_validator_set(
+        &self,
+        subnet: Id,
+    ) -> Result<(BTreeMap<Id, GetCurrentValidatorOutput>, u64)> {
+        (**self).get_current_validator_set(subnet).await
+    }
+
+    async fn get_warp_validator_sets(&self, height: u64) -> Result<HashMap<Id, WarpSet>> {
+        (**self).get_warp_validator_sets(height).await
+    }
+}

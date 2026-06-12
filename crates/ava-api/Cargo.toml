@@ -47,6 +47,9 @@ async-trait = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+# `register_chain` builds the Go `context.TODO()` equivalent (a fresh
+# `CancellationToken`) for the VM handler calls (M8.22).
+tokio-util = { workspace = true }
 # JSON-RPC 2.0 shim (M8.17 / specs 12 §3.2, 14 §1.1): the gorilla-json2 wire
 # shape is hand-rolled over serde_json; `futures::future::BoxFuture` is the
 # boxed handler return type stored in the registry.
@@ -64,8 +67,14 @@ prometheus = { workspace = true, features = [ "process" ] }
 # the axum/tower-http surface). axum 0.7 sits on hyper 1.x / http 1.x / tower
 # 0.5, matching the tonic 0.12 line already in the workspace lock. h2c (HTTP/2
 # cleartext) is served via the hyper-util auto connection builder.
-axum = { version = "0.7", features = [ "http2" ] }
+axum = { version = "0.7", features = [ "http2", "ws", "original-uri" ] }
 tower-http = { version = "0.6", features = [ "cors", "timeout" ] }
+# Header-route dispatch + chain mounting (M8.22 / 12 §3.1, 14 §1.2/§13) drive a
+# registered sub-`Router` per request via `ServiceExt::oneshot`; `tower` was
+# previously dev-only. The axum `ws` feature (WebSocket upgrade via the bundled
+# tokio-tungstenite, 12 §3.8) serves the EVM `/ws`-style mounts and the
+# header-route WS path.
+tower = { version = "0.5", features = [ "util" ] }
 # Connection-level HTTP settings (specs 12 §3.1): the h2c MaxConcurrentStreams=64
 # cap, the HTTP/1 header-read timeout, and graceful shutdown are configured on
 # `hyper-util`'s auto connection builder, which we drive from an explicit accept
@@ -92,7 +101,6 @@ pretty_assertions = { workspace = true }
 # ava-logging pins tempfile = "3" as a dev-dependency).
 tempfile = "3"
 tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }
-tower = { version = "0.5", features = [ "util" ] }
 
 [lints]
 workspace = true

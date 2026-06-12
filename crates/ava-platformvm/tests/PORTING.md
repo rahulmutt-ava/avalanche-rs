@@ -496,3 +496,60 @@ The codec gate has two layers:
 Variants without a ported byte-exact Go vector are covered by the round-trip
 property (item 1), which is sufficient to catch any field-ordering / encoding
 regression; the byte-exact ports are additive and tracked here for follow-up.
+
+## M8.22 — `platform.*` JSON-RPC method inventory vs Go (`vms/platformvm/service.go`)
+
+`PlatformVm::create_handlers` mounts the gorilla service `platform` at
+extension `""` (Go `vm.go:451-466`), served through the in-process
+`HttpHandler` seam by `service::RpcService` + the crate-local
+`jsonrpc.rs` shim (`ava-api` is unreachable from this crate:
+`ava-api → ava-config → ava-genesis → ava-platformvm` is a package cycle; the
+`#[rpc_service]` macro is shared via the leaf `ava-api-macros` crate and the
+dispatch core is pinned to `ava-api`'s by parity tests). The Go set is the 31
+exported `Service` methods; **16 are bridged**, 15 are missing. Full parity is
+owned by M8.23.
+
+### Bridged (16) — exact Go wire names
+
+| Method | Notes |
+|---|---|
+| `getHeight` | |
+| `getProposedHeight` | justified trivial delegation: Go's body is exactly `vm.GetMinimumHeight` = the `ValidatorState::get_minimum_height` seam the service already holds |
+| `getTimestamp` | |
+| `getCurrentSupply` | |
+| `getCurrentValidators` | PARTIAL reply shape: no delegator/uptime/owner attributes yet (needs the staker-attributes cache + owner formatting) |
+| `getL1Validator` | PARTIAL reply shape: read-relevant subset (no remaining-balance/owner fields) |
+| `getValidatorsAt` | `height` accepts `json.Uint64` + `"proposed"` (decode parity); `"proposed"` resolves to `MaxUint64`, which fails the height lookup until the proposer-height seam lands |
+| `getFeeState` | `price` is a recorded `0` sentinel (needs the dynamic-fee config seam) |
+| `getValidatorFeeState` | same `price` sentinel |
+| `validatedBy` | |
+| `validates` | |
+| `getTxStatus` | accepted-state only: `Committed`/`Unknown` (the mempool/preferred-chain `Processing`/`Dropped` walk needs the builder seam) |
+| `getTx` | `hex`/`hexnc` encodings; `json` (typed tx JSON) deferred |
+| `getBlock` | `hex`/`hexnc`; `json` (typed block JSON) deferred |
+| `getBlockByHeight` | same encoding note |
+| `getStakingAssetID` | justified trivial addition: primary network = `ctx.AVAXAssetID` (already on the chain context); a non-primary subnet surfaces Go's `failed fetching subnet transformation…: not found` (elastic-subnet transform state not ported) |
+
+### Missing (15) — blocking seam per method
+
+| Method | Blocking seam |
+|---|---|
+| `getBalance` | address→UTXO index (`avax.GetAllUTXOs`) |
+| `getUTXOs` | address→UTXO index + shared-memory atomic UTXOs (`avax.GetPaginatedUTXOs`/`GetAtomicUTXOs`) |
+| `getSubnet` | subnet owner / transform-subnet state reads (`state.GetSubnetOwner`) |
+| `getSubnets` | subnet list state read (`state.GetSubnetIDs`) |
+| `sampleValidators` | validators-set sampler seam (`vm.Validators.Sample`) |
+| `getBlockchainStatus` | chain-existence walk over the preferred chain + `nodeValidates` |
+| `getBlockchains` | all-subnets chain listing state read |
+| `issueTx` | shared mempool handle + verified RPC issuance (`vm.issueTxFromRPC`); the P-Chain mempool currently lives un-shared on `PlatformVm` |
+| `getStake` | staker UTXO outputs via the staker-attributes cache |
+| `getMinStake` | per-network staking config plumb (ava-genesis, M8) + transform-subnet state for elastic subnets |
+| `getTotalStake` | validators total-weight seam (`vm.Validators.TotalWeight`) |
+| `getRewardUTXOs` | reward-UTXO state index |
+| `getAllValidatorsAt` | all-subnets validator-sets-at-height query seam |
+| `getFeeConfig` | dynamic-fee (`gas.Config`) plumb into the VM |
+| `getValidatorFeeConfig` | validator-fee (`fee.Config`) plumb into the VM |
+
+Recorded transport deferral: Go wraps each handler with the `vm.metrics`
+request interceptor (`vm.go:455-456`) — deferred with the proposervm M8.22
+precedent.

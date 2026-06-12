@@ -5,11 +5,19 @@
 //! from `vms/avm/service.go` (specs 09 §10, 14 API reference).
 //!
 //! This module ports the request/response *shapes* (serde types matching Go's
-//! JSON field names + encodings) and the handler *logic* over the live
-//! [`State`](crate::state::State) seam. It deliberately does **not** wire an HTTP
-//! / JSON-RPC server: that transport lands with `ava-api` (M8/M12). The
-//! `Vm::create_handlers` HTTP wiring returns an empty map today; this service is
-//! ready to wire when `ava-api` lands.
+//! JSON field names + encodings) and the handler *logic* over the
+//! [`ReadOnlyChain`] state seam.
+//!
+//! ## Transport (M8.22)
+//!
+//! [`RpcService`] bridges these typed bodies onto the gorilla-json2
+//! [`ServiceRegistry`] under the Go service name `avm` (Go `vms/avm/vm.go:293`
+//! `CreateHandlers` registers `&Service{vm}` as `"avm"` at extension `""`);
+//! `AvmVm::create_handlers` mounts the [`registry`] through the in-process
+//! `HttpHandler` seam. `issueTx` submits through the [`TxIssuer`] seam (the VM
+//! implements it over the shared mempool via the gossip admission path). The
+//! Go `"/wallet"` extension (keystore) is out of scope — see `tests/PORTING.md`
+//! for the method inventory vs Go.
 //!
 //! ## Encodings (match Go exactly, `vms/avm/service.go`)
 //!
@@ -57,16 +65,16 @@
 
 use std::sync::Arc;
 
+use ava_api_macros::rpc_service;
 use ava_crypto::address;
 use ava_crypto::hashing::checksum;
-use ava_database::Database;
 use ava_types::constants::get_hrp;
 use ava_types::id::Id;
 use serde::{Deserialize, Serialize};
 
 use crate::block::Block;
 use crate::error::{Error, Result};
-use crate::state::State;
+use crate::jsonrpc::{RpcError, ServiceRegistry};
 use crate::state::chain::ReadOnlyChain;
 use crate::txs::Tx;
 use crate::txs::codec::Codec;
@@ -492,28 +500,28 @@ pub struct GetAllBalancesReply {
 // The service
 // ---------------------------------------------------------------------------
 
-/// The X-Chain (AVM) API service over a [`State`].
+/// The X-Chain (AVM) API service over a [`ReadOnlyChain`] state view.
 ///
 /// Mirrors the handler methods of Go's `avm.Service` (port of
-/// `vms/avm/service.go`). The HTTP/JSON-RPC transport that would dispatch onto
-/// these is deferred to `ava-api` (M8/M12); each method here is the typed
-/// handler body.
+/// `vms/avm/service.go`); each method here is the typed handler body, served
+/// on the wire by [`RpcService`]/[`registry`].
 ///
-/// The service is deliberately constructed over the *read-only* [`State`]
-/// (matching Go's `s.vm.state`), so it can be used from any snapshot without
-/// holding the VM lock. Methods that need the mempool or p2p gossip (e.g.,
-/// the full `issueTx` submit path) are documented as deferred.
-pub struct Service<D: Database + 'static> {
-    /// The persisted X-Chain state.
-    state: Arc<State<D>>,
+/// The service is deliberately constructed over the *read-only* state surface
+/// (matching Go's `s.vm.state`), so it runs over either an owned
+/// `State<D>` snapshot (tests) or the VM's live, lock-guarded state (`vm.rs`
+/// forwards each read under the block-manager mutex). Mempool submission is
+/// the separate [`TxIssuer`] seam.
+pub struct Service {
+    /// The X-Chain state view.
+    state: Arc<dyn ReadOnlyChain>,
     /// The network id (for bech32 HRP derivation).
     network_id: u32,
 }
 
-impl<D: Database + 'static> Service<D> {
-    /// Builds a service over a shared state snapshot.
+impl Service {
+    /// Builds a service over a shared state view.
     #[must_use]
-    pub fn new(state: Arc<State<D>>, network_id: u32) -> Self {
+    pub fn new(state: Arc<dyn ReadOnlyChain>, network_id: u32) -> Self {
         Self { state, network_id }
     }
 
@@ -660,24 +668,33 @@ impl<D: Database + 'static> Service<D> {
     // `avm.issueTx` (Go `service.go IssueTx`)
     // -----------------------------------------------------------------------
 
-    /// `avm.issueTx` — parse tx bytes and return the tx id.
-    ///
-    /// **Partial implementation**: the tx is parsed from the supplied bytes
-    /// (hex `0x…` or CB58 per `args.encoding`) and its id is returned. The
-    /// full submit path (mempool add + p2p gossip via `vm.issueTxFromRPC`)
-    /// requires the `AvmVm` handle and is **deferred** to the `ava-api`
-    /// transport layer. This is sufficient for client round-trip testing.
-    ///
-    /// Go decodes bytes using `formatting.Decode(args.Encoding, args.Tx)` then
-    /// calls `s.vm.parser.ParseTx(txBytes)`.
+    /// Decodes + parses the `issueTx` wire payload into a [`Tx`] (Go
+    /// `formatting.Decode(args.Encoding, args.Tx)` then
+    /// `s.vm.parser.ParseTx(txBytes)`). The submit half lives behind the
+    /// [`TxIssuer`] seam ([`RpcService::issue_tx`] joins the two).
     ///
     /// # Errors
-    /// Returns [`Error::Codec`] if the bytes fail to parse.
-    pub fn issue_tx(&self, args: &IssueTxArgs) -> Result<IssueTxReply> {
+    /// Returns [`Error::Service`] on a decode failure or [`Error::Codec`] if
+    /// the bytes fail to parse.
+    pub fn parse_tx(&self, args: &IssueTxArgs) -> Result<Tx> {
         let tx_bytes = decode_formatted_bytes(&args.tx, &args.encoding)?;
-        let tx = Tx::parse(Codec(), &tx_bytes).map_err(Error::Codec)?;
-        // NOTE: mempool submit + gossip is deferred; see module docs.
-        Ok(IssueTxReply { tx_id: tx.id() })
+        Tx::parse(Codec(), &tx_bytes).map_err(Error::Codec)
+    }
+
+    /// `avm.issueTx` — parse tx bytes and return the tx id.
+    ///
+    /// **Parse-only half**: the wire transport ([`RpcService::issue_tx`])
+    /// additionally submits the parsed tx through the [`TxIssuer`] seam (the
+    /// VM's mempool admission path); this body alone is sufficient for client
+    /// round-trip testing over a bare state snapshot.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`]/[`Error::Codec`] if the bytes fail to
+    /// decode/parse.
+    pub fn issue_tx(&self, args: &IssueTxArgs) -> Result<IssueTxReply> {
+        Ok(IssueTxReply {
+            tx_id: self.parse_tx(args)?.id(),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -781,6 +798,178 @@ impl<D: Database + 'static> Service<D> {
 }
 
 // ---------------------------------------------------------------------------
+// The JSON-RPC wire layer (M8.22) — gorilla `avm.*` over the local shim
+// ---------------------------------------------------------------------------
+
+/// The empty gorilla args object (Go `*struct{}`): `[]` / absent / `[{}]` all
+/// accept.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EmptyArgs {}
+
+/// The `issueTx` submission seam (the second half of Go `Service.IssueTx` →
+/// `vm.issueTxFromRPC`): admit a parsed [`Tx`] for inclusion. The VM
+/// implements it over the shared mempool via the SAME admission path inbound
+/// gossip uses (dedupe → verify → add); a no-op/recording impl serves tests.
+///
+/// Outbound re-gossip of the admitted tx is a recorded deferral (the live
+/// `Network::gossip` transport is an M8 handoff; see `tests/PORTING.md`).
+pub trait TxIssuer: Send + Sync {
+    /// Admits `tx` for inclusion in a future block.
+    ///
+    /// # Errors
+    /// A human-readable rejection (duplicate / verification / mempool bounds),
+    /// surfaced to the client as a `-32000` server error (Go returns the
+    /// mempool error the same way).
+    fn issue_tx(&self, tx: Tx) -> std::result::Result<(), String>;
+}
+
+/// Maps an X-Chain domain error onto the gorilla `-32000` server error (the
+/// `utils/rpc` handler surfaces Go handler errors the same way, 14 §16.1).
+fn server_err(e: Error) -> RpcError {
+    RpcError::server(e.to_string())
+}
+
+/// The gorilla `avm` service wrapper over [`Service`] (Go `avm.Service`,
+/// registered as `"avm"` by `CreateHandlers`, `vm.go:302`). Bridges the typed
+/// handler bodies; the Go method set inventory vs the bridged set lives in
+/// `tests/PORTING.md` (M8.23 owns full parity).
+pub struct RpcService {
+    service: Arc<Service>,
+    issuer: Arc<dyn TxIssuer>,
+}
+
+#[rpc_service("avm")]
+impl RpcService {
+    /// `avm.getHeight` (Go `Service.GetHeight`, `service.go:156`).
+    ///
+    /// # Errors
+    /// `-32000` if the last-accepted block cannot be read/parsed.
+    pub async fn get_height(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetHeightResponse, RpcError> {
+        self.service.get_height().map_err(server_err)
+    }
+
+    /// `avm.getBlock` (Go `Service.GetBlock`, `service.go:54`).
+    ///
+    /// # Errors
+    /// `-32000` for an absent block.
+    pub async fn get_block(
+        &self,
+        args: GetBlockArgs,
+    ) -> std::result::Result<GetBlockResponse, RpcError> {
+        self.service.get_block(&args).map_err(server_err)
+    }
+
+    /// `avm.getBlockByHeight` (Go `Service.GetBlockByHeight`, `service.go:101`).
+    ///
+    /// # Errors
+    /// `-32000` for a missing height.
+    pub async fn get_block_by_height(
+        &self,
+        args: GetBlockByHeightArgs,
+    ) -> std::result::Result<GetBlockResponse, RpcError> {
+        self.service.get_block_by_height(&args).map_err(server_err)
+    }
+
+    /// `avm.getTx` (Go `Service.GetTx`, `service.go:244`).
+    ///
+    /// # Errors
+    /// `-32000` for the nil tx id / an absent tx.
+    pub async fn get_tx(&self, args: GetTxArgs) -> std::result::Result<GetTxReply, RpcError> {
+        self.service.get_tx(&args).map_err(server_err)
+    }
+
+    /// `avm.getTxStatus` (Go `Service.GetTxStatus`, `service.go:217`;
+    /// deprecated in Go but still served).
+    ///
+    /// # Errors
+    /// `-32000` for the nil tx id (Go `errNilTxID`).
+    pub async fn get_tx_status(
+        &self,
+        args: GetTxStatusArgs,
+    ) -> std::result::Result<GetTxStatusReply, RpcError> {
+        self.service.get_tx_status(&args).map_err(server_err)
+    }
+
+    /// `avm.issueTx` (Go `Service.IssueTx`, `service.go:184`): decode + parse
+    /// (the typed body) then submit through the [`TxIssuer`] seam — the same
+    /// dedupe → verify → mempool-add path inbound gossip uses. Outbound
+    /// re-gossip is a recorded deferral (live `Network::gossip`, M8).
+    ///
+    /// # Errors
+    /// `-32000` on decode/parse failures or a mempool rejection.
+    pub async fn issue_tx(&self, args: IssueTxArgs) -> std::result::Result<IssueTxReply, RpcError> {
+        let tx = self.service.parse_tx(&args).map_err(server_err)?;
+        let tx_id = tx.id();
+        self.issuer.issue_tx(tx).map_err(RpcError::server)?;
+        Ok(IssueTxReply { tx_id })
+    }
+
+    /// `avm.getAssetDescription` (Go `Service.GetAssetDescription`,
+    /// `service.go:403`; alias lookup is a recorded deferral).
+    ///
+    /// # Errors
+    /// `-32000` for a bad/unknown asset id or a non-`CreateAssetTx`.
+    pub async fn get_asset_description(
+        &self,
+        args: GetAssetDescriptionArgs,
+    ) -> std::result::Result<GetAssetDescriptionReply, RpcError> {
+        self.service
+            .get_asset_description(&args)
+            .map_err(server_err)
+    }
+
+    /// `avm.getUTXOs` (Go `Service.GetUTXOs`, `service.go:285`) —
+    /// **registered stub**: always `-32000` "not yet implemented" until the
+    /// address→UTXO index lands (see [`Service::get_utxos`]).
+    ///
+    /// # Errors
+    /// Always `-32000` today (deferred body).
+    #[rpc(name = "GetUTXOs")]
+    pub async fn get_utxos(
+        &self,
+        args: GetUTXOsArgs,
+    ) -> std::result::Result<GetUTXOsReply, RpcError> {
+        self.service.get_utxos(&args).map_err(server_err)
+    }
+
+    /// `avm.getBalance` (Go `Service.GetBalance`, `service.go:453`) —
+    /// **registered stub** (same address→UTXO index dependency).
+    ///
+    /// # Errors
+    /// Always `-32000` today (deferred body).
+    pub async fn get_balance(
+        &self,
+        args: GetBalanceArgs,
+    ) -> std::result::Result<GetBalanceReply, RpcError> {
+        self.service.get_balance(&args).map_err(server_err)
+    }
+
+    /// `avm.getAllBalances` (Go `Service.GetAllBalances`, `service.go:530`) —
+    /// **registered stub** (same address→UTXO index dependency).
+    ///
+    /// # Errors
+    /// Always `-32000` today (deferred body).
+    pub async fn get_all_balances(
+        &self,
+        args: GetAllBalancesArgs,
+    ) -> std::result::Result<GetAllBalancesReply, RpcError> {
+        self.service.get_all_balances(&args).map_err(server_err)
+    }
+}
+
+/// Builds the registry serving the bridged `avm.*` methods (the body of Go's
+/// `rpcServer.RegisterService(&Service{vm}, "avm")`, `vm.go:302`).
+#[must_use]
+pub fn registry(service: Arc<Service>, issuer: Arc<dyn TxIssuer>) -> ServiceRegistry {
+    let mut registry = ServiceRegistry::new();
+    Arc::new(RpcService { service, issuer }).register_rpc(&mut registry);
+    registry
+}
+
+// ---------------------------------------------------------------------------
 // Byte-decoding helper
 // ---------------------------------------------------------------------------
 
@@ -872,7 +1061,7 @@ mod conformance {
     /// Builds a minimal `State<MemDb>` with one accepted block and one accepted
     /// tx, then wraps it in an `Arc` and returns the block id / tx id alongside
     /// the service.
-    fn seeded_service() -> (Service<MemDb>, Id, Id) {
+    fn seeded_service() -> (Service, Id, Id) {
         let c = Codec();
 
         // Build a minimal tx (BaseTx with empty base fields).
@@ -1392,5 +1581,158 @@ mod conformance {
             let j = serde_json::to_string(&status).expect("json");
             assert_eq!(j, expected, "status {expected} mismatch");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // M8.22 wire layer: the bridged `avm.*` method set + gorilla envelope
+    // -----------------------------------------------------------------------
+
+    /// A recording [`TxIssuer`] stub.
+    struct RecordingIssuer {
+        issued: std::sync::Mutex<Vec<Id>>,
+    }
+
+    impl RecordingIssuer {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                issued: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl TxIssuer for RecordingIssuer {
+        fn issue_tx(&self, tx: Tx) -> std::result::Result<(), String> {
+            self.issued.lock().expect("lock").push(tx.id());
+            Ok(())
+        }
+    }
+
+    /// The bridged method set is EXACTLY the 10 Go wire names (incl. the
+    /// `GetUTXOs` acronym override); `GetTxFee` and the `wallet.*` extension
+    /// stay unbridged (inventory: `tests/PORTING.md`).
+    #[test]
+    fn avm_method_set_matches_bridged() {
+        let (service, _, _) = seeded_service();
+        let reg = registry(Arc::new(service), RecordingIssuer::new());
+        const BRIDGED: [&str; 10] = [
+            "GetHeight",
+            "GetBlock",
+            "GetBlockByHeight",
+            "GetTx",
+            "GetTxStatus",
+            "IssueTx",
+            "GetAssetDescription",
+            "GetUTXOs",
+            "GetBalance",
+            "GetAllBalances",
+        ];
+        assert_eq!(reg.len(), BRIDGED.len(), "exactly the bridged set");
+        for m in BRIDGED {
+            assert!(reg.lookup("avm", m).is_some(), "avm.{m} registered");
+        }
+        // Exact-remainder matching: the pascalized (non-Go) casing must miss.
+        assert!(
+            reg.lookup("avm", "GetUtxos").is_none(),
+            "no pascalized GetUtxos"
+        );
+        // Unbridged Go methods (M8.23) are NOT registered.
+        assert!(
+            reg.lookup("avm", "GetTxFee").is_none(),
+            "GetTxFee unbridged"
+        );
+    }
+
+    /// avm.getTxStatus + avm.issueTx end-to-end through the gorilla envelope:
+    /// the wire issueTx parses AND submits through the `TxIssuer` seam.
+    #[tokio::test]
+    async fn avm_wire_shapes() {
+        use ava_vm::vm::VmRequest;
+
+        let (service, _, tx_id) = seeded_service();
+        // Recover wire-encodable tx bytes from the seeded state.
+        let tx_hex = service
+            .get_tx(&GetTxArgs {
+                tx_id,
+                encoding: String::new(),
+            })
+            .expect("get_tx")
+            .tx;
+
+        let issuer = RecordingIssuer::new();
+        let reg = Arc::new(registry(Arc::new(service), Arc::clone(&issuer) as _));
+        let svc = crate::jsonrpc::registry_service(reg);
+        let post = |body: serde_json::Value| {
+            let svc = Arc::clone(&svc);
+            async move {
+                let resp = svc
+                    .serve_http(VmRequest {
+                        method: "POST".to_string(),
+                        uri: String::new(),
+                        headers: vec![("content-type".to_string(), "application/json".to_string())],
+                        body: serde_json::to_vec(&body).expect("serialize"),
+                    })
+                    .await;
+                assert_eq!(resp.status, 200, "JSON-RPC always answers HTTP 200");
+                serde_json::from_slice::<serde_json::Value>(&resp.body).expect("json body")
+            }
+        };
+
+        // getTxStatus over the accepted tx.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.getTxStatus",
+            "params": [{ "txID": tx_id.to_string() }],
+            "id": 1,
+        }))
+        .await;
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": { "status": "Accepted" },
+                "id": 1,
+            }),
+            "avm.getTxStatus envelope"
+        );
+
+        // issueTx round-trips the checksummed hex AND submits via the seam.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.issueTx",
+            "params": [{ "tx": tx_hex, "encoding": "hex" }],
+            "id": 2,
+        }))
+        .await;
+        assert_eq!(
+            body["result"]["txID"],
+            tx_id.to_string(),
+            "avm.issueTx echoes the parsed txID"
+        );
+        assert_eq!(
+            *issuer.issued.lock().expect("lock"),
+            vec![tx_id],
+            "the wire issueTx submits through the TxIssuer seam"
+        );
+
+        // The deferred getUTXOs stub is REGISTERED and surfaces -32000 (not
+        // -32601): the method exists on the wire, its body is the deferral.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.getUTXOs",
+            "params": [{ "addresses": ["X-avax1test"], "sourceChain": "P" }],
+            "id": 3,
+        }))
+        .await;
+        assert_eq!(body["error"]["code"], -32000, "stub is a server error");
+
+        // An unbridged Go method (getTxFee) dispatches to -32601.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "avm.getTxFee",
+            "params": [{}],
+            "id": 4,
+        }))
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "unbridged method is -32601");
     }
 }

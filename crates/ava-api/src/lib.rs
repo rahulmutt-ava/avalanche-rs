@@ -34,16 +34,19 @@
 
 pub mod admin;
 pub mod error;
+pub mod header_route;
 pub mod health;
 pub mod info;
 pub mod jsonrpc;
 pub mod metrics;
 pub mod middleware;
+pub mod register;
 pub mod server;
 
 pub use ava_api_macros::rpc_service;
 pub use error::{ApiError, IntoJsonRpcError, JsonRpcError, Result, json2_code};
-pub use jsonrpc::{BoxedRpcMethod, RpcError, ServiceRegistry, dispatch};
+pub use header_route::{HTTP_HEADER_ROUTE, HeaderRoutes};
+pub use jsonrpc::{BoxedRpcMethod, RpcError, ServiceRegistry, dispatch, registry_service};
 pub use metrics::{
     CHAIN_LABEL, Gatherer, LabelGatherer, MetricsError, MultiGatherer, NAMESPACE_SEP,
     PLATFORM_NAME, PrefixGatherer, make_and_register, metrics_handler,

@@ -168,7 +168,25 @@ match Go's `gonum prng` + `DeterministicWeightedWithoutReplacement`.
   *summary* re-wrapping (`buildStateSummary`/`summary.Build`) — the wrapper
   forwards `StateSyncableVm` to the inner VM verbatim rather than building
   proposervm summaries; `WithVerifyContext`/`BuildBlockWithContext` use; the
-  HTTP/RPC `proposervm` service; the Fuji P-Chain-height override.
+  Fuji P-Chain-height override (`vm.go:898` time-boxed
+  `fujiOverridePChainHeight*` branch — skipped both in the build path and in
+  the API's `proposed_height`).
+- **API service (M8.22, Go `service.go` + `vm.go:255-311`).** `CreateHandlers`
+  adds the gorilla-parity JSON-RPC mount at `/proposervm`
+  (`getProposedHeight`/`getCurrentEpoch`, `json.Uint64` string replies);
+  `NewHTTPHandler` composes the inner VM's header handler with the
+  `proposervm.ProposerVM` Connect-unary mux on the 2-value
+  `Avalanche-Api-Route` header. The Connect transport is hand-rolled over the
+  buffered `VmHttpService` seam (`src/connect.rs`) with protojson semantics
+  (camelCase, 64-bit ints as strings, zero fields omitted); messages come from
+  `proto/proposervm/service.proto` via `build.rs` prost codegen. The API reads
+  a `PreferredMeta` snapshot refreshed on `set_preference`/`initialize_wrapper`
+  (blocks are immutable, so this equals Go's request-time
+  `getBlock(preferred)`); clock + `GetMinimumHeight` are read live. Deferrals:
+  gRPC reflection (`grpcreflect`, `vm.go:292`); the
+  `metric.NewAPIInterceptor` HTTP metrics wrap (`vm.go:261`); the
+  "routing request"/"API called" debug logs; option blocks as the preferred
+  block (unsupported crate-wide) surface as "not found".
 
 ## Status
 
@@ -185,4 +203,8 @@ match Go's `gonum prng` + `DeterministicWeightedWithoutReplacement`.
 | `pre_fork_block.go` / `post_fork_block.go` / `block.go::buildChild` | `src/vm.rs` (`build_child`) | core done (M3.23) |
 | `state/` | `src/state.rs` | done (M3.23) |
 | `height_indexed_vm.go` | `src/height_index.rs` | done (no pruning) (M3.23) |
+| `service.go` (`jsonrpcService` + `connectrpcService`) | `src/service.rs` + `src/connect.rs` | done (M8.22; no metrics interceptor / reflection) |
+| `vm.go:255-311` (`CreateHandlers`/`NewHTTPHandler`) | `src/vm.rs` | done (M8.22) |
+| `acp181/epoch.go` | `src/acp181.rs` | done (M8.22; used by the API only — build-path epoch still deferred) |
+| `connectproto/proposervm/service.proto` | `proto/proposervm/service.proto` + `src/pb.rs` | done (M8.22) |
 | `batched_vm.go` / `state_syncable_vm.go` | `src/vm.rs` (delegation) | delegate-to-inner (M3.23) |

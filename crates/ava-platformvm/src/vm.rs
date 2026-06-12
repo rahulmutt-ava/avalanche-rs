@@ -45,6 +45,7 @@ use tokio_util::sync::CancellationToken;
 use ava_database::{Database, DynDatabase};
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
+use ava_validators::state::ValidatorState;
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
 use ava_vm::block::batched::{BatchedChainVm, INT_LEN};
@@ -53,12 +54,13 @@ use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
-use ava_vm::vm::{HttpHandler, Vm, VmEvent};
+use ava_vm::vm::{HttpHandler, LockOptions, Vm, VmEvent};
 
 use crate::block::Block;
 use crate::block::builder;
 use crate::block::executor::BlockManager;
 use crate::error::{Error, Result};
+use crate::jsonrpc::registry_service;
 use crate::state::chain::Chain;
 use crate::state::state::State;
 use crate::txs::codec;
@@ -90,6 +92,50 @@ impl<D: Database + 'static> Shared<D> {
     fn refresh_validators(&self) {
         let mgr = self.manager.lock();
         self.validators.refresh(mgr.state());
+    }
+}
+
+/// The [`crate::service::ServiceState`] view over the VM's live state: every
+/// read locks the block manager (the moral equivalent of Go's per-request
+/// `vm.ctx.Lock` in `service.go`) and forwards to the persisted [`State`].
+struct VmServiceState<D: Database + 'static> {
+    shared: Arc<Shared<D>>,
+}
+
+impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
+    fn timestamp(&self) -> SystemTime {
+        Chain::timestamp(self.shared.manager.lock().state())
+    }
+    fn current_supply(&self, subnet: Id) -> Result<u64> {
+        Chain::current_supply(self.shared.manager.lock().state(), subnet)
+    }
+    fn fee_state(&self) -> crate::txs::fee::gas::GasState {
+        Chain::fee_state(self.shared.manager.lock().state())
+    }
+    fn l1_validator_excess(&self) -> u64 {
+        Chain::l1_validator_excess(self.shared.manager.lock().state())
+    }
+    fn get_l1_validator(
+        &self,
+        validation_id: Id,
+    ) -> Result<crate::state::l1_validator::L1Validator> {
+        Chain::get_l1_validator(self.shared.manager.lock().state(), validation_id)
+    }
+    fn chains(&self, subnet: Id) -> Vec<Id> {
+        Chain::chains(self.shared.manager.lock().state(), subnet)
+    }
+    fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>> {
+        Chain::get_tx(self.shared.manager.lock().state(), tx_id)
+    }
+    fn get_block(&self, id: Id) -> Result<Vec<u8>> {
+        self.shared.manager.lock().state().get_block(id)
+    }
+    fn get_block_id_at_height(&self, height: u64) -> Option<Id> {
+        self.shared
+            .manager
+            .lock()
+            .state()
+            .get_block_id_at_height(height)
     }
 }
 
@@ -438,12 +484,37 @@ impl Vm for PlatformVm {
         Ok("platformvm/0.0.0".to_string())
     }
 
+    /// Go `CreateHandlers` (`vms/platformvm/vm.go:451-466`): one gorilla
+    /// JSON-RPC server at extension `""` with the service registered as
+    /// `"platform"` (the `vm.metrics` request-interceptor wrap is a recorded
+    /// deferral, consistent with the proposervm M8.22 precedent). The bridged
+    /// method set vs Go's 31 is inventoried in `tests/PORTING.md` (M8.23 owns
+    /// full parity).
     async fn create_handlers(
         &mut self,
         _token: &CancellationToken,
     ) -> VmResult<HashMap<String, HttpHandler>> {
-        // The JSON-RPC service is M4.28.
-        Ok(HashMap::new())
+        let shared = self.shared().map_err(VmError::from)?;
+        let ctx = self
+            .ctx
+            .as_ref()
+            .ok_or_else(|| VmError::from(Error::NotInitialized))?;
+        let service = Arc::new(crate::service::Service::new(
+            Arc::new(VmServiceState {
+                shared: Arc::clone(shared),
+            }),
+            Arc::clone(&shared.validators) as Arc<dyn ValidatorState>,
+            ctx.network_id,
+        ));
+        let registry = Arc::new(crate::service::registry(service, ctx.avax_asset_id));
+        let mut handlers = HashMap::new();
+        handlers.insert(
+            String::new(),
+            // Go's modern CreateHandlers map carries no lock semantics; the
+            // service locks the block manager per read (VmServiceState).
+            HttpHandler::in_process(LockOptions::NoLock, registry_service(registry)),
+        );
+        Ok(handlers)
     }
 
     async fn new_http_handler(
@@ -835,6 +906,79 @@ mod conformance {
 
         // The ValidatorState is exposed to the snow context.
         assert!(vm.validator_state().is_some());
+    }
+
+    /// M8.22 end-to-end: `create_handlers` mounts the gorilla `platform.*`
+    /// service at extension `""` (Go `vm.go:463-465`) and serves
+    /// `platform.getHeight` / `platform.getTimestamp` through the in-process
+    /// `HttpHandler` seam over the live (genesis) state.
+    #[tokio::test]
+    #[allow(clippy::indexing_slicing)] // Value indexing yields Null, not a panic
+    async fn create_handlers_serves_platform_service() {
+        use ava_vm::vm::VmRequest;
+
+        let token = CancellationToken::new();
+        let (mut vm, ..) = init_vm().await;
+        let handlers = vm.create_handlers(&token).await.expect("create_handlers");
+        assert_eq!(handlers.len(), 1, "exactly the Go extension set");
+        let handler = handlers.get("").expect("root extension (Go key \"\")");
+        let service = handler
+            .service
+            .as_ref()
+            .expect("in-process VmHttpService handler");
+
+        let post = |body: serde_json::Value| {
+            let service = Arc::clone(service);
+            async move {
+                let resp = service
+                    .serve_http(VmRequest {
+                        method: "POST".to_string(),
+                        uri: String::new(),
+                        headers: vec![("content-type".to_string(), "application/json".to_string())],
+                        body: serde_json::to_vec(&body).expect("serialize"),
+                    })
+                    .await;
+                assert_eq!(resp.status, 200, "JSON-RPC always answers HTTP 200");
+                serde_json::from_slice::<serde_json::Value>(&resp.body).expect("json body")
+            }
+        };
+
+        // getHeight over the genesis state: height 0, json.Uint64 string.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "platform.getHeight",
+            "params": [{}],
+            "id": 1,
+        }))
+        .await;
+        assert_eq!(
+            body["result"]["height"], "0",
+            "platform.getHeight serves the genesis height"
+        );
+
+        // getTimestamp reads the live chain time (the synthetic genesis time).
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "platform.getTimestamp",
+            "params": [{}],
+            "id": 2,
+        }))
+        .await;
+        assert!(
+            body["result"]["timestamp"].is_string(),
+            "platform.getTimestamp serves an RFC3339 timestamp: {body}"
+        );
+
+        // An unbridged Go method dispatches to -32601 (method inventory is
+        // tests/PORTING.md; full parity is M8.23).
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "platform.issueTx",
+            "params": [{}],
+            "id": 3,
+        }))
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "unbridged method is -32601");
     }
 }
 

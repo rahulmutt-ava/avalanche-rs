@@ -252,3 +252,124 @@ async fn parse_get_setpref_lastaccepted() {
     assert_eq!(from_store.id(), block1_id);
     assert_eq!(from_store.height(), block1.number());
 }
+
+/// M8.22: `create_handlers` returns REAL in-process handlers under coreth's
+/// extension set ("/rpc", "/ws", "/avax", "/admin" — coreth `vm.go:1029-1075`
+/// + `atomic/vm/vm.go:337-355`) and `new_http_handler` mirrors coreth's
+/// `(nil, nil)` (`vm.go:1079-1081`). Each mount answers end-to-end through
+/// the buffered `VmHttpService` seam.
+#[tokio::test]
+async fn create_handlers_serve_real_rpc() {
+    use ava_vm::vm::{Vm, VmRequest};
+    use serde_json::{Value, json};
+
+    async fn post(handler: &ava_vm::vm::HttpHandler, uri: &str, body: Value) -> Value {
+        let svc = handler.service.as_ref().expect("in-process service");
+        let resp = svc
+            .serve_http(VmRequest {
+                method: "POST".to_string(),
+                uri: uri.to_string(),
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                body: serde_json::to_vec(&body).expect("serialize"),
+            })
+            .await;
+        assert_eq!(resp.status, 200, "JSON-RPC replies are HTTP 200 ({uri})");
+        serde_json::from_slice(&resp.body).expect("json body")
+    }
+
+    let fx = load_fixture();
+    let (_dir, provider, config, canonical, _genesis_root) = setup(&fx);
+    let genesis_id = Id::from([0x42; 32]);
+    let mut vm = EvmVm::new(provider, config, canonical, genesis_id);
+    let token = CancellationToken::new();
+
+    let handlers = vm.create_handlers(&token).await.expect("create_handlers");
+    let mut extensions: Vec<&str> = handlers.keys().map(String::as_str).collect();
+    extensions.sort_unstable();
+    assert_eq!(
+        extensions,
+        ["/admin", "/avax", "/rpc", "/ws"],
+        "coreth extension set (vm.go:1029-1075 + atomic/vm/vm.go:337-355)"
+    );
+
+    // "/rpc": the Ethereum JSON-RPC envelope reaches the real EthRpc bodies.
+    let rpc = handlers.get("/rpc").expect("/rpc handler");
+    let body = post(
+        rpc,
+        "/ext/bc/C/rpc",
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": [] }),
+    )
+    .await;
+    assert_eq!(
+        body["result"],
+        format!("0x{:x}", fx.chain_id),
+        "eth_chainId over /rpc"
+    );
+    let body = post(
+        rpc,
+        "/ext/bc/C/rpc",
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "eth_blockNumber", "params": [] }),
+    )
+    .await;
+    assert_eq!(body["result"], "0x0", "eth_blockNumber over /rpc");
+
+    // "/ws": the same dispatch (the node's WS adapter bridges frames as
+    // buffered POSTs; coreth serves the same rpc.Server on both mounts).
+    let ws = handlers.get("/ws").expect("/ws handler");
+    let body = post(
+        ws,
+        "/ext/bc/C/ws",
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "eth_chainId", "params": [] }),
+    )
+    .await;
+    assert_eq!(
+        body["result"],
+        format!("0x{:x}", fx.chain_id),
+        "eth_chainId over /ws"
+    );
+
+    // "/avax": the gorilla envelope reaches the real AvaxRpc bodies.
+    let avax = handlers.get("/avax").expect("/avax handler");
+    let unknown_tx = Id::from([7u8; 32]);
+    let body = post(
+        avax,
+        "/ext/bc/C/avax",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "avax.getAtomicTxStatus",
+            "params": [{ "txID": unknown_tx.to_string() }],
+        }),
+    )
+    .await;
+    assert_eq!(
+        body["result"]["status"], "Unknown",
+        "avax.getAtomicTxStatus over /avax"
+    );
+
+    // "/admin": the gorilla envelope reaches the real AdminRpc bodies.
+    let admin = handlers.get("/admin").expect("/admin handler");
+    let body = post(
+        admin,
+        "/ext/bc/C/admin",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "admin.startCPUProfiler",
+            "params": [{}],
+        }),
+    )
+    .await;
+    assert_eq!(
+        body["result"],
+        json!({}),
+        "admin.startCPUProfiler over /admin"
+    );
+
+    // NewHTTPHandler: coreth returns (nil, nil) at this pin (vm.go:1079-1081).
+    let header_handler = vm.new_http_handler(&token).await.expect("new_http_handler");
+    assert!(
+        header_handler.is_none(),
+        "coreth NewHTTPHandler returns nil at this pin"
+    );
+}

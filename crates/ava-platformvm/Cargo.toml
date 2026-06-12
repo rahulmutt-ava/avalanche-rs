@@ -53,6 +53,12 @@ serde_json = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 # Hex (`0x…`) encoding of compressed BLS public keys in API replies (M4.28).
 hex = { workspace = true }
+# The `#[rpc_service("platform")]` registration macro (M8.22) so the bridged
+# wire-method set cannot drift from the impl block. NOTE: the full `ava-api`
+# crate is NOT usable here — `ava-api → ava-config → ava-genesis →
+# ava-platformvm` is a package cycle — so `src/jsonrpc.rs` carries a local,
+# parity-tested copy of the gorilla-json2 dispatch core (see its module docs).
+ava-api-macros = { path = "../ava-api-macros" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 

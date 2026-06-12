@@ -17,10 +17,12 @@
 
 // Normal/auto-linked workspace deps not used by this integration test target.
 use assert_matches as _;
+use ava_api as _;
 use ava_codec as _;
 use hex as _;
 use pretty_assertions as _;
 use proptest as _;
+use prost as _;
 use serde as _;
 use sha2 as _;
 use thiserror as _;
@@ -493,6 +495,117 @@ async fn capability_probes_delegate() {
     let plain_ref: &dyn ChainVm = &plain;
     assert!(plain_ref.as_batched().is_none());
     assert!(plain_ref.as_state_syncable().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// API service (M8.22, Go vm.go:255-311 + service.go): create_handlers mounts
+// the JSON-RPC service at "/proposervm"; new_http_handler serves the Connect
+// mux behind the 2-value Avalanche-Api-Route header.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[allow(clippy::indexing_slicing)] // Value indexing yields Null, not a panic.
+async fn api_service_end_to_end() {
+    use ava_vm::vm::VmRequest;
+
+    let token = CancellationToken::new();
+    let mut vm = make_prefork_proposervm(token.clone()).await;
+
+    // --- JSON-RPC half (CreateHandlers, vm.go:255-280) ---
+    let handlers = vm.create_handlers(&token).await.expect("create_handlers");
+    let service = handlers
+        .get("/proposervm")
+        .expect("the /proposervm mount (Go httpPathEndpoint)")
+        .service
+        .clone()
+        .expect("in-process service");
+
+    let post_jsonrpc = |body: serde_json::Value| VmRequest {
+        method: "POST".to_string(),
+        uri: "/proposervm".to_string(),
+        headers: vec![("content-type".to_string(), "application/json".to_string())],
+        body: serde_json::to_vec(&body).expect("serialize"),
+    };
+
+    let resp = service
+        .serve_http(post_jsonrpc(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "proposervm.getProposedHeight",
+            "params": [{}],
+            "id": 1,
+        })))
+        .await;
+    assert_eq!(resp.status, 200, "getProposedHeight HTTP status");
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).expect("json");
+    // Pre-fork preferred block: the floor is ApricotPhase4MinPChainHeight
+    // (793005 on the mainnet schedule, pre_fork_block.go:170) raised to
+    // GetMinimumHeight() == 0 — serialized as a json.Uint64 string.
+    assert_eq!(
+        body["result"]["height"], "793005",
+        "getProposedHeight = max(GetMinimumHeight, ApricotPhase4MinPChainHeight)"
+    );
+
+    let resp = service
+        .serve_http(post_jsonrpc(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "proposervm.getCurrentEpoch",
+            "params": [{}],
+            "id": 2,
+        })))
+        .await;
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).expect("json");
+    // Granite never activates on this schedule -> the zero epoch.
+    assert_eq!(
+        body["result"],
+        serde_json::json!({
+            "number": "0",
+            "startTime": "0",
+            "pChainHeight": "0",
+        }),
+        "getCurrentEpoch pre-Granite zero epoch (json.Uint64 strings)"
+    );
+
+    // --- Connect half (NewHTTPHandler, vm.go:282-311) ---
+    let header = vm
+        .new_http_handler(&token)
+        .await
+        .expect("new_http_handler")
+        .expect("the composed header-route handler");
+    let service = header.service.clone().expect("in-process service");
+
+    // The inner TestVm exposes no header handler: a short route is 404
+    // (vm.go:309 default case).
+    let resp = service
+        .serve_http(VmRequest {
+            method: "POST".to_string(),
+            uri: "/proposervm.ProposerVM/GetProposedHeight".to_string(),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body: b"{}".to_vec(),
+        })
+        .await;
+    assert_eq!(resp.status, 404, "short route with no inner handler -> 404");
+
+    // A 2-value route ending in "proposervm" reaches the Connect mux; the
+    // proto3 JSON reply carries the uint64 as a quoted string.
+    let resp = service
+        .serve_http(VmRequest {
+            method: "POST".to_string(),
+            uri: "/proposervm.ProposerVM/GetProposedHeight".to_string(),
+            headers: vec![
+                ("Avalanche-Api-Route".to_string(), "chain-id".to_string()),
+                ("Avalanche-Api-Route".to_string(), "proposervm".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+            ],
+            body: b"{}".to_vec(),
+        })
+        .await;
+    assert_eq!(resp.status, 200, "2-value route -> Connect mux");
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).expect("json");
+    assert_eq!(
+        body,
+        serde_json::json!({ "height": "793005" }),
+        "Connect-unary GetProposedHeight JSON"
+    );
 }
 
 // Keep `FromStr` used (Id parse helpers may be used in future vectors).

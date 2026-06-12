@@ -21,11 +21,12 @@
 //! ## Scope notes (see `tests/PORTING.md`)
 //!
 //! This port covers the fork-regime selection, the height index + inner-VM
-//! delegation, and the slot-wait sign/build path. The full Go VM additionally
-//! implements oracle/option wrapping, the verified-block graph + inner-block
-//! cache, height-repair/pruning (`NumHistoricalBlocks`), epoch (ACP-181)
-//! selection, and the HTTP/RPC service — those are explicit deferrals recorded
-//! in `tests/PORTING.md`.
+//! delegation, the slot-wait sign/build path, and the proposervm API service
+//! (M8.22: `create_handlers`/`new_http_handler`, Go `vm.go:255-311`). The full
+//! Go VM additionally implements oracle/option wrapping, the verified-block
+//! graph + inner-block cache, height-repair/pruning (`NumHistoricalBlocks`),
+//! and epoch (ACP-181) selection on the build path — those are explicit
+//! deferrals recorded in `tests/PORTING.md`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -35,6 +36,7 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio_util::sync::CancellationToken;
 
+use ava_api::registry_service;
 use ava_database::DynDatabase;
 use ava_snow::{Block as SnowBlock, ChainContext, EngineState};
 use ava_types::id::Id;
@@ -42,6 +44,7 @@ use ava_types::node_id::NodeId;
 use ava_utils::clock::Clock;
 use ava_validators::state::ValidatorState;
 use ava_version::application::Application;
+use ava_version::upgrade::UpgradeConfig;
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
 use ava_vm::block::{BatchedChainVm, Block, ChainVm, StateSyncableVm};
@@ -49,12 +52,15 @@ use ava_vm::connector::Connector;
 use ava_vm::error::Error as VmError;
 use ava_vm::error::Result as VmResult;
 use ava_vm::health::HealthCheck;
-use ava_vm::vm::{Fx, HttpHandler, Vm, VmEvent};
+use ava_vm::vm::{Fx, HttpHandler, LockOptions, Vm, VmEvent};
 
-use crate::block::{GraniteBlock, SignedBlock};
+use crate::acp181;
+use crate::block::{Epoch, GraniteBlock, SignedBlock};
+use crate::connect::HeaderRouteService;
 use crate::error::Error;
 use crate::height_index::{self, HeightLookup};
 use crate::proposer::windower::{MAX_BUILD_WINDOWS, Windower, time_to_slot};
+use crate::service::{self, ApiError, ProposerApi};
 use crate::state::State;
 
 /// `maxSkew` — the maximum time a block may be ahead of local time (24 §B.3).
@@ -81,6 +87,24 @@ impl std::fmt::Debug for StakingIdentity {
     }
 }
 
+/// A snapshot of the preferred block's API-visible fields, refreshed on
+/// `set_preference` / `initialize_wrapper`. Blocks are immutable, so reading
+/// this snapshot at request time is observably identical to Go's request-time
+/// `vm.getBlock(ctx, vm.preferred)` under the lock (`service.go`); only the
+/// clock and the validator state's minimum height are read live.
+#[derive(Clone, Copy, Debug)]
+struct PreferredMeta {
+    /// Whether the preferred block is post-fork (a proposervm block).
+    post_fork: bool,
+    /// The block's embedded P-Chain height (`0` pre-fork — Go
+    /// `preForkBlock.pChainHeight`, `pre_fork_block.go:248`).
+    p_chain_height: u64,
+    /// The block's ACP-181 epoch (zero pre-fork / pre-Granite).
+    epoch: Epoch,
+    /// The block timestamp, Unix seconds.
+    timestamp: i64,
+}
+
 /// The proposervm-shared state a wrapper block reaches into on `accept`.
 struct Shared {
     state: State,
@@ -91,6 +115,9 @@ struct Shared {
     /// serialized bytes. Lets `set_preference`/`get_block` resolve a freshly
     /// built block before it is accepted.
     verified: Mutex<HashMap<Id, Vec<u8>>>,
+    /// The preferred block's API snapshot (`None` until the wrapper is
+    /// initialized), read by the proposervm API service (M8.22).
+    preferred_meta: Mutex<Option<PreferredMeta>>,
 }
 
 impl Shared {
@@ -115,6 +142,22 @@ impl Shared {
         }
         self.state.get_block(id).ok()
     }
+
+    /// The preferred block's API snapshot, if initialized.
+    fn preferred_meta(&self) -> Option<PreferredMeta> {
+        *self
+            .preferred_meta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Replaces the preferred block's API snapshot.
+    fn set_preferred_meta(&self, meta: Option<PreferredMeta>) {
+        *self
+            .preferred_meta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = meta;
+    }
 }
 
 /// `ProposerVm` — the Snowman++ proposer-window middleware over an inner VM.
@@ -122,7 +165,11 @@ pub struct ProposerVm<V: ChainVm, S: ValidatorState> {
     inner: V,
     ctx: Arc<ChainContext>,
     clock: Arc<dyn Clock>,
-    windower: Windower<S>,
+    windower: Windower<Arc<S>>,
+    /// The shared validator-state handle (the windower holds a clone); also
+    /// captured by the proposervm API service for its live
+    /// `get_minimum_height` reads (M8.22).
+    validator_state: Arc<S>,
     shared: Arc<Shared>,
     identity: Option<StakingIdentity>,
     consensus_state: EngineState,
@@ -130,7 +177,7 @@ pub struct ProposerVm<V: ChainVm, S: ValidatorState> {
     preferred: Id,
 }
 
-impl<V: ChainVm, S: ValidatorState> ProposerVm<V, S> {
+impl<V: ChainVm, S: ValidatorState + 'static> ProposerVm<V, S> {
     /// Builds a `ProposerVm` over `inner`. The validator state `S` resolves the
     /// windower's validator sets; `db` backs the proposervm state/index.
     pub fn new(
@@ -141,17 +188,20 @@ impl<V: ChainVm, S: ValidatorState> ProposerVm<V, S> {
         db: Arc<dyn DynDatabase>,
         identity: Option<StakingIdentity>,
     ) -> Self {
-        let windower = Windower::new(validator_state, ctx.subnet_id, ctx.chain_id);
+        let validator_state = Arc::new(validator_state);
+        let windower = Windower::new(Arc::clone(&validator_state), ctx.subnet_id, ctx.chain_id);
         let shared = Arc::new(Shared {
             state: State::new(db),
             last_accepted_height: Mutex::new(0),
             verified: Mutex::new(HashMap::new()),
+            preferred_meta: Mutex::new(None),
         });
         Self {
             inner,
             ctx,
             clock,
             windower,
+            validator_state,
             shared,
             identity,
             consensus_state: EngineState::Initializing,
@@ -179,7 +229,42 @@ impl<V: ChainVm, S: ValidatorState> ProposerVm<V, S> {
         // which is the inner last-accepted pre-fork.
         let last = self.last_accepted(token).await?;
         self.preferred = last;
+        self.refresh_preferred_meta(token, last).await;
         Ok(())
+    }
+
+    /// Re-snapshots the preferred block's API-visible fields (timestamp,
+    /// P-Chain height, epoch) for the proposervm API service. A pre-fork
+    /// preferred block needs the inner block's timestamp; if it cannot be
+    /// resolved the snapshot is cleared and the API reports "not found" (Go's
+    /// request-time `getBlock` failure, `service.go:96`).
+    async fn refresh_preferred_meta(&mut self, token: &CancellationToken, id: Id) {
+        let meta = match self.get_post_fork(id) {
+            Some(crate::block::ParsedBlock::Signed(b)) => Some(PreferredMeta {
+                post_fork: true,
+                p_chain_height: b.p_chain_height(),
+                epoch: Epoch::default(),
+                timestamp: b.timestamp(),
+            }),
+            Some(crate::block::ParsedBlock::Granite(b)) => Some(PreferredMeta {
+                post_fork: true,
+                p_chain_height: b.p_chain_height(),
+                epoch: b.epoch(),
+                timestamp: b.timestamp(),
+            }),
+            // Pre-fork (or an option block, unsupported in this port): the
+            // preferred block lives in the inner VM.
+            _ => match self.inner.get_block(token, id).await {
+                Ok(inner) => Some(PreferredMeta {
+                    post_fork: false,
+                    p_chain_height: 0,
+                    epoch: Epoch::default(),
+                    timestamp: to_unix_secs(inner.timestamp()),
+                }),
+                Err(_) => None,
+            },
+        };
+        self.shared.set_preferred_meta(meta);
     }
 
     /// Whether the ProposerVM fork is active at `parent_timestamp` (Go
@@ -565,6 +650,86 @@ impl Block for ProposerBlock {
 }
 
 // ---------------------------------------------------------------------------
+// The proposervm API data seam (M8.22, Go `service.go`).
+// ---------------------------------------------------------------------------
+
+/// The HTTP path `CreateHandlers` mounts the JSON-RPC service under (Go
+/// `httpPathEndpoint`, `vm.go:46`).
+pub const HTTP_PATH_ENDPOINT: &str = "/proposervm";
+
+/// The live [`ProposerApi`] implementation over the VM's shared state: the
+/// preferred-block snapshot ([`PreferredMeta`]) plus live clock /
+/// validator-state reads.
+struct VmApiBackend<S: ValidatorState> {
+    shared: Arc<Shared>,
+    validator_state: Arc<S>,
+    clock: Arc<dyn Clock>,
+    upgrades: UpgradeConfig,
+}
+
+#[async_trait]
+impl<S: ValidatorState> ProposerApi for VmApiBackend<S> {
+    /// Go `blk.selectChildPChainHeight` on the preferred block
+    /// (`service.go:86-108`): the floor is the preferred block's P-Chain
+    /// height post-fork, or `ApricotPhase4MinPChainHeight` pre-fork
+    /// (`pre_fork_block.go:170`), raised to the validator state's minimum
+    /// height (`vm.go:898`; the time-boxed Fuji override is a recorded
+    /// deferral, consistent with the build path's
+    /// `select_child_p_chain_height`).
+    async fn proposed_height(&self) -> Result<u64, ApiError> {
+        let meta = self
+            .shared
+            .preferred_meta()
+            .ok_or_else(|| ApiError::PreferredBlock("not found".to_string()))?;
+        let min_p_chain_height = if meta.post_fork {
+            meta.p_chain_height
+        } else {
+            self.upgrades.apricot_phase_4_min_p_chain_height
+        };
+        let recommended = self
+            .validator_state
+            .get_minimum_height()
+            .await
+            .map_err(|e| ApiError::ChildPChainHeight(e.to_string()))?;
+        Ok(recommended.max(min_p_chain_height))
+    }
+
+    /// Go `vm.getCurrentEpoch` (`service.go:137-167`): the ACP-181 epoch a
+    /// child of the preferred block would carry, computed from the preferred
+    /// block's epoch/height/timestamp and the wall clock (truncated to
+    /// seconds, never before the parent timestamp).
+    async fn current_epoch(&self) -> Result<Epoch, ApiError> {
+        let meta = self
+            .shared
+            .preferred_meta()
+            .ok_or_else(|| ApiError::EpochPreferredBlock("not found".to_string()))?;
+        // `vm.Time().Truncate(time.Second)`; `max` mirrors the
+        // `newTimestamp.Before(timestamp)` clamp.
+        let now = to_unix_secs(self.clock.unix_time());
+        let child_timestamp = now.max(meta.timestamp);
+        Ok(acp181::new_epoch(
+            &self.upgrades,
+            meta.p_chain_height,
+            meta.epoch,
+            meta.timestamp,
+            child_timestamp,
+        ))
+    }
+}
+
+impl<V: ChainVm, S: ValidatorState + 'static> ProposerVm<V, S> {
+    /// Builds the API service's data seam over the VM's shared state.
+    fn api(&self) -> Arc<dyn ProposerApi> {
+        Arc::new(VmApiBackend {
+            shared: Arc::clone(&self.shared),
+            validator_state: Arc::clone(&self.validator_state),
+            clock: Arc::clone(&self.clock),
+            upgrades: self.ctx.network_upgrades.clone(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Vm + ChainVm: delegate to the inner VM, overriding the proposer-aware ops.
 // ---------------------------------------------------------------------------
 
@@ -637,7 +802,7 @@ impl<V: ChainVm, S: ValidatorState> Connector for ProposerVm<V, S> {
 }
 
 #[async_trait]
-impl<V: ChainVm, S: ValidatorState> Vm for ProposerVm<V, S> {
+impl<V: ChainVm, S: ValidatorState + 'static> Vm for ProposerVm<V, S> {
     async fn initialize(
         &mut self,
         token: &CancellationToken,
@@ -678,18 +843,42 @@ impl<V: ChainVm, S: ValidatorState> Vm for ProposerVm<V, S> {
         self.inner.version(token).await
     }
 
+    /// Go `CreateHandlers` (`vm.go:255-280`): the INNER VM's handler map plus
+    /// `"/proposervm"` → the gorilla JSON-RPC service registered as
+    /// `proposervm` (the `metric.NewAPIInterceptor` HTTP metrics wrap is a
+    /// recorded deferral, consistent with `register_chain`'s middleware note).
     async fn create_handlers(
         &mut self,
         token: &CancellationToken,
     ) -> VmResult<HashMap<String, HttpHandler>> {
-        self.inner.create_handlers(token).await
+        let mut handlers = self.inner.create_handlers(token).await?;
+        let registry = Arc::new(service::registry(self.api()));
+        handlers.insert(
+            HTTP_PATH_ENDPOINT.to_string(),
+            // Go's modern CreateHandlers map carries no lock semantics.
+            HttpHandler::in_process(LockOptions::NoLock, registry_service(registry)),
+        );
+        Ok(handlers)
     }
 
+    /// Go `NewHTTPHandler` (`vm.go:282-311`): the `proposervm.ProposerVM`
+    /// Connect mux composed with the inner VM's header handler by the
+    /// multi-valued `Avalanche-Api-Route` header. An inner handler without an
+    /// in-process service (the rpcchainvm wire form) cannot be dispatched to
+    /// from here and is treated as absent.
     async fn new_http_handler(
         &mut self,
         token: &CancellationToken,
     ) -> VmResult<Option<HttpHandler>> {
-        self.inner.new_http_handler(token).await
+        let inner_service = self
+            .inner
+            .new_http_handler(token)
+            .await?
+            .and_then(|handler| handler.service);
+        Ok(Some(HttpHandler::in_process(
+            LockOptions::NoLock,
+            Arc::new(HeaderRouteService::new(inner_service, self.api())),
+        )))
     }
 
     async fn wait_for_event(&self, token: &CancellationToken) -> VmResult<VmEvent> {
@@ -698,7 +887,7 @@ impl<V: ChainVm, S: ValidatorState> Vm for ProposerVm<V, S> {
 }
 
 #[async_trait]
-impl<V: ChainVm, S: ValidatorState> ChainVm for ProposerVm<V, S> {
+impl<V: ChainVm, S: ValidatorState + 'static> ChainVm for ProposerVm<V, S> {
     async fn build_block(&mut self, token: &CancellationToken) -> VmResult<Arc<dyn Block>> {
         self.build_child(token).await
     }
@@ -781,6 +970,8 @@ impl<V: ChainVm, S: ValidatorState> ChainVm for ProposerVm<V, S> {
 
     async fn set_preference(&mut self, token: &CancellationToken, id: Id) -> VmResult<()> {
         self.preferred = id;
+        // Re-snapshot the preferred block for the API service (M8.22).
+        self.refresh_preferred_meta(token, id).await;
         // If the preferred block is post-fork, delegate the inner preference to
         // the inner block id; otherwise pass through (Go `SetPreference`).
         if let Some(parsed) = self.get_post_fork(id) {
