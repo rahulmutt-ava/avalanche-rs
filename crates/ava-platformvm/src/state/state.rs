@@ -27,7 +27,7 @@
 //! The `weightDiffDB` / `pkDiffDB` handles are created but unused here — their
 //! byte-exact iterators are M4.14.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -36,6 +36,7 @@ use ava_database::error::Error as DbError;
 use ava_database::{Database, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_types::short_id::ShortId;
 use parking_lot::Mutex;
 
 use crate::error::{Error, Result};
@@ -128,6 +129,10 @@ impl<D: Database> ByteSpace<D> {
 pub struct State<D: Database> {
     // ----- byte-valued, persisted spaces (LRU-fronted) -----
     utxos: ByteSpace<D>,
+    /// The address → utxoID index nested under the UTXO space (Go
+    /// `avax.utxoState.indexDB`): persisted as `addr(20) ‖ utxoID(32) → ()`,
+    /// mirrored in [`Self::utxo_index`] for reads.
+    utxo_index_db: PrefixDb<D>,
     reward_utxos: PrefixDb<D>,
     subnets: ByteSpace<D>,
     subnet_owners: ByteSpace<D>,
@@ -166,6 +171,9 @@ pub struct State<D: Database> {
     subnet_ids: Vec<Id>,
     chain_index: BTreeMap<Id, Vec<Id>>,
 
+    // ----- in-memory address → utxoID index (mirrors `utxo_index_db`) -----
+    utxo_index: BTreeMap<ShortId, BTreeSet<Id>>,
+
     // ----- in-memory block-id-at-height index (mirrors `block_ids`) -----
     block_id_index: BTreeMap<u64, Id>,
 
@@ -185,6 +193,8 @@ impl<D: Database> State<D> {
 
         Ok(Self {
             utxos: ByteSpace::new(prefixes::UTXO_PREFIX, &base),
+            utxo_index_db: PrefixDb::new_arc(prefixes::UTXO_PREFIX, Arc::clone(&base))
+                .join(prefixes::UTXO_INDEX_PREFIX),
             reward_utxos: PrefixDb::new_arc(prefixes::REWARD_UTXOS_PREFIX, Arc::clone(&base)),
             subnets: ByteSpace::new(prefixes::SUBNET_PREFIX, &base),
             subnet_owners: ByteSpace::new(prefixes::SUBNET_OWNER_PREFIX, &base),
@@ -214,10 +224,70 @@ impl<D: Database> State<D> {
             subnet_ids: Vec::new(),
             chain_index: BTreeMap::new(),
 
+            utxo_index: BTreeMap::new(),
+
             block_id_index: BTreeMap::new(),
 
             base,
         })
+    }
+
+    /// The persisted index key `addr(20) ‖ utxoID(32)` (Go `utxoState`'s
+    /// index entry layout).
+    fn utxo_index_key(addr: &ShortId, utxo_id: Id) -> Vec<u8> {
+        let mut k = Vec::with_capacity(52);
+        k.extend_from_slice(addr.as_bytes());
+        k.extend_from_slice(utxo_id.as_bytes());
+        k
+    }
+
+    /// `avax.UTXOReader.UTXOIDs(addr, previous, limit)` — up to `limit` UTXO
+    /// ids referencing `addr`, **strictly greater than** `previous`, in
+    /// ascending id order (the `getUTXOs` pagination contract,
+    /// `vms/components/avax/utxo_state.go`).
+    #[must_use]
+    pub fn utxo_ids(&self, addr: &ShortId, previous: Id, limit: usize) -> Vec<Id> {
+        let Some(set) = self.utxo_index.get(addr) else {
+            return Vec::new();
+        };
+        set.iter()
+            .filter(|id| **id > previous)
+            .take(limit)
+            .copied()
+            .collect()
+    }
+
+    /// Index a typed UTXO's addresses (no-op for value bytes that do not
+    /// decode — only canonically-marshaled UTXOs enter the set via
+    /// [`Chain::add_utxo`]).
+    fn index_utxo(&mut self, id: Id, bytes: &[u8]) {
+        let Ok(utxo) = crate::utxo::Utxo::unmarshal(bytes) else {
+            return;
+        };
+        for addr in crate::utxo::output_addresses(&utxo.out) {
+            self.utxo_index.entry(*addr).or_default().insert(id);
+            let _ = self.utxo_index_db.put(&Self::utxo_index_key(addr, id), &[]);
+        }
+    }
+
+    /// Remove a deleted UTXO's index entries (reads the stored bytes first,
+    /// mirroring Go's read-modify-delete in `utxoState.DeleteUTXO`).
+    fn unindex_utxo(&mut self, id: Id) {
+        let Ok(bytes) = self.utxos.get(id.as_bytes()) else {
+            return;
+        };
+        let Ok(utxo) = crate::utxo::Utxo::unmarshal(&bytes) else {
+            return;
+        };
+        for addr in crate::utxo::output_addresses(&utxo.out) {
+            if let Some(set) = self.utxo_index.get_mut(addr) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.utxo_index.remove(addr);
+                }
+            }
+            let _ = self.utxo_index_db.delete(&Self::utxo_index_key(addr, id));
+        }
     }
 
     /// The supply singleton key for `subnet`: the literal key for the Primary
@@ -346,6 +416,8 @@ impl<D: Database> State<D> {
         let l1_parent = PrefixDb::new_arc(prefixes::L1_VALIDATORS_PREFIX, Arc::clone(&base));
         Arc::new(State {
             utxos: ByteSpace::new(prefixes::UTXO_PREFIX, &base),
+            utxo_index_db: PrefixDb::new_arc(prefixes::UTXO_PREFIX, Arc::clone(&base))
+                .join(prefixes::UTXO_INDEX_PREFIX),
             reward_utxos: PrefixDb::new_arc(prefixes::REWARD_UTXOS_PREFIX, Arc::clone(&base)),
             subnets: ByteSpace::new(prefixes::SUBNET_PREFIX, &base),
             subnet_owners: ByteSpace::new(prefixes::SUBNET_OWNER_PREFIX, &base),
@@ -374,6 +446,8 @@ impl<D: Database> State<D> {
             reward_utxo_index: self.reward_utxo_index.clone(),
             subnet_ids: self.subnet_ids.clone(),
             chain_index: self.chain_index.clone(),
+
+            utxo_index: self.utxo_index.clone(),
 
             block_id_index: self.block_id_index.clone(),
 
@@ -510,10 +584,12 @@ impl<D: Database> Chain for State<D> {
     }
 
     fn add_utxo(&mut self, id: Id, utxo: UtxoBytes) {
+        self.index_utxo(id, &utxo);
         let _ = self.utxos.put(id.as_bytes(), &utxo);
     }
 
     fn delete_utxo(&mut self, id: Id) {
+        self.unindex_utxo(id);
         let _ = self.utxos.delete(id.as_bytes());
     }
 
@@ -675,10 +751,68 @@ impl<D: Database> Chain for State<D> {
 mod tests {
     use super::*;
     use ava_database::MemDb;
+    use ava_secp256k1fx::{OutputOwners, TransferOutput};
+
+    use crate::txs::components::Output;
+    use crate::utxo::Utxo;
 
     #[test]
     fn empty_supply_is_zero() {
         let s = State::new(MemDb::new()).expect("state");
         assert_eq!(s.current_supply(Id::EMPTY).expect("supply"), 0);
+    }
+
+    fn utxo(tx: u8, index: u32, addrs: &[ShortId]) -> Utxo {
+        Utxo {
+            tx_id: Id::from([tx; 32]),
+            output_index: index,
+            asset_id: Id::from([0x42; 32]),
+            out: Output::Transfer(TransferOutput::new(
+                1_000,
+                OutputOwners::new(0, 1, addrs.to_vec()),
+            )),
+        }
+    }
+
+    /// `avax.utxoState` index parity: `add_utxo` indexes every owning address,
+    /// `delete_utxo` removes the entries, and `utxo_ids` paginates strictly
+    /// after `previous` in ascending id order.
+    #[test]
+    fn utxo_address_index_add_delete_paginate() {
+        let addr_a = ShortId::from_slice(&[0x0A; 20]).expect("addr");
+        let addr_b = ShortId::from_slice(&[0x0B; 20]).expect("addr");
+
+        let mut s = State::new(MemDb::new()).expect("state");
+        let u1 = utxo(0x01, 0, &[addr_a]);
+        let u2 = utxo(0x02, 0, &[addr_a, addr_b]);
+        let u3 = utxo(0x03, 0, &[addr_b]);
+        for u in [&u1, &u2, &u3] {
+            s.add_utxo(u.input_id(), u.marshal().expect("marshal utxo"));
+        }
+
+        // addr_a sees u1+u2; addr_b sees u2+u3 (ascending utxo-id order).
+        let mut a_ids = vec![u1.input_id(), u2.input_id()];
+        a_ids.sort();
+        assert_eq!(s.utxo_ids(&addr_a, Id::EMPTY, usize::MAX), a_ids, "addr_a index");
+        let mut b_ids = vec![u2.input_id(), u3.input_id()];
+        b_ids.sort();
+        assert_eq!(s.utxo_ids(&addr_b, Id::EMPTY, usize::MAX), b_ids, "addr_b index");
+
+        // Pagination: previous is exclusive; limit truncates.
+        assert_eq!(
+            s.utxo_ids(&addr_a, a_ids[0], usize::MAX),
+            vec![a_ids[1]],
+            "previous is exclusive"
+        );
+        assert_eq!(s.utxo_ids(&addr_a, Id::EMPTY, 1), vec![a_ids[0]], "limit");
+
+        // Deleting u2 removes it from both addresses.
+        s.delete_utxo(u2.input_id());
+        assert_eq!(s.utxo_ids(&addr_a, Id::EMPTY, usize::MAX), vec![u1.input_id()]);
+        assert_eq!(s.utxo_ids(&addr_b, Id::EMPTY, usize::MAX), vec![u3.input_id()]);
+
+        // Unknown address: empty.
+        let addr_c = ShortId::from_slice(&[0x0C; 20]).expect("addr");
+        assert!(s.utxo_ids(&addr_c, Id::EMPTY, usize::MAX).is_empty());
     }
 }
