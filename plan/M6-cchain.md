@@ -707,7 +707,25 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > the `NIX_DEV_SHELL=fuzz` nightly shell (`cargo xtask test-fuzz`). Verified the crate is well-formed via stable
 > `cargo check` (passes); the nightly fuzz build is the CI smoke entry. No existing src/facade/`rpc/mod.rs` touched.
 
-### Task M6.29: Milestone exit gate
+### Task M6.29: Milestone exit gate ✅ DONE (84d64a7+8c88c97, merge 617e1e5 — **M6 MILESTONE COMPLETE**)
+> **AS-BUILT (M6.29, 2026-06-12).** All five exit tests green un-`#[ignore]`d under nextest
+> `--profile ci` in recorded-oracle mode (table in `crates/ava-evm/tests/PORTING.md` §"M6.29 exit
+> gate"): `cchain_block_wire`, `cchain_genesis_root`, `cchain_state_root` (against the REAL coreth
+> 3-account root `0x8b0bf834…71a`), `atomic_xc` (recorded; no live mode exists so no CI gating
+> needed), `evm_fee_schedule_per_fork` (512-case proptest). The gas_used FOLD-IN below is fixed:
+> `Tx` carries a non-serialized `unsigned_bytes` cache (mirrors coreth `Metadata.unsignedBytes`;
+> populated by `initialize()`/`parse()`); orchestrator-verified at the coreth source that
+> `Metadata.Bytes()` returns the UNSIGNED bytes (metadata.go — the doc comment even reads
+> "UnsignedBytes…") and `GasUsed` prices `len(utx.Bytes())` (import_tx.go:136-138). Go-EXECUTED
+> values pinned by `atomic_mempool::gas_used_matches_coreth_oracle` (emitter
+> `tests/differential/go-oracle/atomic_tx_gas_emitter_test.go`, avalanchego@5896c92fee; 77-gas
+> signed-envelope overcount confirmed). 175 ava-evm tests (-j1), clippy/fmt/unsafe-audit clean.
+> **Boot deferral:** booting C-Chain through the real node = M8.29–M8.31; `EvmVm` implements
+> `ChainVm` (consumed by `ava-chains create_chain`); `avalanchers/src/wiring/chains.rs` registers
+> only the no-op test-VM factory today — what remains for M8 is registering an EVM `Factory` with
+> the `VmManager` (verified claims). NOTE: the "avalanchers runs C-Chain" clause of Step 3 is
+> explicitly deferred to M8.29-M8.31 per orchestrator scope adjudication.
+>
 > **FOLD-IN (found by M8.26 wallet differential, 2026-06-11):** `atomic/mempool.rs::gas_used`
 > uses SIGNED `tx.bytes()` but coreth `Metadata.Bytes()` returns the **unsigned** bytes (the Go
 > method name is misleading) — ~81-gas overcount per 1-input import, affecting mempool fee/gas-cap
@@ -715,17 +733,17 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > `c/builder.rs::gas_used` (unsigned marshal) is the verified-correct model.
 **Crate:** ava-evm (+ avalanchers binary)  ·  **Depends on:** all M6.1–M6.28, M6.30; **M6.31** for the base-fee-to-coinbase recipient override that gates real-mainnet `cchain_state_root` 3-account parity (see M6.30/M6.31 notes — recorded-oracle mode can run before M6.31 lands; full coreth on-chain-root parity needs it)  ·  **Spec:** 10 (all), 04 §4, 20 §7, 21; 02 §10.5/§11; BUILDABLE-&-GREEN INVARIANT
 **Files:** `crates/ava-evm/tests/PORTING.md` (final), workspace wiring for `avalanchers` to run C-Chain
-- [ ] **Step 1 — Red:** Ensure the four named exit tests exist and are wired into `cargo nextest --profile ci`: `golden::cchain_block_wire`, `golden::cchain_genesis_root`, `differential::cchain_state_root` (recorded-oracle/reexecute mode — deterministic, per-PR friendly, over a multi-block recorded mainnet range, 02 §10.5), `differential::atomic_xc` (recorded mode green per-PR; live mode `#[ignore]`/CI-gated, coordinate with cross-cutting harness X), `prop::evm_fee_schedule_per_fork`.
-- [ ] **Step 2 — Confirm red:** Run the full gate; record any failure.
-- [ ] **Step 3 — Green:** Fix remaining wiring so the `avalanchers` binary now boots and runs the C-Chain via `EvmVm`. Run and pass:
+- [x] **Step 1 — Red:** Ensure the four named exit tests exist and are wired into `cargo nextest --profile ci`: `golden::cchain_block_wire`, `golden::cchain_genesis_root`, `differential::cchain_state_root` (recorded-oracle/reexecute mode — deterministic, per-PR friendly, over a multi-block recorded mainnet range, 02 §10.5), `differential::atomic_xc` (recorded mode green per-PR; live mode `#[ignore]`/CI-gated, coordinate with cross-cutting harness X), `prop::evm_fee_schedule_per_fork`.
+- [x] **Step 2 — Confirm red:** Run the full gate; record any failure.
+- [x] **Step 3 — Green:** Fix remaining wiring so the `avalanchers` binary now boots and runs the C-Chain via `EvmVm`. Run and pass:
   - `cargo build --workspace`
   - `cargo build -p avalanchers`
   - `cargo nextest run --profile ci`
   - `cargo clippy --workspace -- -D warnings`
   - the four named exit tests above.
   Update final PORTING.md; confirm `#![forbid(unsafe_code)]` holds everywhere except inside `ava-evm-reth` (binding wrappers).
-- [ ] **Step 4 — Confirm green:** All commands above exit 0; exit tests pass; differential::cchain_state_root green in recorded mode.
-- [ ] **Step 5 — Commit:** `ava-evm: M6 exit gate — C-Chain on reth green; avalanchers runs C-Chain`
+- [x] **Step 4 — Confirm green:** All commands above exit 0; exit tests pass; differential::cchain_state_root green in recorded mode.
+- [x] **Step 5 — Commit:** `ava-evm: M6 exit gate — C-Chain on reth green; avalanchers runs C-Chain`
 
 ### Task M6.30: 5-field account-RLP state-encoding parity (libevm `StateAccount.Extra`)  ✅ DONE (a753201) ⟸ NEW (surfaced by M6.6)
 **Crate:** ava-evm  ·  **Depends on:** M6.3/M6.4 (state.rs)  ·  **Blocks:** real-mainnet `differential::cchain_state_root` (M6.29)  ·  **Spec:** 10 §5/§17.2; 04 §4
