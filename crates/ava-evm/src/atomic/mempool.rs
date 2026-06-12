@@ -613,9 +613,14 @@ fn export_input_id(in_: &crate::atomic::tx::EvmInput) -> Id {
 /// coreth `tx.GasUsed(fixedFee=true)`:
 /// `calcBytesCost(len(bytes)) + per-input cost + AtomicTxIntrinsicGas`.
 fn gas_used(tx: &Tx) -> Result<u64, MempoolError> {
-    // calcBytesCost(n) = n * TxBytesGas. The signed bytes length matches Go's
-    // `len(utx.Bytes())` (initialize() caches the full signed bytes).
-    let byte_len = u64::try_from(tx.bytes().len()).map_err(|_| MempoolError::Overflow)?;
+    // calcBytesCost(n) = n * TxBytesGas over the UNSIGNED bytes: Go's
+    // `len(utx.Bytes())` is `Metadata.unsignedBytes` — the misleadingly-named
+    // accessor returns the unsigned form (coreth `metadata.go:30`,
+    // `import_tx.go:138`, `export_tx.go:135`). Pricing the signed envelope
+    // instead overcounts by 77 gas per 1-sig credential (M8.26
+    // wallet-differential fold-in; Go-pinned by
+    // `tests/atomic_mempool.rs::gas_used_matches_coreth_oracle`).
+    let byte_len = u64::try_from(tx.unsigned_bytes().len()).map_err(|_| MempoolError::Overflow)?;
     let mut cost = byte_len
         .checked_mul(TX_BYTES_GAS)
         .ok_or(MempoolError::Overflow)?;

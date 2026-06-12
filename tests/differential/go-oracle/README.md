@@ -12,6 +12,7 @@ a normal `go test` never runs it:
 | `streaming_vector_emitter_test.go` | `SAE_EMIT_STREAMING_VECTORS` | `sae_streaming.rs::differential::sae_streaming` (M7.30) | `tests/vectors/saevm/streaming_differential/` |
 | `precompile_configkey_golden_emitter_test.go` | (none — plain `go test -run TestM631EmitGoldens`) | `ava-evm precompile_golden.rs` (M6.31) | `crates/ava-evm/tests/vectors/cchain/precompile/configkey_golden.json` |
 | `precompile_selectors_emitter_test.go` + `precompile_nativeminter_selectors_emitter_test.go` | (none — plain `go test`) | constants pinned in `ava-evm src/precompile/{feemanager,rewardmanager,gaspricemanager,nativeminter}.rs` (M6.31) | (stdout only) |
+| `atomic_tx_gas_emitter_test.go` | `AVAX_RS_EMIT_ATOMIC_GAS` | `ava-evm atomic_mempool.rs::gas_used_matches_coreth_oracle` (M6.29) | `gas_used` block in `crates/ava-evm/tests/vectors/cchain/atomic/atomic_txs.json` |
 
 > The two SAE emitters redeclare a few shared helper names (`observe*Frontier`,
 > `*HexBytes`) under distinct prefixes, but to be safe drop **one emitter at a
@@ -22,6 +23,13 @@ a normal `go test` never runs it:
 > `graft/subnet-evm/precompile/contracts/{feemanager,nativeminter}/` in the
 > avalanchego checkout (they use the contracts' own exported `Pack*` ABI
 > helpers, so the emitted bytes ARE the Go encoding).
+>
+> The M6.29 atomic-gas emitter is a `package atomic_test` test — drop it into
+> `graft/coreth/plugin/evm/atomic/` in the avalanchego checkout and run
+> `AVAX_RS_EMIT_ATOMIC_GAS=1 go test -run TestEmitAtomicTxGasUsed -v` from
+> `graft/coreth/`. It parses the already-committed unsigned-tx interface bytes
+> from `atomic_txs.json`, signs each with one key, and prints `GasUsed` for both
+> `fixedFee` modes (frozen into the vector's `gas_used` block).
 
 ## Recovery emitter (M7.29)
 

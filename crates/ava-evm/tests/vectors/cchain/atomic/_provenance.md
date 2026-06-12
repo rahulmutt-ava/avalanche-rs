@@ -65,3 +65,26 @@ Source files exercised:
   The exported UTXO uses `TxID = signed-tx ID`, `OutputIndex = i` (0-based over
   the exported outputs only). The signed-tx ID here is over an unsigned-only Tx
   (no credentials), `Sign(Codec, nil)`.
+
+## `gas_used` block (M6.29 fold-in)
+
+Go-EXECUTED `GasUsed` values for the corpus txs, added by the M6.29 exit gate
+after the M8.26 wallet differential exposed a +77-gas overcount in
+`atomic/mempool.rs::gas_used` (it priced the SIGNED envelope).
+
+- **Emitter:** `tests/differential/go-oracle/atomic_tx_gas_emitter_test.go`,
+  dropped into `graft/coreth/plugin/evm/atomic/` and run as
+  `AVAX_RS_EMIT_ATOMIC_GAS=1 go test -run TestEmitAtomicTxGasUsed`.
+- **Go tree:** avalanchego `5896c92fee23c2eff53d557dceeb89f1a6218224`
+  (graft/coreth), `go1.25.10 darwin/arm64`, 2026-06-12. Tree left git-clean.
+- **What it pins:** coreth `Metadata.Bytes()` (`metadata.go:30`) returns the
+  **unsigned** bytes (the Go name is misleading; `SignedBytes()` is the full
+  envelope), and `GasUsed(fixedFee)` =
+  `len(unsignedBytes)*TxBytesGas + Σ len(SigIndices)*CostPerSignature
+  [+ ap5.AtomicTxIntrinsicGas iff fixedFee]`
+  (`import_tx.go:136`, `export_tx.go:134`, `tx.go:340`).
+- Each corpus tx signed with ONE secp credential of ONE 65-byte signature
+  (signature content does not affect gas): unsigned = 230 B, signed = 307 B
+  (+77 = 4 creds-len + 4 cred type_id + 4 sigs-len + 65 sig), so
+  `GasUsed(true)` = 230 + 1000 + 10000 = **11230** for both import and export.
+- Asserted by `crates/ava-evm/tests/atomic_mempool.rs::gas_used_matches_coreth_oracle`.
