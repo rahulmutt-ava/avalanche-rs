@@ -63,5 +63,21 @@
     "evm_output_gas": 60,
     "evm_input_gas": 1068,
     "cost_per_signature": 1000
+  },
+
+  "gas_used": {
+    "_comment": "Go-EXECUTED GasUsed for the corpus txs signed with ONE secp256k1 credential (one 65-byte sig). Emitter: tests/differential/go-oracle/atomic_tx_gas_emitter_test.go run in avalanchego@5896c92fee23c2eff53d557dceeb89f1a6218224 (graft/coreth, go1.25.10). Pins that coreth Metadata.Bytes() (metadata.go:30) returns the UNSIGNED bytes, so GasUsed = len(unsignedBytes)*TxBytesGas + sigs*CostPerSignature [+ ap5.AtomicTxIntrinsicGas iff fixedFee] (import_tx.go:136, export_tx.go:134). The signed envelope is 77 bytes longer (4B creds len + 4B cred type_id + 4B sigs len + 65B sig); computing from it overcounts gas by 77 (the M8.26 fold-in bug).",
+    "import": {
+      "unsigned_bytes_len": 230,
+      "signed_bytes_len": 307,
+      "gas_used_fixed_fee": 11230,
+      "gas_used_no_fixed_fee": 1230
+    },
+    "export": {
+      "unsigned_bytes_len": 230,
+      "signed_bytes_len": 307,
+      "gas_used_fixed_fee": 11230,
+      "gas_used_no_fixed_fee": 1230
+    }
   }
 }

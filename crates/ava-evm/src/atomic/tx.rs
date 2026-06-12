@@ -330,9 +330,9 @@ impl AtomicTx {
 /// `atomic.Tx` — a signed atomic transaction (coreth `atomic/tx.go:175`).
 ///
 /// Wire layout (codec v0): the typeid-prefixed `unsigned` body then the
-/// credentials `creds`. `tx_id`/`bytes` are derived caches populated by
-/// [`Tx::initialize`] / [`Tx::parse`] and are **not** on the wire (no `#[codec]`
-/// tag), mirroring the embedded `Metadata`.
+/// credentials `creds`. `tx_id`/`bytes`/`unsigned_bytes` are derived caches
+/// populated by [`Tx::initialize`] / [`Tx::parse`] and are **not** on the wire
+/// (no `#[codec]` tag), mirroring the embedded `Metadata`.
 #[derive(AvaCodec, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tx {
     /// The transaction body (interface → typeid-prefixed).
@@ -343,8 +343,14 @@ pub struct Tx {
     pub creds: Vec<FxCredential>,
     /// `= sha256(signed_bytes)`. Not serialized (coreth `Metadata.id`).
     pub tx_id: Id,
-    /// Cached signed bytes. Not serialized (coreth `Metadata.bytes`).
+    /// Cached signed bytes. Not serialized (coreth `Metadata.bytes` —
+    /// accessed via the Go `SignedBytes()` method).
     pub bytes: Vec<u8>,
+    /// Cached **unsigned** bytes — `Codec.Marshal(0, &unsigned)`, the
+    /// interface form. Not serialized (coreth `Metadata.unsignedBytes`).
+    /// NB: Go's misleadingly-named `Metadata.Bytes()` accessor returns
+    /// *these* (coreth `metadata.go:30`); `GasUsed` is priced over them.
+    pub unsigned_bytes: Vec<u8>,
 }
 
 impl Tx {
@@ -356,34 +362,40 @@ impl Tx {
             creds: Vec::new(),
             tx_id: Id::EMPTY,
             bytes: Vec::new(),
+            unsigned_bytes: Vec::new(),
         }
     }
 
-    /// `Tx.Initialize` — marshals the whole tx, then derives the cached signed
-    /// bytes and `tx_id = sha256(signed_bytes)` (coreth `metadata.go:18`).
+    /// `Tx.Sign(c, nil)` / `Tx.Initialize` — marshals the unsigned body and the
+    /// whole tx, then caches both plus `tx_id = sha256(signed_bytes)` (coreth
+    /// `tx.go:197` `Sign`, `metadata.go:18` `Initialize`).
     ///
     /// # Errors
     /// Returns a [`ava_codec::error::CodecError`] if marshalling fails.
     pub fn initialize(&mut self) -> CodecResult<()> {
+        let unsigned_bytes = codec().marshal(CODEC_VERSION, &self.unsigned)?;
         let signed_bytes = codec().marshal(CODEC_VERSION, self)?;
-        self.set_bytes(signed_bytes);
+        self.set_bytes(unsigned_bytes, signed_bytes);
         Ok(())
     }
 
-    fn set_bytes(&mut self, signed_bytes: Vec<u8>) {
+    fn set_bytes(&mut self, unsigned_bytes: Vec<u8>, signed_bytes: Vec<u8>) {
         self.tx_id = Id::from(hashing::sha256(&signed_bytes));
         self.bytes = signed_bytes;
+        self.unsigned_bytes = unsigned_bytes;
     }
 
     /// `atomic.ExtractAtomicTx` — decodes a signed tx and reproduces the cached
-    /// signed bytes + `tx_id` (coreth `codec.go:80`).
+    /// signed + unsigned bytes and `tx_id` (coreth `codec.go:80`, which calls
+    /// `Sign(codec, nil)` to re-derive both byte caches).
     ///
     /// # Errors
     /// Returns a [`ava_codec::error::CodecError`] if the bytes fail to decode.
     pub fn parse(signed_bytes: &[u8]) -> CodecResult<Self> {
         let mut tx = Tx::default();
         codec().unmarshal(signed_bytes, &mut tx)?;
-        tx.set_bytes(signed_bytes.to_vec());
+        let unsigned_bytes = codec().marshal(CODEC_VERSION, &tx.unsigned)?;
+        tx.set_bytes(unsigned_bytes, signed_bytes.to_vec());
         Ok(tx)
     }
 
@@ -394,9 +406,19 @@ impl Tx {
     }
 
     /// The cached signed bytes (empty until [`Tx::initialize`]/[`Tx::parse`]).
+    /// Mirrors coreth `Metadata.SignedBytes()`.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// The cached **unsigned** bytes (empty until
+    /// [`Tx::initialize`]/[`Tx::parse`]). Mirrors coreth `Metadata.Bytes()`
+    /// (`metadata.go:30`) — the misleading Go name returns the unsigned form,
+    /// which is what `GasUsed` prices (`import_tx.go:138`, `export_tx.go:135`).
+    #[must_use]
+    pub fn unsigned_bytes(&self) -> &[u8] {
+        &self.unsigned_bytes
     }
 }
 

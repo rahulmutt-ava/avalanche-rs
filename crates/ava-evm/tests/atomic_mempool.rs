@@ -11,9 +11,10 @@
 use std::time::Duration;
 
 use ava_avm::txs::components::{Input as FxInput, TransferableInput};
+use ava_avm::txs::credential::FxCredential;
 use ava_evm::atomic::mempool::{AtomicMempool, AvaNextBlockCtx, Gossipable, MempoolError};
-use ava_evm::atomic::tx::{AtomicTx, EvmOutput, Tx, UnsignedImportTx};
-use ava_secp256k1fx::TransferInput;
+use ava_evm::atomic::tx::{AtomicTx, CODEC_VERSION, EvmOutput, Tx, UnsignedImportTx, codec};
+use ava_secp256k1fx::{Credential as SecpCredential, TransferInput};
 use ava_types::id::Id;
 
 /// 32-byte id with every byte = `b`.
@@ -195,4 +196,81 @@ fn mempool_full_evicts_lowest_priced() {
     // A second low-priced tx can't displace hi => insufficient fee.
     let lo2 = import_tx(0x12, 0, 5_000, 4_500, 1); // burn 500 (lower)
     assert_eq!(m.add(lo2), Err(MempoolError::InsufficientFee));
+}
+
+/// M6.29 fold-in (found by the M8.26 wallet differential): `gas_used` must be
+/// computed over the **unsigned** tx bytes — coreth `Metadata.Bytes()`
+/// (`metadata.go:30`) returns `unsignedBytes` despite the misleading name, and
+/// `GasUsed` calls `calcBytesCost(len(utx.Bytes()))`
+/// (`import_tx.go:136-138`, `export_tx.go:134-135`). Computing over the signed
+/// envelope overcounts by 77 gas for a 1-credential/1-sig tx (4B creds len +
+/// 4B cred type_id + 4B sigs len + 65B sig).
+///
+/// Pins the Go-EXECUTED values from `vectors/cchain/atomic/atomic_txs.json`
+/// `gas_used` (emitter: `tests/differential/go-oracle/
+/// atomic_tx_gas_emitter_test.go`, avalanchego@5896c92f, go1.25.10).
+#[test]
+fn gas_used_matches_coreth_oracle() {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/cchain/atomic/atomic_txs.json"))
+            .expect("parse golden vectors");
+
+    for (kind, iface_ptr) in [
+        ("import", "/unsigned_import_tx/interface_codec_hex"),
+        ("export", "/unsigned_export_tx/interface_codec_hex"),
+    ] {
+        let iface_hex = vectors
+            .pointer(iface_ptr)
+            .and_then(serde_json::Value::as_str)
+            .expect("interface_codec_hex");
+        let unsigned_bytes = hex::decode(iface_hex).expect("hex");
+
+        let golden = &vectors["gas_used"][kind];
+        let want_unsigned_len = golden["unsigned_bytes_len"].as_u64().expect("unsigned len");
+        let want_signed_len = golden["signed_bytes_len"].as_u64().expect("signed len");
+        let want_gas = golden["gas_used_fixed_fee"].as_u64().expect("gas");
+
+        // Parse the Go-golden unsigned tx and re-create the exact signed
+        // envelope the Go emitter built: one secp credential with one 65-byte
+        // signature (signature content does not affect GasUsed).
+        let mut unsigned = AtomicTx::default();
+        codec()
+            .unmarshal(&unsigned_bytes, &mut unsigned)
+            .expect("unmarshal unsigned interface bytes");
+        assert_eq!(
+            unsigned_bytes.len() as u64,
+            want_unsigned_len,
+            "{kind}: vector unsigned length"
+        );
+
+        let mut tx = Tx::new(unsigned);
+        tx.creds = vec![FxCredential::new(
+            Id::EMPTY,
+            SecpCredential::new(vec![[0u8; 65]]),
+        )];
+        tx.initialize().expect("initialize");
+        assert_eq!(
+            tx.bytes().len() as u64,
+            want_signed_len,
+            "{kind}: signed envelope length must match the Go emitter's"
+        );
+
+        // Round-trip sanity: re-marshalling the unsigned body reproduces the
+        // Go unsigned bytes GasUsed is priced over.
+        let remarshal = codec()
+            .marshal(CODEC_VERSION, &tx.unsigned)
+            .expect("marshal unsigned");
+        assert_eq!(
+            remarshal, unsigned_bytes,
+            "{kind}: unsigned bytes round-trip"
+        );
+
+        let m = AtomicMempool::new(1024, avax_asset());
+        assert_eq!(
+            m.tx_gas_used(&tx).expect("tx_gas_used"),
+            want_gas,
+            "{kind}: GasUsed(fixedFee=true) must equal the Go oracle (priced \
+             over UNSIGNED bytes, coreth metadata.go:30)"
+        );
+    }
 }

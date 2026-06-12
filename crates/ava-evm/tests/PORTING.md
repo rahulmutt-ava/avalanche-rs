@@ -18,6 +18,42 @@ Shipped scope covers: block wire codec / chainspec / fee rules / lifecycle
 atomic backend / atomic transfer / atomic conflict verify / block builder /
 ChainVm adapter / genesis root / state sync / eth_* RPC / fuzz targets.
 
+## M6.29 exit gate (recorded-oracle mode)
+
+The five exit tests all run un-`#[ignore]`d under nextest `--profile ci` and
+pass in recorded mode against Go-executed fixtures:
+
+| Exit test | File | Oracle |
+|---|---|---|
+| `cchain_block_wire` | `tests/block_wire.rs` | coreth RLP wire vectors |
+| `cchain_genesis_root` | `tests/genesis_root.rs` | coreth genesis state root |
+| `cchain_state_root` | `tests/cchain_state_root.rs` | recorded reexecute; the REAL coreth 3-account post-state root `0x8b0bf834…71a` (M6.31 base-fee-to-coinbase; `vectors/cchain/reexecute/genesis_to_1/genesis_to_1.json`) |
+| `atomic_xc` | `tests/atomic_xc.rs` | recorded X↔C shared-memory vectors (no live mode exists, so no CI gating needed) |
+| `evm_fee_schedule_per_fork` | `tests/fee_schedule.rs` | proptest (512 cases) over phase-gated fee params |
+
+**`gas_used` fix (M8.26 wallet-differential fold-in):**
+`atomic/mempool.rs::gas_used` now prices the **unsigned** tx bytes — coreth
+`Metadata.Bytes()` (`metadata.go:30`) returns `unsignedBytes` despite the
+name, and `GasUsed` calls `calcBytesCost(len(utx.Bytes()))`
+(`import_tx.go:138`, `export_tx.go:135`). Pricing the signed envelope
+overcounted by 77 gas per 1-sig credential. `Tx` carries a non-serialized
+`unsigned_bytes` cache (populated by `initialize()`/`parse()`, mirroring Go
+`Metadata.unsignedBytes`); Go-EXECUTED values are pinned by
+`atomic_mempool::gas_used_matches_coreth_oracle` against the `gas_used` block
+of `vectors/cchain/atomic/atomic_txs.json` (emitter:
+`tests/differential/go-oracle/atomic_tx_gas_emitter_test.go`,
+avalanchego@5896c92fee).
+
+**Boot deferral:** booting the C-Chain through the real `avalanchers` node is
+**M8.29–M8.31 (node assembly)**, not M6 scope. The seam is ready on both
+sides: `EvmVm` implements `ava_vm::block::ChainVm`
+(`src/vm.rs:244`/`:498`), which is exactly the trait the chain manager's
+creation path consumes (`crates/ava-chains/src/create_chain.rs` wraps any
+`V: ChainVm`); what remains for M8 is registering an EVM `Factory` with the
+`VmManager` — today `crates/avalanchers/src/wiring/chains.rs` registers only
+the built-in no-op test-VM factory, which is what
+`crates/avalanchers/tests/in_process_chain.rs` boots.
+
 ---
 
 ## plugin/evm (root — vm, block builder, gossip)
@@ -127,7 +163,7 @@ ChainVm adapter / genesis root / state sync / eth_* RPC / fuzz targets.
 | `TestExportTxSemanticVerify` | ✅ ported | `atomic_verify::rejects_conflicting_inputs_across_ancestry` covers conflict detection; `atomic_transfer` covers EVM-state side effects |
 | `TestExportTxAccept` | ✅ ported | `atomic_backend::accept_indexes_trie_and_applies_shared_memory` (Export → `Put` in shared-memory) |
 | `TestExportTxVerify` | ✅ ported | `atomic_verify::rejects_conflicting_inputs_across_ancestry` + `atomic_transfer::import_credits_export_debits_and_bumps_nonce` |
-| `TestExportTxGasCost` | ✅ ported | `fee_schedule::atomic_gas_and_fee` — Export gas cost (`EVMInputGas × inputs + TxBytesGas × bytes`) |
+| `TestExportTxGasCost` | ✅ ported | `fee_schedule::atomic_gas_and_fee` — Export gas cost (`EVMInputGas × inputs + TxBytesGas × bytes`); bytes = UNSIGNED tx bytes, Go-pinned by `atomic_mempool::gas_used_matches_coreth_oracle` (M6.29) |
 | `TestNewExportTx` | 🟡 partial | The builder-side `NewExportTx` (which selects UTXOs and constructs the tx) is not yet ported (M6.26 reuse-surface follow-up); the codec/lifecycle side is fully covered |
 | `TestNewExportTxMulticoin` | 🟡 partial | Same deferral as `TestNewExportTx` — multi-asset export builder not yet ported |
 | `TestImportMissingUTXOs` | ✅ ported | `atomic_transfer::import_credits_export_debits_and_bumps_nonce` exercises the Import path (shared-memory UTXO consumed); missing-UTXO path is covered by error type coverage |
@@ -151,7 +187,7 @@ ChainVm adapter / genesis root / state sync / eth_* RPC / fuzz targets.
 | `TestFirewoodHistoricalReplayAcrossAtomicImport` | ✅ ported | `state_sync::atomic_trie_syncs_then_applies_to_shared_memory` (Firewood historical proof + atomic trie replay) |
 | `TestImportTxVerify` | ✅ ported | `atomic_verify::rejects_conflicting_inputs_across_ancestry` + `atomic_transfer::import_credits_export_debits_and_bumps_nonce` |
 | `TestNewImportTx` | 🟡 partial | Builder-side `NewImportTx` not yet ported (M6.26 follow-up); codec/lifecycle fully covered |
-| `TestImportTxGasCost` | ✅ ported | `fee_schedule::atomic_gas_and_fee` — Import gas cost (`CostPerSignature × sigs + EVMOutputGas × outs + TxBytesGas × bytes`) |
+| `TestImportTxGasCost` | ✅ ported | `fee_schedule::atomic_gas_and_fee` — Import gas cost (`CostPerSignature × sigs + EVMOutputGas × outs + TxBytesGas × bytes`); bytes = UNSIGNED tx bytes, Go-pinned by `atomic_mempool::gas_used_matches_coreth_oracle` (M6.29) |
 | `TestImportTxSemanticVerify` | ✅ ported | `atomic_verify` + `atomic_transfer` |
 | `TestImportTxEVMStateTransfer` | ✅ ported | `atomic_transfer::import_credits_export_debits_and_bumps_nonce` — Import credits EVM state |
 | `TestAtomicSyncerVM` | ✅ ported | `state_sync::atomic_trie_syncs_then_applies_to_shared_memory` |
