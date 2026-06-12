@@ -66,6 +66,11 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > Remaining M8 frontier: **per-service fan-out M8.18 (info) ∥ M8.19 (admin) ∥ M8.20 (health) ∥
 > M8.21 (metrics) ∥ M8.24 (indexer)** (all parallel on the M8.17 shim; M8.19 needs M8.28's reload
 > handles — landed), then M8.22 (register_chain) → M8.23 (api_parity) → Wave E (M8.29–M8.31).
+>
+> **PER-SERVICE FAN-OUT MERGED 2026-06-11/12** (merges 16b62c1 info, 7a4696f admin, b9b0c94 health,
+> 57911ba metrics, 60ee2e8 indexer; per-task AS-BUILTs below). Remaining M8 frontier:
+> **M8.22 (register_chain) → M8.23 (api_parity) → Wave E serial (M8.29–M8.31) → M8.32 gate.**
+> Current wave (2026-06-12): M8.22 ∥ M6.29 (C-Chain exit gate, cross-milestone).
 
 ---
 
@@ -281,41 +286,52 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > behind Arc. NOTE for M8.22/M8.31: no BUILD.bazel committed for ava-api/ava-api-macros/ava-node yet —
 > run `bazel-gazelle-generate` + `deps-tidy` before any push upstream.
 
-### Task M8.18: info API — 13 methods (`/ext/info`)
+### Task M8.18: info API — 13 methods (`/ext/info`) ✅ DONE (0d6ead5+51ebc10, merge 16b62c1)
 **Crate:** ava-api  ·  **Depends on:** M8.17, M2/M3 (network/validators/benchlist/chainManager handles), M8.12 (Config), M1 ava-version  ·  **Spec:** 12 §3.3, 14 §3
 **Files:** `crates/ava-api/src/info/mod.rs`, `crates/ava-api/src/info/types.rs`
-- [ ] **Step 1 — Red:** `info/mod.rs::tests::info_method_set` — assert the registered `info` method set == the 13 names in 14 §3 (`getNodeVersion`,`getNodeID`,`getNodeIP`,`getNetworkID`,`getNetworkName`,`getBlockchainID`,`peers`,`isBootstrapped`,`upgrades`,`uptime`,`acps`,`getTxFee`,`getVMs`). Type-shape unit test for `getNodeVersion` reply field names/json tags (14 §3).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-api info::tests::info_method_set` → fails.
-- [ ] **Step 3 — Green:** Implement `#[rpc_service("info")] impl Info` with the 13 methods, Args/Reply serde types mirroring Go field names/json tags exactly (14 §3): `getNodeVersion`→{version,databaseVersion,rpcProtocolVersion,gitCommit,vmVersions}; `getNodeID`→{nodeID,nodePOP{publicKey,proofOfPossession}}; `peers`→{numPeers,peers:[Peer]}; `upgrades`→`upgrade::Config`; `acps` tally; `getTxFee` (deprecated warn); `getVMs`. Construct from `Parameters{version,nodeID,nodePOP,networkID,vmManager,upgrades,txFee,createAssetTxFee}` + handles.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-api info::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: info API (13 methods, 14 §3)`
+- [x] **Step 1 — Red:** `info/mod.rs::tests::info_method_set` — assert the registered `info` method set == the 13 names in 14 §3 (`getNodeVersion`,`getNodeID`,`getNodeIP`,`getNetworkID`,`getNetworkName`,`getBlockchainID`,`peers`,`isBootstrapped`,`upgrades`,`uptime`,`acps`,`getTxFee`,`getVMs`). Type-shape unit test for `getNodeVersion` reply field names/json tags (14 §3).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-api info::tests::info_method_set` → fails.
+- [x] **Step 3 — Green:** Implement `#[rpc_service("info")] impl Info` with the 13 methods, Args/Reply serde types mirroring Go field names/json tags exactly (14 §3): `getNodeVersion`→{version,databaseVersion,rpcProtocolVersion,gitCommit,vmVersions}; `getNodeID`→{nodeID,nodePOP{publicKey,proofOfPossession}}; `peers`→{numPeers,peers:[Peer]}; `upgrades`→`upgrade::Config`; `acps` tally; `getTxFee` (deprecated warn); `getVMs`. Construct from `Parameters{version,nodeID,nodePOP,networkID,vmManager,upgrades,txFee,createAssetTxFee}` + handles.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-api info::` passes.
+- [x] **Step 5 — Commit:** `ava-api: info API (13 methods, 14 §3)`
 
-### Task M8.19: admin API — 13 methods (`/ext/admin`, disabled by default)
+### Task M8.19: admin API — 13 methods (`/ext/admin`, disabled by default) ✅ DONE (400c12b+11ca82d, merge 7a4696f)
 **Crate:** ava-api  ·  **Depends on:** M8.17, M8.18, M8.28 (logging reload handles for setLoggerLevel), M1 ava-database (dbGet)  ·  **Spec:** 12 §3.5, 14 §4
 **Files:** `crates/ava-api/src/admin/mod.rs`, `crates/ava-api/src/admin/types.rs`, `crates/ava-api/src/admin/profiler.rs` (pprof crate)
-- [ ] **Step 1 — Red:** `admin/mod.rs::tests::admin_method_set` — registered `admin` set == the 13 names (14 §4): `startCPUProfiler`,`stopCPUProfiler`,`memoryProfile`,`lockProfile`,`alias`,`aliasChain`,`getChainAliases`,`stacktrace`,`setLoggerLevel`,`getLoggerLevel`,`getConfig`,`loadVMs`,`dbGet`. Unit: `alias` rejects `len(alias) > 512`; `setLoggerLevel` requires ≥1 of logLevel/displayLevel (14 §4).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-api admin::tests::admin_method_set` → fails.
-- [ ] **Step 3 — Green:** Implement `#[rpc_service("admin")] impl Admin` with the 13 methods: pprof via the `pprof` crate (CPU/memory/lock profiles to `profile-dir`); `alias`/`aliasChain`/`getChainAliases` via the ApiServer alias registry; `stacktrace` dumps task backtraces; `setLoggerLevel`/`getLoggerLevel` via `tracing-subscriber` reload handles (12 §3.5); `getConfig` serializes the resolved `Config` (providedFlags-aware, 13 §23); `loadVMs` rescans plugin-dir; `dbGet` raw hex DB read → `{value, errorCode}`.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-api admin::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: admin API (13 methods, 14 §4)`
+- [x] **Step 1 — Red:** `admin/mod.rs::tests::admin_method_set` — registered `admin` set == the 13 names (14 §4): `startCPUProfiler`,`stopCPUProfiler`,`memoryProfile`,`lockProfile`,`alias`,`aliasChain`,`getChainAliases`,`stacktrace`,`setLoggerLevel`,`getLoggerLevel`,`getConfig`,`loadVMs`,`dbGet`. Unit: `alias` rejects `len(alias) > 512`; `setLoggerLevel` requires ≥1 of logLevel/displayLevel (14 §4).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-api admin::tests::admin_method_set` → fails.
+- [x] **Step 3 — Green:** Implement `#[rpc_service("admin")] impl Admin` with the 13 methods: pprof via the `pprof` crate (CPU/memory/lock profiles to `profile-dir`); `alias`/`aliasChain`/`getChainAliases` via the ApiServer alias registry; `stacktrace` dumps task backtraces; `setLoggerLevel`/`getLoggerLevel` via `tracing-subscriber` reload handles (12 §3.5); `getConfig` serializes the resolved `Config` (providedFlags-aware, 13 §23); `loadVMs` rescans plugin-dir; `dbGet` raw hex DB read → `{value, errorCode}`.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-api admin::` passes.
+- [x] **Step 5 — Commit:** `ava-api: admin API (13 methods, 14 §4)`
 
-### Task M8.20: health API — dual GET/JSON-RPC handler + health worker loop
+### Task M8.20: health API — dual GET/JSON-RPC handler + health worker loop ✅ DONE (1920779+f020d7e, merge b9b0c94)
 **Crate:** ava-api  ·  **Depends on:** M8.17, M8.21 (health metrics namespace)  ·  **Spec:** 12 §3.4, 14 §5/§16.3, 17 §2.2 (#21), 18 §2.13
 **Files:** `crates/ava-api/src/health/mod.rs` (worker + checker registry), `crates/ava-api/src/health/handler.rs` (method-branching axum handler), `crates/ava-api/src/health/types.rs` (`Result`, `APIReply`)
-- [ ] **Step 1 — Red:** `health/handler.rs::tests::get_returns_200_or_503` — GET `/ext/health` healthy→200, unhealthy→503, body `{checks, healthy}` (14 §5/§16.3); `?tag=` filtering. `get_subpaths` — `/ext/health/{health,readiness,liveness}` GET-only. `post_jsonrpc` — POST dispatches `health.health/readiness/liveness(tags)`. `worker_ewma` — registered checkers run on `health-check-frequency` with averager halflife.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-api health::handler::tests::get_returns_200_or_503` → fails.
-- [ ] **Step 3 — Green:** Implement the dual handler (GET branch → GET handler; else JSON-RPC, 14 §5). `Health` worker: `register_health_check(name, checker, tags)`, runs on the freq interval (17 #21), EWMA per `health-check-averager-halflife`, `ApplicationTag` + per-chain tags; `shuttingDown` checker registered at shutdown. `Result{message,error,timestamp,duration,contiguousFailures,timeOfFirstFailure}`. Worker initialized **before** the chain manager (12 §2.2 step 18).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-api health::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: health API dual handler + worker loop (12 §3.4, 14 §5)`
+- [x] **Step 1 — Red:** `health/handler.rs::tests::get_returns_200_or_503` — GET `/ext/health` healthy→200, unhealthy→503, body `{checks, healthy}` (14 §5/§16.3); `?tag=` filtering. `get_subpaths` — `/ext/health/{health,readiness,liveness}` GET-only. `post_jsonrpc` — POST dispatches `health.health/readiness/liveness(tags)`. `worker_ewma` — registered checkers run on `health-check-frequency` with averager halflife.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-api health::handler::tests::get_returns_200_or_503` → fails.
+- [x] **Step 3 — Green:** Implement the dual handler (GET branch → GET handler; else JSON-RPC, 14 §5). `Health` worker: `register_health_check(name, checker, tags)`, runs on the freq interval (17 #21), EWMA per `health-check-averager-halflife`, `ApplicationTag` + per-chain tags; `shuttingDown` checker registered at shutdown. `Result{message,error,timestamp,duration,contiguousFailures,timeOfFirstFailure}`. Worker initialized **before** the chain manager (12 §2.2 step 18).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-api health::` passes.
+- [x] **Step 5 — Commit:** `ava-api: health API dual handler + worker loop (12 §3.4, 14 §5)`
 
-### Task M8.21: metrics API + MultiGatherer/PrefixGatherer/LabelGatherer + metrics-name golden
+### Task M8.21: metrics API + MultiGatherer/PrefixGatherer/LabelGatherer + metrics-name golden ✅ DONE (98649a5+a65ad79+c865bdb+5bd826a, merge 57911ba)
 **Crate:** ava-api  ·  **Depends on:** M8.16, M1 (prometheus crate)  ·  **Spec:** 12 §3.6, 14 §6, 18 §1/§2/§3/§4
 **Files:** `crates/ava-api/src/metrics/mod.rs` (`PrefixGatherer`, `LabelGatherer`, `make_and_register`, `/ext/metrics` handler), `crates/ava-api/tests/golden_metrics_names.rs`, `crates/ava-api/tests/vectors/api/metrics_schema.json` (Go snapshot)
-- [ ] **Step 1 — Red:** `metrics/mod.rs::tests::prefix_namespace` — family `peers` under prefix `avalanche_network` exposes `avalanche_network_peers` (sep `_`, 18 §1.2); overlapping-namespace registration rejected (`eitherIsPrefix`). `label_injection` — `LabelGatherer("chain")` injects `chain="<alias>"` into every family (18 §1.1). `tests/golden_metrics_names.rs::metrics_name_parity` — Rust `/ext/metrics` schema `{(name,type,sorted(label_keys))}` is a **superset** of the committed Go snapshot (18 §3), with the documented `go_*` waiver (18 §4).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-api metrics_name_parity` → fails.
-- [ ] **Step 3 — Green:** Implement `PrefixGatherer`/`LabelGatherer`/`make_and_register` (18 §1.2), `NAMESPACE_SEP="_"`, `PLATFORM_NAME="avalanche"`, `CHAIN_LABEL="chain"`. `/ext/metrics` GET serializes via `prometheus::TextEncoder` (`text/plain; version=0.0.4`), sorted families for byte-stability (18 §7). Add `process_*` collector (Linux); document the `go_*` gap. Commit the Go metrics schema snapshot.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-api metrics::` passes.
-- [ ] **Step 5 — Commit:** `ava-api: metrics MultiGatherer + /ext/metrics + name-parity golden (18 §1-§4)`
+- [x] **Step 1 — Red:** `metrics/mod.rs::tests::prefix_namespace` — family `peers` under prefix `avalanche_network` exposes `avalanche_network_peers` (sep `_`, 18 §1.2); overlapping-namespace registration rejected (`eitherIsPrefix`). `label_injection` — `LabelGatherer("chain")` injects `chain="<alias>"` into every family (18 §1.1). `tests/golden_metrics_names.rs::metrics_name_parity` — Rust `/ext/metrics` schema `{(name,type,sorted(label_keys))}` is a **superset** of the committed Go snapshot (18 §3), with the documented `go_*` waiver (18 §4).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-api metrics_name_parity` → fails.
+- [x] **Step 3 — Green:** Implement `PrefixGatherer`/`LabelGatherer`/`make_and_register` (18 §1.2), `NAMESPACE_SEP="_"`, `PLATFORM_NAME="avalanche"`, `CHAIN_LABEL="chain"`. `/ext/metrics` GET serializes via `prometheus::TextEncoder` (`text/plain; version=0.0.4`), sorted families for byte-stability (18 §7). Add `process_*` collector (Linux); document the `go_*` gap. Commit the Go metrics schema snapshot.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-api metrics::` passes.
+- [x] **Step 5 — Commit:** `ava-api: metrics MultiGatherer + /ext/metrics + name-parity golden (18 §1-§4)`
+
+> **AS-BUILT (M8.18–M8.21, merged 2026-06-11/12 wave; each spec+quality reviewed).** info 15 / admin 14 /
+> health 16 / metrics 9 module tests + `golden_metrics_names.rs`. Notable: **metrics** — merge semantics
+> mirror Go `prometheus.Gatherers.Gather` (type-conflict/dup-label checks), sorted families + sorted-by-label-value
+> metrics (18 §7); golden superset vs Go snapshot emitted via `tests/go-oracle/` (avalanchego @ 5896c92fee);
+> waivers: `go_*` runtime families, `process_*` off Linux, Linux-only `process_network_*`,
+> `process_virtual_memory_max_bytes` (Rust prometheus crate gap). **Spec finding (18 §4):** families are
+> `avalanche_process_{go,process}_*` — the prefix gatherer renames unconditionally, not bare `go_*`/`process_*`.
+> Quality follow-ups worth knowing: metrics gathers OUTSIDE the registry lock + alloc-free label sort (5bd826a);
+> health checker-panic containment + monotonic/registration tests (f020d7e); admin wraps profiler/stacktrace
+> blocking I/O in `spawn_blocking` (11ca82d).
 
 ### Task M8.22: register_chain mounting contract (P/X/C/proposervm) + header-route + aliases
 **Crate:** ava-api  ·  **Depends on:** M8.16, M8.17, M4 ava-platformvm::service (31 methods), M5 ava-avm::service (11 methods), M6 ava-evm (rpc/ws/avax/admin header-routes), M7/proposervm::service  ·  **Spec:** 12 §3.1/§3.7/§3.8, 14 §1.2/§8/§9/§10/§11/§13
@@ -335,14 +351,27 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-api api_parity` (recorded mode) passes.
 - [ ] **Step 5 — Commit:** `ava-api: differential::api_parity (all endpoints, 14 §14/§16.6)`
 
-### Task M8.24: ava-indexer — Indexer trait + per-chain index + index API + differential::indexer_parity
+### Task M8.24: ava-indexer — Indexer trait + per-chain index + index API + differential::indexer_parity ✅ DONE (3463015+a186580, merge 60ee2e8)
 **Crate:** ava-indexer  ·  **Depends on:** M8.17 (JSON-RPC shim), M2/M3 (AcceptorGroup broadcast, ConsensusContext, CommonVM), M1 ava-database (versioned batch), M8.12 (index-enabled/allow-incomplete)  ·  **Spec:** 12 §5, 14 §7, 17 §2.2 (#20)/§3 (broadcast Lagged)
 **Files:** `crates/ava-indexer/Cargo.toml`, `crates/ava-indexer/src/lib.rs` (`Indexer` trait), `crates/ava-indexer/src/indexer.rs` (`register_chain`), `crates/ava-indexer/src/index.rs` (Accept writes), `crates/ava-indexer/src/service.rs` (6 methods), `crates/ava-indexer/tests/differential_indexer_parity.rs`, `crates/ava-indexer/tests/vectors/...`
-- [ ] **Step 1 — Red:** `index.rs::tests::accept_ordering_and_markers` — `Accept` writes `containerID→bytes`, `height→containerID`, `containerID→height`, advances `nextAcceptedIndex` atomically (12 §5); `incomplete-index fatal` — toggling `index-enabled` so an index would gap with `index-allow-incomplete=false` ⇒ fatal (12 §5). `service.rs::tests::index_method_set` — 6 methods (14 §7): `getLastAccepted`,`getContainerByIndex`,`getContainerByID`,`getContainerRange`,`getIndex`,`isAccepted`; `getContainerRange` capped at 1024; `FormattedContainer{id,bytes,timestamp,encoding,index}`. `differential_indexer_parity.rs::indexer_parity` — accept ordering, range queries, restart markers vs recorded Go oracle.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-indexer indexer_parity` → fails.
-- [ ] **Step 3 — Green:** Implement the `Indexer` trait (`register_chain`, `close`), `register_chain` (skip non-primary subnets + already-indexed; prefixes `tx=0x01`,`vtx=0x02`,`block=0x03`; incomplete-index safety). `Accept` via versioned batch, offloaded to `spawn_blocking` (17 #20), broadcast `Lagged` treated as fatal (17 §3). Index API JSON-RPC service mounted per chain at `/ext/index/<alias>/{block,tx,vtx}` (14 §7); encodings hex/cb58. Persisted `hasRun`/`incomplete` markers match Go.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-indexer` passes (recorded mode).
-- [ ] **Step 5 — Commit:** `ava-indexer: index + index API + differential::indexer_parity (12 §5, 14 §7)`
+- [x] **Step 1 — Red:** `index.rs::tests::accept_ordering_and_markers` — `Accept` writes `containerID→bytes`, `height→containerID`, `containerID→height`, advances `nextAcceptedIndex` atomically (12 §5); `incomplete-index fatal` — toggling `index-enabled` so an index would gap with `index-allow-incomplete=false` ⇒ fatal (12 §5). `service.rs::tests::index_method_set` — 6 methods (14 §7): `getLastAccepted`,`getContainerByIndex`,`getContainerByID`,`getContainerRange`,`getIndex`,`isAccepted`; `getContainerRange` capped at 1024; `FormattedContainer{id,bytes,timestamp,encoding,index}`. `differential_indexer_parity.rs::indexer_parity` — accept ordering, range queries, restart markers vs recorded Go oracle.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-indexer indexer_parity` → fails.
+- [x] **Step 3 — Green:** Implement the `Indexer` trait (`register_chain`, `close`), `register_chain` (skip non-primary subnets + already-indexed; prefixes `tx=0x01`,`vtx=0x02`,`block=0x03`; incomplete-index safety). `Accept` via versioned batch, offloaded to `spawn_blocking` (17 #20), broadcast `Lagged` treated as fatal (17 §3). Index API JSON-RPC service mounted per chain at `/ext/index/<alias>/{block,tx,vtx}` (14 §7); encodings hex/cb58. Persisted `hasRun`/`incomplete` markers match Go.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-indexer` passes (recorded mode).
+- [x] **Step 5 — Commit:** `ava-indexer: index + index API + differential::indexer_parity (12 §5, 14 §7)`
+
+> **AS-BUILT (M8.24, merged 60ee2e8).** 16 tests (15 unit + indexer_parity); tests/PORTING.md maps every Go
+> indexer test. container.rs byte-exact linear codec (v0); index.rs reads mirror Go incl. byte-stable error
+> strings, `MAX_FETCHED_BY_RANGE=1024`; acceptor.rs = broadcast AcceptorGroup seam implementing the ava-snow
+> Acceptor engine-side publish hook; register_chain markers (`hasRun`/previously-indexed/incomplete) byte-identical
+> to Go, incomplete-index violation ⇒ fatal close + `shutdown_f`; per-index acceptor task offloads writes to
+> `spawn_blocking` (17 §2.2 #20), broadcast `Lagged` fatal; service.rs = 6 `index.*` methods with
+> `#[rpc(name = "GetContainerByID")]` acronym override, gorilla-parity `FormattedContainer` (cb58 id,
+> checksummed hex, RFC3339Nano timestamp, json.Uint64 index); per-index axum handler mounted through a narrow
+> `PathAdder` seam (full node wiring lands M8.29). Differential: recorded Go oracle (in-repo emitter,
+> avalanchego@5896c92) pins codec bytes, FULL physical DB dumps across three runs, live JSON-RPC reply JSON,
+> error strings, and the incomplete-index fatal. Quality follow-up a186580: fatal-path tests + quiet
+> write-abort on graceful close.
 
 ### Task M8.25: ava-wallet — P-chain Builder/Signer/Backend + UTXO selection ✅ DONE (530a882+f7266a4)
 **Crate:** ava-wallet  ·  **Depends on:** M4 ava-platformvm (tx/UTXO/Owner/SubnetValidator types), M1 ava-crypto (keychain, secp256k1, BLS PoP)  ·  **Spec:** 12 §13 (incl. the ACP-236 upstream-delta callout)
