@@ -33,6 +33,7 @@ use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 
 use crate::error::{ApiError, Result};
+use crate::header_route::{HeaderRoutes, header_route};
 use crate::middleware::{AllowedHosts, WILDCARD, allowed_hosts, node_id_header, not_bootstrapped};
 
 /// The base path every route is mounted under (Go `baseURL = "/ext"`).
@@ -73,13 +74,17 @@ pub trait ApiServer: Send + Sync {
     fn add_aliases(&self, endpoint: &str, aliases: &[String]) -> Result<()>;
 
     /// Mount a chain's VM HTTP handlers under `/ext/bc/<chainID>/<endpoint>`
-    /// (mirror Go `server.RegisterChain`).
-    ///
-    /// Full mounting (calling `vm.create_handlers` and wiring each extension)
-    /// lands in M8.22; in this task the call records the chain's
-    /// [`ConsensusContext`] so the per-chain not-bootstrapped `503` layer can be
-    /// applied.
-    async fn register_chain(&self, name: &str, ctx: &Arc<ConsensusContext>, vm: Arc<dyn Vm>);
+    /// (mirror Go `server.RegisterChain`, `api/server/server.go:153`; full
+    /// contract in [`crate::register`]). The VM sits behind a `tokio` mutex
+    /// because `Vm::create_handlers`/`new_http_handler` take `&mut self` (the
+    /// Rust shape of Go's `ctx.Lock` around the calls, `server.go:154`); the
+    /// chain manager holds VMs the same way.
+    async fn register_chain(
+        &self,
+        name: &str,
+        ctx: &Arc<ConsensusContext>,
+        vm: Arc<tokio::sync::Mutex<dyn Vm>>,
+    );
 
     /// Register the chain's header-route handler (EVM `/rpc`, `/ws`), routed by
     /// the chain-id request header (mirror Go `server.AddChainRoute` /
@@ -157,6 +162,9 @@ pub struct Server {
     node_id_value: HeaderValue,
     /// Accumulated routes / chain registrations.
     registry: Mutex<Registry>,
+    /// The header-route table (Go `router.headerRoutes`), dispatched by the
+    /// `Avalanche-Api-Route` header before path routing (M8.22; 14 §1.2).
+    header_routes: HeaderRoutes,
     /// Notified by [`ApiServer::shutdown`] to stop the serve loop. Held behind
     /// an `Arc` so the graceful-shutdown future can hold it past `&self`.
     shutdown: Arc<Notify>,
@@ -174,6 +182,7 @@ impl Server {
             config,
             node_id_value,
             registry: Mutex::new(Registry::default()),
+            header_routes: HeaderRoutes::new(),
             shutdown: Arc::new(Notify::new()),
         }
     }
@@ -234,7 +243,7 @@ impl Server {
     /// `503`). The node-id header is outermost so it is set on **every**
     /// response, including the allowed-hosts `403` short-circuit (mirror Go,
     /// where the node-id wrapper is the outermost handler; 14 §16.3).
-    fn build_router(&self) -> Result<Router> {
+    pub(crate) fn build_router(&self) -> Result<Router> {
         let registry = self.registry.lock();
 
         let mut router = Router::new();
@@ -263,6 +272,13 @@ impl Server {
         let allowed = AllowedHosts::new(&self.config.http_allowed_hosts);
 
         let router = router
+            // Header-based VM routing runs BEFORE path routing (Go
+            // `router.ServeHTTP`, router.go:53), but inside the transport
+            // wrappers (Go `wrapHandler` wraps the router). Innermost layer.
+            .layer(axum::middleware::from_fn_with_state(
+                self.header_routes.clone(),
+                header_route,
+            ))
             // Read/write timeout (Go's read+write timeouts collapse to a single
             // request timeout here; idle/read-header are connection-level and
             // configured on the hyper builder at serve time). A timed-out
@@ -317,6 +333,24 @@ impl Server {
         };
 
         Ok(candidate)
+    }
+
+    /// The live header-route table (used by `register_chain`, M8.22).
+    pub(crate) fn header_routes(&self) -> &HeaderRoutes {
+        &self.header_routes
+    }
+
+    /// Records a chain registration (its mount prefix + ctx) so `build_router`
+    /// wraps every route at/beneath `/ext/bc/<chainID>` with the chain's
+    /// not-bootstrapped `503` layer.
+    pub(crate) fn record_chain(&self, ctx: &Arc<ConsensusContext>) {
+        let prefix = Self::route_path(&format!("bc/{}", ctx.chain.chain_id), "")
+            .unwrap_or_else(|_| BASE_URL.to_string());
+        let mut registry = self.registry.lock();
+        registry.chains.push(ChainRegistration {
+            prefix,
+            ctx: ctx.clone(),
+        });
     }
 
     fn reserve(&self, path: String, handler: BoxedHandler) -> Result<()> {
@@ -416,19 +450,14 @@ impl ApiServer for Server {
         Ok(())
     }
 
-    async fn register_chain(&self, _name: &str, ctx: &Arc<ConsensusContext>, _vm: Arc<dyn Vm>) {
-        // M8.16: record the chain (its mount prefix + ctx) so `build_router`
-        // wraps every route at/beneath `/ext/bc/<chainID>` with the chain's
-        // not-bootstrapped 503 layer. Calling `vm.create_handlers()` and mounting
-        // each extension under /ext/bc/<chainID>/<extension> lands in M8.22; the
-        // chain id is keyed by the context's chain id (Go uses `ctx.ChainID`).
-        let prefix = Self::route_path(&format!("bc/{}", ctx.chain.chain_id), "")
-            .unwrap_or_else(|_| BASE_URL.to_string());
-        let mut registry = self.registry.lock();
-        registry.chains.push(ChainRegistration {
-            prefix,
-            ctx: ctx.clone(),
-        });
+    async fn register_chain(
+        &self,
+        name: &str,
+        ctx: &Arc<ConsensusContext>,
+        vm: Arc<tokio::sync::Mutex<dyn Vm>>,
+    ) {
+        // Full mounting contract (M8.22): see `crate::register`.
+        self.register_chain_impl(name, ctx, &vm).await;
     }
 
     fn add_header_route(&self, chain_id: &str, handler: BoxedHandler) -> Result<()> {
@@ -794,7 +823,7 @@ mod tests {
             Arc::new(NoOpAcceptor),
             Arc::new(NoOpAcceptor),
         ));
-        let vm: Arc<dyn Vm> = Arc::new(TestVm::new());
+        let vm: Arc<tokio::sync::Mutex<dyn Vm>> = Arc::new(tokio::sync::Mutex::new(TestVm::new()));
         srv.register_chain("C-Chain", &ctx, vm).await;
 
         let registry = srv.registry.lock();
@@ -845,7 +874,8 @@ mod tests {
         let srv = server();
         // Register the chain (records prefix + ctx), then mount a route under
         // its prefix /ext/bc/<chainID>/rpc (what M8.22 will do per VM handler).
-        let vm: Arc<dyn Vm> = Arc::new(ava_vm::testutil::TestVm::new());
+        let vm: Arc<tokio::sync::Mutex<dyn Vm>> =
+            Arc::new(tokio::sync::Mutex::new(ava_vm::testutil::TestVm::new()));
         srv.register_chain("C-Chain", &ctx, vm).await;
         let rpc_path = Server::route_path(&format!("bc/{chain_id}"), "rpc").expect("path");
         srv.reserve(
@@ -885,7 +915,8 @@ mod tests {
         let srv = server();
         // Register an Initializing chain, but mount an unrelated /ext/info route.
         let chain_id = Id::from_slice(&[5u8; 32]).expect("chain id");
-        let vm: Arc<dyn Vm> = Arc::new(ava_vm::testutil::TestVm::new());
+        let vm: Arc<tokio::sync::Mutex<dyn Vm>> =
+            Arc::new(tokio::sync::Mutex::new(ava_vm::testutil::TestVm::new()));
         srv.register_chain("C-Chain", &ctx_for_chain(chain_id), vm)
             .await;
         srv.reserve(

@@ -163,6 +163,10 @@ pub struct TestVm {
     shutdown: bool,
     /// Monotonic payload counter so successive built blocks differ.
     next_payload: u64,
+    /// The handlers returned by `create_handlers` (configurable; M8.22).
+    pub http_handlers: HashMap<String, HttpHandler>,
+    /// The handler returned by `new_http_handler` (configurable; M8.22).
+    pub http_header_handler: Option<HttpHandler>,
 }
 
 impl Default for TestVm {
@@ -181,6 +185,8 @@ impl TestVm {
             state: None,
             shutdown: false,
             next_payload: 0,
+            http_handlers: HashMap::new(),
+            http_header_handler: None,
         }
     }
 
@@ -312,14 +318,14 @@ impl Vm for TestVm {
         &mut self,
         _token: &CancellationToken,
     ) -> Result<HashMap<String, HttpHandler>> {
-        Ok(HashMap::new())
+        Ok(self.http_handlers.clone())
     }
 
     async fn new_http_handler(
         &mut self,
         _token: &CancellationToken,
     ) -> Result<Option<HttpHandler>> {
-        Ok(None)
+        Ok(self.http_header_handler.clone())
     }
 
     async fn wait_for_event(&self, _token: &CancellationToken) -> Result<VmEvent> {

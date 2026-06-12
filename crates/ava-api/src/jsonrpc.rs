@@ -314,6 +314,12 @@ fn is_json_content_type(headers: &HeaderMap) -> bool {
     let Ok(value) = value.to_str() else {
         return false;
     };
+    is_json_media_type(value)
+}
+
+/// The media-type core of [`is_json_content_type`], shared with the buffered
+/// [`registry_service`] adapter.
+fn is_json_media_type(value: &str) -> bool {
     let media = value.split(';').next().unwrap_or("").trim();
     media.eq_ignore_ascii_case("application/json")
 }
@@ -478,6 +484,83 @@ impl RpcError {
             data: wire.data,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Buffered in-process adapter (M8.22): ServiceRegistry -> ava_vm::VmHttpService
+// ---------------------------------------------------------------------------
+
+/// A [`ServiceRegistry`] served through the buffered in-process VM seam.
+struct RegistryService {
+    registry: Arc<ServiceRegistry>,
+}
+
+#[async_trait::async_trait]
+impl ava_vm::VmHttpService for RegistryService {
+    async fn serve_http(&self, req: ava_vm::VmRequest) -> ava_vm::VmResponse {
+        // Mirror `dispatch`'s pre-dispatch transport checks (14 §16.3).
+        // 405: JSON-RPC mounts are POST-only (gorilla `v2/server.go:149`).
+        if !req.method.eq_ignore_ascii_case("POST") {
+            return vm_response(
+                405,
+                "text/plain; charset=utf-8",
+                b"405 must POST\n".to_vec(),
+            );
+        }
+        // 415: the Content-Type must select the json codec (`v2/server.go:165`).
+        if !req.header("content-type").is_some_and(is_json_media_type) {
+            return vm_response(
+                415,
+                "text/plain; charset=utf-8",
+                b"415 unsupported media type\n".to_vec(),
+            );
+        }
+        let response = dispatch_body(&self.registry, &req.body).await;
+        match response_to_vm(response).await {
+            Ok(resp) => resp,
+            Err(_) => vm_response(500, "text/plain; charset=utf-8", Vec::new()),
+        }
+    }
+}
+
+/// Builds a buffered [`ava_vm::VmResponse`].
+fn vm_response(status: u16, content_type: &str, body: Vec<u8>) -> ava_vm::VmResponse {
+    ava_vm::VmResponse {
+        status,
+        headers: vec![("content-type".to_string(), content_type.to_string())],
+        body,
+    }
+}
+
+/// Buffers an axum [`Response`] into the in-process [`ava_vm::VmResponse`].
+async fn response_to_vm(response: Response) -> Result<ava_vm::VmResponse, axum::Error> {
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX).await?;
+    let headers = parts
+        .headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.as_str().to_string(), v.to_string()))
+        })
+        .collect();
+    Ok(ava_vm::VmResponse {
+        status: parts.status.as_u16(),
+        headers,
+        body: bytes.to_vec(),
+    })
+}
+
+/// Wraps a [`ServiceRegistry`] as an in-process VM HTTP handler
+/// ([`ava_vm::VmHttpService`]) so VM crates can expose gorilla-parity JSON-RPC
+/// mounts through `Vm::create_handlers` (M8.22 / 14 §13). The adapter applies
+/// the same `405`/`415` pre-dispatch checks as [`dispatch`] and then runs the
+/// shared dispatch core.
+#[must_use]
+pub fn registry_service(registry: Arc<ServiceRegistry>) -> Arc<dyn ava_vm::VmHttpService> {
+    Arc::new(RegistryService { registry })
 }
 
 #[cfg(test)]
