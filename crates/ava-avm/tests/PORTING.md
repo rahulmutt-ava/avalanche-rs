@@ -310,7 +310,7 @@ clients get a `-32000` body naming the deferral) rather than `-32601`.
 | Method / mount | Blocking seam |
 |---|---|
 | `getTxFee` | VM fee-config exposure to the service (`vm.txFee`/`createAssetTxFee`; Go-deprecated method) |
-| `"/wallet"` extension (`wallet.issueTx`, `wallet.send*`) | out of scope: keystore / key-management boundary of the Rust port |
+| `"/wallet"` extension (`wallet.issueTx` — the only exported method at the Go oracle) | out of scope: keystore / key-management boundary of the Rust port |
 
 Recorded transport deferral: Go wraps each handler with the `vm.metrics`
 request interceptor (`vm.go:299-300`) — deferred with the proposervm M8.22
