@@ -164,7 +164,7 @@ pub fn registry(api: Arc<dyn ProposerApi>) -> ServiceRegistry {
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use ava_api::registry_service;
-    use ava_vm::vm::{VmHttpService, VmRequest};
+    use ava_vm::vm::VmRequest;
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
 
@@ -296,8 +296,7 @@ mod tests {
         .await;
         assert_eq!(body["error"]["code"], -32000, "gorilla server error code");
         assert_eq!(
-            body["error"]["message"],
-            "failed to get preferred block: not found",
+            body["error"]["message"], "failed to get preferred block: not found",
             "Go service.go:97 wrap"
         );
 

@@ -17,10 +17,12 @@
 
 // Normal/auto-linked workspace deps not used by this integration test target.
 use assert_matches as _;
+use ava_api as _;
 use ava_codec as _;
 use hex as _;
 use pretty_assertions as _;
 use proptest as _;
+use prost as _;
 use serde as _;
 use sha2 as _;
 use thiserror as _;

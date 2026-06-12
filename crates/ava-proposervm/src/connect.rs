@@ -444,7 +444,11 @@ mod tests {
         assert_eq!(reply.height, 123, "proto reply height");
 
         let resp = svc
-            .serve_http(post(GET_CURRENT_EPOCH_PATH, "application/proto", Vec::new()))
+            .serve_http(post(
+                GET_CURRENT_EPOCH_PATH,
+                "application/proto",
+                Vec::new(),
+            ))
             .await;
         let reply = pb::GetCurrentEpochReply::decode(resp.body.as_slice()).expect("decode");
         assert_eq!(
@@ -461,7 +465,11 @@ mod tests {
         let svc = ConnectService::new(fixed());
 
         let resp = svc
-            .serve_http(post("/proposervm.ProposerVM/Nope", "application/json", vec![]))
+            .serve_http(post(
+                "/proposervm.ProposerVM/Nope",
+                "application/json",
+                vec![],
+            ))
             .await;
         assert_eq!(resp.status, 404, "unknown procedure");
 
@@ -491,8 +499,7 @@ mod tests {
         let body: Value = serde_json::from_slice(&resp.body).expect("json");
         assert_eq!(body["code"], "unknown", "Connect error code");
         assert_eq!(
-            body["message"],
-            "failed to get preferred block: not found",
+            body["message"], "failed to get preferred block: not found",
             "Go connectrpcService wrap (service.go:46)"
         );
     }
@@ -545,7 +552,9 @@ mod tests {
         );
 
         // Two values, second == "proposervm" -> the Connect mux.
-        let resp = svc.serve_http(with_route(&["chain-id", "proposervm"])).await;
+        let resp = svc
+            .serve_http(with_route(&["chain-id", "proposervm"]))
+            .await;
         assert_eq!(resp.status, 200, "len(route) == 2 + proposervm -> mux");
         let body: Value = serde_json::from_slice(&resp.body).expect("json");
         assert_eq!(body, json!({ "height": "123" }), "served by the mux");
@@ -555,9 +564,7 @@ mod tests {
         assert_eq!(resp.status, 404, "len == 2, wrong second value -> 404");
 
         // Three values -> 404 (Go's default case).
-        let resp = svc
-            .serve_http(with_route(&["a", "proposervm", "c"]))
-            .await;
+        let resp = svc.serve_http(with_route(&["a", "proposervm", "c"])).await;
         assert_eq!(resp.status, 404, "len(route) > 2 -> 404");
 
         // Short route with NO inner handler -> 404 (Go: case guard fails
@@ -567,7 +574,9 @@ mod tests {
         assert_eq!(resp.status, 404, "no inner handler -> 404");
 
         // ... but the mux route still works without an inner handler.
-        let resp = svc.serve_http(with_route(&["chain-id", "proposervm"])).await;
+        let resp = svc
+            .serve_http(with_route(&["chain-id", "proposervm"]))
+            .await;
         assert_eq!(resp.status, 200, "mux independent of the inner handler");
     }
 }
