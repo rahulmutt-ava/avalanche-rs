@@ -1570,6 +1570,7 @@ version = "0.1.0"
 dependencies = [
  "assert_matches",
  "async-trait",
+ "ava-api",
  "ava-codec",
  "ava-crypto",
  "ava-database",
@@ -1583,6 +1584,7 @@ dependencies = [
  "hex",
  "pretty_assertions",
  "proptest",
+ "prost 0.13.5",
  "rcgen",
  "ring",
  "rustls-pemfile",
@@ -1592,6 +1594,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "tonic-build",
 ]
 
 [[package]]
