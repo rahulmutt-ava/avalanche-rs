@@ -257,8 +257,17 @@ impl Server {
             // sub-router — so the guard actually applies, unlike a `.layer()` on
             // an empty merged router.)
             let mut handler = route.handler.clone();
+            // Resolve an alias-mounted path back to its canonical form so the
+            // chain's `503` layer also guards `/ext/bc/P/...` (Go wraps the
+            // handler itself before the alias fan-out — `wrapMiddleware`,
+            // server.go:226 — so alias copies carry the reject layer too).
+            let canonical_path = registry
+                .aliases
+                .iter()
+                .find_map(|a| alias_route_path(&a.alias, &a.canonical, &route.path))
+                .unwrap_or_else(|| route.path.clone());
             if let Some(chain) = registry.chains.iter().find(|c| {
-                route.path == c.prefix || route.path.starts_with(&format!("{}/", c.prefix))
+                canonical_path == c.prefix || canonical_path.starts_with(&format!("{}/", c.prefix))
             }) {
                 handler = handler.layer(axum::middleware::from_fn_with_state(
                     chain.ctx.clone(),
@@ -272,6 +281,12 @@ impl Server {
         let allowed = AllowedHosts::new(&self.config.http_allowed_hosts);
 
         let router = router
+            // Explicit 404 fallback: axum only runs `.layer()` middleware on
+            // requests that match a route (or an explicit fallback added
+            // before the layer), but the header-route dispatch below must see
+            // EVERY request — Go checks the header before path routing
+            // (`router.ServeHTTP`, router.go:53-58).
+            .fallback(|| async { StatusCode::NOT_FOUND })
             // Header-based VM routing runs BEFORE path routing (Go
             // `router.ServeHTTP`, router.go:53), but inside the transport
             // wrappers (Go `wrapHandler` wraps the router). Innermost layer.
@@ -360,8 +375,10 @@ impl Server {
 
     /// Records `path -> handler`, rejecting a path already taken by a route or
     /// reserved as an alias name (mirror Go `router.addRouter`: it errors if
-    /// `reservedRoutes.Contains(base)`), then propagates the handler to any
-    /// alias whose canonical is this path (mirror `forceAddRouter`'s alias fan-out).
+    /// `reservedRoutes.Contains(base)`), then propagates the handler to every
+    /// alias base at or above this path (mirror `forceAddRouter`'s alias
+    /// fan-out, `router.go:142-149`: EVERY endpoint registered under an
+    /// aliased base — current and future — is mirrored under each alias).
     fn reserve_locked(registry: &mut Registry, path: String, handler: BoxedHandler) -> Result<()> {
         if registry.routes.iter().any(|r| r.path == path)
             || registry.reserved_aliases.contains(&path)
@@ -369,15 +386,20 @@ impl Server {
             return Err(ApiError::AlreadyReserved { path });
         }
 
-        // Propagate to every alias recorded against this canonical path (the
-        // alias names were reserved up-front by `add_aliases`, so they are free).
+        // Propagate to every alias whose canonical base covers this path (the
+        // alias base names were reserved up-front by `add_aliases`).
         let alias_paths: Vec<String> = registry
             .aliases
             .iter()
-            .filter(|a| a.canonical == path)
-            .map(|a| a.alias.clone())
+            .filter_map(|a| alias_route_path(&a.canonical, &a.alias, &path))
             .collect();
         for alias in alias_paths {
+            // A directly-registered route may already occupy the alias path;
+            // keep it (Go's `forceAddRouter` reports the collision for the
+            // alias copy only and keeps going, router.go:128).
+            if registry.routes.iter().any(|r| r.path == alias) {
+                continue;
+            }
             registry.routes.push(Route {
                 path: alias,
                 handler: handler.clone(),
@@ -387,6 +409,16 @@ impl Server {
         registry.routes.push(Route { path, handler });
         Ok(())
     }
+}
+
+/// The alias-mounted copy of `path` for the mapping `canonical -> alias`:
+/// `Some(alias + suffix)` when `path` is at or beneath the `canonical` base,
+/// else `None`. (Go keys routes by `(base, endpoint)` so the alias fan-out is
+/// a map walk, router.go:142/171; here routes carry full paths, so the
+/// endpoint suffix is recomputed by prefix-stripping.)
+fn alias_route_path(canonical: &str, alias: &str, path: &str) -> Option<String> {
+    let suffix = path.strip_prefix(canonical)?;
+    (suffix.is_empty() || suffix.starts_with('/')).then(|| format!("{alias}{suffix}"))
 }
 
 #[async_trait]

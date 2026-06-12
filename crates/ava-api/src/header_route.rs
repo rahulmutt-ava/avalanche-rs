@@ -127,6 +127,10 @@ mod tests {
     fn test_router(routes: HeaderRoutes) -> Router {
         Router::new()
             .route("/ext/info", any(|| async { "path-routed" }))
+            // Mirror `Server::build_router`: an explicit 404 fallback BEFORE
+            // the layer, so the header dispatch sees requests whose path
+            // matches no route (Go checks the header before path routing).
+            .fallback(|| async { StatusCode::NOT_FOUND })
             .layer(axum::middleware::from_fn_with_state(routes, header_route))
     }
 
@@ -143,7 +147,10 @@ mod tests {
         assert!(
             routes.add(
                 "2JVSBoinj9C2J33VntvzYtVJNZdN2NKiwwKjcumHUWEb5DbBrm",
-                Router::new().route("/", any(|| async { "proposervm" })),
+                // Path-agnostic, like a Go `http.Handler`: the dispatched
+                // request keeps its ORIGINAL path (router.go:74 passes it
+                // unchanged), so the handler must not path-match.
+                Router::new().fallback_service(any(|| async { "proposervm" })),
             ),
             "HeaderRoutes::add (first registration)"
         );

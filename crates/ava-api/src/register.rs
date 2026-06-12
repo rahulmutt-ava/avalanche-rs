@@ -146,11 +146,11 @@ impl Server {
         };
         // wrapMiddleware (server.go:226): the not-bootstrapped 503 reject layer
         // is applied here for the header route (path routes get it from the
-        // chain-prefix matching in `build_router`).
-        let wrapped = vm_service_router(service).layer(axum::middleware::from_fn_with_state(
-            ctx.clone(),
-            not_bootstrapped,
-        ));
+        // chain-prefix matching in `build_router`). The header route serves
+        // every path (router.go:74 dispatches the request unchanged).
+        let wrapped = vm_service_fallback_router(service).layer(
+            axum::middleware::from_fn_with_state(ctx.clone(), not_bootstrapped),
+        );
         if !self.header_routes().add(&chain_id, wrapped) {
             error!(chain_name = name, "failed to add header route");
         }
@@ -170,9 +170,25 @@ fn parse_request_uri_ok(extension: &str) -> bool {
 }
 
 /// Adapts a buffered in-process VM handler ([`VmHttpService`]) onto an
-/// [`axum::Router`] serving every method and sub-path of its mount, plus the
-/// WebSocket upgrade path (12 §3.8).
+/// [`axum::Router`] serving exactly its mount path (every method, plus the
+/// WebSocket upgrade, 12 §3.8). Path mounts are EXACT in Go — `mux.Handle(url,
+/// handler)`, `router.go:135` — so `/ext/bc/<id>/unknown` must 404, not fall
+/// through to the chain-root handler.
 pub fn vm_service_router(service: Arc<dyn VmHttpService>) -> Router {
+    Router::new().route("/", vm_method_router(service))
+}
+
+/// Adapts a buffered in-process VM handler onto an [`axum::Router`] serving
+/// EVERY path. Header-routed handlers receive the request unchanged regardless
+/// of its path (Go `router.ServeHTTP` calls `handler.ServeHTTP` directly,
+/// `router.go:74`) — the EVM routes `/rpc`/`/ws`/… internally.
+pub fn vm_service_fallback_router(service: Arc<dyn VmHttpService>) -> Router {
+    Router::new().fallback_service(vm_method_router(service))
+}
+
+/// The shared method router: any method, WS upgrade bridged through the
+/// buffered seam, plain requests buffered through it.
+fn vm_method_router(service: Arc<dyn VmHttpService>) -> axum::routing::MethodRouter {
     let handler = move |ws: Option<WebSocketUpgrade>,
                         OriginalUri(original_uri): OriginalUri,
                         req: Request| {
@@ -192,9 +208,7 @@ pub fn vm_service_router(service: Arc<dyn VmHttpService>) -> Router {
             }
         }
     };
-    Router::new()
-        .route("/", any(handler.clone()))
-        .route("/*rest", any(handler))
+    any(handler)
 }
 
 /// Copies transport headers into the buffered seam's `(name, value)` pairs,
