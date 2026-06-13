@@ -132,9 +132,9 @@ pub struct Node {
     /// Tracks every task the node spawns so shutdown (M8.30) can join them.
     pub tasks: TaskTracker,
     /// The exit code recorded by the first shutdown demand (Go `exitCode`).
-    exit_code: Arc<AtomicI32>,
+    pub(crate) exit_code: Arc<AtomicI32>,
     /// Whether a shutdown has been demanded (Go `shuttingDown`).
-    shutting_down: Arc<AtomicBool>,
+    pub(crate) shutting_down: Arc<AtomicBool>,
     /// Runs the 14-step shutdown exactly once (M8.30; Go `shuttingDownOnce`).
     pub shutdown_once: tokio::sync::OnceCell<()>,
 }
@@ -440,44 +440,8 @@ impl Node {
 mod tests {
     use std::sync::Arc;
 
-    use ava_config::flags::{FLAG_SPECS, build_command};
-    use ava_config::parse::get_node_config;
-    use ava_config::precedence::Layered;
-
     use super::Node;
-    use crate::logging::LogFactory;
-
-    /// A minimal, network-quiet node config: local network, in-memory DB,
-    /// ephemeral staking identity, OS-assigned ports, explicit public IP (so
-    /// the NAT step never probes the LAN).
-    fn test_config(data_dir: &std::path::Path) -> ava_config::node::Config {
-        let args: Vec<String> = [
-            "avalanchers",
-            "--network-id=local",
-            "--db-type=memdb",
-            "--staking-ephemeral-cert-enabled",
-            "--staking-ephemeral-signer-enabled",
-            "--http-host=127.0.0.1",
-            "--http-port=0",
-            "--staking-port=0",
-            "--public-ip=127.0.0.1",
-            "--api-admin-enabled",
-            "--index-enabled",
-        ]
-        .into_iter()
-        .map(String::from)
-        .chain([format!("--data-dir={}", data_dir.display())])
-        .collect();
-
-        let layered = Layered::build_with_env(
-            build_command(FLAG_SPECS),
-            args,
-            FLAG_SPECS,
-            std::iter::empty(),
-        )
-        .unwrap_or_else(|e| panic!("Layered::build_with_env(): {e}"));
-        get_node_config(&layered).unwrap_or_else(|e| panic!("get_node_config(): {e}"))
-    }
+    use crate::testutil::{log_factory, test_config};
 
     /// The Go 26-step init order of `node.go::New` (12 §2.2). Steps 22/23 are
     /// two Go init calls each; every entry is one recorded `init_*`.
@@ -516,10 +480,7 @@ mod tests {
     async fn init_order_matches_go() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir(): {e}"));
         let config = Arc::new(test_config(dir.path()));
-
-        let handles = crate::logging::init(&config.logging_config)
-            .unwrap_or_else(|e| panic!("logging::init(): {e}"));
-        let log_factory = Arc::new(LogFactory::new(config.logging_config.clone(), handles));
+        let log_factory = log_factory(&config);
 
         let mut recorded = Vec::new();
         let node = Node::new_recorded(

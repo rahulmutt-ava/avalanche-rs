@@ -17,6 +17,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use ava_chains::aliaser::Aliaser;
 use ava_chains::manager::ChainParameters;
@@ -55,6 +57,23 @@ pub fn evm_id() -> Id {
     Id::from(ava_genesis::chains::EVM_ID_BYTES)
 }
 
+/// A running chain's shutdown handles (17 §4.1/§4.4). A chain's `token` is a
+/// child of its subnet's token, which is a child of the node's root
+/// `subnet_token`; cancelling a subnet token therefore reaches only that
+/// subnet's chains (asserted by the M8.30 cancellation-propagation test). The
+/// `tasks` tracker collects the chain's async worker pool so shutdown step 5
+/// can drain it.
+struct ChainHandle {
+    /// The chain id (for diagnostics / per-chain shutdown logging).
+    chain_id: Id,
+    /// The chain's subnet (the cancellation-propagation boundary).
+    subnet_id: Id,
+    /// The chain's cancellation token (child of the subnet token).
+    token: CancellationToken,
+    /// The chain's async worker pool (joined on drain).
+    tasks: TaskTracker,
+}
+
 /// The assembly-stage chain manager: alias resolution, bootstrapped tracking,
 /// registrants, and the queued chain-creation requests. Chain *creation* is
 /// the documented deferral (module docs).
@@ -74,6 +93,13 @@ pub struct AssemblyChainManager {
     /// chain's custom beacons; `ChainParameters::custom_beacons` carries only
     /// ids, so the manager keeps the full set).
     bootstrappers: Arc<dyn ValidatorManager>,
+    /// Per-subnet cancellation tokens (children of the node's root
+    /// `subnet_token`). A chain's token is a child of its subnet's token, so a
+    /// subnet shutdown cancels only that subnet's chains.
+    subnet_tokens: Mutex<std::collections::HashMap<Id, CancellationToken>>,
+    /// Running chains' shutdown handles, drained by [`Self::shutdown`]
+    /// (shutdown step 5).
+    chains: Mutex<Vec<ChainHandle>>,
 }
 
 impl AssemblyChainManager {
@@ -87,6 +113,88 @@ impl AssemblyChainManager {
             registrants: Mutex::new(Vec::new()),
             queued: Mutex::new(Vec::new()),
             bootstrappers,
+            subnet_tokens: Mutex::new(std::collections::HashMap::new()),
+            chains: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The cancellation token for `subnet_id`, created as a child of
+    /// `root_subnet_token` on first use (17 §4.1: root → subnet → chain). A
+    /// chain registered under this subnet derives its token from the returned
+    /// one, so cancelling a subnet's token reaches only that subnet's chains
+    /// (17 §9).
+    #[must_use]
+    pub fn subnet_token(
+        &self,
+        subnet_id: Id,
+        root_subnet_token: &CancellationToken,
+    ) -> CancellationToken {
+        self.subnet_tokens
+            .lock()
+            .entry(subnet_id)
+            .or_insert_with(|| root_subnet_token.child_token())
+            .clone()
+    }
+
+    /// Register a created chain's shutdown handles (called when chain creation
+    /// lands; exercised today by the M8.30 cancellation-propagation test). The
+    /// chain's token is a child of its subnet's token. Returns the chain's
+    /// token + task tracker so the (future) chain worker can run under them.
+    pub fn register_chain(
+        &self,
+        chain_id: Id,
+        subnet_id: Id,
+        root_subnet_token: &CancellationToken,
+    ) -> (CancellationToken, TaskTracker) {
+        let subnet_token = self.subnet_token(subnet_id, root_subnet_token);
+        let token = subnet_token.child_token();
+        let tasks = TaskTracker::new();
+        self.chains.lock().push(ChainHandle {
+            chain_id,
+            subnet_id,
+            token: token.clone(),
+            tasks: tasks.clone(),
+        });
+        (token, tasks)
+    }
+
+    /// The number of running (registered) chains (asserted by tests).
+    #[must_use]
+    pub fn running_chains(&self) -> usize {
+        self.chains.lock().len()
+    }
+
+    /// Shutdown step 5 (17 §4.3): drain every running chain. Per chain: cancel
+    /// its token (which cascades to its async workers + executor + gossip),
+    /// close its task tracker, then await the workers with the
+    /// `consensus-shutdown-timeout` budget; stragglers past the budget are
+    /// abandoned (their tasks observe the cancelled token and unwind on their
+    /// own — Go `cancel → drain-with-timeout → abort`). Engines/VMs drop when
+    /// the handles are cleared. Idempotent.
+    pub async fn shutdown(&self, drain_timeout: std::time::Duration) {
+        let handles: Vec<ChainHandle> = std::mem::take(&mut *self.chains.lock());
+        for handle in &handles {
+            tracing::debug!(
+                chain_id = %handle.chain_id,
+                subnet_id = %handle.subnet_id,
+                "shutting down chain"
+            );
+            handle.token.cancel();
+            handle.tasks.close();
+        }
+        for handle in handles {
+            // Drain the chain's worker pool within the consensus-shutdown
+            // budget; a chain that does not settle in time is abandoned (its
+            // workers already observe the cancelled token).
+            if tokio::time::timeout(drain_timeout, handle.tasks.wait())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    chain_id = %handle.chain_id,
+                    "chain did not drain within consensus-shutdown-timeout; abandoning stragglers"
+                );
+            }
         }
     }
 
