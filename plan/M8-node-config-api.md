@@ -78,6 +78,13 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > + address→UTXO index, 202 ava-avm tests). All spec+quality reviewed MERGE-READY (no must-fix); merged --no-ff
 > into main with zero conflicts. Remaining M8 frontier: **M8.23 differential::api_parity harness (golden vectors +
 > normalizer + live-mode) → Wave E serial M8.30 (dispatch/shutdown) → M8.31 (binary) → M8.32 gate.**
+>
+> **WAVE 2026-06-13b MERGED: M8.23 ∥ M8.30.** Two parallel worktree agents (disjoint crates, zero conflicts):
+> M8.23 (ava-api differential::api_parity — recorded-Go oracle @3d434ba, info/admin/health reply-shape + P/X
+> method-set + error/HTTP snapshots, 8 tests; merge `85f65e7`) + M8.30 (ava-node dispatch.rs + shutdown.rs —
+> 14-step shutdown order verbatim vs Go, OnceCell once, subnet-scoped cancel, process.json, 13 tests; merge
+> `6706ee5`). Both spec+quality reviewed MERGE-READY (no must-fix). **Full workspace 1462/1462 (1 leaky, 1 skipped).**
+> Remaining M8 frontier: **M8.31 (avalanchers binary promotion — main/signals/exit; now unblocked) → M8.32 gate.**
 
 ---
 
@@ -386,7 +393,7 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 >   `spawn_blocking` around synchronous EVM dispatch (eth_call/estimateGas on the shared runtime); per-chain
 >   HTTP-metrics + OTel wrap (Go `wrapMiddleware`) still deferred; gRPC reflection deferred.
 
-### Task M8.23: differential::api_parity — every endpoint structural-JSON-equal vs Go
+### Task M8.23: differential::api_parity — every endpoint structural-JSON-equal vs Go ✅ DONE (7cf022b, merge 85f65e7)
 **Crate:** ava-api (test harness coordinated with cross-cutting harness X)  ·  **Depends on:** M8.18–M8.22  ·  **Spec:** 14 §14/§16.6, 12 §12.4, 02 §9/§11.4
 
 > **METHOD-SET COMPLETION LANDED 2026-06-13** (merges `m8/platform-service`, `m8/avm-service`; both spec+quality
@@ -407,11 +414,34 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 >   getTx/getBlock `json` encoding, getUTXOs cross-chain `sourceChain` atomic UTXOs, elastic-subnet transform fields,
 >   P-Chain issueTx runtime admission (un-shared mempool until M8.30 node wiring).
 **Files:** `crates/ava-api/tests/differential_api_parity.rs`, `crates/ava-api/tests/vectors/api/<service>/<method>.json` (recorded Go request/response pairs), `tests/differential/api_oracle.rs` (shared harness hook)
-- [ ] **Step 1 — Red:** `tests/differential_api_parity.rs::api_parity` — for every method in 14 §3–§11, drive an identical JSON-RPC (or geth/Connect) request at the Rust node and compare against the recorded Go oracle response: structural-JSON-equal after normalizing non-deterministic fields (timestamps, node-IDs, peer lists, 02 §11.4). Plus method-set completeness (registered Rust method set == Go set per service, 14 §14.2), wire-shape conformance (single-element `params`, `Service.Method`, `{code,message,data}` errors), HTTP semantics (403 allowed-hosts, 503 not-bootstrapped, `node-id` header, health 200/503), and error-response snapshots (14 §16.6: bad params -32602, unknown method -32601, malformed -32700, EVM revert code 3, fee-cap message).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-api api_parity` (recorded-oracle mode) → fails.
-- [ ] **Step 3 — Green:** Wire the differential harness hook (live mode boots Go + Rust nodes; recorded mode replays committed `tests/vectors/api/`). Commit recorded Go vectors for every endpoint group. Normalize via the 02 §11.4 normalizer. Reconcile any divergence until structural-equal. Mark live mode CI-gated; recorded-oracle runs per-PR.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-api api_parity` (recorded mode) passes.
-- [ ] **Step 5 — Commit:** `ava-api: differential::api_parity (all endpoints, 14 §14/§16.6)`
+- [x] **Step 1 — Red:** `tests/differential_api_parity.rs::api_parity` — for every method in 14 §3–§11, drive an identical JSON-RPC (or geth/Connect) request at the Rust node and compare against the recorded Go oracle response: structural-JSON-equal after normalizing non-deterministic fields (timestamps, node-IDs, peer lists, 02 §11.4). Plus method-set completeness (registered Rust method set == Go set per service, 14 §14.2), wire-shape conformance (single-element `params`, `Service.Method`, `{code,message,data}` errors), HTTP semantics (403 allowed-hosts, 503 not-bootstrapped, `node-id` header, health 200/503), and error-response snapshots (14 §16.6: bad params -32602, unknown method -32601, malformed -32700, EVM revert code 3, fee-cap message).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-api api_parity` (recorded-oracle mode) → fails.
+- [x] **Step 3 — Green:** Wire the differential harness hook (live mode boots Go + Rust nodes; recorded mode replays committed `tests/vectors/api/`). Commit recorded Go vectors for every endpoint group. Normalize via the 02 §11.4 normalizer. Reconcile any divergence until structural-equal. Mark live mode CI-gated; recorded-oracle runs per-PR.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-api api_parity` (recorded mode) passes.
+- [x] **Step 5 — Commit:** `ava-api: differential::api_parity (all endpoints, 14 §14/§16.6)`
+
+> **AS-BUILT (M8.23, merged 2026-06-13 `85f65e7`; spec+quality reviewed MERGE-READY, no must-fix).** Followed the
+> M8.24 indexer_parity precedent exactly: **recorded-oracle is the per-PR mode** (NOT `#[ignore]`/env-gated) — committed
+> Go vectors `include_str!("vectors/api/api_parity.json")` replayed against in-process Rust services through the real
+> `ServiceRegistry` + `ava_api::dispatch` json2 shim, compared structural-JSON-equal after a local 02 §11.4 normalizer.
+> Live two-binary mode is left as a documented seam for cross-cutting harness X. 8 differential tests; full ava-api 96/96.
+> - **Go oracle** `crates/ava-api/tests/go-oracle/api_parity_oracle_test.go` — env-gated on `AVAX_RS_API_PARITY_OUT`,
+>   `goCommit` provenance; builds the REAL Go reply structs (`GetNodeVersionReply`/`GetVMsReply`/`PeersReply`/
+>   `UptimeResponse`/`admin.*`/`health.APIReply`) and marshals through the production `utils/json` codec. **Built & run
+>   against `../avalanchego` @ `3d434ba` (verified HEAD == recorded goCommit) to produce real vectors; Go tree left clean.**
+>   Regen command documented in `crates/ava-api/tests/PORTING.md`.
+> - **Coverage (no silent caps, documented in PORTING.md):** reply-shape driven in-process for **info** (9 calls, 13-method
+>   set), **admin** (3 calls, 13-method set), **health** (3 calls, timestamp/duration normalized). **Method-set completeness
+>   (14 §14.2)** exact for info/admin/health; **platform (31) / avm (11)** canonical wire-name sets pinned. **Error snapshots
+>   (14 §16.6):** −32602/−32601/−32700/−32600/−32000 through real dispatch; EVM revert code 3 asserted-as-recorded
+>   (geth/reth surface belongs to ava-evm parity). **HTTP semantics (14 §16.3):** node-id header (normal + 403 short-circuit),
+>   per-chain 503, health GET 200/503; pre-dispatch 405/415/−32700 covered by in-crate `jsonrpc.rs` unit tests.
+> - **★ P/X reply-shape parity is method-set-only here** — the `ava-api → ava-config → ava-genesis → ava-{platformvm,avm}`
+>   dep cycle forbids driving those services in-process from ava-api; their reply-shapes are covered inside the P/X crates
+>   (M8.23a/b). Honestly documented as a known gap. **Known divergences** (in PORTING.md, not forced to byte-match): `gas.Gas`/
+>   `gas.Price` bare-number; getCurrentValidators/getL1Validator subset; getTx/getBlock json encoding; getUTXOs sourceChain;
+>   getTxJSON shape; address→UTXO pagination order; header is `Avalanche-Api-Route`.
+> - Anti-vacuity verified by perturbation (`networkName: mainnet→TAMPERED` ⇒ `info_parity` fails with diff; restored).
 
 ### Task M8.24: ava-indexer — Indexer trait + per-chain index + index API + differential::indexer_parity ✅ DONE (3463015+a186580, merge 60ee2e8)
 **Crate:** ava-indexer  ·  **Depends on:** M8.17 (JSON-RPC shim), M2/M3 (AcceptorGroup broadcast, ConsensusContext, CommonVM), M1 ava-database (versioned batch), M8.12 (index-enabled/allow-incomplete)  ·  **Spec:** 12 §5, 14 §7, 17 §2.2 (#20)/§3 (broadcast Lagged)
@@ -557,14 +587,34 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > Deferrals (Go↔Rust, in PORTING.md): RPC remote signer, public-IP resolution service, read-only DB, process/go
 > collectors, `futureupgrade` check (gauge at +Inf), built-in P/X/C factory registration, admin `getConfig`=providedFlags map.
 
-### Task M8.30: ava-node dispatch + shutdown ordering + lifecycle test
+### Task M8.30: ava-node dispatch + shutdown ordering + lifecycle test ✅ DONE (7e48b11, merge 6706ee5)
 **Crate:** ava-node  ·  **Depends on:** M8.29  ·  **Spec:** 12 §2.3/§2.4, 17 §4.3/§4.4, 17 §9
 **Files:** `crates/ava-node/src/dispatch.rs`, `crates/ava-node/src/shutdown.rs`
-- [ ] **Step 1 — Red:** `shutdown.rs::tests::shutdown_order_matches_go` — record the actual step order in `Node::shutdown` and assert it equals the Go 14-step sequence (17 §4.3 / 12 §2.4): shuttingDown health-check + sleep `http-shutdown-wait`; staking_signer; resource_manager; timeout_manager; chain_manager (per-chain drain); benchlist; profiler; net.start_close (+cancel net_token); api_server (graceful, `http-shutdown-timeout`); nat unmap + ip_updater; indexer.close; runtime_manager.stop; db.delete(UNGRACEFUL)+close; tracer.close. `dispatch.rs::tests::api_dispatch_failure_triggers_shutdown_1`. `shutdown_runs_once` (OnceCell). Cancellation-propagation: cancel a `subnet_token` ⇒ only that subnet's chains join (17 §9).
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-node shutdown::tests::shutdown_order_matches_go` → fails.
-- [ ] **Step 3 — Green:** Implement `dispatch` (12 §2.3: write process.json `{pid,uri,stakingAddress}`; spawn API task → on unexpected exit `shutdown(1)`; manually-track state-sync + bootstrap peers; `net.dispatch().await` then `shutdown(1)`). Implement `shutdown` (OnceCell, 14 steps exact, 17 §4.3) using cancel→drain-with-timeout(`consensus-shutdown-timeout`)→abort-stragglers→drop (17 §4.4); `db.delete(UNGRACEFUL_SHUTDOWN)` last before close.
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-node dispatch:: shutdown::` passes.
-- [ ] **Step 5 — Commit:** `ava-node: dispatch + shutdown ordering + lifecycle test (12 §2.3/§2.4, 17 §4.3)`
+- [x] **Step 1 — Red:** `shutdown.rs::tests::shutdown_order_matches_go` — record the actual step order in `Node::shutdown` and assert it equals the Go 14-step sequence (17 §4.3 / 12 §2.4): shuttingDown health-check + sleep `http-shutdown-wait`; staking_signer; resource_manager; timeout_manager; chain_manager (per-chain drain); benchlist; profiler; net.start_close (+cancel net_token); api_server (graceful, `http-shutdown-timeout`); nat unmap + ip_updater; indexer.close; runtime_manager.stop; db.delete(UNGRACEFUL)+close; tracer.close. `dispatch.rs::tests::api_dispatch_failure_triggers_shutdown_1`. `shutdown_runs_once` (OnceCell). Cancellation-propagation: cancel a `subnet_token` ⇒ only that subnet's chains join (17 §9).
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-node shutdown::tests::shutdown_order_matches_go` → fails.
+- [x] **Step 3 — Green:** Implement `dispatch` (12 §2.3: write process.json `{pid,uri,stakingAddress}`; spawn API task → on unexpected exit `shutdown(1)`; manually-track state-sync + bootstrap peers; `net.dispatch().await` then `shutdown(1)`). Implement `shutdown` (OnceCell, 14 steps exact, 17 §4.3) using cancel→drain-with-timeout(`consensus-shutdown-timeout`)→abort-stragglers→drop (17 §4.4); `db.delete(UNGRACEFUL_SHUTDOWN)` last before close.
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-node dispatch:: shutdown::` passes.
+- [x] **Step 5 — Commit:** `ava-node: dispatch + shutdown ordering + lifecycle test (12 §2.3/§2.4, 17 §4.3)`
+
+> **AS-BUILT (M8.30, merged 2026-06-13 `6706ee5`; spec+quality reviewed MERGE-READY, no must-fix).** 13 ava-node tests
+> (5 mandated). `Node::shutdown(code)` (`shutdown.rs`) sets exit-code/`shuttingDown` (first demand wins via
+> `shutting_down.swap(true)`), cancels the root token, and runs the **14 steps exactly once** via `shutdown_once: OnceCell`
+> — order verified verbatim against `../avalanchego/node/node.go:1827` and specs 17 §4.3 / 12 §2.4. `run_shutdown`
+> `record(name)`s each step at its start; the recorder is parameter-gated (`shutdown` → `shutdown_recorded(code, None)`),
+> so the production path carries no test instrumentation. `Node::dispatch(self: Arc<Self>) -> i32` (`dispatch.rs`) writes
+> `process.json {pid,uri,stakingAddress}`, spawns the API task + bootstrap-beacon warn task (both on `Node.tasks`),
+> manually-tracks state-sync→bootstrap peers, awaits `net.dispatch()`, then `shutdown(1)` and removes `process.json`.
+> Added `AssemblyChainManager::shutdown(drain_timeout)` + `register_chain` + per-subnet child tokens (cancel → close
+> tracker → `timeout(drain)` wait → abandon stragglers — the 17 §4.4 machinery, exercised by `subnet_cancellation_is_scoped`).
+> - **Real steps:** 1 (shuttingDown+wait), 2 (staking signer), 4 (timeout mgr), 8 (net start_close + token), 9 (API
+>   graceful w/ `http-shutdown-timeout`), 11 (indexer close), 13 (db delete-marker + close), 14 (tracer flush).
+> - **Seam/noop (Go-parity placeholders, in PORTING.md):** 3 resource_manager, 6 benchlist (M3 no task), 7 profiler,
+>   10 nat (`ip_updater` always None), 12 runtime_manager. **Partial:** 5 chain_manager — drain machinery real & tested,
+>   but no chains created yet (real executor/gossip/engine drop lands with the chains milestone).
+> - **M8.31 handoffs (PORTING.md):** `apiURI` re-resolution for `--http-port=0` DEFERRED (needs a cross-crate bound-addr
+>   accessor on `ava_api::Server`); `RouterBridge::handle_inbound` still debug-drops (engine routing = chains milestone).
+> - `node.rs` `exit_code`/`shutting_down` made `pub(crate)`; new `src/testutil.rs` (`#[cfg(test)]`) shares fixtures with a
+>   process-once `OnceLock<LogFactory>` (the global tracing subscriber installs once).
 
 ### Task M8.31: avalanchers binary promotion — main flow + signals + exit code
 **Crate:** avalanchers (bin)  ·  **Depends on:** M8.3 (build_command), M8.12 (get_node_config), M8.29/M8.30 (Node), M8.28 (logging), M1 ava-version  ·  **Spec:** 12 §9, 17 §1.1/§2.5/§5
