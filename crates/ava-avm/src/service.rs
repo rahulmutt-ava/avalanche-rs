@@ -34,13 +34,14 @@
 //!
 //! ## Deferred functionality (spec 09 §10 deferral list)
 //!
-//! - **`getUTXOs` address-pagination**: Go uses an address → UTXO index
-//!   (`avax.GetPaginatedUTXOs`, `avax.GetAtomicUTXOs`) that is not yet ported.
-//!   The method stubs are implemented returning `ErrNotImplemented` with a
-//!   detailed comment. Wiring the address index is a follow-up task.
-//! - **`getBalance` / `getAllBalances`**: both require the address UTXO index and
-//!   the secp256k1fx UTXO iteration over the address set. Stub methods exist that
-//!   return `Error::Service("...not yet implemented...")`. Deferred (same reason).
+//! - **`getUTXOs` / `getBalance` / `getAllBalances`** are LIVE as of M8.23b over
+//!   the address → UTXO index (`State::utxo_ids`; the Rust
+//!   [`get_paginated_utxos`]/[`get_all_utxos`] port of
+//!   `vms/components/avax/utxo_fetching.go`) plus the shared-memory atomic path
+//!   (`avax.GetAtomicUTXOs` over [`SharedMemory::indexed`]). Remaining recorded
+//!   deferrals: the node-level `BCLookup` aliaser (the [`ChainLookup`] seam —
+//!   `"P"`/`"C"` aliases need `ava-node` wiring; chain-id strings work) and the
+//!   VM asset aliaser (`"AVAX"` does not resolve in `getBalance.assetID`).
 //! - **`issueTx` mempool submit**: the service carries only the state handle;
 //!   actual mempool add + p2p gossip needs the `AvmVm` handle. The method parses
 //!   the tx and returns its id (useful for client round-trip testing), but does
@@ -63,13 +64,18 @@
 //! The service only performs read operations; no ordering guarantees are needed
 //! beyond the state's own read consistency.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use ava_api_macros::rpc_service;
 use ava_crypto::address;
 use ava_crypto::hashing::checksum;
 use ava_types::constants::get_hrp;
 use ava_types::id::Id;
+use ava_types::short_id::ShortId;
+use ava_utils::clock::{Clock, RealClock};
+use ava_vm::components::avax::shared_memory::SharedMemory;
 use serde::{Deserialize, Serialize};
 
 use crate::block::Block;
@@ -78,6 +84,8 @@ use crate::jsonrpc::{RpcError, ServiceRegistry};
 use crate::state::chain::ReadOnlyChain;
 use crate::txs::Tx;
 use crate::txs::codec::Codec;
+use crate::txs::components::Output;
+use crate::txs::executor::semantic::Utxo;
 
 // ---------------------------------------------------------------------------
 // `avajson` — Go `utils/json` numeric encodings (quoted decimal strings)
@@ -128,6 +136,37 @@ pub mod avajson {
         }
     }
 
+    /// Serialize a `u32` as a quoted decimal string (`json.Uint32`).
+    ///
+    /// # Errors
+    /// Propagates the serializer's error.
+    pub fn serialize_u32<S: Serializer>(v: &u32, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&v.to_string())
+    }
+
+    /// Deserialize a `u32` from a quoted decimal string **or** a bare JSON
+    /// number — Go's `json.Uint32.UnmarshalJSON` trims surrounding quotes
+    /// before parsing, so both `"5"` and `5` are accepted on the wire.
+    ///
+    /// # Errors
+    /// Returns a deserialization error if the value is not a base-10 `u32`.
+    pub fn deserialize_flex_u32<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+        struct FlexU32;
+        impl serde::de::Visitor<'_> for FlexU32 {
+            type Value = u32;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a u32 as a number or quoted decimal string")
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u32, E> {
+                u32::try_from(v).map_err(E::custom)
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<u32, E> {
+                v.parse::<u32>().map_err(E::custom)
+            }
+        }
+        d.deserialize_any(FlexU32)
+    }
+
     /// Serialize a `u8` as a quoted decimal string (`json.Uint8`).
     ///
     /// # Errors
@@ -161,6 +200,30 @@ fn hex_encode(bytes: &[u8]) -> String {
     let mut combined = bytes.to_vec();
     combined.extend_from_slice(&cs);
     format!("0x{}", hex::encode(&combined))
+}
+
+/// `formatting.Encode(encoding, bytes)` for the encodings the AVM service
+/// accepts: `""`/`"hex"`/`"hexc"` (checksummed) and `"hexnc"` (no checksum).
+///
+/// # Errors
+/// Returns [`Error::Service`] with Go's `invalid encoding` message for an
+/// unknown encoding name (Go rejects it at `Encoding.UnmarshalJSON` time).
+fn encode_formatted_bytes(bytes: &[u8], encoding: &str) -> Result<String> {
+    match encoding.to_lowercase().as_str() {
+        "" | "hex" | "hexc" => Ok(hex_encode(bytes)),
+        "hexnc" => Ok(format!("0x{}", hex::encode(bytes))),
+        _ => Err(Error::Service("invalid encoding".to_owned())),
+    }
+}
+
+/// The `encoding` string echoed in replies (`"hex"` for the default/checksummed
+/// forms; otherwise the normalized lowercase name).
+fn reply_encoding(encoding: &str) -> &'static str {
+    match encoding.to_lowercase().as_str() {
+        "" | "hex" | "hexc" => "hex",
+        "hexnc" => "hexnc",
+        _ => "hex",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -342,20 +405,21 @@ pub struct GetAssetDescriptionReply {
 }
 
 /// Args for `avm.getUTXOs` (matches Go `api.GetUTXOsArgs`).
-///
-/// **DEFERRED**: address-indexed UTXO pagination (`avax.GetPaginatedUTXOs`)
-/// requires the address → UTXO index that is not yet ported. The method
-/// returns `Error::Service` with a `NotImplemented` message. Cross-chain
-/// `sourceChain` lookups (`avax.GetAtomicUTXOs`) are also deferred.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetUTXOsArgs {
     /// The addresses whose UTXOs to fetch.
     pub addresses: Vec<String>,
-    /// The source chain for atomic UTXOs (empty = this chain). **Deferred**.
+    /// The source chain for atomic UTXOs (empty = this chain; an alias or
+    /// chain id resolves through the [`ChainLookup`] seam → shared memory).
     #[serde(default, rename = "sourceChain")]
     pub source_chain: String,
-    /// Max results per page.
-    #[serde(default)]
+    /// Max results per page (`json.Uint32` — quoted string or bare number;
+    /// `0` / out-of-range values clamp to the 1024 page max).
+    #[serde(
+        default,
+        serialize_with = "avajson::serialize_u32",
+        deserialize_with = "avajson::deserialize_flex_u32"
+    )]
     pub limit: u32,
     /// Pagination start index (address + utxo id).
     #[serde(default, rename = "startIndex")]
@@ -375,9 +439,6 @@ pub struct UtxoIndex {
 }
 
 /// Reply for `avm.getUTXOs` (matches Go `api.GetUTXOsReply`).
-///
-/// **DEFERRED**: see [`GetUTXOsArgs`] — this struct is defined for the type
-/// system but the handler always returns `Error::Service`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetUTXOsReply {
     /// Number of UTXOs returned.
@@ -437,7 +498,20 @@ pub struct GetBalanceReply {
     pub balance: u64,
     /// The UTXOs contributing to the balance.
     #[serde(rename = "utxoIDs")]
-    pub utxo_ids: Vec<String>,
+    pub utxo_ids: Vec<UtxoIdReply>,
+}
+
+/// `avax.UTXOID` as it appears in JSON replies (`json:"txID"` CB58 string +
+/// `json:"outputIndex"` bare number; the runtime `Symbol` field is `json:"-"`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UtxoIdReply {
+    /// `UTXOID.TxID` — the id of the tx that produced the UTXO (CB58).
+    #[serde(rename = "txID")]
+    pub tx_id: Id,
+    /// `UTXOID.OutputIndex` — a plain (unquoted) JSON number, matching Go's
+    /// raw `uint32` (NOT `json.Uint32`).
+    #[serde(rename = "outputIndex")]
+    pub output_index: u32,
 }
 
 /// A single asset balance entry inside [`GetAllBalancesReply`]
@@ -496,6 +570,49 @@ pub struct GetAllBalancesReply {
     pub balances: Vec<AssetBalance>,
 }
 
+/// Reply for `avm.getTxFee` (matches Go `avm.GetTxFeeReply`).
+///
+/// Go:
+/// ```go
+/// type GetTxFeeReply struct {
+///     TxFee            avajson.Uint64 `json:"txFee"`
+///     CreateAssetTxFee avajson.Uint64 `json:"createAssetTxFee"`
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetTxFeeReply {
+    /// `Config.TxFee` — the fee burned by a non-asset-creation tx (nAVAX).
+    #[serde(
+        rename = "txFee",
+        serialize_with = "avajson::serialize_u64",
+        deserialize_with = "avajson::deserialize_u64"
+    )]
+    pub tx_fee: u64,
+    /// `Config.CreateAssetTxFee` — the fee burned by a `CreateAssetTx` (nAVAX).
+    #[serde(
+        rename = "createAssetTxFee",
+        serialize_with = "avajson::serialize_u64",
+        deserialize_with = "avajson::deserialize_u64"
+    )]
+    pub create_asset_tx_fee: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Chain-alias lookup seam (`ctx.BCLookup`)
+// ---------------------------------------------------------------------------
+
+/// The blockchain alias lookup seam (`snow.Context.BCLookup` / `ids.Aliaser`):
+/// resolves a chain alias (`"P"`, `"X"`, a chain-id string, …) to its chain id.
+///
+/// The node-level aliaser is an M8 `ava-node` wiring follow-up; until then the
+/// service falls back to (a) the alias `"X"` for its own chain and (b) parsing
+/// the string as a CB58 chain id (Go registers every chain's id string as an
+/// alias of itself).
+pub trait ChainLookup: Send + Sync {
+    /// `Lookup(alias)` — the chain id `alias` refers to, if known.
+    fn lookup(&self, alias: &str) -> Option<Id>;
+}
+
 // ---------------------------------------------------------------------------
 // The service
 // ---------------------------------------------------------------------------
@@ -516,13 +633,77 @@ pub struct Service {
     state: Arc<dyn ReadOnlyChain>,
     /// The network id (for bech32 HRP derivation).
     network_id: u32,
+    /// This chain's id (`ctx.ChainID`; local-address + `sourceChain` checks).
+    chain_id: Id,
+    /// The cross-chain shared-memory read handle (`ctx.SharedMemory`), backing
+    /// the `getUTXOs` `sourceChain` atomic path; `None` ⇒ atomic reads error.
+    shared_memory: Option<Arc<dyn SharedMemory>>,
+    /// The blockchain alias lookup (`ctx.BCLookup`); `None` ⇒ the built-in
+    /// fallback (`"X"` + chain-id strings) only.
+    chain_lookup: Option<Arc<dyn ChainLookup>>,
+    /// `Config.TxFee` (nAVAX), served by `getTxFee`.
+    tx_fee: u64,
+    /// `Config.CreateAssetTxFee` (nAVAX), served by `getTxFee`.
+    create_asset_tx_fee: u64,
+    /// The clock backing the `getBalance`/`getAllBalances` locktime check
+    /// (Go `vm.clock.Unix()`).
+    clock: Arc<dyn Clock>,
 }
 
 impl Service {
-    /// Builds a service over a shared state view.
+    /// Builds a service over a shared state view with mainnet-default fees, no
+    /// shared memory / alias lookup, and the real clock. Use the `with_*`
+    /// builders to wire the VM context (`vm.rs::create_handlers`).
     #[must_use]
     pub fn new(state: Arc<dyn ReadOnlyChain>, network_id: u32) -> Self {
-        Self { state, network_id }
+        let fees = crate::config::Config::default();
+        Self {
+            state,
+            network_id,
+            chain_id: Id::EMPTY,
+            shared_memory: None,
+            chain_lookup: None,
+            tx_fee: fees.tx_fee,
+            create_asset_tx_fee: fees.create_asset_tx_fee,
+            clock: Arc::new(RealClock),
+        }
+    }
+
+    /// Sets this chain's id (`ctx.ChainID`).
+    #[must_use]
+    pub fn with_chain_id(mut self, chain_id: Id) -> Self {
+        self.chain_id = chain_id;
+        self
+    }
+
+    /// Supplies the cross-chain shared-memory read handle (`ctx.SharedMemory`).
+    #[must_use]
+    pub fn with_shared_memory(mut self, shared_memory: Arc<dyn SharedMemory>) -> Self {
+        self.shared_memory = Some(shared_memory);
+        self
+    }
+
+    /// Supplies the blockchain alias lookup (`ctx.BCLookup`).
+    #[must_use]
+    pub fn with_chain_lookup(mut self, lookup: Arc<dyn ChainLookup>) -> Self {
+        self.chain_lookup = Some(lookup);
+        self
+    }
+
+    /// Sets the fee schedule served by `getTxFee` (`Config.TxFee` /
+    /// `Config.CreateAssetTxFee`).
+    #[must_use]
+    pub fn with_fees(mut self, tx_fee: u64, create_asset_tx_fee: u64) -> Self {
+        self.tx_fee = tx_fee;
+        self.create_asset_tx_fee = create_asset_tx_fee;
+        self
+    }
+
+    /// Replaces the clock (tests pin the `getBalance` locktime check).
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// The bech32 HRP for this service's network.
@@ -538,6 +719,100 @@ impl Service {
     pub fn format_address(&self, addr: &[u8]) -> Result<String> {
         address::format("X", self.hrp(), addr)
             .map_err(|e| Error::Service(format!("format address: {e}")))
+    }
+
+    /// `ctx.BCLookup.Lookup(alias)` — resolve a chain alias to its chain id:
+    /// the [`ChainLookup`] seam first, then the built-in fallback (`"X"` is
+    /// this chain; a CB58 chain-id string resolves to itself, mirroring Go
+    /// registering every chain's id string as an alias).
+    ///
+    /// # Errors
+    /// [`Error::Api`] with Go's `ids.Aliaser` message
+    /// (`there is no ID with alias %s`) when unresolvable.
+    fn lookup_chain(&self, alias: &str) -> Result<Id> {
+        if let Some(lookup) = &self.chain_lookup
+            && let Some(id) = lookup.lookup(alias)
+        {
+            return Ok(id);
+        }
+        if alias == "X" {
+            return Ok(self.chain_id);
+        }
+        if let Ok(id) = alias.parse::<Id>() {
+            return Ok(id);
+        }
+        Err(Error::Api(format!("there is no ID with alias {alias}")))
+    }
+
+    /// `avax.addressManager.ParseLocalAddress` — parse a chain-prefixed bech32
+    /// address (`X-avax1…`) and require it to belong to this chain + network.
+    ///
+    /// # Errors
+    /// [`Error::Api`] carrying the Go error strings (separator / alias lookup /
+    /// `mismatched chainIDs` / `expected hrp`).
+    fn parse_local_address(&self, addr_str: &str) -> Result<ShortId> {
+        let (alias, hrp, addr_bytes) =
+            address::parse(addr_str).map_err(|e| Error::Api(e.to_string()))?;
+        let chain_id = self.lookup_chain(&alias)?;
+        if chain_id != self.chain_id {
+            return Err(Error::Api(format!(
+                "mismatched chainIDs: expected {:?} but got {:?}",
+                self.chain_id.to_string(),
+                chain_id.to_string(),
+            )));
+        }
+        let expected_hrp = self.hrp();
+        if hrp != expected_hrp {
+            return Err(Error::Api(format!(
+                "expected hrp {expected_hrp:?} but got {hrp:?}"
+            )));
+        }
+        ShortId::from_slice(&addr_bytes).map_err(|e| Error::Api(e.to_string()))
+    }
+
+    /// `avax.ParseServiceAddress` — a raw CB58 short id **or** a localized
+    /// bech32 address.
+    ///
+    /// # Errors
+    /// [`Error::Api`] `couldn't parse address %q: %w` (Go wrap) when both fail.
+    fn parse_service_address(&self, addr_str: &str) -> Result<ShortId> {
+        if let Ok(short) = addr_str.parse::<ShortId>() {
+            return Ok(short);
+        }
+        self.parse_local_address(addr_str)
+            .map_err(|e| Error::Api(format!("couldn't parse address {addr_str:?}: {e}")))
+    }
+
+    /// `avax.ParseServiceAddresses` — parse a batch into a sorted set.
+    fn parse_service_addresses(&self, addr_strs: &[String]) -> Result<BTreeSet<ShortId>> {
+        let mut addrs = BTreeSet::new();
+        for addr_str in addr_strs {
+            addrs.insert(self.parse_service_address(addr_str)?);
+        }
+        Ok(addrs)
+    }
+
+    /// `vm.lookupAssetID` — resolve an asset alias or CB58 id string.
+    ///
+    /// As-built: there is no VM asset aliaser yet (recorded deferral — Go can
+    /// also resolve `"AVAX"`), so only the CB58 form resolves; the failure
+    /// message is Go's (`asset '%s' not found`).
+    ///
+    /// # Errors
+    /// [`Error::Api`] when the string is neither a known alias nor a CB58 id.
+    fn lookup_asset_id(&self, asset: &str) -> Result<Id> {
+        asset
+            .parse::<Id>()
+            .map_err(|_| Error::Api(format!("asset '{asset}' not found")))
+    }
+
+    /// `vm.clock.Unix()` — current Unix seconds via the clock seam.
+    fn unix_now(&self) -> u64 {
+        self.clock
+            .now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 
     // -----------------------------------------------------------------------
@@ -737,64 +1012,331 @@ impl Service {
     }
 
     // -----------------------------------------------------------------------
-    // `avm.getUTXOs` — DEFERRED
+    // `avm.getUTXOs` (Go `service.go GetUTXOs`)
     // -----------------------------------------------------------------------
 
-    /// `avm.getUTXOs` — **DEFERRED**.
+    /// `avm.getUTXOs` — paginated UTXOs referencing any of `args.addresses`,
+    /// from this chain's state (M8.23b address → UTXO index) or, with
+    /// `sourceChain`, from cross-chain shared memory (`avax.GetAtomicUTXOs`).
     ///
-    /// Address-indexed UTXO pagination (`avax.GetPaginatedUTXOs`) and the
-    /// cross-chain atomic UTXO path (`avax.GetAtomicUTXOs`) both require the
-    /// address → UTXO index, which is not yet ported. Returns an error
-    /// with a clear `NotImplemented` message.
+    /// Error strings mirror Go's `service.go GetUTXOs` byte-for-byte.
     ///
-    /// Follow-up: port the address index + `avax.GetPaginatedUTXOs` +
-    /// `avax.GetAtomicUTXOs` (specs 09 §10; 27 §2.3).
-    pub fn get_utxos(&self, _args: &GetUTXOsArgs) -> Result<GetUTXOsReply> {
-        Err(Error::Service(
-            "getUTXOs: address-indexed UTXO pagination not yet implemented \
-             (deferred: requires address→UTXO index port; see service.rs module docs)"
-                .to_owned(),
-        ))
+    /// # Errors
+    /// [`Error::Api`] on empty/oversized address lists, unresolvable
+    /// `sourceChain`, malformed cursor, or a retrieval failure.
+    pub fn get_utxos(&self, args: &GetUTXOsArgs) -> Result<GetUTXOsReply> {
+        if args.addresses.is_empty() {
+            // Go `errNoAddresses`.
+            return Err(Error::Api("no addresses provided".to_owned()));
+        }
+        if args.addresses.len() > MAX_GET_UTXOS_ADDRS {
+            return Err(Error::Api(format!(
+                "number of addresses given, {}, exceeds maximum, {}",
+                args.addresses.len(),
+                MAX_GET_UTXOS_ADDRS
+            )));
+        }
+
+        let source_chain = if args.source_chain.is_empty() {
+            self.chain_id
+        } else {
+            self.lookup_chain(&args.source_chain).map_err(|e| {
+                Error::Api(format!(
+                    "problem parsing source chainID {:?}: {e}",
+                    args.source_chain
+                ))
+            })?
+        };
+
+        let addrs = self.parse_service_addresses(&args.addresses)?;
+
+        let mut start_addr = ShortId::EMPTY;
+        let mut start_utxo = Id::EMPTY;
+        if !args.start_index.address.is_empty() || !args.start_index.utxo.is_empty() {
+            start_addr = self
+                .parse_service_address(&args.start_index.address)
+                .map_err(|e| {
+                    Error::Api(format!(
+                        "couldn't parse start index address {:?}: {e}",
+                        args.start_index.address
+                    ))
+                })?;
+            start_utxo = args
+                .start_index
+                .utxo
+                .parse::<Id>()
+                .map_err(|e| Error::Api(format!("couldn't parse start index utxo: {e}")))?;
+        }
+
+        let mut limit = args.limit as usize;
+        if limit == 0 || limit > MAX_PAGE_SIZE {
+            limit = MAX_PAGE_SIZE;
+        }
+
+        let (utxos, end_addr, end_utxo_id) = if source_chain == self.chain_id {
+            get_paginated_utxos(self.state.as_ref(), &addrs, start_addr, start_utxo, limit)
+        } else {
+            self.get_atomic_utxos(source_chain, &addrs, start_addr, start_utxo, limit)
+        }
+        .map_err(|e| Error::Api(format!("problem retrieving UTXOs: {e}")))?;
+
+        let mut encoded = Vec::with_capacity(utxos.len());
+        for utxo in &utxos {
+            let bytes = utxo
+                .marshal()
+                .map_err(|e| Error::Api(format!("problem marshalling UTXO: {e}")))?;
+            let s = encode_formatted_bytes(&bytes, &args.encoding).map_err(|e| {
+                Error::Api(format!(
+                    "couldn't encode UTXO {} as string: {e}",
+                    utxo.input_id()
+                ))
+            })?;
+            encoded.push(s);
+        }
+
+        let end_address = self
+            .format_address(end_addr.as_bytes())
+            .map_err(|e| Error::Api(format!("problem formatting address: {e}")))?;
+
+        Ok(GetUTXOsReply {
+            num_fetched: encoded.len() as u64,
+            utxos: encoded,
+            end_index: UtxoIndex {
+                address: end_address,
+                utxo: end_utxo_id.to_string(),
+            },
+            encoding: reply_encoding(&args.encoding).to_owned(),
+        })
+    }
+
+    /// `avax.GetAtomicUTXOs` — paginated exported UTXOs from shared memory
+    /// (`SharedMemory.Indexed` keyed by `source_chain`, traits = addresses).
+    fn get_atomic_utxos(
+        &self,
+        source_chain: Id,
+        addrs: &BTreeSet<ShortId>,
+        start_addr: ShortId,
+        start_utxo: Id,
+        limit: usize,
+    ) -> Result<(Vec<Utxo>, ShortId, Id)> {
+        let Some(shared_memory) = &self.shared_memory else {
+            return Err(Error::Api(
+                "error fetching atomic UTXOs: shared memory unavailable".to_owned(),
+            ));
+        };
+        let traits: Vec<Vec<u8>> = addrs.iter().map(|a| a.as_bytes().to_vec()).collect();
+        let (values, last_trait, last_key) = shared_memory
+            .indexed(
+                source_chain,
+                &traits,
+                start_addr.as_bytes(),
+                start_utxo.as_bytes(),
+                limit,
+            )
+            .map_err(|e| Error::Api(format!("error fetching atomic UTXOs: {e}")))?;
+
+        let last_addr = ShortId::from_slice(&last_trait).unwrap_or(ShortId::EMPTY);
+        let last_utxo_id = Id::from_slice(&last_key).unwrap_or(Id::EMPTY);
+
+        let mut utxos = Vec::with_capacity(values.len());
+        for bytes in &values {
+            let utxo = Utxo::unmarshal(bytes)
+                .map_err(|e| Error::Api(format!("error parsing UTXO: {e}")))?;
+            utxos.push(utxo);
+        }
+        Ok((utxos, last_addr, last_utxo_id))
     }
 
     // -----------------------------------------------------------------------
-    // `avm.getBalance` — DEFERRED
+    // `avm.getBalance` (Go `service.go GetBalance`; deprecated but served)
     // -----------------------------------------------------------------------
 
-    /// `avm.getBalance` — **DEFERRED**.
+    /// `avm.getBalance` — the balance of one asset held by an address.
     ///
-    /// Returns the balance of a single asset held by an address. Requires
-    /// `avax.GetAllUTXOs(s.vm.state, addrSet)` over an address→UTXO index
-    /// (Go `vms/avm/service.go GetBalance`). Neither the address index nor the
-    /// UTXO-set iterator over addresses is ported yet.
+    /// If `!args.include_partial`, counts only UTXOs held solely (1-of-1
+    /// multisig) by the address with a locktime in the past; otherwise also
+    /// partially-held / future-locked UTXOs (Go `GetBalance`). Only
+    /// `secp256k1fx.TransferOutput`s count (Go's `TODO` downcast).
     ///
-    /// Follow-up: port the address index + `avax.GetAllUTXOs` (specs 09 §10).
-    pub fn get_balance(&self, _args: &GetBalanceArgs) -> Result<GetBalanceReply> {
-        Err(Error::Service(
-            "getBalance: not yet implemented — address→UTXO index not ported \
-             (Go vms/avm uses an address index via avax.GetAllUTXOs); deferred"
-                .to_owned(),
-        ))
+    /// # Errors
+    /// [`Error::Api`] on a bad address/asset or a retrieval failure.
+    pub fn get_balance(&self, args: &GetBalanceArgs) -> Result<GetBalanceReply> {
+        let addr = self
+            .parse_service_address(&args.address)
+            .map_err(|e| Error::Api(format!("problem parsing address '{}': {e}", args.address)))?;
+        let asset_id = self.lookup_asset_id(&args.asset_id)?;
+
+        let addrs = BTreeSet::from([addr]);
+        let utxos = get_all_utxos(self.state.as_ref(), &addrs)
+            .map_err(|e| Error::Api(format!("problem retrieving UTXOs: {e}")))?;
+
+        let now = self.unix_now();
+        let mut balance: u64 = 0;
+        let mut utxo_ids = Vec::with_capacity(utxos.len());
+        for utxo in &utxos {
+            if utxo.asset_id != asset_id {
+                continue;
+            }
+            // Go TODO: not specific to *secp256k1fx.TransferOutput.
+            let Output::SecpTransfer(transferable) = &utxo.out else {
+                continue;
+            };
+            let owners = &transferable.owners;
+            if !args.include_partial && (owners.addrs.len() != 1 || owners.locktime > now) {
+                continue;
+            }
+            // Go `safemath.Add` — propagate the overflow error.
+            balance = balance
+                .checked_add(transferable.amt)
+                .ok_or_else(|| Error::Api("overflow".to_owned()))?;
+            utxo_ids.push(UtxoIdReply {
+                tx_id: utxo.tx_id,
+                output_index: utxo.output_index,
+            });
+        }
+
+        Ok(GetBalanceReply { balance, utxo_ids })
     }
 
     // -----------------------------------------------------------------------
-    // `avm.getAllBalances` — DEFERRED
+    // `avm.getAllBalances` (Go `service.go GetAllBalances`; deprecated)
     // -----------------------------------------------------------------------
 
-    /// `avm.getAllBalances` — **DEFERRED**.
+    /// `avm.getAllBalances` — the balance of every asset held by an address
+    /// (same `include_partial` semantics as [`get_balance`](Self::get_balance)).
     ///
-    /// Returns balances for ALL assets held by an address. Same dependency as
-    /// [`get_balance`](Self::get_balance) — requires the address→UTXO index
-    /// (Go `vms/avm/service.go GetAllBalances`). Deferred for the same reason.
+    /// Determinism note: Go iterates a `set.Set` (random order); the reply here
+    /// is sorted by asset id (00 §6.1). The per-entry `asset` string is
+    /// `PrimaryAliasOrDefault` — without a VM asset aliaser (recorded deferral)
+    /// it is always the CB58 asset id.
     ///
-    /// Follow-up: port the address index + `avax.GetAllUTXOs` (specs 09 §10).
-    pub fn get_all_balances(&self, _args: &GetAllBalancesArgs) -> Result<GetAllBalancesReply> {
-        Err(Error::Service(
-            "getAllBalances: not yet implemented — address→UTXO index not ported \
-             (Go vms/avm uses an address index via avax.GetAllUTXOs); deferred"
-                .to_owned(),
-        ))
+    /// # Errors
+    /// [`Error::Api`] on a bad address or a retrieval failure.
+    pub fn get_all_balances(&self, args: &GetAllBalancesArgs) -> Result<GetAllBalancesReply> {
+        let addr = self
+            .parse_service_address(&args.address)
+            .map_err(|e| Error::Api(format!("problem parsing address '{}': {e}", args.address)))?;
+        let addrs = BTreeSet::from([addr]);
+
+        let utxos = get_all_utxos(self.state.as_ref(), &addrs)
+            .map_err(|e| Error::Api(format!("couldn't get address's UTXOs: {e}")))?;
+
+        let now = self.unix_now();
+        let mut balances: BTreeMap<Id, u64> = BTreeMap::new();
+        for utxo in &utxos {
+            let Output::SecpTransfer(transferable) = &utxo.out else {
+                continue;
+            };
+            let owners = &transferable.owners;
+            if !args.include_partial && (owners.addrs.len() != 1 || owners.locktime > now) {
+                continue;
+            }
+            let entry = balances.entry(utxo.asset_id).or_insert(0);
+            // Go: on overflow the balance saturates at MaxUint64.
+            *entry = entry.saturating_add(transferable.amt);
+        }
+
+        Ok(GetAllBalancesReply {
+            balances: balances
+                .into_iter()
+                .map(|(asset_id, balance)| AssetBalance {
+                    asset_id: asset_id.to_string(),
+                    balance,
+                })
+                .collect(),
+        })
     }
+
+    // -----------------------------------------------------------------------
+    // `avm.getTxFee` (Go `service.go GetTxFee`)
+    // -----------------------------------------------------------------------
+
+    /// `avm.getTxFee` — the static fee schedule (`Config.TxFee` /
+    /// `Config.CreateAssetTxFee`), as quoted `json.Uint64` strings.
+    #[must_use]
+    pub fn get_tx_fee(&self) -> GetTxFeeReply {
+        GetTxFeeReply {
+            tx_fee: self.tx_fee,
+            create_asset_tx_fee: self.create_asset_tx_fee,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UTXO fetching (`vms/components/avax/utxo_fetching.go`)
+// ---------------------------------------------------------------------------
+
+/// `maxGetUTXOsAddrs` — max addresses per `getUTXOs` call.
+const MAX_GET_UTXOS_ADDRS: usize = 1024;
+/// `maxPageSize` — max UTXOs per page.
+const MAX_PAGE_SIZE: usize = 1024;
+
+/// `avax.GetPaginatedUTXOs` — UTXOs referencing any address in `addrs`,
+/// resuming after the `(last_addr, last_utxo_id)` cursor, at most `limit`.
+///
+/// Returns `(utxos, last_address_searched, last_utxo_id_searched)` — the
+/// cursor reflects the last *searched* (not necessarily returned) position,
+/// exactly like Go.
+///
+/// # Errors
+/// Wraps index/UTXO read failures with Go's message strings.
+fn get_paginated_utxos(
+    state: &dyn ReadOnlyChain,
+    addrs: &BTreeSet<ShortId>,
+    mut last_addr: ShortId,
+    mut last_utxo_id: Id,
+    limit: usize,
+) -> Result<(Vec<Utxo>, ShortId, Id)> {
+    let mut utxos = Vec::new();
+    let mut seen: BTreeSet<Id> = BTreeSet::new();
+    let search_size = limit; // the limit diminishes; the search size does not
+    let mut remaining = limit;
+
+    // `addrs` iterates sorted (BTreeSet) — Go sorts `addrsList` explicitly.
+    for &addr in addrs {
+        // Skip addresses before the cursor; resume mid-address at the cursor.
+        let start = match addr.cmp(&last_addr) {
+            std::cmp::Ordering::Less => continue,
+            std::cmp::Ordering::Equal => last_utxo_id,
+            std::cmp::Ordering::Greater => Id::EMPTY,
+        };
+
+        last_addr = addr; // the last address searched
+
+        let utxo_ids = state
+            .utxo_ids(&addr, start, search_size)
+            .map_err(|e| Error::Api(format!("couldn't get UTXOs for address {addr}: {e}")))?;
+        for utxo_id in utxo_ids {
+            last_utxo_id = utxo_id; // the last searched UTXO — not the last found
+
+            if seen.contains(&utxo_id) {
+                continue;
+            }
+
+            let bytes = state
+                .get_utxo(utxo_id)
+                .map_err(|e| Error::Api(format!("couldn't get UTXO {utxo_id}: {e}")))?;
+            let utxo = Utxo::unmarshal(&bytes)
+                .map_err(|e| Error::Api(format!("couldn't get UTXO {utxo_id}: {e}")))?;
+
+            utxos.push(utxo);
+            seen.insert(utxo_id);
+            remaining = remaining.saturating_sub(1);
+            if remaining == 0 {
+                return Ok((utxos, last_addr, last_utxo_id));
+            }
+        }
+    }
+    Ok((utxos, last_addr, last_utxo_id))
+}
+
+/// `avax.GetAllUTXOs` — every UTXO referencing any address in `addrs`.
+///
+/// # Errors
+/// Propagates [`get_paginated_utxos`] failures.
+fn get_all_utxos(state: &dyn ReadOnlyChain, addrs: &BTreeSet<ShortId>) -> Result<Vec<Utxo>> {
+    get_paginated_utxos(state, addrs, ShortId::EMPTY, Id::EMPTY, usize::MAX)
+        .map(|(utxos, _, _)| utxos)
 }
 
 // ---------------------------------------------------------------------------
@@ -921,12 +1463,13 @@ impl RpcService {
             .map_err(server_err)
     }
 
-    /// `avm.getUTXOs` (Go `Service.GetUTXOs`, `service.go:285`) —
-    /// **registered stub**: always `-32000` "not yet implemented" until the
-    /// address→UTXO index lands (see [`Service::get_utxos`]).
+    /// `avm.getUTXOs` (Go `Service.GetUTXOs`, `service.go:285`): paginated
+    /// address-indexed UTXOs, incl. the cross-chain `sourceChain` atomic path
+    /// (M8.23b).
     ///
     /// # Errors
-    /// Always `-32000` today (deferred body).
+    /// `-32000` carrying the Go handler error strings (bad addresses / cursor /
+    /// source chain / retrieval failures).
     #[rpc(name = "GetUTXOs")]
     pub async fn get_utxos(
         &self,
@@ -935,11 +1478,11 @@ impl RpcService {
         self.service.get_utxos(&args).map_err(server_err)
     }
 
-    /// `avm.getBalance` (Go `Service.GetBalance`, `service.go:453`) —
-    /// **registered stub** (same address→UTXO index dependency).
+    /// `avm.getBalance` (Go `Service.GetBalance`, `service.go:453`; deprecated
+    /// in Go but still served).
     ///
     /// # Errors
-    /// Always `-32000` today (deferred body).
+    /// `-32000` for a bad address/asset or a retrieval failure.
     pub async fn get_balance(
         &self,
         args: GetBalanceArgs,
@@ -947,16 +1490,28 @@ impl RpcService {
         self.service.get_balance(&args).map_err(server_err)
     }
 
-    /// `avm.getAllBalances` (Go `Service.GetAllBalances`, `service.go:530`) —
-    /// **registered stub** (same address→UTXO index dependency).
+    /// `avm.getAllBalances` (Go `Service.GetAllBalances`, `service.go:530`;
+    /// deprecated in Go but still served).
     ///
     /// # Errors
-    /// Always `-32000` today (deferred body).
+    /// `-32000` for a bad address or a retrieval failure.
     pub async fn get_all_balances(
         &self,
         args: GetAllBalancesArgs,
     ) -> std::result::Result<GetAllBalancesReply, RpcError> {
         self.service.get_all_balances(&args).map_err(server_err)
+    }
+
+    /// `avm.getTxFee` (Go `Service.GetTxFee`, `service.go:594`): the static
+    /// fee schedule.
+    ///
+    /// # Errors
+    /// Infallible (the `Result` is the bridge signature).
+    pub async fn get_tx_fee(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetTxFeeReply, RpcError> {
+        Ok(self.service.get_tx_fee())
     }
 }
 
@@ -1407,43 +1962,444 @@ mod conformance {
     }
 
     // -----------------------------------------------------------------------
-    // `getUTXOs` — stub returns error
+    // `getUTXOs` / `getBalance` / `getAllBalances` — M8.23b live handlers
     // -----------------------------------------------------------------------
 
+    use ava_secp256k1fx::{OutputOwners, TransferOutput};
+    use ava_utils::clock::MockClock;
+
+    /// The fixed "now" for locktime checks (matches the seeded chain time).
+    const NOW_SECS: u64 = 1_600_000_000;
+
+    fn short(seed: u8) -> ShortId {
+        ShortId::from_slice(&[seed; 20]).expect("short id")
+    }
+
+    /// A canonical `avax.UTXO` carrying a secp `TransferOutput`.
+    fn make_utxo(
+        tx_seed: u8,
+        out_index: u32,
+        asset_seed: u8,
+        amt: u64,
+        locktime: u64,
+        addr_seeds: &[u8],
+    ) -> Utxo {
+        Utxo {
+            tx_id: Id::from([tx_seed; 32]),
+            output_index: out_index,
+            asset_id: Id::from([asset_seed; 32]),
+            out: Output::SecpTransfer(TransferOutput::new(
+                amt,
+                OutputOwners::new(locktime, 1, addr_seeds.iter().map(|&a| short(a)).collect()),
+            )),
+        }
+    }
+
+    /// A service over a state seeded with `utxos`, pinned to `NOW_SECS`.
+    fn utxo_service(utxos: &[Utxo]) -> Service {
+        let mut state = State::new(Arc::new(MemDb::new())).expect("state");
+        for utxo in utxos {
+            state.add_utxo(utxo.input_id(), utxo.marshal().expect("marshal"));
+        }
+        state.commit().expect("commit");
+        Service::new(Arc::new(state), 1).with_clock(Arc::new(MockClock::at(
+            UNIX_EPOCH + Duration::from_secs(NOW_SECS),
+        )))
+    }
+
+    /// The X-bech32 form of a seeded test address.
+    fn bech32(service: &Service, seed: u8) -> String {
+        service
+            .format_address(short(seed).as_bytes())
+            .expect("format")
+    }
+
     #[test]
-    fn service_get_utxos_deferred() {
-        let (service, _, _) = seeded_service();
+    fn service_get_utxos_no_addresses_error() {
+        let service = utxo_service(&[]);
+        let err = service
+            .get_utxos(&GetUTXOsArgs::default())
+            .expect_err("getUTXOs([])");
+        // Go `errNoAddresses` — byte-equal.
+        assert_eq!(err.to_string(), "no addresses provided");
+    }
+
+    #[test]
+    fn service_get_utxos_too_many_addresses_error() {
+        let service = utxo_service(&[]);
         let args = GetUTXOsArgs {
-            addresses: vec!["X-avax1test".to_owned()],
+            addresses: vec!["X-avax1test".to_owned(); 1025],
             ..Default::default()
         };
-        // Expected: deferred stub returns an error.
-        assert!(service.get_utxos(&args).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // `getBalance` / `getAllBalances` — deferred stubs return errors
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn service_get_balance_deferred() {
-        let (service, _, _) = seeded_service();
-        let args = GetBalanceArgs {
-            address: "X-avax1test".to_owned(),
-            asset_id: "FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z".to_owned(),
-            include_partial: false,
-        };
-        assert!(service.get_balance(&args).is_err());
+        let err = service.get_utxos(&args).expect_err("getUTXOs(1025 addrs)");
+        assert_eq!(
+            err.to_string(),
+            "number of addresses given, 1025, exceeds maximum, 1024"
+        );
     }
 
     #[test]
-    fn service_get_all_balances_deferred() {
-        let (service, _, _) = seeded_service();
-        let args = GetAllBalancesArgs {
-            address: "X-avax1test".to_owned(),
-            include_partial: false,
+    fn service_get_utxos_bad_source_chain_error() {
+        let service = utxo_service(&[]);
+        let args = GetUTXOsArgs {
+            addresses: vec!["X-avax1test".to_owned()],
+            source_chain: "P".to_owned(),
+            ..Default::default()
         };
-        assert!(service.get_all_balances(&args).is_err());
+        let err = service
+            .get_utxos(&args)
+            .expect_err("getUTXOs(sourceChain=P)");
+        // Go: `problem parsing source chainID %q: %w` over the aliaser error.
+        assert_eq!(
+            err.to_string(),
+            "problem parsing source chainID \"P\": there is no ID with alias P"
+        );
+    }
+
+    #[test]
+    fn service_get_utxos_bad_start_index_utxo_error() {
+        let utxo = make_utxo(1, 0, 0xAA, 100, 0, &[1]);
+        let service = utxo_service(&[utxo]);
+        let args = GetUTXOsArgs {
+            addresses: vec![bech32(&service, 1)],
+            start_index: UtxoIndex {
+                address: bech32(&service, 1),
+                utxo: "!!!not-cb58!!!".to_owned(),
+            },
+            ..Default::default()
+        };
+        let err = service.get_utxos(&args).expect_err("bad cursor utxo");
+        assert!(
+            err.to_string()
+                .starts_with("couldn't parse start index utxo: "),
+            "Go wrap prefix; got: {err}"
+        );
+    }
+
+    #[test]
+    fn service_get_utxos_local_shape() {
+        // addr 1 owns two UTXOs; addr 2 owns one.
+        let u1 = make_utxo(1, 0, 0xAA, 100, 0, &[1]);
+        let u2 = make_utxo(2, 0, 0xAA, 200, 0, &[1]);
+        let u3 = make_utxo(3, 0, 0xAA, 300, 0, &[2]);
+        let service = utxo_service(&[u1.clone(), u2.clone(), u3]);
+
+        let args = GetUTXOsArgs {
+            addresses: vec![bech32(&service, 1)],
+            ..Default::default()
+        };
+        let reply = service.get_utxos(&args).expect("get_utxos");
+
+        assert_eq!(reply.num_fetched, 2, "addr 1 has two UTXOs");
+        assert_eq!(reply.utxos.len(), 2);
+        // Each entry is checksummed hex of the canonical UTXO bytes.
+        let mut expected: Vec<String> = vec![
+            hex_encode(&u1.marshal().expect("marshal")),
+            hex_encode(&u2.marshal().expect("marshal")),
+        ];
+        expected.sort();
+        let mut got = reply.utxos.clone();
+        got.sort();
+        assert_eq!(got, expected, "canonical UTXO bytes, checksummed hex");
+
+        // endIndex: the last searched address (bech32) + UTXO id (CB58).
+        assert_eq!(reply.end_index.address, bech32(&service, 1));
+        assert!(reply.end_index.utxo.parse::<Id>().is_ok(), "CB58 end utxo");
+        assert_eq!(reply.encoding, "hex");
+
+        // JSON shape: numFetched is a quoted json.Uint64.
+        let j = serde_json::to_value(&reply).expect("json");
+        assert_eq!(j["numFetched"], serde_json::json!("2"));
+        assert!(j["utxos"].as_array().is_some());
+        assert!(j["endIndex"]["address"].as_str().is_some());
+        assert!(j["endIndex"]["utxo"].as_str().is_some());
+        assert_eq!(j["encoding"], serde_json::json!("hex"));
+    }
+
+    #[test]
+    fn service_get_utxos_pagination_cursor() {
+        let u1 = make_utxo(1, 0, 0xAA, 100, 0, &[1]);
+        let u2 = make_utxo(2, 0, 0xAA, 200, 0, &[1]);
+        let u3 = make_utxo(3, 0, 0xAA, 300, 0, &[1]);
+        let service = utxo_service(&[u1, u2, u3]);
+
+        // Page 1: limit 2.
+        let args = GetUTXOsArgs {
+            addresses: vec![bech32(&service, 1)],
+            limit: 2,
+            ..Default::default()
+        };
+        let page1 = service.get_utxos(&args).expect("page 1");
+        assert_eq!(page1.num_fetched, 2);
+
+        // Page 2: resume from endIndex.
+        let args2 = GetUTXOsArgs {
+            addresses: vec![bech32(&service, 1)],
+            start_index: page1.end_index.clone(),
+            ..Default::default()
+        };
+        let page2 = service.get_utxos(&args2).expect("page 2");
+        assert_eq!(page2.num_fetched, 1, "one UTXO remains");
+
+        // No overlap; union covers all three.
+        let mut all: Vec<String> = page1
+            .utxos
+            .iter()
+            .chain(page2.utxos.iter())
+            .cloned()
+            .collect();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 3, "pages are disjoint and complete");
+    }
+
+    #[test]
+    fn service_get_utxos_hexnc_encoding() {
+        let u1 = make_utxo(1, 0, 0xAA, 100, 0, &[1]);
+        let service = utxo_service(std::slice::from_ref(&u1));
+        let args = GetUTXOsArgs {
+            addresses: vec![bech32(&service, 1)],
+            encoding: "hexnc".to_owned(),
+            ..Default::default()
+        };
+        let reply = service.get_utxos(&args).expect("get_utxos hexnc");
+        assert_eq!(
+            reply.utxos,
+            vec![format!("0x{}", hex::encode(u1.marshal().expect("marshal")))],
+            "hexnc carries no checksum"
+        );
+        assert_eq!(reply.encoding, "hexnc");
+    }
+
+    /// A `SharedMemory` stub serving fixed atomic UTXOs for the `sourceChain`
+    /// path (the `Indexed` half of `avax.GetAtomicUTXOs`).
+    struct FixedSharedMemory {
+        values: Vec<Vec<u8>>,
+        last_trait: Vec<u8>,
+        last_key: Vec<u8>,
+    }
+
+    impl ava_vm::components::avax::shared_memory::SharedMemory for FixedSharedMemory {
+        fn get(&self, _peer_chain: Id, _keys: &[Vec<u8>]) -> ava_vm::error::Result<Vec<Vec<u8>>> {
+            Ok(vec![])
+        }
+        fn indexed(
+            &self,
+            _peer_chain: Id,
+            _traits: &[Vec<u8>],
+            _start_trait: &[u8],
+            _start_key: &[u8],
+            _limit: usize,
+        ) -> ava_vm::error::Result<(Vec<Vec<u8>>, Vec<u8>, Vec<u8>)> {
+            Ok((
+                self.values.clone(),
+                self.last_trait.clone(),
+                self.last_key.clone(),
+            ))
+        }
+        fn apply(
+            &self,
+            _requests: std::collections::BTreeMap<
+                Id,
+                ava_vm::components::avax::shared_memory::Requests,
+            >,
+            _batches: &[ava_database::BatchOps],
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A fixed alias → chain id lookup (the `ChainLookup` seam).
+    struct FixedLookup(Vec<(String, Id)>);
+
+    impl ChainLookup for FixedLookup {
+        fn lookup(&self, alias: &str) -> Option<Id> {
+            self.0.iter().find(|(a, _)| a == alias).map(|&(_, id)| id)
+        }
+    }
+
+    #[test]
+    fn service_get_utxos_source_chain_atomic() {
+        let p_chain = Id::from([0x50; 32]);
+        let atomic_utxo = make_utxo(9, 1, 0xAA, 500, 0, &[1]);
+        let atomic_bytes = atomic_utxo.marshal().expect("marshal");
+
+        let u_local = make_utxo(1, 0, 0xAA, 100, 0, &[1]);
+        let service = utxo_service(&[u_local])
+            .with_chain_lookup(Arc::new(FixedLookup(vec![("P".to_owned(), p_chain)])))
+            .with_shared_memory(Arc::new(FixedSharedMemory {
+                values: vec![atomic_bytes.clone()],
+                last_trait: short(1).as_bytes().to_vec(),
+                last_key: atomic_utxo.input_id().as_bytes().to_vec(),
+            }));
+
+        let args = GetUTXOsArgs {
+            addresses: vec![bech32(&service, 1)],
+            source_chain: "P".to_owned(),
+            ..Default::default()
+        };
+        let reply = service.get_utxos(&args).expect("atomic get_utxos");
+
+        // The atomic UTXO (not the local one) comes back.
+        assert_eq!(reply.num_fetched, 1);
+        assert_eq!(reply.utxos, vec![hex_encode(&atomic_bytes)]);
+        assert_eq!(reply.end_index.address, bech32(&service, 1));
+        assert_eq!(reply.end_index.utxo, atomic_utxo.input_id().to_string());
+    }
+
+    #[test]
+    fn service_get_balance_strict_and_partial() {
+        let asset = 0xAA;
+        // Spendable: sole owner, unlocked.
+        let u_ok = make_utxo(1, 0, asset, 100, 0, &[1]);
+        // Locked in the future: only counted with includePartial.
+        let u_locked = make_utxo(2, 0, asset, 50, NOW_SECS + 1000, &[1]);
+        // Shared (2 owners): only counted with includePartial.
+        let u_shared = make_utxo(3, 0, asset, 25, 0, &[1, 2]);
+        // A different asset: never counted.
+        let u_other = make_utxo(4, 0, 0xBB, 999, 0, &[1]);
+        let service = utxo_service(&[u_ok.clone(), u_locked, u_shared, u_other]);
+
+        let asset_str = Id::from([asset; 32]).to_string();
+
+        // Strict (includePartial=false): only the sole-owner unlocked UTXO.
+        let strict = service
+            .get_balance(&GetBalanceArgs {
+                address: bech32(&service, 1),
+                asset_id: asset_str.clone(),
+                include_partial: false,
+            })
+            .expect("strict get_balance");
+        assert_eq!(strict.balance, 100, "strict balance counts only u_ok");
+        assert_eq!(
+            strict.utxo_ids,
+            vec![UtxoIdReply {
+                tx_id: u_ok.tx_id,
+                output_index: 0
+            }]
+        );
+
+        // Partial: locked + shared also count (100 + 50 + 25).
+        let partial = service
+            .get_balance(&GetBalanceArgs {
+                address: bech32(&service, 1),
+                asset_id: asset_str,
+                include_partial: true,
+            })
+            .expect("partial get_balance");
+        assert_eq!(partial.balance, 175);
+        assert_eq!(partial.utxo_ids.len(), 3);
+
+        // JSON shape: balance quoted; utxoIDs objects {txID, outputIndex}.
+        let j = serde_json::to_value(&strict).expect("json");
+        assert_eq!(j["balance"], serde_json::json!("100"));
+        assert_eq!(j["utxoIDs"][0]["txID"], u_ok.tx_id.to_string());
+        assert_eq!(j["utxoIDs"][0]["outputIndex"], serde_json::json!(0));
+    }
+
+    #[test]
+    fn service_get_balance_bad_address_error() {
+        let service = utxo_service(&[]);
+        let err = service
+            .get_balance(&GetBalanceArgs {
+                address: "definitely-not-an-address".to_owned(),
+                asset_id: Id::EMPTY.to_string(),
+                include_partial: false,
+            })
+            .expect_err("bad address");
+        assert!(
+            err.to_string()
+                .starts_with("problem parsing address 'definitely-not-an-address': "),
+            "Go wrap prefix; got: {err}"
+        );
+    }
+
+    #[test]
+    fn service_get_balance_unknown_asset_error() {
+        let service = utxo_service(&[]);
+        let err = service
+            .get_balance(&GetBalanceArgs {
+                address: bech32(&service, 1),
+                asset_id: "AVAX".to_owned(), // no asset aliaser (recorded deferral)
+                include_partial: false,
+            })
+            .expect_err("unknown asset");
+        // Go `vm.lookupAssetID` failure message.
+        assert_eq!(err.to_string(), "asset 'AVAX' not found");
+    }
+
+    #[test]
+    fn service_get_all_balances_shape() {
+        let u_a = make_utxo(1, 0, 0xAA, 100, 0, &[1]);
+        let u_a2 = make_utxo(2, 0, 0xAA, 11, 0, &[1]);
+        let u_b = make_utxo(3, 0, 0xBB, 7, 0, &[1]);
+        // Locked: excluded from the strict reply.
+        let u_locked = make_utxo(4, 0, 0xBB, 1000, NOW_SECS + 5, &[1]);
+        let service = utxo_service(&[u_a, u_a2, u_b, u_locked]);
+
+        let reply = service
+            .get_all_balances(&GetAllBalancesArgs {
+                address: bech32(&service, 1),
+                include_partial: false,
+            })
+            .expect("get_all_balances");
+
+        // Sorted by asset id (deterministic; Go's set order is random).
+        assert_eq!(
+            reply.balances,
+            vec![
+                AssetBalance {
+                    asset_id: Id::from([0xAA; 32]).to_string(),
+                    balance: 111
+                },
+                AssetBalance {
+                    asset_id: Id::from([0xBB; 32]).to_string(),
+                    balance: 7
+                },
+            ]
+        );
+
+        // JSON: [{"asset": "<cb58>", "balance": "111"}, …].
+        let j = serde_json::to_value(&reply).expect("json");
+        assert_eq!(j["balances"][0]["asset"], Id::from([0xAA; 32]).to_string());
+        assert_eq!(j["balances"][0]["balance"], serde_json::json!("111"));
+
+        // includePartial folds the locked UTXO in.
+        let partial = service
+            .get_all_balances(&GetAllBalancesArgs {
+                address: bech32(&service, 1),
+                include_partial: true,
+            })
+            .expect("partial get_all_balances");
+        assert_eq!(partial.balances[1].balance, 1007);
+    }
+
+    // -----------------------------------------------------------------------
+    // `getTxFee`
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn service_get_tx_fee_shape() {
+        // Mainnet defaults (config.rs): 1 mAVAX / 10 mAVAX.
+        let service = utxo_service(&[]);
+        let reply = service.get_tx_fee();
+        assert_eq!(reply.tx_fee, 1_000_000);
+        assert_eq!(reply.create_asset_tx_fee, 10_000_000);
+
+        // Go shape: quoted json.Uint64 strings under Go's exact JSON tags.
+        let j = serde_json::to_value(reply).expect("json");
+        assert_eq!(
+            j,
+            serde_json::json!({
+                "txFee": "1000000",
+                "createAssetTxFee": "10000000",
+            })
+        );
+
+        // The fee schedule follows the VM config.
+        let configured = utxo_service(&[]).with_fees(7, 9).get_tx_fee();
+        assert_eq!(configured.tx_fee, 7);
+        assert_eq!(configured.create_asset_tx_fee, 9);
     }
 
     // -----------------------------------------------------------------------
@@ -1607,14 +2563,14 @@ mod conformance {
         }
     }
 
-    /// The bridged method set is EXACTLY the 10 Go wire names (incl. the
-    /// `GetUTXOs` acronym override); `GetTxFee` and the `wallet.*` extension
-    /// stay unbridged (inventory: `tests/PORTING.md`).
+    /// The bridged method set is EXACTLY the 11 Go wire names (incl. the
+    /// `GetUTXOs` acronym override and the M8.23b `GetTxFee`); the `wallet.*`
+    /// extension stays unbridged (inventory: `tests/PORTING.md`).
     #[test]
     fn avm_method_set_matches_bridged() {
         let (service, _, _) = seeded_service();
         let reg = registry(Arc::new(service), RecordingIssuer::new());
-        const BRIDGED: [&str; 10] = [
+        const BRIDGED: [&str; 11] = [
             "GetHeight",
             "GetBlock",
             "GetBlockByHeight",
@@ -1625,6 +2581,7 @@ mod conformance {
             "GetUTXOs",
             "GetBalance",
             "GetAllBalances",
+            "GetTxFee",
         ];
         assert_eq!(reg.len(), BRIDGED.len(), "exactly the bridged set");
         for m in BRIDGED {
@@ -1635,10 +2592,10 @@ mod conformance {
             reg.lookup("avm", "GetUtxos").is_none(),
             "no pascalized GetUtxos"
         );
-        // Unbridged Go methods (M8.23) are NOT registered.
+        // The keystore-backed wallet extension stays out of scope.
         assert!(
-            reg.lookup("avm", "GetTxFee").is_none(),
-            "GetTxFee unbridged"
+            reg.lookup("wallet", "SendMultiple").is_none(),
+            "wallet.* unbridged"
         );
     }
 
@@ -1714,8 +2671,8 @@ mod conformance {
             "the wire issueTx submits through the TxIssuer seam"
         );
 
-        // The deferred getUTXOs stub is REGISTERED and surfaces -32000 (not
-        // -32601): the method exists on the wire, its body is the deferral.
+        // getUTXOs with an unresolvable sourceChain alias surfaces Go's
+        // handler error string as a -32000 server error.
         let body = post(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "avm.getUTXOs",
@@ -1723,9 +2680,14 @@ mod conformance {
             "id": 3,
         }))
         .await;
-        assert_eq!(body["error"]["code"], -32000, "stub is a server error");
+        assert_eq!(body["error"]["code"], -32000, "handler error is -32000");
+        assert_eq!(
+            body["error"]["message"],
+            "problem parsing source chainID \"P\": there is no ID with alias P",
+            "Go-byte-equal handler error string"
+        );
 
-        // An unbridged Go method (getTxFee) dispatches to -32601.
+        // getTxFee (bridged in M8.23b) answers the static fee schedule.
         let body = post(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "avm.getTxFee",
@@ -1733,6 +2695,13 @@ mod conformance {
             "id": 4,
         }))
         .await;
-        assert_eq!(body["error"]["code"], -32601, "unbridged method is -32601");
+        assert_eq!(
+            body["result"],
+            serde_json::json!({
+                "txFee": "1000000",
+                "createAssetTxFee": "10000000",
+            }),
+            "avm.getTxFee mainnet defaults"
+        );
     }
 }

@@ -223,6 +223,13 @@ pub enum Error {
     #[error("service error: {0}")]
     Service(String),
 
+    /// A service-layer error whose message must surface to the API client
+    /// **byte-equal to Go's** (no `service error:` prefix) — the
+    /// `vms/avm/service.go` handler error strings (M8.23b: `getUTXOs` /
+    /// `getBalance` / `getAllBalances` pagination + parse errors).
+    #[error("{0}")]
+    Api(String),
+
     // ---- folded-in shared errors -----------------------------------------
     /// Linear-codec marshal/unmarshal failure.
     #[error(transparent)]

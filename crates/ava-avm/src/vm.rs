@@ -130,6 +130,11 @@ struct Shared {
     manager: Mutex<BlockManager<DynDb>>,
     /// The decision-tx mempool, shared with the gossip handler ([`AvmGossipHandler`]).
     mempool: Arc<Mutex<Mempool>>,
+    /// The cross-chain shared-memory handle (also held by the block manager);
+    /// retained so `create_handlers` can wire the `getUTXOs` `sourceChain`
+    /// atomic path (M8.23b). The live node-wide implementation replaces the
+    /// `NoopSharedMemory` at the M8 `ava-chains` wiring.
+    shared_memory: Arc<dyn SharedMemory>,
 }
 
 /// The [`ReadOnlyChain`] view over the VM's live state: every read locks the
@@ -162,6 +167,18 @@ impl ReadOnlyChain for VmChainReader {
     }
     fn get_timestamp(&self) -> SystemTime {
         self.shared.manager.lock().state().get_timestamp()
+    }
+    fn utxo_ids(
+        &self,
+        addr: &ava_types::short_id::ShortId,
+        previous: Id,
+        limit: usize,
+    ) -> Result<Vec<Id>> {
+        self.shared
+            .manager
+            .lock()
+            .state()
+            .utxo_ids(addr, previous, limit)
     }
 }
 
@@ -628,10 +645,13 @@ impl Vm for AvmVm {
         let genesis_id = state.get_last_accepted();
 
         // Build the M5.16 block manager (bootstrapped=false; flipped at NormalOp).
+        // The shared-memory handle is also retained on `Shared` so the API
+        // service's `getUTXOs` sourceChain path reads the same store (M8.23b).
+        let shared_memory: Arc<dyn SharedMemory> = Arc::new(NoopSharedMemory);
         let mgr_config = BlockManagerConfig {
             backend: backend(&chain_ctx, fee_config, false),
             dispatch: dispatch(),
-            shared_memory: Arc::new(NoopSharedMemory) as Arc<dyn SharedMemory>,
+            shared_memory: Arc::clone(&shared_memory),
         };
         let manager = BlockManager::new(state, mgr_config);
 
@@ -648,6 +668,7 @@ impl Vm for AvmVm {
         self.shared = Some(Arc::new(Shared {
             manager: Mutex::new(manager),
             mempool,
+            shared_memory,
         }));
         self.gossip_handler = Some(Arc::new(AtomicAppHandler::new(gossip_handler)));
         self.ctx = Some(chain_ctx);
@@ -709,12 +730,22 @@ impl Vm for AvmVm {
             .ctx
             .as_ref()
             .ok_or(VmError::from(Error::NotInitialized))?;
-        let service = Arc::new(crate::service::Service::new(
-            Arc::new(VmChainReader {
-                shared: Arc::clone(shared),
-            }),
-            ctx.network_id,
-        ));
+        // M8.23b: wire the chain id (local-address + sourceChain checks), the
+        // fee schedule (`getTxFee`), and the shared-memory handle (`getUTXOs`
+        // sourceChain atomic path). The node-level `BCLookup` aliaser
+        // (`ChainLookup`: "P"/"C" aliases) is the recorded `ava-node` wiring
+        // follow-up — chain-id strings resolve via the built-in fallback.
+        let service = Arc::new(
+            crate::service::Service::new(
+                Arc::new(VmChainReader {
+                    shared: Arc::clone(shared),
+                }),
+                ctx.network_id,
+            )
+            .with_chain_id(ctx.chain_id)
+            .with_fees(self.fee_config.tx_fee, self.fee_config.create_asset_tx_fee)
+            .with_shared_memory(Arc::clone(&shared.shared_memory)),
+        );
         let issuer = Arc::new(VmTxIssuer {
             shared: Arc::clone(shared),
         });

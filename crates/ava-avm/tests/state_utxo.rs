@@ -13,6 +13,7 @@
 #![allow(unused_crate_dependencies)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::indexing_slicing)]
 
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
