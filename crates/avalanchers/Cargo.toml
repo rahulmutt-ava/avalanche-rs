@@ -21,6 +21,14 @@ path = "src/main.rs"
 ava-version = { path = "../ava-version" }
 clap = { workspace = true }
 
+# Full-node entrypoint (M8.31): resolve the node config, assemble the Node, and
+# run dispatch under the single process-wide tokio runtime (17 §1.1).
+ava-config = { path = "../ava-config" }
+ava-node = { path = "../ava-node" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 # In-process chain-manager assembly (M3.28): build the VmManager, register the
 # built-in no-op test-VM factory, and create one Snowman chain through the full
 # create_snowman_chain pipeline. `ava-vm/testutil` supplies the in-memory no-op
@@ -38,7 +46,9 @@ ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
+# The binary owns the single multi-thread runtime (17 §1.1) and installs the
+# SIGINT/SIGTERM/SIGABRT handlers (17 §2.5).
+tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macros", "time", "signal" ] }
 tokio-util = { workspace = true }
 prometheus = { workspace = true }
 # Staking-cert generation + ECDSA P-256 signing for the proposervm identity.
@@ -46,5 +56,11 @@ rcgen = { workspace = true }
 ring = { workspace = true }
 rustls-pemfile = { workspace = true }
 
+# Minimal FFI for the fd-limit (`setrlimit`) + SIGABRT raw signal number; same
+# choice as `ava-vm-rpc` (00 §4 keeps the FFI surface to `libc`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
-tokio = { workspace = true, features = [ "rt", "sync", "macros", "time" ] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macros", "time", "signal" ] }

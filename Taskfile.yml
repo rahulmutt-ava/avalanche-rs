@@ -91,6 +91,10 @@ tasks:
     desc: actionlint on GitHub workflows (carried over)
     cmd: '{{.NIX_RUN}} actionlint'
 
+  lint-single-runtime:
+    desc: Forbid runtime construction / block_on outside the avalanchers binary (specs/17 §1.1)
+    cmd: '{{.NIX_RUN}} ./scripts/single_runtime_lint.sh'
+
   check-yaml-fmt:
     desc: Assert YAML is yamlfmt-clean (carried over)
     cmds:
@@ -99,7 +103,7 @@ tasks:
 
   lint-all:
     desc: Run all lint checks
-    deps: [lint, lint-saevm, lint-shell, lint-action]
+    deps: [lint, lint-saevm, lint-shell, lint-action, lint-single-runtime]
     cmds:
       - task: check-yaml-fmt
       - task: deps-tidy
@@ -113,6 +117,7 @@ tasks:
       - task: lint-saevm
       - task: lint-shell
       - task: lint-action
+      - task: lint-single-runtime
       - task: check-yaml-fmt
       - task: check-rust-version
       - task: deps-tidy
