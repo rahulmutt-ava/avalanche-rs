@@ -22,15 +22,28 @@
 //!   the `ava-logging` factory + the [`logging::LogFactory`] registry
 //!   (specs/18 §5).
 //!
-//! Dispatch and the 14-step shutdown sequence (M8.30) arrive next; `Node`
-//! already owns the root `CancellationToken` tree (17 §4.1) and the task
-//! tracker they drive.
+//! - [`dispatch`] — [`Node::dispatch`], the run loop (process-context write,
+//!   API + warn task spawn, manual peer tracking, P2P event loop; specs/12
+//!   §2.3, M8.30).
+//! - [`shutdown`] — [`Node::shutdown`], the 14-step teardown run exactly once
+//!   (specs/12 §2.4, 17 §4.3/§4.4, M8.30).
+//!
+//! `Node` owns the root `CancellationToken` tree (17 §4.1) and the task tracker
+//! that dispatch + shutdown drive.
+//!
+//! [`Node::dispatch`]: crate::node::Node::dispatch
+//! [`Node::shutdown`]: crate::node::Node::shutdown
 
 #![forbid(unsafe_code)]
 
+pub mod dispatch;
 pub mod error;
 pub mod init;
 pub mod logging;
 pub mod nat;
 pub mod node;
+pub mod shutdown;
 pub mod trace;
+
+#[cfg(test)]
+pub(crate) mod testutil;

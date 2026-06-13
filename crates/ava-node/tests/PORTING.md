@@ -73,16 +73,66 @@ the M8.29 `ShutdownTrigger` records the exit code and cancels the root token
 | `insecure_validator_manager.go` (no Go test) | n/a | ported (`src/init/networking.rs`) |
 | `config.go` / `config_test.go` | n/a | lives in `ava-config` (M8.1–M8.15) |
 
-### Notes for M8.30 (dispatch + shutdown)
+## Dispatch + 14-step shutdown (M8.30 — specs 12 §2.3/§2.4, 17 §4.3/§4.4/§9)
 
-- `Networking::on_sufficiently_connected` (watch receiver) feeds the
-  bootstrap-beacon-connection-timeout warn task.
-- `RouterBridge::engine_router()` is `Some` after step 20 — wire
-  `handle_inbound` to it.
-- `Node.api_uri` uses the configured port; re-resolve via
-  `Server::bind_addr()` after `serve()` binds when `--http-port=0`, then write
-  `process.json`.
-- The `ShutdownTrigger` tail must become the 14-step sequence; delete
-  `UNGRACEFUL_SHUTDOWN_KEY` (step 13) before `db.close()`.
-- `Node.tasks` (`TaskTracker`) is constructed but nothing registers on it yet;
-  dispatch-spawned tasks must.
+`Node::dispatch` (`src/dispatch.rs`) and `Node::shutdown` (`src/shutdown.rs`)
+are the run loop + teardown. Dispatch writes `process.json`
+(`{pid, uri, stakingAddress}`), spawns the API task + the
+bootstrap-beacon-connection-timeout warn task (both on `Node.tasks`),
+manually-tracks state-sync + bootstrap peers, runs `net.dispatch().await`, then
+`shutdown(1)` and removes `process.json`. Shutdown sets exit-code/`shuttingDown`
+(first demand wins), cancels the root token, and runs the 14 steps **exactly
+once** via `shutdown_once: OnceCell`. Pinned by
+`src/shutdown.rs::tests::shutdown_order_matches_go` (+ `shutdown_runs_once`,
+`subnet_cancellation_is_scoped`) and `src/dispatch.rs::tests::*`.
+
+### Shutdown steps: real vs instrumented-seam
+
+| # | Step (recorded name) | Status | Notes |
+|---|---|---|---|
+| 1 | `shuttingDown` | ✅ real | registers an always-failing `Checker`; sleeps `http-shutdown-wait` |
+| 2 | `staking_signer` | ✅ real | `Signer::shutdown()` (default `Ok` for the ephemeral/file signer) |
+| 3 | `resource_manager` | 🟡 seam | calls `SystemResourceManager::shutdown()`; the noop has no poller (real poller → future system-poller task) |
+| 4 | `timeout_manager` | ✅ real | `AdaptiveTimeoutManager::stop()` cancels the dispatch loop |
+| 5 | `chain_manager` | 🟡 partial | `AssemblyChainManager::shutdown(consensus_shutdown_timeout)` drains every registered chain (cancel token → close+`wait()` w/ timeout → abandon); **no chains are created yet** so the live node drains zero chains. `register_chain`/`subnet_token` exist + are exercised by the cancellation-propagation test; real per-chain executor/gossip/engine drop lands with the chains milestone |
+| 6 | `benchlist` | 🟡 noop | the M3 `Benchlist` has no background task (no `shutdown` method); Go-parity placeholder |
+| 7 | `profiler` | 🟡 noop | continuous profiler is a documented deferral; on-demand admin profiler holds no state |
+| 8 | `net_start_close` | ✅ real | `Network::start_close()` + cancel `network_token` |
+| 9 | `api_server` | ✅ real | `ApiServer::shutdown()` bounded by `http-shutdown-timeout` |
+| 10 | `nat` | 🟡 partial | aborts the staking-port keep-alive task (per-mapping unmap fires on the cancelled token, Go `UnmapAllPorts`); `ip_updater` is always `None` (resolver deferral) |
+| 11 | `indexer` | ✅ real | `Indexer::close()` flushes the final batch |
+| 12 | `runtime_manager` | 🟡 seam | `RuntimeManager::stop()`; the noop tracks no subprocesses (real kill → plugin-host milestone) |
+| 13 | `database` | ✅ real | `db.delete(UNGRACEFUL_SHUTDOWN_KEY)` then `db.close()` — persistence last |
+| 14 | `tracer` | ✅ real | `Tracer::shutdown()` flushes spans (no-op when tracing disabled) |
+
+### Dispatch divergences (Go ↔ Rust)
+
+| Go | Rust (M8.30) |
+|---|---|
+| `RecoverAndPanic` around the API goroutine | a `tokio` task on `Node.tasks`; an exit while not `shutting_down` logs + demands `shutdown(1)` |
+| `tlsKeyLogWriterCloser.Close()` in `Dispatch` | n/a — TLS key logging is a networking deferral (no closer) |
+| `apiURI` re-resolution for `--http-port=0` | **DEFERRED**: `process.json` still records the *configured* URI. The `Server` binds inside `serve()` and does not expose the bound `SocketAddr` post-bind, so a `--http-port=0` URI cannot yet be re-resolved. Handoff: add a bound-addr watch/oneshot to `ava_api::Server` (cross-crate) so dispatch can rewrite `process.json` after `serve()` binds. `Server::bind_addr()` only returns the *configured* addr. |
+| `RouterBridge::handle_inbound` → engine router | **DEFERRED**: `handle_inbound` still debug-drops (wire-op → engine-op conversion + chain dispatch is the chains milestone). The engine-router slot is filled at init step 20, but no decoded message is routed yet. |
+
+### Go test parity (`node/`) — M8.30 additions
+
+| Go test | Status | Where / why |
+|---|---|---|
+| `node.go` shutdown order (no Go unit test; ordering is comment-enforced) | ✅ | `src/shutdown.rs::tests::shutdown_order_matches_go` (stronger than Go: asserted) + `shutdown_runs_once` (the `OnceCell` guard) |
+| `node.go` `Dispatch` (no Go unit test) | ✅ | `src/dispatch.rs::tests::api_dispatch_failure_triggers_shutdown_1` + `write_process_context_writes_pid_uri_staking` |
+| cancellation propagation (17 §9; no Go unit test) | ✅ | `src/shutdown.rs::tests::subnet_cancellation_is_scoped` |
+
+### Notes for M8.31 (the `avalanchers` bin)
+
+- `Node::dispatch(self: Arc<Self>) -> i32` is the bin's run loop; it owns the
+  `Arc<Node>` and returns the process exit code.
+- `apiURI` re-resolution + `RouterBridge` engine routing remain deferred (see
+  the divergence table above) — the bin does not need them, but the chains
+  milestone does.
+- The `ShutdownTrigger` tail (`src/init/mod.rs`) still only records the exit
+  code + cancels the root token. The real 14-step sequence runs in
+  `Node::shutdown`; subsystems that hold a `ShutdownTrigger` (disk-space check,
+  indexer fatal close) therefore demand a shutdown that the **dispatch loop**
+  observes (root token cancel → `net.dispatch()` returns → `shutdown(1)`). A
+  trigger fired before `dispatch` starts is observed once `net.dispatch()` is
+  entered.
