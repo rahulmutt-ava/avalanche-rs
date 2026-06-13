@@ -2340,6 +2340,20 @@ fn server_err(e: Error) -> RpcError {
     RpcError::server(e.to_string())
 }
 
+/// The `issueTx` mempool-admission seam (Go `vm.issueTxFromRPC`): the wire
+/// `issueTx` handler parses the tx (via [`Service::parse_issue_tx`]) then
+/// submits it through this seam. The P-Chain mempool lives un-shared on
+/// `PlatformVm`, so the production wiring of this trait to the mempool +
+/// gossip path is the M8 node-assembly concern; the local conformance tests
+/// supply a recording stub. Mirrors the avm precedent (`ava-avm` `TxIssuer`).
+pub trait TxIssuer: Send + Sync {
+    /// Admits `tx` to the mempool (Go `vm.issueTxFromRPC` → `Network.IssueTx`).
+    ///
+    /// # Errors
+    /// Returns the Go-byte-equal rejection message on a failed admission.
+    fn issue_tx(&self, tx: Tx) -> std::result::Result<(), String>;
+}
+
 /// The gorilla `platform` service wrapper over [`Service`] (Go
 /// `platformvm.Service`, registered as `"platform"` by `CreateHandlers`,
 /// `vm.go:462`). Bridges the typed read bodies; the full Go method set is
@@ -2349,6 +2363,8 @@ pub struct RpcService {
     /// `ctx.AVAXAssetID` — the primary network's staking asset
     /// (Go `GetStakingAssetID`, `service.go:612`).
     avax_asset_id: Id,
+    /// The `issueTx` mempool-admission seam.
+    issuer: Arc<dyn TxIssuer>,
 }
 
 #[rpc_service("platform")]
@@ -2581,17 +2597,226 @@ impl RpcService {
             asset_id: self.avax_asset_id,
         })
     }
+
+    // -----------------------------------------------------------------------
+    // M8.23a — the 15 previously-missing platform.* wire methods
+    // -----------------------------------------------------------------------
+
+    /// `platform.getBalance` (Go `Service.GetBalance`, `service.go:139`).
+    ///
+    /// # Errors
+    /// `-32000` on address parse / UTXO decode failure.
+    pub async fn get_balance(
+        &self,
+        args: GetBalanceRequest,
+    ) -> std::result::Result<GetBalanceResponse, RpcError> {
+        self.service.get_balance(&args).map_err(server_err)
+    }
+
+    /// `platform.getUTXOs` (Go `Service.GetUTXOs`, `service.go:267`). The
+    /// cross-chain (`sourceChain`) atomic path is a recorded deferral.
+    ///
+    /// # Errors
+    /// `-32000` on no/too-many addresses, a bad cursor, an atomic source chain
+    /// (deferred), or a UTXO decode failure.
+    #[rpc(name = "GetUTXOs")]
+    pub async fn get_utxos(
+        &self,
+        args: GetUTXOsArgs,
+    ) -> std::result::Result<GetUTXOsReply, RpcError> {
+        self.service.get_utxos(&args).map_err(server_err)
+    }
+
+    /// `platform.getSubnet` (Go `Service.GetSubnet`, `service.go:391`).
+    ///
+    /// # Errors
+    /// `-32000` for the primary network, an absent owner, or malformed bytes.
+    pub async fn get_subnet(
+        &self,
+        args: GetSubnetArgs,
+    ) -> std::result::Result<GetSubnetResponse, RpcError> {
+        self.service.get_subnet(args.subnet_id).map_err(server_err)
+    }
+
+    /// `platform.getSubnets` (Go `Service.GetSubnets`, `service.go:482`).
+    ///
+    /// # Errors
+    /// `-32000` on malformed owner bytes.
+    pub async fn get_subnets(
+        &self,
+        args: GetSubnetsArgs,
+    ) -> std::result::Result<GetSubnetsResponse, RpcError> {
+        self.service.get_subnets(&args.ids).map_err(server_err)
+    }
+
+    /// `platform.sampleValidators` (Go `Service.SampleValidators`,
+    /// `service.go:1146`).
+    ///
+    /// # Errors
+    /// `-32000` on a validator-set read failure.
+    pub async fn sample_validators(
+        &self,
+        args: SampleValidatorsArgs,
+    ) -> std::result::Result<SampleValidatorsReply, RpcError> {
+        let size = u16::try_from(args.size).unwrap_or(u16::MAX);
+        self.service
+            .sample_validators(args.subnet_id, size)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.getBlockchainStatus` (Go `Service.GetBlockchainStatus`,
+    /// `service.go:1180`). Accepted-state only (see
+    /// [`Service::get_blockchain_status`]).
+    ///
+    /// # Errors
+    /// `-32000` on a missing/unparsable blockchain id.
+    pub async fn get_blockchain_status(
+        &self,
+        args: GetBlockchainStatusArgs,
+    ) -> std::result::Result<GetBlockchainStatusReply, RpcError> {
+        self.service
+            .get_blockchain_status(&args.blockchain_id)
+            .map_err(server_err)
+    }
+
+    /// `platform.getBlockchains` (Go `Service.GetBlockchains`,
+    /// `service.go:1374`).
+    ///
+    /// # Errors
+    /// `-32000` on a chain-tx decode failure.
+    pub async fn get_blockchains(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetBlockchainsResponse, RpcError> {
+        self.service.get_blockchains().map_err(server_err)
+    }
+
+    /// `platform.issueTx` (Go `Service.IssueTx`, `service.go:1435`): parse the
+    /// tx (typed body) then admit it through the [`TxIssuer`] mempool seam.
+    ///
+    /// # Errors
+    /// `-32000` on a decode/parse failure or a rejected issuance.
+    pub async fn issue_tx(
+        &self,
+        args: FormattedTx,
+    ) -> std::result::Result<JsonTxId, RpcError> {
+        let tx = self.service.parse_issue_tx(&args).map_err(server_err)?;
+        let tx_id = tx.id();
+        self.issuer
+            .issue_tx(tx)
+            .map_err(|e| RpcError::server(format!("couldn't issue tx: {e}")))?;
+        Ok(JsonTxId { tx_id })
+    }
+
+    /// `platform.getStake` (Go `Service.GetStake`, `service.go:1582`).
+    ///
+    /// # Errors
+    /// `-32000` on too-many addresses, address parse, staker-tx decode, or an
+    /// output encode failure.
+    pub async fn get_stake(
+        &self,
+        args: GetStakeArgs,
+    ) -> std::result::Result<GetStakeReply, RpcError> {
+        self.service.get_stake(&args).map_err(server_err)
+    }
+
+    /// `platform.getMinStake` (Go `Service.GetMinStake`, `service.go:1678`).
+    /// Non-primary (elastic) subnets are a recorded deferral.
+    ///
+    /// # Errors
+    /// `-32000` for a non-primary subnet (deferred).
+    pub async fn get_min_stake(
+        &self,
+        args: GetMinStakeArgs,
+    ) -> std::result::Result<GetMinStakeReply, RpcError> {
+        self.service.get_min_stake(args.subnet_id).map_err(server_err)
+    }
+
+    /// `platform.getTotalStake` (Go `Service.GetTotalStake`,
+    /// `service.go:1731`).
+    ///
+    /// # Errors
+    /// `-32000` on a validator-set read failure.
+    pub async fn get_total_stake(
+        &self,
+        args: GetTotalStakeArgs,
+    ) -> std::result::Result<GetTotalStakeReply, RpcError> {
+        self.service
+            .get_total_stake(args.subnet_id)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.getRewardUTXOs` (Go `Service.GetRewardUTXOs`,
+    /// `service.go:1759`).
+    ///
+    /// # Errors
+    /// `-32000` on an output encode failure.
+    #[rpc(name = "GetRewardUTXOs")]
+    pub async fn get_reward_utxos(
+        &self,
+        args: GetTxArgs,
+    ) -> std::result::Result<GetRewardUTXOsReply, RpcError> {
+        self.service
+            .get_reward_utxos(args.tx_id, &args.encoding)
+            .map_err(server_err)
+    }
+
+    /// `platform.getAllValidatorsAt` (Go `Service.GetAllValidatorsAt`,
+    /// `service.go:1824`).
+    ///
+    /// # Errors
+    /// `-32000` on a height-resolution / validator-set read failure.
+    pub async fn get_all_validators_at(
+        &self,
+        args: GetAllValidatorsAtArgs,
+    ) -> std::result::Result<GetAllValidatorsAtReply, RpcError> {
+        self.service
+            .get_all_validators_at(args.height)
+            .await
+            .map_err(server_err)
+    }
+
+    /// `platform.getFeeConfig` (Go `Service.GetFeeConfig`, `service.go:2034`).
+    ///
+    /// # Errors
+    /// Infallible (the dynamic-fee config constants).
+    pub async fn get_fee_config(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetFeeConfigReply, RpcError> {
+        Ok(self.service.get_fee_config())
+    }
+
+    /// `platform.getValidatorFeeConfig` (Go `Service.GetValidatorFeeConfig`,
+    /// `service.go:2071`).
+    ///
+    /// # Errors
+    /// Infallible (the validator continuous-fee config constants).
+    pub async fn get_validator_fee_config(
+        &self,
+        _args: EmptyArgs,
+    ) -> std::result::Result<GetValidatorFeeConfigReply, RpcError> {
+        Ok(self.service.get_validator_fee_config())
+    }
 }
 
-/// Builds the registry serving the bridged `platform.*` methods (the body of
-/// Go's `server.RegisterService(service, "platform")`, `vm.go:462`).
-/// `avax_asset_id` is the chain context's AVAX asset id (`GetStakingAssetID`).
+/// Builds the registry serving the `platform.*` methods (the body of Go's
+/// `server.RegisterService(service, "platform")`, `vm.go:462`).
+/// `avax_asset_id` is the chain context's AVAX asset id (`GetStakingAssetID`);
+/// `issuer` is the `issueTx` mempool-admission seam.
 #[must_use]
-pub fn registry(service: Arc<Service>, avax_asset_id: Id) -> ServiceRegistry {
+pub fn registry(
+    service: Arc<Service>,
+    avax_asset_id: Id,
+    issuer: Arc<dyn TxIssuer>,
+) -> ServiceRegistry {
     let mut registry = ServiceRegistry::new();
     Arc::new(RpcService {
         service,
         avax_asset_id,
+        issuer,
     })
     .register_rpc(&mut registry);
     registry
@@ -2629,6 +2854,25 @@ mod conformance {
     use crate::validators::manager::PChainValidatorManager;
 
     const AVAX: u64 = 1_000_000_000;
+
+    /// A recording [`TxIssuer`] stub: captures the issued tx id and reports
+    /// success (the wire `issueTx` parses AND submits through this seam).
+    struct RecordingIssuer {
+        issued: std::sync::Mutex<Vec<Id>>,
+    }
+
+    impl TxIssuer for RecordingIssuer {
+        fn issue_tx(&self, tx: Tx) -> std::result::Result<(), String> {
+            self.issued.lock().expect("lock").push(tx.id());
+            Ok(())
+        }
+    }
+
+    fn test_issuer() -> Arc<dyn TxIssuer> {
+        Arc::new(RecordingIssuer {
+            issued: std::sync::Mutex::new(Vec::new()),
+        })
+    }
 
     fn pk(seed: u8) -> PublicKey {
         SecretKey::from_bytes(&[seed; 32]).expect("sk").public_key()
@@ -2824,11 +3068,13 @@ mod conformance {
             assert!(v["weight"].as_str().is_some());
         }
 
-        // getFeeState shape.
+        // getFeeState shape. Go's `gas.State`/`gas.Price` are bare `uint64`
+        // with no custom JSON marshaler ⇒ plain JSON numbers (M8.23a parity
+        // refinement: previously string-serialized).
         let fs = service.get_fee_state();
         let fsj = serde_json::to_value(&fs).expect("json");
-        assert!(fsj["capacity"].as_str().is_some());
-        assert!(fsj["excess"].as_str().is_some());
+        assert!(fsj["capacity"].as_u64().is_some());
+        assert!(fsj["excess"].as_u64().is_some());
         assert!(fsj["timestamp"].as_str().is_some());
     }
 
@@ -2852,8 +3098,9 @@ mod conformance {
     #[test]
     fn platform_method_set_matches_bridged() {
         let (service, ..) = seeded_service();
-        let reg = registry(Arc::new(service), Id::from([0x42; 32]));
-        const BRIDGED: [&str; 16] = [
+        let reg = registry(Arc::new(service), Id::from([0x42; 32]), test_issuer());
+        // M8.23a: the full 31-method Go `platform.*` set is now bridged.
+        const BRIDGED: [&str; 31] = [
             "GetHeight",
             "GetProposedHeight",
             "GetTimestamp",
@@ -2870,29 +3117,44 @@ mod conformance {
             "GetBlock",
             "GetBlockByHeight",
             "GetStakingAssetID",
+            "GetBalance",
+            "GetUTXOs",
+            "GetSubnet",
+            "GetSubnets",
+            "SampleValidators",
+            "GetBlockchainStatus",
+            "GetBlockchains",
+            "IssueTx",
+            "GetStake",
+            "GetMinStake",
+            "GetTotalStake",
+            "GetRewardUTXOs",
+            "GetAllValidatorsAt",
+            "GetFeeConfig",
+            "GetValidatorFeeConfig",
         ];
-        assert_eq!(reg.len(), BRIDGED.len(), "exactly the bridged set");
+        assert_eq!(reg.len(), BRIDGED.len(), "exactly the full Go set");
         for m in BRIDGED {
             assert!(
                 reg.lookup("platform", m).is_some(),
                 "platform.{m} registered"
             );
         }
-        // Exact-remainder matching: the pascalized (non-Go) casing must miss.
+        // Exact-remainder matching: the pascalized (non-Go) casing must miss
+        // for the acronym methods.
         assert!(reg.lookup("platform", "GetStakingAssetId").is_none());
-        // Unbridged Go methods (M8.23) are NOT registered.
-        for m in ["IssueTx", "GetUTXOs", "GetBalance", "SampleValidators"] {
-            assert!(
-                reg.lookup("platform", m).is_none(),
-                "platform.{m} unbridged"
-            );
-        }
+        assert!(reg.lookup("platform", "GetUtxos").is_none());
+        assert!(reg.lookup("platform", "GetRewardUtxos").is_none());
     }
 
     /// Drives the gorilla envelope end-to-end through `registry_service`.
     async fn post_platform(service: Service, body: serde_json::Value) -> serde_json::Value {
         use ava_vm::vm::VmRequest;
-        let reg = std::sync::Arc::new(registry(std::sync::Arc::new(service), Id::from([0x42; 32])));
+        let reg = std::sync::Arc::new(registry(
+            std::sync::Arc::new(service),
+            Id::from([0x42; 32]),
+            test_issuer(),
+        ));
         let svc = crate::jsonrpc::registry_service(reg);
         let resp = svc
             .serve_http(VmRequest {

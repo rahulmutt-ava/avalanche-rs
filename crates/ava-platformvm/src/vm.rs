@@ -168,6 +168,22 @@ impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
     }
 }
 
+/// The deferred `issueTx` admission seam: the P-Chain mempool is un-shared on
+/// [`PlatformVm`] (not in `Shared`), so an RPC-issued tx cannot yet be admitted
+/// from the per-request handler. The shared-mempool + gossip wiring is the M8
+/// node-assembly concern (`tests/PORTING.md`). Returns the Go-byte-equal
+/// rejection prefix wrapped with the deferral reason.
+struct DeferredIssuer;
+
+impl crate::service::TxIssuer for DeferredIssuer {
+    fn issue_tx(&self, _tx: crate::txs::Tx) -> std::result::Result<(), String> {
+        Err("RPC issuance not yet wired (deferred: the P-Chain mempool is \
+             un-shared on PlatformVm; shared-mempool + gossip admission is M8 \
+             node assembly)"
+            .to_owned())
+    }
+}
+
 /// `platformvm.VM` — the P-Chain Snowman VM over the [`DynDb`]-adapted engine
 /// database (specs 08 §1).
 pub struct PlatformVm {
@@ -536,7 +552,14 @@ impl Vm for PlatformVm {
             ctx.network_id,
             ctx.avax_asset_id,
         ));
-        let registry = Arc::new(crate::service::registry(service, ctx.avax_asset_id));
+        // The `issueTx` mempool-admission seam. The P-Chain mempool currently
+        // lives un-shared on `PlatformVm` (not in `Shared`), so it cannot be
+        // reached from the per-request handler; admission therefore surfaces a
+        // clear deferral (the shared-mempool + gossip wiring is the M8 node
+        // assembly concern — see `tests/PORTING.md`). Decode/parse + the wire
+        // contract are fully exercised before this point.
+        let issuer: Arc<dyn crate::service::TxIssuer> = Arc::new(DeferredIssuer);
+        let registry = Arc::new(crate::service::registry(service, ctx.avax_asset_id, issuer));
         let mut handlers = HashMap::new();
         handlers.insert(
             String::new(),
@@ -999,8 +1022,8 @@ mod conformance {
             "platform.getTimestamp serves an RFC3339 timestamp: {body}"
         );
 
-        // An unbridged Go method dispatches to -32601 (method inventory is
-        // tests/PORTING.md; full parity is M8.23).
+        // issueTx is now bridged (M8.23a): an empty payload fails to decode and
+        // surfaces a -32000 handler error (not -32601 method-not-found).
         let body = post(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "platform.issueTx",
@@ -1008,7 +1031,20 @@ mod conformance {
             "id": 3,
         }))
         .await;
-        assert_eq!(body["error"]["code"], -32601, "unbridged method is -32601");
+        assert_eq!(
+            body["error"]["code"], -32000,
+            "bridged issueTx surfaces a -32000 handler error on a bad payload"
+        );
+
+        // A genuinely-unknown method still dispatches to -32601.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "platform.notAMethod",
+            "params": [{}],
+            "id": 4,
+        }))
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "unknown method is -32601");
     }
 }
 
