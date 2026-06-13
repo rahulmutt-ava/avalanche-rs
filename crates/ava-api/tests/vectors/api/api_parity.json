@@ -1,0 +1,342 @@
+{
+  "goCommit": "3d434bacaee972c37ae899f7e49566e09d04f915",
+  "emitter": "crates/ava-api/tests/go-oracle/api_parity_oracle_test.go",
+  "services": {
+    "admin": {
+      "service": "admin",
+      "methods": [
+        "startCPUProfiler",
+        "stopCPUProfiler",
+        "memoryProfile",
+        "lockProfile",
+        "alias",
+        "aliasChain",
+        "getChainAliases",
+        "stacktrace",
+        "setLoggerLevel",
+        "getLoggerLevel",
+        "getConfig",
+        "loadVMs",
+        "dbGet"
+      ],
+      "calls": [
+        {
+          "method": "getChainAliases",
+          "params": {
+            "chain": "2Kw2XL8QVSQHwJYKpWLktaxtwKuz7iYF5pqcauUHpmcrSjRPp"
+          },
+          "response": {
+            "aliases": [
+              "X",
+              "2Kw2XL8QVSQHwJYKpWLktaxtwKuz7iYF5pqcauUHpmcrSjRPp"
+            ]
+          }
+        },
+        {
+          "method": "getLoggerLevel",
+          "params": {
+            "loggerName": "C"
+          },
+          "response": {
+            "loggerLevels": {
+              "C": {
+                "logLevel": "INFO",
+                "displayLevel": "INFO"
+              }
+            }
+          }
+        },
+        {
+          "method": "loadVMs",
+          "params": {},
+          "response": {
+            "newVMs": {
+              "4Y9jjDLkJqQSq97CX1ughtuPVsSHyaSKDsEdtkFms3yv5zyB7": [
+                "avm"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "avm": {
+      "service": "avm",
+      "methods": [
+        "getBlock",
+        "getBlockByHeight",
+        "getHeight",
+        "issueTx",
+        "getTxStatus",
+        "getTx",
+        "getUTXOs",
+        "getAssetDescription",
+        "getBalance",
+        "getAllBalances",
+        "getTxFee"
+      ],
+      "calls": null
+    },
+    "health": {
+      "service": "health",
+      "methods": [
+        "health",
+        "readiness",
+        "liveness"
+      ],
+      "calls": [
+        {
+          "method": "health",
+          "params": {},
+          "response": {
+            "checks": {
+              "c": {
+                "message": "ok",
+                "timestamp": "0001-01-01T00:00:00Z",
+                "duration": 0
+              }
+            },
+            "healthy": true
+          }
+        },
+        {
+          "method": "readiness",
+          "params": {},
+          "response": {
+            "checks": {
+              "c": {
+                "message": "ok",
+                "timestamp": "0001-01-01T00:00:00Z",
+                "duration": 0
+              }
+            },
+            "healthy": true
+          }
+        },
+        {
+          "method": "liveness",
+          "params": {},
+          "response": {
+            "checks": {
+              "c": {
+                "message": "ok",
+                "timestamp": "0001-01-01T00:00:00Z",
+                "duration": 0
+              }
+            },
+            "healthy": true
+          }
+        }
+      ]
+    },
+    "info": {
+      "service": "info",
+      "methods": [
+        "getNodeVersion",
+        "getNodeID",
+        "getNodeIP",
+        "getNetworkID",
+        "getNetworkName",
+        "getBlockchainID",
+        "peers",
+        "isBootstrapped",
+        "upgrades",
+        "uptime",
+        "acps",
+        "getTxFee",
+        "getVMs"
+      ],
+      "calls": [
+        {
+          "method": "getNodeVersion",
+          "params": {},
+          "response": {
+            "version": "avalanchego/1.14.2",
+            "databaseVersion": "v1.4.5",
+            "rpcProtocolVersion": "45",
+            "gitCommit": "de4da4de",
+            "vmVersions": {
+              "avm": "v1.14.2",
+              "platform": "v1.14.2"
+            }
+          }
+        },
+        {
+          "method": "getNodeID",
+          "params": {},
+          "response": {
+            "nodeID": "NodeID-eA9ctCNq41iLLnQErtTUVdxpRyZ8QSc1",
+            "nodePOP": {
+              "publicKey": "0x010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
+              "proofOfPossession": "0x020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202"
+            }
+          }
+        },
+        {
+          "method": "getNetworkID",
+          "params": {},
+          "response": {
+            "networkID": "1"
+          }
+        },
+        {
+          "method": "getNetworkName",
+          "params": {},
+          "response": {
+            "networkName": "mainnet"
+          }
+        },
+        {
+          "method": "getBlockchainID",
+          "params": {
+            "alias": "X"
+          },
+          "response": {
+            "blockchainID": "2Kw2XL8QVSQHwJYKpWLktaxtwKuz7iYF5pqcauUHpmcrSjRPp"
+          }
+        },
+        {
+          "method": "isBootstrapped",
+          "params": {
+            "chain": "P"
+          },
+          "response": {
+            "isBootstrapped": true
+          }
+        },
+        {
+          "method": "uptime",
+          "params": {},
+          "response": {
+            "rewardingStakePercentage": "91.5000",
+            "weightedAveragePercentage": "98.1235"
+          }
+        },
+        {
+          "method": "getTxFee",
+          "params": {},
+          "response": {
+            "txFee": "1000000",
+            "createAssetTxFee": "10000000",
+            "createSubnetTxFee": "1000000000",
+            "transformSubnetTxFee": "10000000000",
+            "createBlockchainTxFee": "1000000000",
+            "addPrimaryNetworkValidatorFee": "0",
+            "addPrimaryNetworkDelegatorFee": "0",
+            "addSubnetValidatorFee": "1000000",
+            "addSubnetDelegatorFee": "1000000"
+          }
+        },
+        {
+          "method": "getVMs",
+          "params": {},
+          "response": {
+            "vms": {
+              "4Y9jjDLkJqQSq97CX1ughtuPVsSHyaSKDsEdtkFms3yv5zyB7": [
+                "avm"
+              ]
+            },
+            "fxs": {
+              "qd2U4HDWUvMrVUeTcCHp6xH3Qpnn1XbU5MDdnBoiifFqvgXwT": "nftfx",
+              "rXJsCSEYXg2TehWxCEEGj6JU2PWKTkd6cBdNLjoe2SpsKD9cy": "propertyfx",
+              "spdxUxVJQbX85MGxMHbKw1sHxMnSqJ3QBzDyDYEP3h6TLuxqQ": "secp256k1fx"
+            }
+          }
+        },
+        {
+          "method": "peers",
+          "params": {},
+          "response": {
+            "numPeers": "1",
+            "peers": [
+              {
+                "ip": "10.0.0.1:9651",
+                "publicIP": "",
+                "nodeID": "NodeID-pmuWZgV4nJVHaioT79ABVXxCGYLJ2pvZ",
+                "version": "avalanchego/1.14.2",
+                "upgradeTime": 1607144400,
+                "lastSent": "2026-06-11T12:00:00Z",
+                "lastReceived": "2026-06-11T12:00:01Z",
+                "observedUptime": "100",
+                "trackedSubnets": [
+                  "3DDiCtDLpQ19tqZshWZvpJwVZYXJrru593Q2JqnV3HN4Zb62X"
+                ],
+                "supportedACPs": [
+                  103,
+                  23,
+                  5
+                ],
+                "objectedACPs": [],
+                "benched": [
+                  "C"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "platform": {
+      "service": "platform",
+      "methods": [
+        "getHeight",
+        "getProposedHeight",
+        "getBalance",
+        "getUTXOs",
+        "getSubnet",
+        "getSubnets",
+        "getStakingAssetID",
+        "getCurrentValidators",
+        "getL1Validator",
+        "getCurrentSupply",
+        "sampleValidators",
+        "getBlockchainStatus",
+        "validatedBy",
+        "validates",
+        "getBlockchains",
+        "issueTx",
+        "getTx",
+        "getTxStatus",
+        "getStake",
+        "getMinStake",
+        "getTotalStake",
+        "getRewardUTXOs",
+        "getTimestamp",
+        "getValidatorsAt",
+        "getAllValidatorsAt",
+        "getBlock",
+        "getBlockByHeight",
+        "getFeeConfig",
+        "getFeeState",
+        "getValidatorFeeConfig",
+        "getValidatorFeeState"
+      ],
+      "calls": null
+    }
+  },
+  "errors": [
+    {
+      "name": "badParams",
+      "code": -32602
+    },
+    {
+      "name": "unknownMethod",
+      "code": -32601
+    },
+    {
+      "name": "malformedJSON",
+      "code": -32700
+    },
+    {
+      "name": "invalidRequest",
+      "code": -32600
+    },
+    {
+      "name": "serverError",
+      "code": -32000
+    },
+    {
+      "name": "evmRevert",
+      "code": 3
+    }
+  ]
+}

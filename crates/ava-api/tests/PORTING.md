@@ -136,3 +136,91 @@ in the oracle **in sync** — they must build the same namespaces/families.
   plain text output is spec-compliant either way).
 - Empty metric families are not filtered from the merged output (Go's
   `NormalizeMetricFamilies` drops them).
+
+---
+
+## `vectors/api/api_parity.json` — differential API parity (M8.23, specs 14 §14/§16.6, 02 §11.4)
+
+**What it is.** Recorded REAL Go responses for the built-in node-level services
+`ava-api` hosts (info / admin / health), emitted by the in-repo Go oracle
+`go-oracle/api_parity_oracle_test.go`. Each recorded call's reply struct is
+marshaled through the production `utils/json` codec (the same `json.Uint32` /
+`json.Uint64` / `json.Float64` / `signer.ProofOfPossession` marshalers the live
+service uses). `differential_api_parity.rs` drives the identical pinned request
+at the in-process Rust service through the JSON-RPC registry + `ava_api::dispatch`
+and asserts **structural-JSON-equality** after the 02 §11.4 normalizer.
+
+**Recorded-oracle is the per-PR mode** (not `#[ignore]`, not env-gated): the
+committed vector is `include_str!`-loaded and the test always runs under
+`cargo nextest run -p ava-api`. Live mode (booting both a Go and a Rust node and
+diffing live `/ext/*` responses) is the cross-cutting differential harness X's
+job — see the seam comment at the top of `differential_api_parity.rs`; this task
+does not build the two-binary live path.
+
+### Coverage
+
+| Service | Reply-shape parity | Method-set completeness (14 §14.2) | Notes |
+|---|---|---|---|
+| `info` (13) | ✅ 9 recorded calls (getNodeVersion, getNodeID, getNetworkID, getNetworkName, getBlockchainID, isBootstrapped, uptime, getTxFee, getVMs, peers) | ✅ exact set | `acps` / `getNodeIP` shape covered by the in-crate `info::tests`; not re-recorded (no new wire-type) |
+| `admin` (13) | ✅ 3 recorded calls (getChainAliases, getLoggerLevel UPPERCASE level, loadVMs omitempty) | ✅ exact set | profiler/stacktrace divergences are the existing admin matrix above |
+| `health` (3 JSON-RPC) | ✅ 3 recorded calls (health/readiness/liveness), `timestamp`+`duration` normalized | ✅ via mounted router | dual GET handler covered by the HTTP-semantics tests below |
+| `platform` (31) | n/a — driven in `ava-platformvm` (M8.23a) | ✅ canonical wire-name set pinned | see divergences below |
+| `avm` (11) | n/a — driven in `ava-avm` (M8.23b) | ✅ canonical wire-name set pinned | see divergences below |
+
+Plus: **error-response snapshots** (14 §16.6) driven through the real Rust
+dispatch shim — bad params `-32602`, unknown method `-32601`, malformed JSON
+`-32700`, wrong version `-32600`, server error `-32000` (+ the EVM-revert code
+`3`, asserted-as-recorded; it is a reth wire concern, checked in `ava-evm`).
+And **HTTP semantics** (14 §16.3): the `node-id` response header on a normal
+response and on the allowed-hosts `403` short-circuit, the per-chain
+not-bootstrapped `503`, and the health GET `200`/`503` — driven through the
+PUBLIC `ava_api::middleware` functions in `build_router`'s layer order (the
+composed-server wiring is covered by the in-crate `server.rs` unit tests; its
+`build_router` is crate-private).
+
+### Why P-Chain / X-Chain are method-set-only here (no silent caps)
+
+The `platform.*` / `avm.*` services live in `ava-platformvm` / `ava-avm`, which
+**must not import `ava-api`** (the dep chain is `ava-api → ava-config →
+ava-genesis → ava-{platformvm,avm}`; importing back would cycle). So they cannot
+be driven in-process from this crate. Their reply-shape differential parity is
+covered by the tests INSIDE those crates (M8.23a / M8.23b). This harness pins
+their canonical gorilla wire-name sets (31 / 11) so a dropped or renamed method
+is caught here even though the bodies are diffed elsewhere.
+
+### Documented known-divergences (do not force byte-match)
+
+- **`gas.Gas` / `gas.Price` have no Go marshaler** ⇒ `platform.getFeeState` /
+  `getFeeConfig` / `getValidatorFeeState` emit **bare JSON numbers**, not
+  `json.Uint64` strings (asserted in the ava-platformvm differential test).
+- **P-Chain**: `getCurrentValidators` / `getL1Validator` attribute subset;
+  `getTx` / `getBlock` `json` encoding; `getUTXOs` cross-chain `sourceChain`
+  atomic UTXOs; elastic-subnet transform fields; `issueTx` runtime admission
+  (un-shared mempool until M8.30 node wiring).
+- **X-Chain**: `getTxJSON` shape goldens; typed `FxOperation` outputs;
+  address→UTXO pagination order (Rust UTXO-ID sort vs Go linkeddb insertion
+  order — node-local).
+- **`Avalanche-Api-Route`** is the header-route header (NOT
+  `X-Avalanche-Vm-Route`).
+- **health `timestamp` / `duration`** are normalized out (02 §11.4: wall-clock +
+  measured durations are non-deterministic).
+
+### Regenerate (avalanchego checkout required; leaves the Go tree clean)
+
+```sh
+AG=/path/to/avalanchego
+RS=/path/to/avalanche-rs
+cp $RS/crates/ava-api/tests/go-oracle/api_parity_oracle_test.go $AG/api/info/
+cd $AG
+AVAX_RS_GO_COMMIT=$(git rev-parse HEAD) \
+AVAX_RS_API_PARITY_OUT=$RS/crates/ava-api/tests/vectors/api/api_parity.json \
+  go test -tags test -run TestEmitAvalancheRsAPIParity ./api/info/ -count=1 -v
+rm $AG/api/info/api_parity_oracle_test.go
+```
+
+Current snapshot provenance: avalanchego `3d434bacaee972c37ae899f7e49566e09d04f915`.
+
+Keep the Rust replay fixtures in `differential_api_parity.rs` and the pinned
+inputs in the oracle **in sync** — the fixtures (node id `[7;20]`, BLS PoP
+`01../02..`, mainnet, X alias = `[3;32]`, avm = `[8;32]`, one peer `[9;20]`
+benched on `C`) must match the oracle's inputs exactly.
