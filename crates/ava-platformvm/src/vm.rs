@@ -137,6 +137,48 @@ impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
             .state()
             .get_block_id_at_height(height)
     }
+    fn utxo_ids(&self, addr: &ava_types::short_id::ShortId, previous: Id, limit: usize) -> Vec<Id> {
+        crate::state::State::utxo_ids(self.shared.manager.lock().state(), addr, previous, limit)
+    }
+    fn get_utxo(&self, id: Id) -> Result<crate::state::chain::UtxoBytes> {
+        Chain::get_utxo(self.shared.manager.lock().state(), id)
+    }
+    fn subnets(&self) -> Vec<Id> {
+        Chain::subnets(self.shared.manager.lock().state())
+    }
+    fn get_subnet_owner(&self, subnet: Id) -> Result<Vec<u8>> {
+        Chain::get_subnet_owner(self.shared.manager.lock().state(), subnet)
+    }
+    fn get_subnet_manager(&self, subnet: Id) -> Result<Vec<u8>> {
+        Chain::get_subnet_manager(self.shared.manager.lock().state(), subnet)
+    }
+    fn get_reward_utxos(&self, tx_id: Id) -> Vec<crate::state::chain::UtxoBytes> {
+        Chain::get_reward_utxos(self.shared.manager.lock().state(), tx_id)
+    }
+    fn current_stakers(&self) -> Vec<crate::state::staker::Staker> {
+        Chain::current_stakers(self.shared.manager.lock().state())
+    }
+    fn pending_stakers(&self) -> Vec<crate::state::staker::Staker> {
+        Chain::pending_stakers(self.shared.manager.lock().state())
+    }
+}
+
+/// The deferred `issueTx` admission seam: the P-Chain mempool is un-shared on
+/// [`PlatformVm`] (not in `Shared`), so an RPC-issued tx cannot yet be admitted
+/// from the per-request handler. The shared-mempool + gossip wiring is the M8
+/// node-assembly concern (`tests/PORTING.md`). Returns the Go-byte-equal
+/// rejection prefix wrapped with the deferral reason.
+struct DeferredIssuer;
+
+impl crate::service::TxIssuer for DeferredIssuer {
+    fn issue_tx(&self, _tx: crate::txs::Tx) -> std::result::Result<(), String> {
+        Err(
+            "RPC issuance not yet wired (deferred: the P-Chain mempool is \
+             un-shared on PlatformVm; shared-mempool + gossip admission is M8 \
+             node assembly)"
+                .to_owned(),
+        )
+    }
 }
 
 /// `platformvm.VM` — the P-Chain Snowman VM over the [`DynDb`]-adapted engine
@@ -505,8 +547,16 @@ impl Vm for PlatformVm {
             }),
             Arc::clone(&shared.validators) as Arc<dyn ValidatorState>,
             ctx.network_id,
+            ctx.avax_asset_id,
         ));
-        let registry = Arc::new(crate::service::registry(service, ctx.avax_asset_id));
+        // The `issueTx` mempool-admission seam. The P-Chain mempool currently
+        // lives un-shared on `PlatformVm` (not in `Shared`), so it cannot be
+        // reached from the per-request handler; admission therefore surfaces a
+        // clear deferral (the shared-mempool + gossip wiring is the M8 node
+        // assembly concern — see `tests/PORTING.md`). Decode/parse + the wire
+        // contract are fully exercised before this point.
+        let issuer: Arc<dyn crate::service::TxIssuer> = Arc::new(DeferredIssuer);
+        let registry = Arc::new(crate::service::registry(service, ctx.avax_asset_id, issuer));
         let mut handlers = HashMap::new();
         handlers.insert(
             String::new(),
@@ -969,8 +1019,8 @@ mod conformance {
             "platform.getTimestamp serves an RFC3339 timestamp: {body}"
         );
 
-        // An unbridged Go method dispatches to -32601 (method inventory is
-        // tests/PORTING.md; full parity is M8.23).
+        // issueTx is now bridged (M8.23a): an empty payload fails to decode and
+        // surfaces a -32000 handler error (not -32601 method-not-found).
         let body = post(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "platform.issueTx",
@@ -978,7 +1028,20 @@ mod conformance {
             "id": 3,
         }))
         .await;
-        assert_eq!(body["error"]["code"], -32601, "unbridged method is -32601");
+        assert_eq!(
+            body["error"]["code"], -32000,
+            "bridged issueTx surfaces a -32000 handler error on a bad payload"
+        );
+
+        // A genuinely-unknown method still dispatches to -32601.
+        let body = post(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "platform.notAMethod",
+            "params": [{}],
+            "id": 4,
+        }))
+        .await;
+        assert_eq!(body["error"]["code"], -32601, "unknown method is -32601");
     }
 }
 

@@ -89,6 +89,19 @@ impl Utxo {
     }
 }
 
+/// `avax.Addressable.Addresses()` — the secp256k1 addresses owning an fx
+/// output (`vms/components/avax`): a `secp256k1fx.TransferOutput` reports its
+/// `OutputOwners.Addrs`; a `stakeable.LockOut` delegates to its wrapped
+/// output. Used to maintain the address → UTXO index (`avax.utxoState`,
+/// specs 08 §3.2).
+#[must_use]
+pub fn output_addresses(out: &Output) -> &[ava_types::short_id::ShortId] {
+    match out {
+        Output::Transfer(o) => &o.owners.addrs,
+        Output::StakeableLock(l) => output_addresses(&l.transferable_out),
+    }
+}
+
 /// `avax.Consume` — remove the UTXOs referenced by `ins` from the UTXO set
 /// (`vms/components/avax/utxo_handler.go`).
 pub fn consume(chain: &mut dyn Chain, ins: &[TransferableInput]) {

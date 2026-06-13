@@ -24,6 +24,10 @@ pub const TX_PREFIX: &[u8] = b"tx";
 pub const REWARD_UTXOS_PREFIX: &[u8] = b"rewardUTXOs";
 /// `utxoPrefix` — utxoID → UTXO bytes (the cross-chain-relevant value layout).
 pub const UTXO_PREFIX: &[u8] = b"utxo";
+/// `indexPrefix` — the address → utxoID index nested under [`UTXO_PREFIX`]
+/// (Go `avax.NewUTXOState`'s `indexDB`, `vms/components/avax/utxo_state.go`).
+/// Keys are `address(20) ‖ utxoID(32)`, values empty.
+pub const UTXO_INDEX_PREFIX: &[u8] = b"index";
 /// `subnetPrefix` — the set of created subnets.
 pub const SUBNET_PREFIX: &[u8] = b"subnet";
 /// `subnetOwnerPrefix` — subnetID → owner bytes.
