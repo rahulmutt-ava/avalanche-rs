@@ -17,10 +17,35 @@ publish.workspace = true
 description = "Node assembly submodules: OTel trace wiring, NAT port mapping, and the logging factory bridge (M8 / specs 12 §7/§8, 17 §2, 18 §5/§6)."
 
 [dependencies]
+ava-api = { path = "../ava-api" }
+ava-chains = { path = "../ava-chains" }
 ava-config = { path = "../ava-config" }
+ava-crypto = { path = "../ava-crypto" }
+ava-database = { path = "../ava-database" }
+ava-engine = { path = "../ava-engine" }
+ava-genesis = { path = "../ava-genesis" }
+ava-indexer = { path = "../ava-indexer" }
 ava-logging = { path = "../ava-logging" }
+ava-message = { path = "../ava-message" }
 ava-network = { path = "../ava-network" }
+ava-types = { path = "../ava-types" }
+ava-utils = { path = "../ava-utils" }
+ava-validators = { path = "../ava-validators" }
+ava-version = { path = "../ava-version" }
 async-trait = { workspace = true }
+# The info service is mounted as a raw axum `Router` through the JSON-RPC shim
+# (M8.17); pinned per-crate to the ava-api 0.7 line.
+axum = "0.7"
+# `--staking-signer-key-file-content` is base64 (decoded by `newStakingSigner`
+# in Go); pinned per-crate to ava-config's 0.22 line.
+base64 = "0.22"
+# The upgrade schedule (`ava-version`) carries `DateTime<Utc>` fork times; the
+# networking step converts the Granite time into the compatibility floor.
+chrono = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+prometheus = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -41,8 +66,14 @@ opentelemetry_sdk = { version = "0.27", features = [ "trace", "rt-tokio" ] }
 opentelemetry-otlp = { version = "0.27", default-features = false, features = [ "trace", "grpc-tonic", "tls-roots", "http-proto", "reqwest-blocking-client" ] }
 tracing-opentelemetry = "0.28"
 
+[features]
+# Passthrough to the on-disk RocksDB backend (04 §2.1). Off by default so the
+# inner-loop build skips the C++ FFI toolchain; `--all-features` (CI test-unit)
+# and the release binary enable it.
+rocksdb = ["ava-database/rocksdb"]
+
 [dev-dependencies]
-parking_lot = { workspace = true }
+tempfile = "3"
 
 [lints]
 workspace = true

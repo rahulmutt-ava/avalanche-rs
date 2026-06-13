@@ -1,0 +1,290 @@
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
+//! Init steps 20 and 26 (specs/12 §2.2): the chain manager (mirror Go
+//! `initChainManager`) and the platform-chain kickoff (mirror Go
+//! `initChains`).
+//!
+//! **Narrow seam (M8.29, `tests/PORTING.md`):** the full Go `chains.Manager`
+//! (queued chain creation through the `create_snowman_chain` pipeline, chain
+//! registrant fan-out, router `add_chain`) is not assembled yet — the concrete
+//! P/X/C VM factories it would instantiate do not exist as
+//! `ava_chains::Factory` impls. [`AssemblyChainManager`] owns what the rest of
+//! `Node::new` and the mounted APIs need today: the chain aliaser, the
+//! bootstrapped set, the registrant list, and the queued [`ChainParameters`].
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use parking_lot::{Mutex, RwLock};
+
+use ava_chains::aliaser::Aliaser;
+use ava_chains::manager::ChainParameters;
+use ava_engine::networking::benchlist::{Benchlist, BenchlistConfig as EngineBenchlistConfig};
+use ava_engine::networking::router::ChainRouter;
+use ava_engine::networking::timeout::AdaptiveTimeoutManager;
+use ava_genesis::vm_genesis;
+use ava_indexer::Indexer;
+use ava_types::constants::PRIMARY_NETWORK_ID;
+use ava_types::id::Id;
+use ava_utils::clock::{Clock, RealClock};
+use ava_validators::ValidatorManager;
+
+use crate::error::{Error, Result};
+use crate::init::metrics::NodeMetrics;
+use crate::init::networking::RouterBridge;
+
+/// The platform chain's well-known ID (Go `constants.PlatformChainID`).
+pub const PLATFORM_CHAIN_ID: Id = Id::EMPTY;
+
+/// The platform VM's well-known ID (Go `constants.PlatformVMID`).
+#[must_use]
+pub fn platform_vm_id() -> Id {
+    Id::from(ava_genesis::chains::PLATFORM_VM_ID_BYTES)
+}
+
+/// The AVM's well-known ID (Go `constants.AVMID`).
+#[must_use]
+pub fn avm_id() -> Id {
+    Id::from(ava_genesis::chains::AVM_ID_BYTES)
+}
+
+/// The EVM's well-known ID (Go `constants.EVMID`).
+#[must_use]
+pub fn evm_id() -> Id {
+    Id::from(ava_genesis::chains::EVM_ID_BYTES)
+}
+
+/// The assembly-stage chain manager: alias resolution, bootstrapped tracking,
+/// registrants, and the queued chain-creation requests. Chain *creation* is
+/// the documented deferral (module docs).
+pub struct AssemblyChainManager {
+    aliaser: Aliaser,
+    /// Chains the node would shut down for if they failed (P, X, C).
+    critical_chains: HashSet<Id>,
+    /// Chains that finished bootstrapping (none yet at assembly stage).
+    bootstrapped: RwLock<HashSet<Id>>,
+    /// Indexer-style registrants notified when a chain is created (Go
+    /// `AddRegistrant`).
+    registrants: Mutex<Vec<Arc<dyn Indexer>>>,
+    /// Chain-creation requests recorded by `start_chain_creator` (Go queues
+    /// these into the chain creator; consumed when chain creation lands).
+    queued: Mutex<Vec<ChainParameters>>,
+    /// The bootstrap beacons (Go threads `n.bootstrappers` in as the platform
+    /// chain's custom beacons; `ChainParameters::custom_beacons` carries only
+    /// ids, so the manager keeps the full set).
+    bootstrappers: Arc<dyn ValidatorManager>,
+}
+
+impl AssemblyChainManager {
+    /// Build the manager over the critical-chain set and the beacon list.
+    #[must_use]
+    pub fn new(critical_chains: HashSet<Id>, bootstrappers: Arc<dyn ValidatorManager>) -> Self {
+        Self {
+            aliaser: Aliaser::new(),
+            critical_chains,
+            bootstrapped: RwLock::new(HashSet::new()),
+            registrants: Mutex::new(Vec::new()),
+            queued: Mutex::new(Vec::new()),
+            bootstrappers,
+        }
+    }
+
+    /// Register `alias` for `chain_id` (Go `Manager.Alias`).
+    ///
+    /// # Errors
+    /// Propagates the aliaser's conflict error.
+    pub fn alias(&self, chain_id: Id, alias: &str) -> ava_chains::Result<()> {
+        self.aliaser.alias(chain_id, alias)
+    }
+
+    /// Resolve an alias to a chain ID (Go `Manager.Lookup`).
+    ///
+    /// # Errors
+    /// The aliaser's unknown-alias error.
+    pub fn lookup(&self, alias: &str) -> ava_chains::Result<Id> {
+        use ava_chains::aliaser::AliaserReader;
+        self.aliaser.lookup(alias)
+    }
+
+    /// The primary alias of `chain_id` (Go `Manager.PrimaryAlias`).
+    ///
+    /// # Errors
+    /// The aliaser's no-alias error.
+    pub fn primary_alias(&self, chain_id: Id) -> ava_chains::Result<String> {
+        use ava_chains::aliaser::AliaserReader;
+        self.aliaser.primary_alias(chain_id)
+    }
+
+    /// All aliases of `chain_id` (Go `Manager.Aliases`).
+    #[must_use]
+    pub fn aliases(&self, chain_id: Id) -> Vec<String> {
+        use ava_chains::aliaser::AliaserReader;
+        self.aliaser.aliases(chain_id)
+    }
+
+    /// Whether `chain_id` exists and finished bootstrapping (Go
+    /// `Manager.IsBootstrapped`).
+    #[must_use]
+    pub fn is_bootstrapped(&self, chain_id: Id) -> bool {
+        self.bootstrapped.read().contains(&chain_id)
+    }
+
+    /// Whether `chain_id` is one of the node-critical chains.
+    #[must_use]
+    pub fn is_critical(&self, chain_id: Id) -> bool {
+        self.critical_chains.contains(&chain_id)
+    }
+
+    /// Subscribe a registrant to chain-creation events (Go `AddRegistrant`).
+    pub fn add_registrant(&self, registrant: Arc<dyn Indexer>) {
+        self.registrants.lock().push(registrant);
+    }
+
+    /// Step 26: record the platform-chain creation request (Go
+    /// `StartChainCreator`). Actual chain creation is the documented deferral.
+    ///
+    /// # Errors
+    /// Infallible today; the `Result` mirrors Go's signature for when creation
+    /// lands.
+    pub fn start_chain_creator(&self, params: ChainParameters) -> Result<()> {
+        tracing::info!(
+            chain_id = %params.id,
+            vm_id = %params.vm_id,
+            "queueing chain creation (chain construction lands with the chains milestone)"
+        );
+        self.queued.lock().push(params);
+        Ok(())
+    }
+
+    /// The chain-creation requests recorded so far (consumed by the future
+    /// chain-creator wiring; asserted by tests).
+    #[must_use]
+    pub fn queued_chains(&self) -> Vec<ChainParameters> {
+        self.queued.lock().clone()
+    }
+
+    /// The bootstrap beacons threaded through to the platform chain.
+    #[must_use]
+    pub fn bootstrappers(&self) -> Arc<dyn ValidatorManager> {
+        Arc::clone(&self.bootstrappers)
+    }
+}
+
+/// Everything step 20 hands back to `Node::new`.
+pub struct ChainManagerInit {
+    /// The assembly-stage chain manager.
+    pub manager: Arc<AssemblyChainManager>,
+    /// The adaptive timeout manager (Go `n.timeoutManager`).
+    pub timeout_manager: Arc<AdaptiveTimeoutManager>,
+    /// The engine chain router (Go `n.chainRouter`, initialized here).
+    pub chain_router: Arc<ChainRouter>,
+    /// The benchlist (Go `n.benchlistManager`, created with the router).
+    pub benchlist: Arc<Benchlist>,
+    /// The X-Chain's genesis-derived ID.
+    pub x_chain_id: Id,
+    /// The C-Chain's genesis-derived ID.
+    pub c_chain_id: Id,
+}
+
+/// Step 20: derive the X/C chain IDs from genesis, build the timeout manager,
+/// the engine chain router (filling the [`RouterBridge`] slot), the benchlist,
+/// and the assembly chain manager (mirror Go `initChainManager`).
+///
+/// # Errors
+/// - Genesis parsing failures (`vm_genesis`).
+/// - Metrics-namespace registration failures.
+/// - Timeout-manager construction failures.
+pub fn init_chain_manager(
+    config: &ava_config::node::Config,
+    metrics: &NodeMetrics,
+    bootstrappers: &Arc<dyn ValidatorManager>,
+    router_bridge: &RouterBridge,
+    node_id: ava_types::node_id::NodeId,
+) -> Result<ChainManagerInit> {
+    let x_chain_id = vm_genesis(&config.genesis_bytes, avm_id())?.id();
+    let c_chain_id = vm_genesis(&config.genesis_bytes, evm_id())?.id();
+
+    let critical_chains: HashSet<Id> = [PLATFORM_CHAIN_ID, x_chain_id, c_chain_id]
+        .into_iter()
+        .collect();
+
+    let _requests_registry = ava_api::metrics::make_and_register(
+        metrics.gatherer.as_ref(),
+        &crate::init::namespace::requests(),
+    )?;
+    let _responses_registry = ava_api::metrics::make_and_register(
+        metrics.gatherer.as_ref(),
+        &crate::init::namespace::responses(),
+    )?;
+    let _benchlist_registry = ava_api::metrics::make_and_register(
+        metrics.gatherer.as_ref(),
+        &crate::init::namespace::benchlist(),
+    )?;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock);
+    let timeout_manager = Arc::new(
+        AdaptiveTimeoutManager::new(&config.adaptive_timeout_config, clock)
+            .map_err(|e| Error::ChainManager(e.to_string()))?,
+    );
+
+    // The engine router replaces Go's `chainRouter.Initialize` (the Rust
+    // router takes its timeout manager at construction).
+    let chain_router = ChainRouter::new(Arc::clone(&timeout_manager));
+    router_bridge.set_engine_router(chain_router.clone());
+
+    // The Rust benchlist is the simplified M3 port: only the bench-duration
+    // cap maps from the Go config block (divergence noted in
+    // `tests/PORTING.md`). Seeded from the NodeID for per-node determinism.
+    let benchlist = Arc::new(Benchlist::new(
+        EngineBenchlistConfig {
+            max_bench_duration: config.benchlist_config.bench_duration,
+            ..EngineBenchlistConfig::default()
+        },
+        seed_from_node_id(node_id),
+    ));
+
+    let manager = Arc::new(AssemblyChainManager::new(
+        critical_chains,
+        Arc::clone(bootstrappers),
+    ));
+
+    Ok(ChainManagerInit {
+        manager,
+        timeout_manager,
+        chain_router,
+        benchlist,
+        x_chain_id,
+        c_chain_id,
+    })
+}
+
+/// Step 26: queue the platform chain (mirror Go `initChains` — its genesis
+/// specifies the other chains to create).
+///
+/// # Errors
+/// Propagates `start_chain_creator`.
+pub fn init_chains(manager: &AssemblyChainManager, genesis_bytes: &[u8]) -> Result<()> {
+    tracing::info!("initializing chains");
+    manager.start_chain_creator(ChainParameters {
+        id: PLATFORM_CHAIN_ID,
+        subnet_id: PRIMARY_NETWORK_ID,
+        genesis_data: genesis_bytes.to_vec(),
+        vm_id: platform_vm_id(),
+        fx_ids: Vec::new(),
+        // Go passes the beacon validators.Manager; `ChainParameters` carries
+        // ids only — the manager retains the full set (`bootstrappers()`).
+        custom_beacons: Vec::new(),
+    })
+}
+
+/// Derive a deterministic per-node benchlist seed from the first 8 NodeID
+/// bytes.
+fn seed_from_node_id(node_id: ava_types::node_id::NodeId) -> u64 {
+    let bytes = node_id.as_bytes();
+    let mut seed = [0u8; 8];
+    for (dst, src) in seed.iter_mut().zip(bytes.iter()) {
+        *dst = *src;
+    }
+    u64::from_be_bytes(seed)
+}
