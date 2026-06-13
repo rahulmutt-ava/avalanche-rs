@@ -534,6 +534,7 @@ impl Vm for PlatformVm {
             }),
             Arc::clone(&shared.validators) as Arc<dyn ValidatorState>,
             ctx.network_id,
+            ctx.avax_asset_id,
         ));
         let registry = Arc::new(crate::service::registry(service, ctx.avax_asset_id));
         let mut handlers = HashMap::new();

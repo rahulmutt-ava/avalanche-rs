@@ -52,6 +52,7 @@ use ava_types::constants::get_hrp;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
+use ava_secp256k1fx::OutputOwners;
 use ava_utils::sampler::new_deterministic_weighted_without_replacement;
 use ava_utils::sampler::weighted_without_replacement::WeightedWithoutReplacement;
 use ava_validators::state::ValidatorState;
@@ -65,14 +66,14 @@ use crate::state::staker::Staker;
 use crate::state::state::State;
 use crate::status::Status;
 use crate::txs::Tx;
-use crate::txs::components::Output;
+use crate::txs::components::{Output, TransferableOutput};
 use crate::txs::executor::StakingConfig;
 use crate::txs::fee::dynamic_calculator::{
     K as DYNAMIC_FEE_K, MAX_CAPACITY, MAX_PER_SECOND, MIN_PRICE as DYNAMIC_FEE_MIN_PRICE,
     TARGET_PER_SECOND, WEIGHTS,
 };
 use crate::txs::fee::gas::{GasState, calculate_price};
-use crate::utxo::Utxo;
+use crate::utxo::{Utxo, output_addresses};
 use crate::validators::fee as validator_fee;
 
 /// `maxGetUTXOsAddrs` — `getUTXOs` address-count cap (`service.go:51`).
@@ -173,6 +174,141 @@ pub mod avajson {
 /// Formats a 32-byte compressed BLS key as `formatting.HexNC` (`0x…`).
 fn hex_nc(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
+}
+
+/// `safemath.Add` into a balance map, saturating at `u64::MAX` (Go sets the
+/// entry to `math.MaxUint64` on overflow).
+fn add_balance(map: &mut BTreeMap<Id, u64>, asset: Id, amount: u64) {
+    let entry = map.entry(asset).or_insert(0);
+    *entry = entry.saturating_add(amount);
+}
+
+/// `formatting.Encode` (the [`Error`]-returning variant of
+/// [`encode_reply_bytes`]): `hex`/`""` appends the 4-byte checksum then
+/// hex-encodes with a `0x` prefix; `hexnc` skips the checksum. Returns the
+/// encoded string + the canonical encoding name.
+///
+/// # Errors
+/// Returns [`Error::Service`] for `json` (deferred) or an unknown encoding.
+fn encode_bytes(bytes: &[u8], encoding: &str) -> Result<(String, String)> {
+    match encoding {
+        "" | "hex" => {
+            let cs = checksum(bytes, 4);
+            let mut combined = bytes.to_vec();
+            combined.extend_from_slice(&cs);
+            Ok((format!("0x{}", hex::encode(&combined)), "hex".to_owned()))
+        }
+        "hexnc" => Ok((format!("0x{}", hex::encode(bytes)), "hexnc".to_owned())),
+        "json" => Err(Error::Service(
+            "json encoding is not yet supported (deferred: typed JSON shapes)".to_owned(),
+        )),
+        other => Err(Error::Service(format!("invalid encoding: {other}"))),
+    }
+}
+
+/// `formatting.Decode` — the inverse of [`encode_bytes`]: `hex`/`""` strips and
+/// verifies the trailing 4-byte checksum; `hexnc` does not.
+///
+/// # Errors
+/// Returns [`Error::Service`] on a bad hex string, a missing/invalid checksum,
+/// or an unsupported encoding.
+fn decode_bytes(s: &str, encoding: &str) -> Result<Vec<u8>> {
+    let hexpart = s.strip_prefix("0x").unwrap_or(s);
+    let raw =
+        hex::decode(hexpart).map_err(|e| Error::Service(format!("invalid hex: {e}")))?;
+    match encoding {
+        "" | "hex" => {
+            if raw.len() < 4 {
+                return Err(Error::Service("input too short for checksum".to_owned()));
+            }
+            let split = raw.len() - 4;
+            let (payload, cs) = raw.split_at(split);
+            if checksum(payload, 4) != cs {
+                return Err(Error::Service("invalid input checksum".to_owned()));
+            }
+            Ok(payload.to_vec())
+        }
+        "hexnc" => Ok(raw),
+        other => Err(Error::Service(format!("invalid encoding: {other}"))),
+    }
+}
+
+/// The canonical reply-echoed encoding name for `encoding`
+/// (`""`/`hex` → `hex`).
+///
+/// # Errors
+/// Returns [`Error::Service`] for `json` (deferred) or an unknown encoding.
+fn canonical_encoding(encoding: &str) -> Result<String> {
+    match encoding {
+        "" | "hex" => Ok("hex".to_owned()),
+        "hexnc" => Ok("hexnc".to_owned()),
+        "json" => Err(Error::Service(
+            "json encoding is not yet supported (deferred: typed JSON shapes)".to_owned(),
+        )),
+        other => Err(Error::Service(format!("invalid encoding: {other}"))),
+    }
+}
+
+/// The primary-network `APISubnet` view (no control keys, threshold 0).
+fn primary_api_subnet() -> ApiSubnet {
+    ApiSubnet {
+        id: Id::EMPTY,
+        control_keys: Vec::new(),
+        threshold: 0,
+    }
+}
+
+/// The stake outputs of a staker-creating tx (`tx.Unsigned.Stake()`); empty for
+/// non-staker txs.
+fn stake_outs_of(tx: &crate::txs::UnsignedTx) -> &[crate::txs::components::TransferableOutput] {
+    use crate::txs::UnsignedTx;
+    match tx {
+        UnsignedTx::AddValidator(t) => &t.stake_outs,
+        UnsignedTx::AddDelegator(t) => &t.stake_outs,
+        UnsignedTx::AddPermissionlessValidator(t) => &t.stake_outs,
+        UnsignedTx::AddPermissionlessDelegator(t) => &t.stake_outs,
+        UnsignedTx::AddAutoRenewedValidator(t) => &t.stake_outs,
+        _ => &[],
+    }
+}
+
+/// Groups a [`WarpSet`](ava_validators::state::WarpSet)'s flat per-node
+/// validators by compressed BLS public key into the Go `validators.Warp`
+/// shape (`{publicKey, weight, nodeIDs}`), summing weights and collecting node
+/// ids, sorted by uncompressed public-key bytes (Go `Warp.Less`). Validators
+/// with no public key are omitted (they cannot warp-sign).
+///
+/// # Errors
+/// Infallible today; returns [`Result`] for caller-side `?` symmetry.
+fn warp_set_to_json(warp: &ava_validators::state::WarpSet) -> Result<JsonWarpSet> {
+    // key: uncompressed pubkey bytes (the canonical sort key).
+    let mut grouped: BTreeMap<Vec<u8>, (Vec<u8>, u64, Vec<NodeId>)> = BTreeMap::new();
+    for v in &warp.validators {
+        let Some(pk) = &v.public_key else {
+            continue;
+        };
+        let uncompressed = pk.serialize().to_vec();
+        let entry = grouped
+            .entry(uncompressed)
+            .or_insert_with(|| (pk.compress().to_vec(), 0, Vec::new()));
+        entry.1 = entry.1.saturating_add(v.weight);
+        entry.2.push(v.node_id);
+    }
+    let validators = grouped
+        .into_values()
+        .map(|(compressed, weight, mut node_ids)| {
+            node_ids.sort();
+            JsonWarpValidator {
+                public_key: hex_nc(&compressed),
+                weight,
+                node_ids,
+            }
+        })
+        .collect();
+    Ok(JsonWarpSet {
+        validators,
+        total_weight: warp.total_weight,
+    })
 }
 
 /// Formats a P-Chain timestamp (whole Unix seconds) as RFC3339 (`time.Time`).
@@ -1020,6 +1156,9 @@ pub struct Service {
     state: Arc<dyn ServiceState>,
     validators: Arc<dyn ValidatorState>,
     network_id: u32,
+    /// `ctx.AVAXAssetID` — the primary network's staking asset, used by the
+    /// balance / stake replies' scalar AVAX duplicate fields.
+    avax_asset_id: Id,
 }
 
 impl Service {
@@ -1029,11 +1168,13 @@ impl Service {
         state: Arc<dyn ServiceState>,
         validators: Arc<dyn ValidatorState>,
         network_id: u32,
+        avax_asset_id: Id,
     ) -> Self {
         Self {
             state,
             validators,
             network_id,
+            avax_asset_id,
         }
     }
 
@@ -1297,6 +1438,730 @@ impl Service {
     pub fn format_address(&self, addr: &[u8]) -> Result<String> {
         address::format("P", self.hrp(), addr)
             .map_err(|e| Error::Service(format!("format address: {e}")))
+    }
+
+    /// Parses a bech32 `P-<hrp>1…` service address into its 20-byte
+    /// secp256k1 short id (`avax.ParseServiceAddress`). The chain prefix and
+    /// hrp must match this network.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a malformed address, a wrong chain prefix,
+    /// or a wrong hrp.
+    fn parse_address(&self, addr: &str) -> Result<ShortId> {
+        let (chain, hrp, raw) =
+            address::parse(addr).map_err(|e| Error::Service(format!("parse address: {e}")))?;
+        if chain != "P" {
+            return Err(Error::Service(format!(
+                "expected chain \"P\" but got \"{chain}\""
+            )));
+        }
+        if hrp != self.hrp() {
+            return Err(Error::Service(format!(
+                "expected hrp {:?} but got {hrp:?}",
+                self.hrp()
+            )));
+        }
+        ShortId::from_slice(&raw).map_err(|e| Error::Service(format!("parse address: {e}")))
+    }
+
+    /// Parses a list of service addresses into a deduplicated, ascending set.
+    fn parse_addresses(&self, addrs: &[String]) -> Result<Vec<ShortId>> {
+        let mut set = BTreeSet::new();
+        for a in addrs {
+            set.insert(self.parse_address(a)?);
+        }
+        Ok(set.into_iter().collect())
+    }
+
+    /// The current chain time in unix seconds (Go `vm.clock.Unix()`), derived
+    /// from the persisted chain timestamp.
+    fn now_unix(&self) -> u64 {
+        self.state
+            .timestamp()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// `getBalance` — the AVAX (and per-asset) balance over `addresses`
+    /// (`service.go:139`). Walks every UTXO referencing the addresses through
+    /// the address→UTXO index and classifies it as
+    /// unlocked / locked-stakeable / locked-not-stakeable by locktime.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on address parse or UTXO decode failure.
+    pub fn get_balance(&self, args: &GetBalanceRequest) -> Result<GetBalanceResponse> {
+        let addrs = self.parse_addresses(&args.addresses)?;
+        let utxos = self.all_utxos(&addrs)?;
+        let now = self.now_unix();
+
+        let mut unlockeds: BTreeMap<Id, u64> = BTreeMap::new();
+        let mut locked_stakeables: BTreeMap<Id, u64> = BTreeMap::new();
+        let mut locked_not_stakeables: BTreeMap<Id, u64> = BTreeMap::new();
+        let mut utxo_ids = Vec::new();
+
+        for utxo in &utxos {
+            let asset = utxo.asset_id;
+            let counted = match &utxo.out {
+                Output::Transfer(out) => {
+                    let bucket = if out.owners.locktime <= now {
+                        &mut unlockeds
+                    } else {
+                        &mut locked_not_stakeables
+                    };
+                    add_balance(bucket, asset, out.amt);
+                    true
+                }
+                Output::StakeableLock(lock) => match &*lock.transferable_out {
+                    Output::Transfer(inner) => {
+                        let bucket = if inner.owners.locktime > now {
+                            &mut locked_not_stakeables
+                        } else if lock.locktime <= now {
+                            &mut unlockeds
+                        } else {
+                            &mut locked_stakeables
+                        };
+                        add_balance(bucket, asset, lock.amount());
+                        true
+                    }
+                    // Nested stakeable lock / unexpected wrapped type: skip
+                    // (Go logs a warning and `continue`s).
+                    Output::StakeableLock(_) => false,
+                },
+            };
+            if counted {
+                utxo_ids.push(ApiUtxoId {
+                    tx_id: utxo.tx_id,
+                    output_index: utxo.output_index,
+                });
+            }
+        }
+
+        let mut balances = locked_stakeables.clone();
+        for (asset, amount) in &locked_not_stakeables {
+            add_balance(&mut balances, *asset, *amount);
+        }
+        for (asset, amount) in &unlockeds {
+            add_balance(&mut balances, *asset, *amount);
+        }
+
+        let avax = self.avax_asset_id();
+        Ok(GetBalanceResponse {
+            balance: balances.get(&avax).copied().unwrap_or(0),
+            unlocked: unlockeds.get(&avax).copied().unwrap_or(0),
+            locked_stakeable: locked_stakeables.get(&avax).copied().unwrap_or(0),
+            locked_not_stakeable: locked_not_stakeables.get(&avax).copied().unwrap_or(0),
+            balances,
+            unlockeds,
+            locked_stakeables,
+            locked_not_stakeables,
+            utxo_ids: (!utxo_ids.is_empty()).then_some(utxo_ids),
+        })
+    }
+
+    /// All UTXOs referencing any of `addrs` (`avax.GetAllUTXOs`), decoded.
+    fn all_utxos(&self, addrs: &[ShortId]) -> Result<Vec<Utxo>> {
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for addr in addrs {
+            let mut previous = Id::EMPTY;
+            loop {
+                let ids = self.state.utxo_ids(addr, previous, MAX_PAGE_SIZE);
+                if ids.is_empty() {
+                    break;
+                }
+                let count = ids.len();
+                for id in ids {
+                    previous = id;
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let bytes = self.state.get_utxo(id)?;
+                    out.push(Utxo::unmarshal(&bytes)?);
+                }
+                if count < MAX_PAGE_SIZE {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// `getUTXOs` — a paginated page of UTXOs over `addresses`
+    /// (`avax.GetPaginatedUTXOs`, `service.go:267`). The cross-chain
+    /// `sourceChain` (atomic shared-memory) path is a recorded deferral.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on no/too-many addresses, a bad cursor, a
+    /// requested atomic source chain (deferred), or a UTXO decode failure.
+    pub fn get_utxos(&self, args: &GetUTXOsArgs) -> Result<GetUTXOsReply> {
+        if args.addresses.is_empty() {
+            return Err(Error::Service("no addresses provided".to_owned()));
+        }
+        if args.addresses.len() > MAX_GET_UTXOS_ADDRS {
+            return Err(Error::Service(format!(
+                "number of addresses given, {}, exceeds maximum, {MAX_GET_UTXOS_ADDRS}",
+                args.addresses.len()
+            )));
+        }
+        if !args.source_chain.is_empty() {
+            return Err(Error::Service(
+                "getUTXOs: cross-chain (sourceChain) atomic UTXOs not yet implemented \
+                 (deferred: requires the shared-memory atomic-UTXO seam, M8)"
+                    .to_owned(),
+            ));
+        }
+
+        let addrs = self.parse_addresses(&args.addresses)?;
+
+        let mut start_addr = ShortId::EMPTY;
+        let mut start_utxo = Id::EMPTY;
+        if !args.start_index.address.is_empty() || !args.start_index.utxo.is_empty() {
+            start_addr = self.parse_address(&args.start_index.address).map_err(|e| {
+                Error::Service(format!(
+                    "couldn't parse start index address {:?}: {e}",
+                    args.start_index.address
+                ))
+            })?;
+            start_utxo = args
+                .start_index
+                .utxo
+                .parse::<Id>()
+                .map_err(|e| Error::Service(format!("couldn't parse start index utxo: {e}")))?;
+        }
+
+        let limit = if args.limit == 0 || args.limit > MAX_PAGE_SIZE as u64 {
+            MAX_PAGE_SIZE
+        } else {
+            // Safe: bounded by MAX_PAGE_SIZE above.
+            usize::try_from(args.limit).unwrap_or(MAX_PAGE_SIZE)
+        };
+
+        let (utxos, end_addr, end_utxo) =
+            self.paginated_utxos(&addrs, start_addr, start_utxo, limit)?;
+
+        let mut encoded = Vec::with_capacity(utxos.len());
+        for utxo in &utxos {
+            let bytes = utxo.marshal()?;
+            let (s, _) = encode_bytes(&bytes, &args.encoding)?;
+            encoded.push(s);
+        }
+
+        let encoding = canonical_encoding(&args.encoding)?;
+        Ok(GetUTXOsReply {
+            num_fetched: encoded.len() as u64,
+            utxos: encoded,
+            end_index: UtxoIndex {
+                address: self.format_address(end_addr.as_bytes())?,
+                utxo: end_utxo.to_string(),
+            },
+            encoding,
+        })
+    }
+
+    /// `avax.GetPaginatedUTXOs` — a single ascending page across the sorted
+    /// `(addr, utxo-id)` index, exclusive of the `(start_addr, start_utxo)`
+    /// cursor. Returns the page plus the `(addr, utxo-id)` to resume from.
+    fn paginated_utxos(
+        &self,
+        addrs: &[ShortId],
+        start_addr: ShortId,
+        start_utxo: Id,
+        limit: usize,
+    ) -> Result<(Vec<Utxo>, ShortId, Id)> {
+        let mut out = Vec::new();
+        let mut last_addr = ShortId::EMPTY;
+        let mut last_utxo = Id::EMPTY;
+        let mut seen = BTreeSet::new();
+        // Go iterates addrs in sorted order; `parse_addresses` already sorts.
+        for addr in addrs {
+            if out.len() >= limit {
+                break;
+            }
+            // Skip addresses preceding the cursor address.
+            if *addr < start_addr {
+                continue;
+            }
+            // For the cursor address, resume strictly after start_utxo.
+            let mut previous = if *addr == start_addr {
+                start_utxo
+            } else {
+                Id::EMPTY
+            };
+            loop {
+                if out.len() >= limit {
+                    break;
+                }
+                let remaining = limit - out.len();
+                let ids = self.state.utxo_ids(addr, previous, remaining);
+                if ids.is_empty() {
+                    break;
+                }
+                let count = ids.len();
+                for id in ids {
+                    previous = id;
+                    if out.len() >= limit {
+                        break;
+                    }
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let bytes = self.state.get_utxo(id)?;
+                    out.push(Utxo::unmarshal(&bytes)?);
+                    last_addr = *addr;
+                    last_utxo = id;
+                }
+                if count < remaining {
+                    break;
+                }
+            }
+        }
+        Ok((out, last_addr, last_utxo))
+    }
+
+    /// `getSubnet` — the owner / elastic-transform / L1-conversion info of
+    /// `subnet` (`service.go:391`). The elastic-subnet transform state is not
+    /// ported, so `isPermissioned` reflects only the L1-conversion slot.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] when `subnet` is the primary network, has no
+    /// recorded owner, or has malformed owner bytes.
+    pub fn get_subnet(&self, subnet: Id) -> Result<GetSubnetResponse> {
+        if subnet == Id::EMPTY {
+            return Err(Error::Service(
+                "the primary network isn't a subnet".to_owned(),
+            ));
+        }
+        let owner = self.decode_owner(self.state.get_subnet_owner(subnet)?)?;
+        let control_keys = self.format_addresses(&owner.addrs)?;
+
+        let mut response = GetSubnetResponse {
+            is_permissioned: true,
+            control_keys,
+            threshold: owner.threshold,
+            locktime: owner.locktime,
+            subnet_transformation_tx_id: Id::EMPTY,
+            conversion_id: Id::EMPTY,
+            manager_chain_id: Id::EMPTY,
+            manager_address: None,
+        };
+
+        // Elastic-subnet transform state is not ported; `isPermissioned`
+        // therefore reflects only the L1-conversion slot below.
+        if let Ok(bytes) = self.state.get_subnet_manager(subnet) {
+            let conversion = crate::txs::executor::l1_executor::SubnetConversion::unmarshal(&bytes)?;
+            response.is_permissioned = false;
+            response.conversion_id = conversion.conversion_id;
+            response.manager_chain_id = conversion.chain_id;
+            response.manager_address = Some(format!("0x{}", hex::encode(&conversion.addr)));
+        }
+        Ok(response)
+    }
+
+    /// `getSubnets` — the requested subnets (or every subnet when `ids` is
+    /// empty), the primary network always included (`service.go:482`). The
+    /// elastic-subnet transform branch is not ported.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on malformed owner bytes.
+    pub fn get_subnets(&self, ids: &[Id]) -> Result<GetSubnetsResponse> {
+        let mut subnets = Vec::new();
+        if ids.is_empty() {
+            for subnet in self.state.subnets() {
+                subnets.push(self.api_subnet(subnet)?);
+            }
+            subnets.push(primary_api_subnet());
+            return Ok(GetSubnetsResponse { subnets });
+        }
+
+        let mut seen = BTreeSet::new();
+        for &subnet in ids {
+            if !seen.insert(subnet) {
+                continue;
+            }
+            if subnet == Id::EMPTY {
+                subnets.push(primary_api_subnet());
+                continue;
+            }
+            match self.state.get_subnet_owner(subnet) {
+                Ok(bytes) => {
+                    let owner = self.decode_owner(bytes)?;
+                    subnets.push(ApiSubnet {
+                        id: subnet,
+                        control_keys: self.format_addresses(&owner.addrs)?,
+                        threshold: owner.threshold,
+                    });
+                }
+                // Absent subnet: Go skips it.
+                Err(_) => continue,
+            }
+        }
+        Ok(GetSubnetsResponse { subnets })
+    }
+
+    /// The `APISubnet` view of an owned (permissioned) subnet.
+    fn api_subnet(&self, subnet: Id) -> Result<ApiSubnet> {
+        let owner = self.decode_owner(self.state.get_subnet_owner(subnet)?)?;
+        Ok(ApiSubnet {
+            id: subnet,
+            control_keys: self.format_addresses(&owner.addrs)?,
+            threshold: owner.threshold,
+        })
+    }
+
+    /// Decodes subnet-owner codec bytes (`Owner` = `secp256k1fx.OutputOwners`).
+    fn decode_owner(&self, bytes: Vec<u8>) -> Result<OutputOwners> {
+        let mut owner = crate::txs::components::Owner::default();
+        crate::txs::codec::Codec()
+            .unmarshal(&bytes, &mut owner)
+            .map_err(Error::Codec)?;
+        let crate::txs::components::Owner::Secp256k1(o) = owner;
+        Ok(o)
+    }
+
+    /// Formats every owner address as a bech32 P-Chain string.
+    fn format_addresses(&self, addrs: &[ShortId]) -> Result<Vec<String>> {
+        addrs
+            .iter()
+            .map(|a| self.format_address(a.as_bytes()))
+            .collect()
+    }
+
+    /// `getBlockchains` — every blockchain that exists, the primary-network
+    /// chains last (`service.go:1374`).
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a chain-tx decode failure.
+    pub fn get_blockchains(&self) -> Result<GetBlockchainsResponse> {
+        let mut blockchains = Vec::new();
+        for subnet in self.state.subnets() {
+            self.push_chains(subnet, &mut blockchains)?;
+        }
+        self.push_chains(Id::EMPTY, &mut blockchains)?;
+        Ok(GetBlockchainsResponse { blockchains })
+    }
+
+    /// Appends the `CreateChainTx` views of `subnet`'s chains to `out`.
+    fn push_chains(&self, subnet: Id, out: &mut Vec<ApiBlockchain>) -> Result<()> {
+        for chain_id in self.state.chains(subnet) {
+            let bytes = self.state.get_tx(chain_id)?;
+            let tx = Tx::parse(crate::txs::codec::Codec(), &bytes).map_err(Error::Codec)?;
+            if let crate::txs::UnsignedTx::CreateChain(create) = &tx.unsigned {
+                out.push(ApiBlockchain {
+                    id: chain_id,
+                    name: create.chain_name.clone(),
+                    subnet_id: subnet,
+                    vm_id: create.vm_id,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// `getBlockchainStatus` — the status of `blockchain_id` (`service.go:1180`).
+    /// Accepted-state only: `Validating` if this node validates the chain's
+    /// subnet, `Created` if its create-chain tx is accepted, else
+    /// `Unknown`. The preferred-but-not-accepted (`Preferred`) and the
+    /// alias-driven `Syncing` cases need the chain registry / preferred-chain
+    /// state manager seams and are recorded deferrals.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a missing or unparsable blockchain id.
+    pub fn get_blockchain_status(&self, blockchain_id: &str) -> Result<GetBlockchainStatusReply> {
+        if blockchain_id.is_empty() {
+            return Err(Error::Service("argument 'blockchainID' not given".to_owned()));
+        }
+        let id = blockchain_id
+            .parse::<Id>()
+            .map_err(|e| Error::Service(format!("problem parsing blockchainID {blockchain_id:?}: {e}")))?;
+
+        if self.node_validates(id) {
+            return Ok(GetBlockchainStatusReply {
+                status: BlockchainStatus::Validating,
+            });
+        }
+        if self.chain_exists(id) {
+            return Ok(GetBlockchainStatusReply {
+                status: BlockchainStatus::Created,
+            });
+        }
+        Ok(GetBlockchainStatusReply {
+            status: BlockchainStatus::UnknownChain,
+        })
+    }
+
+    /// `Service.nodeValidates` — true iff `chain` is an accepted `CreateChainTx`
+    /// whose subnet this node validates.
+    fn node_validates(&self, chain: Id) -> bool {
+        let Ok(bytes) = self.state.get_tx(chain) else {
+            return false;
+        };
+        let Ok(tx) = Tx::parse(crate::txs::codec::Codec(), &bytes) else {
+            return false;
+        };
+        let crate::txs::UnsignedTx::CreateChain(create) = &tx.unsigned else {
+            return false;
+        };
+        // This node validates the chain iff it is in the subnet's chain list
+        // and the node is a validator of that subnet. The validator-membership
+        // check needs the live validator set keyed by node id, which the read
+        // service does not hold synchronously; conservatively report
+        // membership by chain presence under its subnet.
+        self.state
+            .chains(create.subnet_id)
+            .into_iter()
+            .any(|c| c == chain)
+    }
+
+    /// `Service.chainExists` over the accepted state — true iff `chain` is an
+    /// accepted `CreateChainTx`.
+    fn chain_exists(&self, chain: Id) -> bool {
+        let Ok(bytes) = self.state.get_tx(chain) else {
+            return false;
+        };
+        let Ok(tx) = Tx::parse(crate::txs::codec::Codec(), &bytes) else {
+            return false;
+        };
+        matches!(tx.unsigned, crate::txs::UnsignedTx::CreateChain(_))
+    }
+
+    /// `getStake` — the AVAX (and per-asset) stake locked by `addresses`, plus
+    /// the contributing staked outputs (`service.go:1582`). Walks the current
+    /// and pending staker sets, decodes each staker tx, and sums the stake
+    /// outputs owned by the requested addresses.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on too-many addresses, address parse failure,
+    /// a staker-tx decode failure, or an output encode failure.
+    pub fn get_stake(&self, args: &GetStakeArgs) -> Result<GetStakeReply> {
+        if args.addresses.len() > MAX_GET_STAKE_ADDRS {
+            return Err(Error::Service(format!(
+                "{} addresses provided but this method can take at most {MAX_GET_STAKE_ADDRS}",
+                args.addresses.len()
+            )));
+        }
+        let addrs: BTreeSet<ShortId> = self.parse_addresses(&args.addresses)?.into_iter().collect();
+
+        let mut totals: BTreeMap<Id, u64> = BTreeMap::new();
+        let mut staked_outs: Vec<TransferableOutput> = Vec::new();
+
+        let mut stakers = self.state.current_stakers();
+        stakers.extend(self.state.pending_stakers());
+        for staker in &stakers {
+            if args.validators_only && !staker.priority.is_validator() {
+                continue;
+            }
+            let bytes = self.state.get_tx(staker.tx_id)?;
+            let tx = Tx::parse(crate::txs::codec::Codec(), &bytes).map_err(Error::Codec)?;
+            for out in stake_outs_of(&tx.unsigned) {
+                let owned = output_addresses(&out.out)
+                    .iter()
+                    .any(|a| addrs.contains(a));
+                if !owned {
+                    continue;
+                }
+                add_balance(&mut totals, out.asset_id, out.amount());
+                staked_outs.push(out.clone());
+            }
+        }
+
+        let mut outputs = Vec::with_capacity(staked_outs.len());
+        for out in &staked_outs {
+            let bytes = crate::txs::codec::Codec()
+                .marshal(crate::CODEC_VERSION, out)
+                .map_err(Error::Codec)?;
+            let (s, _) = encode_bytes(&bytes, &args.encoding)?;
+            outputs.push(s);
+        }
+
+        let avax = self.avax_asset_id();
+        Ok(GetStakeReply {
+            staked: totals.get(&avax).copied().unwrap_or(0),
+            stakeds: totals,
+            outputs,
+            encoding: canonical_encoding(&args.encoding)?,
+        })
+    }
+
+    /// `getRewardUTXOs` — the reward UTXOs minted for the staker tx `tx_id`
+    /// (`service.go:1759`).
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on an output encode failure.
+    pub fn get_reward_utxos(&self, tx_id: Id, encoding: &str) -> Result<GetRewardUTXOsReply> {
+        let utxos = self.state.get_reward_utxos(tx_id);
+        let mut encoded = Vec::with_capacity(utxos.len());
+        for bytes in &utxos {
+            let (s, _) = encode_bytes(bytes, encoding)?;
+            encoded.push(s);
+        }
+        Ok(GetRewardUTXOsReply {
+            num_fetched: encoded.len() as u64,
+            utxos: encoded,
+            encoding: canonical_encoding(encoding)?,
+        })
+    }
+
+    /// `getMinStake` — the minimum validator/delegator bond (`service.go:1678`).
+    /// The primary network reads the per-network staking config; non-primary
+    /// (elastic) subnets need the transform-subnet state, a recorded deferral.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] for a non-primary subnet (deferred).
+    pub fn get_min_stake(&self, subnet: Id) -> Result<GetMinStakeReply> {
+        if subnet != Id::EMPTY {
+            return Err(Error::Service(format!(
+                "failed fetching subnet transformation for {subnet}: not found \
+                 (elastic-subnet transform state not ported)"
+            )));
+        }
+        let staking = self.staking_config();
+        Ok(GetMinStakeReply {
+            min_validator_stake: staking.min_validator_stake,
+            min_delegator_stake: staking.min_delegator_stake,
+        })
+    }
+
+    /// The per-network staking config (mainnet / Fuji share the same min-stake
+    /// constants in Go; the full per-network plumb is ava-genesis).
+    fn staking_config(&self) -> StakingConfig {
+        StakingConfig::mainnet()
+    }
+
+    /// `getFeeConfig` — the dynamic-fee `gas.Config` (`service.go:2034`).
+    #[must_use]
+    pub fn get_fee_config(&self) -> GetFeeConfigReply {
+        GetFeeConfigReply {
+            weights: WEIGHTS,
+            max_capacity: MAX_CAPACITY,
+            max_per_second: MAX_PER_SECOND,
+            target_per_second: TARGET_PER_SECOND,
+            min_price: DYNAMIC_FEE_MIN_PRICE,
+            excess_conversion_constant: DYNAMIC_FEE_K,
+        }
+    }
+
+    /// `getValidatorFeeConfig` — the validator continuous-fee `fee.Config`
+    /// (`service.go:2071`).
+    #[must_use]
+    pub fn get_validator_fee_config(&self) -> GetValidatorFeeConfigReply {
+        GetValidatorFeeConfigReply {
+            capacity: validator_fee::CAPACITY,
+            target: validator_fee::TARGET,
+            min_price: validator_fee::MIN_PRICE,
+            excess_conversion_constant: self.validator_fee_k(),
+        }
+    }
+
+    /// `sampleValidators` — a sorted sample of up to `size` current validators
+    /// of `subnet` (`service.go:1146`). Samples (weighted, without
+    /// replacement) over the current validator set read from the validator
+    /// manager.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a validator-set read failure.
+    pub async fn sample_validators(
+        &self,
+        subnet: Id,
+        size: u16,
+    ) -> Result<SampleValidatorsReply> {
+        let set = self
+            .validators
+            .get_current_validator_set(subnet)
+            .await
+            .map_err(|e| Error::Service(format!("sampling {subnet} errored with {e}")))?
+            .0;
+
+        // Build (nodeID, weight) pairs and sample without replacement.
+        let mut nodes: Vec<NodeId> = Vec::with_capacity(set.len());
+        let mut weights: Vec<u64> = Vec::with_capacity(set.len());
+        for v in set.values() {
+            nodes.push(v.node_id);
+            weights.push(v.weight);
+        }
+
+        let want = usize::from(size).min(nodes.len());
+        let mut sampler = new_deterministic_weighted_without_replacement(Box::new(
+            ava_utils::rng::Mt19937_64::new(),
+        ));
+        sampler
+            .initialize(&weights)
+            .map_err(|e| Error::Service(format!("sampling {subnet} errored with {e}")))?;
+        // `Sample(count)` yields `None` only when the request cannot be
+        // satisfied; with `want <= nodes.len()` it always succeeds.
+        let indices = sampler.sample(want).unwrap_or_default();
+
+        let mut sampled: Vec<NodeId> =
+            indices.into_iter().filter_map(|i| nodes.get(i).copied()).collect();
+        sampled.sort();
+        Ok(SampleValidatorsReply { validators: sampled })
+    }
+
+    /// `getTotalStake` — the total validator weight of `subnet`
+    /// (`service.go:1731`). Summed from the current validator set.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a validator-set read failure.
+    pub async fn get_total_stake(&self, subnet: Id) -> Result<GetTotalStakeReply> {
+        let set = self
+            .validators
+            .get_current_validator_set(subnet)
+            .await
+            .map_err(|e| Error::Service(format!("couldn't get total weight: {e}")))?
+            .0;
+        let weight = set.values().fold(0u64, |acc, v| acc.saturating_add(v.weight));
+        Ok(GetTotalStakeReply {
+            stake: weight,
+            weight,
+        })
+    }
+
+    /// `getAllValidatorsAt` — the canonical warp validator sets of every subnet
+    /// at `height` (`service.go:1824`). `height == u64::MAX` ("proposed")
+    /// resolves to the minimum (proposed) height.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a height resolution or validator-set read
+    /// failure.
+    pub async fn get_all_validators_at(&self, height: u64) -> Result<GetAllValidatorsAtReply> {
+        let resolved = if height == u64::MAX {
+            self.validators
+                .get_minimum_height()
+                .await
+                .map_err(|e| Error::Service(format!("failed to get proposed height: {e}")))?
+        } else {
+            height
+        };
+        let sets = self
+            .validators
+            .get_warp_validator_sets(resolved)
+            .await
+            .map_err(|e| Error::Service(format!("failed to get validator sets at {resolved}: {e}")))?;
+
+        let mut validator_sets = BTreeMap::new();
+        for (subnet, warp) in sets {
+            validator_sets.insert(subnet, warp_set_to_json(&warp)?);
+        }
+        Ok(GetAllValidatorsAtReply { validator_sets })
+    }
+
+    /// `issueTx` (the decode/parse half) — decodes `args.tx` and parses it into
+    /// a signed [`Tx`] (`service.go:1435`). The wire wrapper
+    /// ([`RpcService::issue_tx`]) admits the parsed tx through the
+    /// [`TxIssuer`] mempool seam.
+    ///
+    /// # Errors
+    /// Returns [`Error::Service`] on a decode or parse failure.
+    pub fn parse_issue_tx(&self, args: &FormattedTx) -> Result<Tx> {
+        let bytes = decode_bytes(&args.tx, &args.encoding)
+            .map_err(|e| Error::Service(format!("problem decoding transaction: {e}")))?;
+        Tx::parse(crate::txs::codec::Codec(), &bytes)
+            .map_err(|e| Error::Service(format!("couldn't parse tx: {e}")))
+    }
+
+    /// The primary network's staking / fee asset.
+    fn avax_asset_id(&self) -> Id {
+        self.avax_asset_id
     }
 }
 
@@ -1862,7 +2727,7 @@ mod conformance {
         // Snapshot the state for the scalar read methods (timestamp/supply/
         // height); the manager carries the validator snapshot.
         let state = Arc::new(genesis_state_after_accept());
-        let service = Service::new(state, vmgr, 1);
+        let service = Service::new(state, vmgr, 1, Id::from([0x42; 32]));
         (service, node_a, node_b, key_a, key_b)
     }
 
