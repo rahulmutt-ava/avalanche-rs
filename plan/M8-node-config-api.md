@@ -616,14 +616,57 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > - `node.rs` `exit_code`/`shutting_down` made `pub(crate)`; new `src/testutil.rs` (`#[cfg(test)]`) shares fixtures with a
 >   process-once `OnceLock<LogFactory>` (the global tracing subscriber installs once).
 
-### Task M8.31: avalanchers binary promotion — main flow + signals + exit code
+### Task M8.31: avalanchers binary promotion — main flow + signals + exit code ✅ DONE
 **Crate:** avalanchers (bin)  ·  **Depends on:** M8.3 (build_command), M8.12 (get_node_config), M8.29/M8.30 (Node), M8.28 (logging), M1 ava-version  ·  **Spec:** 12 §9, 17 §1.1/§2.5/§5
 **Files:** `crates/avalanchers/src/main.rs`, `crates/avalanchers/src/app.rs` (banner, chmod, fd-limit, signals)
-- [ ] **Step 1 — Red:** `crates/avalanchers/tests/cli.rs::version_flags` — `--version` prints `version::get_versions().to_string()` and exits 0; `--version-json` pretty JSON exit 0; both set → error exit 1 (12 §9). `help_exits_0` — `--help` exit 0. `no_args_runs_mainnet` (parse-only smoke: builds Config with network-id mainnet). These use `assert_cmd` against the built binary.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p avalanchers version_flags` → fails.
-- [ ] **Step 3 — Green:** Implement `main` (12 §9): register EVM extras; `build_command(FLAG_SPECS)`; parse (`--help`→exit 0); `--version`/`--version-json` (both→exit 1); `Layered`→`get_node_config`→`Config`; TTY banner; `chmod_r` data/log dirs; build LogFactory; raise fd-limit; build the single tokio multi-thread runtime (17 §1.1); `Node::new`; install SIGINT/SIGTERM→`shutdown(0)` + SIGABRT→backtrace dump (17 §2.5); `block_on(dispatch)`; `std::process::exit(node.exit_code())`. Add a CI grep gate forbidding `Runtime::new`/`block_on` outside the bin/tests (17 §1.1).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p avalanchers` + `cargo build -p avalanchers` pass.
-- [ ] **Step 5 — Commit:** `avalanchers: full-node binary promotion (main/signals/exit, 12 §9, 17 §1.1)`
+- [x] **Step 1 — Red:** `crates/avalanchers/tests/cli.rs::version_flags` — `--version` exits 0 (carries `avalanchers/`); `--version-json` pretty JSON exit 0; both set → error exit 1 (12 §9). `help_exits_0` — `--help` exit 0. Parse-only smoke is a unit test (`app::tests::build_config_for_mainnet_and_fuji`) calling the config-building helper directly — running the full node blocks, so we don't spawn it. Uses `std::process::Command` (no `assert_cmd` dep added).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p avalanchers version_flags` → failed (old M0 skeleton had no `--version-json`).
+- [x] **Step 3 — Green:** Implemented `main` (12 §9): register-EVM-extras documented no-op; `build_command(FLAG_SPECS)`; parse (`--help`→exit 0 via clap `DisplayHelp`); `--version`/`--version-json` (both→exit 1); `Layered`→`get_node_config`→`Config`; TTY banner; `chmod_r` data/log dirs; build LogFactory; raise fd-limit; build the single tokio multi-thread runtime (17 §1.1); `Node::new`; install SIGINT/SIGTERM→`shutdown(0)` + SIGABRT→backtrace dump (17 §2.5); `block_on(dispatch)`; `ExitCode::from(node.exit_code())`. Added CI grep gate `scripts/single_runtime_lint.sh` forbidding `Runtime::new`/`block_on` outside the bin/tests (17 §1.1).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p avalanchers` (7/7) + `cargo build -p avalanchers` + `cargo clippy -p avalanchers -p ava-node -p ava-config --all-targets --all-features -- -D warnings` pass.
+- [x] **Step 5 — Commit:** `avalanchers: full-node binary promotion (main/signals/exit, 12 §9, 17 §1.1)`
+
+> **AS-BUILT (M8.31).** The binary is a thin shell (`src/main.rs`) over the library
+> (`src/app.rs`, the Go `app/app.go` + `version/string.go` port); the 26-step
+> assembly + 14-step shutdown stay in `ava-node` (M8.29/M8.30). 7 avalanchers
+> tests green (4 new + 3 carried).
+> - **`--version` ↔ Go `GetVersions`.** `app::versions()` mirrors Go `Versions`
+>   (`application`/`database`/`rpcchainvm`/`commit`/`go`, same JSON field names →
+>   `--version-json` is drop-in unmarshalable). `--version` prints `Versions::line()`
+>   = `avalanchers/1.14.2 [application=avalanchego/1.14.2, database=v1.4.5,
+>   rpcchainvm=45, go=…]` — the `avalanchers/` prefix satisfies the M0 invariant
+>   (`tests/cli_version_help.rs`), the bracketed detail mirrors Go's
+>   `Versions.String()`, and the JSON `application` field stays the pure Go value.
+>   `commit`/`go` come from `option_env!("AVALANCHERS_GIT_COMMIT"/"…RUSTC_VERSION")`
+>   (empty unless a build script injects them; Go's `GitCommit` is also empty by
+>   default). `--version` + `--version-json` together → exit 1 with Go's exact
+>   message.
+> - **Signals (17 §2.5).** `app::install_signal_handlers` spawns onto the ambient
+>   runtime: SIGINT/SIGTERM (`tokio::signal::unix`) → `node.shutdown(0)`; SIGABRT →
+>   `std::backtrace::Backtrace::force_capture()` to stderr. Non-unix falls back to
+>   `ctrl_c`→`shutdown(0)`. SIGABRT dump is **best-effort** (handler thread's stack
+>   only; Rust can't enumerate every task's stack the way Go reads all goroutines).
+> - **fd-limit / chmod.** `set_fd_limit` (unix) does `getrlimit`/`setrlimit(RLIMIT_NOFILE)`,
+>   clamping to the hard limit and never lowering the soft limit; `chmod_r`
+>   recursively `set_permissions(0o700)` on the data + log dirs (missing dir = Ok).
+>   Both no-op on non-unix, matching Go's unix-only `ulimit`/`perms`.
+> - **`unsafe`.** One isolated `unsafe` block in `app::set_fd_limit` (the two libc
+>   rlimit syscalls), `#[allow(unsafe_code)]` + `// SAFETY:` note, scoped exactly
+>   like `ava-vm-rpc/src/host/subprocess.rs`'s `prctl`. `lib.rs` `deny`s `unsafe`
+>   on unix (so the scoped `allow` is honored) + `forbid`s it elsewhere; `main.rs`
+>   stays `#![forbid(unsafe_code)]`.
+> - **CI grep gate (17 §1.1).** `scripts/single_runtime_lint.sh` (CI job
+>   `single_runtime_lint` in `.github/workflows/ci.yml`; Task `lint-single-runtime`,
+>   wired into `lint-all`/`lint-all-ci`) forbids `Runtime::new`/`new_multi_thread`/
+>   `new_current_thread`/`block_on` outside `crates/avalanchers/src/main.rs` and
+>   test/bench files. **Allowlisted** (per-plugin-process bridges, 17 §1.2, not a
+>   second node-process runtime): `ava-database/src/rpcdb/client.rs`,
+>   `ava-vm-rpc/src/proxy/{rpcdb,sharedmemory}.rs` — the blocking `Database`/
+>   `SharedMemory` gRPC client bridges.
+> - **Deferral (kept from M8.30).** `apiURI` re-resolution for `--http-port=0`
+>   (needs a cross-crate bound-addr accessor on `ava_api::Server`) — **DEFERRED**,
+>   not attempted. Lifecycle start/stop smoke (`./avalanchers`, `--network-id=fuji`)
+>   is the M8.32 exit gate; M8.31 proves the config builds without spawning the
+>   blocking node.
 
 ### Task M8.32: Milestone exit gate
 **Crate:** all M8 crates + avalanchers  ·  **Depends on:** M8.1–M8.31  ·  **Spec:** all M8 specs; 02 §10 (PORTING.md)

@@ -65,6 +65,13 @@ jobs:
       - name: Forbid raw casts/unchecked Duration math on Tau (analogue of tausecondslint)
         run: ./scripts/tau_lint.sh
 
+  single_runtime_lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Forbid runtime construction / block_on outside the avalanchers binary (specs/17 §1.1)
+        run: ./scripts/single_runtime_lint.sh
+
   check_generated_protobuf:
     name: Up-to-date protobuf
     runs-on: ubuntu-24.04
