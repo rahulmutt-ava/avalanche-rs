@@ -71,6 +71,13 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > 57911ba metrics, 60ee2e8 indexer; per-task AS-BUILTs below). Remaining M8 frontier:
 > **M8.22 (register_chain) → M8.23 (api_parity) → Wave E serial (M8.29–M8.31) → M8.32 gate.**
 > Current wave (2026-06-12): M8.22 ∥ M6.29 (C-Chain exit gate, cross-milestone).
+>
+> **WAVE 2026-06-13 MERGED: M8.29 ∥ M8.23-method-set-completion (P+X).** Three parallel worktree agents:
+> M8.29 (ava-node `Node::new` 26-step assembly, 8 tests) + M8.23a (P-Chain all 31 `platform.*` bridged +
+> address→UTXO index, 148 ava-platformvm tests) + M8.23b (X-Chain live getUTXOs/getBalance/getAllBalances/getTxFee
+> + address→UTXO index, 202 ava-avm tests). All spec+quality reviewed MERGE-READY (no must-fix); merged --no-ff
+> into main with zero conflicts. Remaining M8 frontier: **M8.23 differential::api_parity harness (golden vectors +
+> normalizer + live-mode) → Wave E serial M8.30 (dispatch/shutdown) → M8.31 (binary) → M8.32 gate.**
 
 ---
 
@@ -381,6 +388,24 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 
 ### Task M8.23: differential::api_parity — every endpoint structural-JSON-equal vs Go
 **Crate:** ava-api (test harness coordinated with cross-cutting harness X)  ·  **Depends on:** M8.18–M8.22  ·  **Spec:** 14 §14/§16.6, 12 §12.4, 02 §9/§11.4
+
+> **METHOD-SET COMPLETION LANDED 2026-06-13** (merges `m8/platform-service`, `m8/avm-service`; both spec+quality
+> reviewed MERGE-READY). The prerequisite for the api_parity harness — **full per-service method-set parity** — is
+> now done for P and X:
+> - **P-Chain: all 31 `platform.*` methods bridged** (M8.22 had 16; M8.23a added the missing 15 — getBalance/getUTXOs/
+>   getSubnet/getSubnets/sampleValidators/getBlockchainStatus/getBlockchains/issueTx/getStake/getMinStake/getTotalStake/
+>   getRewardUTXOs/getAllValidatorsAt/getFeeConfig/getValidatorFeeConfig — over a new address→UTXO index in
+>   `ava-platformvm` state mirroring `avax.utxoState.indexDB`). 148 ava-platformvm tests. `platform_method_set_matches_bridged`
+>   pins the exact 31 Go names. Spec finding folded into PORTING.md: Go `gas.Gas`/`gas.Price` have NO marshaler ⇒
+>   getFeeState/getValidatorFeeState/getFeeConfig emit **bare JSON numbers** (not json.Uint64 strings).
+> - **X-Chain: getUTXOs/getBalance/getAllBalances/getTxFee now LIVE** (M8.22 had them as -32000 stubs), over a new
+>   address→UTXO index in `ava-avm` state (flat `addr++utxoID` layout). 202 ava-avm tests. getBalance `utxoIDs` reply
+>   corrected to `[{txID, outputIndex}]` objects (was `Vec<String>`); error strings byte-equal to Go.
+> - Remaining for THIS task: the recorded-Go differential harness itself (golden request/response vectors + the 02 §11.4
+>   normalizer + live-mode wiring) — unblocked now that the method sets are complete. Known reply-shape deferrals that
+>   won't byte-match Go yet (tracked in the two PORTING.md files): getCurrentValidators/getL1Validator attribute subset,
+>   getTx/getBlock `json` encoding, getUTXOs cross-chain `sourceChain` atomic UTXOs, elastic-subnet transform fields,
+>   P-Chain issueTx runtime admission (un-shared mempool until M8.30 node wiring).
 **Files:** `crates/ava-api/tests/differential_api_parity.rs`, `crates/ava-api/tests/vectors/api/<service>/<method>.json` (recorded Go request/response pairs), `tests/differential/api_oracle.rs` (shared harness hook)
 - [ ] **Step 1 — Red:** `tests/differential_api_parity.rs::api_parity` — for every method in 14 §3–§11, drive an identical JSON-RPC (or geth/Connect) request at the Rust node and compare against the recorded Go oracle response: structural-JSON-equal after normalizing non-deterministic fields (timestamps, node-IDs, peer lists, 02 §11.4). Plus method-set completeness (registered Rust method set == Go set per service, 14 §14.2), wire-shape conformance (single-element `params`, `Service.Method`, `{code,message,data}` errors), HTTP semantics (403 allowed-hosts, 503 not-bootstrapped, `node-id` header, health 200/503), and error-response snapshots (14 §16.6: bad params -32602, unknown method -32601, malformed -32700, EVM revert code 3, fee-cap message).
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-api api_parity` (recorded-oracle mode) → fails.
@@ -506,14 +531,31 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > spawn_blocking; Verbo/Trace/Fatal collapse to tracing's 5 levels until callers emit the `ava_level`
 > field; `deps-tidy`/`bazel-check-metadata` must run before push (new per-crate deps).
 
-### Task M8.29: ava-node assembly — Node::new (init steps 1–26, exact order)
+### Task M8.29: ava-node assembly — Node::new (init steps 1–26, exact order) ✅ DONE (a08bb9d+7a4da65+4daa5d1, merge into main)
 **Crate:** ava-node  ·  **Depends on:** M8.12 (Config), M8.16–M8.22 (ApiServer), M8.24 (Indexer), M8.28 (trace/nat/logging), M2/M3 (Network/Router/validators/message::Creator/timeout/resource), M4–M7 (chain manager + VMs), M1 ava-database  ·  **Spec:** 12 §2.1/§2.2, 17 §1/§2/§7
 **Files:** `crates/ava-node/src/node.rs` (`pub struct Node`, `Node::new`), `crates/ava-node/src/init/*.rs` (one per init step)
-- [ ] **Step 1 — Red:** `node.rs::tests::init_order_matches_go` — instrument each `init_*` step to push its name onto a recorded `Vec<&str>`; assert the order equals the Go 26-step sequence (12 §2.2): cert→NodeID, BLS signer, log-banner, VMAliaser/VMManager, init_bootstrappers, trace, metrics, nat, api_server, metrics_api, database(+ungraceful marker), shared_memory, message::Creator (after metrics, before networking), validators(+override), resource/cpu/disk targeters, networking, event_dispatchers, **health_api before chain_manager**, default vm aliases, chain_manager, vms, admin/info api, chain/api aliases, indexer, health.start/profiler, init_chains.
-- [ ] **Step 2 — Confirm red:** `cargo test -p ava-node node::tests::init_order_matches_go` → fails.
-- [ ] **Step 3 — Green:** Define `Node` (12 §2.2 struct: log, id, config, signers, db, net, chain_router, chain_manager, vm_manager/registry, runtime_manager, validators/bootstrappers, api_server, indexer, health, benchlist, timeout_manager, resource_manager, nat, tracer, metrics, `shutdown: CancellationToken`, `tasks: TaskTracker`, exit_code/shutting_down/shutdown_once). Implement `Node::new(config, log_factory, log, rt: Handle) -> Result<Arc<Self>>` running steps 1–26 exactly, returning typed errors. Build the root `CancellationToken` + child tokens per the 17 §4.1 tree (root→network→peer; root→subnet→chain). No sub-runtime (17 §1.1).
-- [ ] **Step 4 — Confirm green:** `cargo test -p ava-node node::tests::init_order_matches_go` passes.
-- [ ] **Step 5 — Commit:** `ava-node: Node::new assembly (26-step init order, 12 §2.2)`
+- [x] **Step 1 — Red:** `node.rs::tests::init_order_matches_go` — instrument each `init_*` step to push its name onto a recorded `Vec<&str>`; assert the order equals the Go 26-step sequence (12 §2.2): cert→NodeID, BLS signer, log-banner, VMAliaser/VMManager, init_bootstrappers, trace, metrics, nat, api_server, metrics_api, database(+ungraceful marker), shared_memory, message::Creator (after metrics, before networking), validators(+override), resource/cpu/disk targeters, networking, event_dispatchers, **health_api before chain_manager**, default vm aliases, chain_manager, vms, admin/info api, chain/api aliases, indexer, health.start/profiler, init_chains.
+- [x] **Step 2 — Confirm red:** `cargo test -p ava-node node::tests::init_order_matches_go` → fails.
+- [x] **Step 3 — Green:** Define `Node` (12 §2.2 struct: log, id, config, signers, db, net, chain_router, chain_manager, vm_manager/registry, runtime_manager, validators/bootstrappers, api_server, indexer, health, benchlist, timeout_manager, resource_manager, nat, tracer, metrics, `shutdown: CancellationToken`, `tasks: TaskTracker`, exit_code/shutting_down/shutdown_once). Implement `Node::new(config, log_factory, log, rt: Handle) -> Result<Arc<Self>>` running steps 1–26 exactly, returning typed errors. Build the root `CancellationToken` + child tokens per the 17 §4.1 tree (root→network→peer; root→subnet→chain). No sub-runtime (17 §1.1).
+- [x] **Step 4 — Confirm green:** `cargo test -p ava-node node::tests::init_order_matches_go` passes.
+- [x] **Step 5 — Commit:** `ava-node: Node::new assembly (26-step init order, 12 §2.2)`
+
+> **AS-BUILT (M8.29, merged 2026-06-13; spec+quality reviewed MERGE-READY, no must-fix).** 8 ava-node tests.
+> `Node::new(config, log_factory, rt: Handle) -> Result<Arc<Self>>` runs the exact Go `node.New` 26-step order
+> (one `src/init/*.rs` module per concern); `node::tests::init_order_matches_go` pins a recorded 28-entry
+> sequence (steps 22/23 are two Go calls each) against `GO_INIT_ORDER`, then verifies the 17 §4.1 token tree
+> (root `shutdown` → `network_token` + `subnet_token`), `queued_chains().len()==1`, the engine-router slot,
+> and clean exit state. Single-runtime rule honored (takes a `Handle`; NAT probe/PMP/DNS/external-IP via
+> `spawn_blocking`). **Narrow seams (all in `crates/ava-node/tests/PORTING.md`, no cross-crate refactors):**
+> `RouterBridge` (networking.rs — inbound drops until M8.30 fills the engine-router slot), `SystemResourceManager`+noop,
+> `RuntimeManager`+noop + `EmptyVmGetter` (vms.rs — plugin-host milestone), `AssemblyChainManager` (queues
+> `ChainParameters`, no chain construction — chains milestone), `ShutdownTrigger` (records exit + cancels root token),
+> admin/info live adapters + `ServerPathAdder` (api_services.rs), `DynDb` (object-safe `Arc<dyn DynDatabase>` adapter).
+> **M8.30 handoffs:** wire `RouterBridge::handle_inbound` (engine-router `Some` after step 20); re-resolve `api_uri`
+> via `Server::bind_addr()` when `--http-port=0` before writing `process.json`; `ShutdownTrigger` tail becomes the
+> 14-step sequence (delete `UNGRACEFUL_SHUTDOWN_KEY` before `db.close()`); dispatch-spawned tasks register on `Node.tasks`.
+> Deferrals (Go↔Rust, in PORTING.md): RPC remote signer, public-IP resolution service, read-only DB, process/go
+> collectors, `futureupgrade` check (gauge at +Inf), built-in P/X/C factory registration, admin `getConfig`=providedFlags map.
 
 ### Task M8.30: ava-node dispatch + shutdown ordering + lifecycle test
 **Crate:** ava-node  ·  **Depends on:** M8.29  ·  **Spec:** 12 §2.3/§2.4, 17 §4.3/§4.4, 17 §9
