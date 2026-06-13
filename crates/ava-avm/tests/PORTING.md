@@ -9,15 +9,15 @@ Rust test/module; when no Rust counterpart exists the reason is cited.
 
 Legend: ⬜ not ported · 🟡 partial · ✅ ported · n/a not applicable
 
-**Summary:** 121 ported ✅ / 31 partial 🟡 / 0 not ported ⬜ / 12 n/a.
-Of the 152 non-`n/a` rows, **100 %** have a concrete Rust counterpart (✅ or 🟡).
+**Summary:** 128 ported ✅ / 25 partial 🟡 / 0 not ported ⬜ / 11 n/a.
+Of the 153 non-`n/a` rows, **100 %** have a concrete Rust counterpart (✅ or 🟡).
 M5 covers: codec / fx-verify / state / syntactic / semantic / executor / block /
 mempool / gossip / VM-conformance / atomic / service / fuzz / differential.
-Partial rows are: address-indexed getUTXOs/getBalance (need UTXO address index,
-M5.21 follow-up), typed `FxOperation` op outputs (typed op variants follow-up),
-getTxJSON shape goldens for each tx variant (large Go fixtures, M5.21 follow-up),
-and a few Go-specific bootstrap/fast-path combinations (Snowman bootstrapper
-deferral).
+M8.23b landed the address→UTXO index + live getUTXOs/getBalance/getAllBalances/
+getTxFee. Remaining partial rows are: typed `FxOperation` op outputs (typed op
+variants follow-up), getTxJSON shape goldens for each tx variant (large Go
+fixtures, M8 follow-up), and a few Go-specific bootstrap/fast-path combinations
+(Snowman bootstrapper deferral).
 
 ---
 
@@ -46,7 +46,7 @@ deferral).
 | `TestIssueExportTx` | ✅ ported | `executor::export_builds_put_requests` + `block_lifecycle::accept_export_tx_applies_atomic_requests` + `atomic_xp::differential::atomic_xp` |
 | `TestClearForceAcceptedExportTx` | 🟡 partial | the acceptance + atomic clear path is exercised by `block_lifecycle::accept_export_tx_applies_atomic_requests`; the explicit `force_accept` + mempool clear flow is part of the bootstrapper deferral |
 | `TestVerifyFxUsage` | ✅ ported | `semantic::incompatible_fx` + `fx_dispatch` dispatch tests cover verify-fx-usage; `error_variants::error_variants_exist_and_match_go_sentinels` pins the `IncompatibleFx` sentinel |
-| `BenchmarkGetUTXOs` | n/a | benchmark; not ported — Rust uses `criterion` / `cargo-bench` separately |
+| `BenchmarkGetUTXOs` | n/a | benchmark; not ported — Rust uses `criterion` / `cargo-bench` separately. The functional surface it drives (paginated `getUTXOs` over the address index) IS ported as of M8.23b (`service::conformance::service_get_utxos_*`); only the perf-measurement harness is n/a |
 
 ### vms/avm/state
 
@@ -61,8 +61,8 @@ deferral).
 | Go test | Status | Rust counterpart / note |
 |---|---|---|
 | `TestSetsAndGets` | ✅ ported | `state_utxo::add_commit_reopen_get_utxo_roundtrips` + `block_store_roundtrips_bytes_and_height_index` |
-| `TestFundingNoAddresses` | 🟡 partial | `state_utxo` covers the UTXO persistence layer; the address-indexed UTXO query (`getUTXOs` / `FundingAddresses` which iterate an address→UTXO index) is deferred — the address index requires the M5.21 `getUTXOs` follow-up |
-| `TestFundingAddresses` | 🟡 partial | same deferral as `TestFundingNoAddresses` (address→UTXO index) |
+| `TestFundingNoAddresses` | ✅ ported | M8.23b: `state_utxo::utxo_ids_opaque_bytes_are_not_indexed` (non-addressable UTXOs store but never index) + `state_utxo::utxo_ids_indexes_owning_addresses_on_add` (unrelated address sees nothing) |
+| `TestFundingAddresses` | ✅ ported | M8.23b: `state_utxo::utxo_ids_indexes_owning_addresses_on_add` + `utxo_ids_delete_removes_index_rows` + `utxo_ids_pagination_previous_and_limit` + `utxo_ids_survive_commit_and_reopen` (add → index, delete → unindex, paginated reads; as-built: sorted-by-UTXO-ID order vs Go's `linkeddb` insertion order — node-local, documented on `ReadOnlyChain::utxo_ids`) |
 
 ### vms/avm/txs
 
@@ -150,9 +150,9 @@ deferral).
 |---|---|---|
 | `TestServiceIssueTx` | ✅ ported | `service::conformance::service_issue_tx_roundtrip` — hex-encoded tx bytes → mempool add → reply with `txID` in CB58 |
 | `TestServiceGetTxStatus` | ✅ ported | `service::conformance::service_get_tx_status_accepted` (Committed) + `service_get_tx_status_unknown` (Unknown) + `service_get_tx_status_nil_id_error` |
-| `TestServiceGetBalanceStrict` | 🟡 partial | `service::conformance::service_get_balance_deferred` asserts the stub returns the documented deferral error; address-indexed `getBalance` requires the UTXO address index (M5.21 follow-up) |
-| `TestServiceGetAllBalances` | 🟡 partial | `service::conformance::service_get_all_balances_deferred` — same address-index deferral |
-| `TestServiceGetTxFee` | n/a | Go `GetTxFee` is a static config read; the Rust service exposes fee config via `Config` deserialization tested in the `vm_conformance` init; no dedicated fee-endpoint test exists (the endpoint itself is n/a — there is no `avm.getTxFee` in the Rust RPC surface) |
+| `TestServiceGetBalanceStrict` | ✅ ported | M8.23b: `service::conformance::service_get_balance_strict_and_partial` — strict (1-of-1 + unlocked only) vs `includePartial` (locked + multisig fold in), per-asset filter, Go reply shape (`balance` quoted, `utxoIDs` `{txID, outputIndex}` objects); + `service_get_balance_bad_address_error` / `service_get_balance_unknown_asset_error` (Go-byte-equal error strings). Recorded deferral: the VM asset aliaser (`"AVAX"` does not resolve as `assetID`) |
+| `TestServiceGetAllBalances` | ✅ ported | M8.23b: `service::conformance::service_get_all_balances_shape` — per-asset sums with strict/partial semantics, `[{asset, balance}]` Go shape (reply sorted by asset id; Go's set order is random) |
+| `TestServiceGetTxFee` | ✅ ported | M8.23b: `service::conformance::service_get_tx_fee_shape` — `avm.getTxFee` bridged; `{txFee, createAssetTxFee}` quoted `json.Uint64` strings from the VM `Config` (mainnet defaults + `with_fees` override); wire envelope in `avm_wire_shapes` |
 | `TestServiceGetTx` | ✅ ported | `service::conformance::service_get_tx_shape` + `service_get_tx_nil_id_error` + `service_get_tx_not_found` |
 | `TestServiceGetTxJSON_BaseTx` | 🟡 partial | `service::conformance::service_get_tx_shape` returns the raw hex bytes; full JSON decode + shape assertion for each tx variant is deferred (large Go vectors, incremental M5.21 follow-up) |
 | `TestServiceGetTxJSON_ExportTx` | 🟡 partial | same deferral as `TestServiceGetTxJSON_BaseTx` |
@@ -165,9 +165,9 @@ deferral).
 | `TestServiceGetTxJSON_OperationTxWithPropertyFxMintOpMultiple` | 🟡 partial | same |
 | `TestServiceGetNilTx` | ✅ ported | `service::conformance::service_get_tx_nil_id_error` |
 | `TestServiceGetUnknownTx` | ✅ ported | `service::conformance::service_get_tx_not_found` |
-| `TestServiceGetUTXOs` | 🟡 partial | `service::conformance::service_get_utxos_deferred` — the handler stub returns a documented deferral error; address-indexed `getUTXOs` (including cross-chain `sourceChain`) requires the UTXO address index, deferred to follow-up |
+| `TestServiceGetUTXOs` | ✅ ported | M8.23b: `service::conformance::service_get_utxos_local_shape` (paginated address-indexed reads, checksummed-hex UTXO bytes, `endIndex` cursor, `numFetched`) + `service_get_utxos_pagination_cursor` (disjoint complete pages via `startIndex`) + `service_get_utxos_source_chain_atomic` (shared-memory `Indexed` path) + `service_get_utxos_hexnc_encoding` + the Go-byte-equal error tests (`no addresses provided`, max-1024, source-chain alias, cursor parse) |
 | `TestGetAssetDescription` | ✅ ported | `service::conformance::service_get_asset_description_shape` + `service_get_asset_description_not_create_asset` |
-| `TestGetBalance` | 🟡 partial | `service::conformance::service_get_balance_deferred` — same address-index deferral as `TestServiceGetBalanceStrict` |
+| `TestGetBalance` | ✅ ported | M8.23b: `service::conformance::service_get_balance_strict_and_partial` (see `TestServiceGetBalanceStrict`) |
 | `TestServiceGetBlock` | ✅ ported | `service::conformance::service_get_block_returns_hex` + `service_get_block_not_found` |
 | `TestServiceGetBlockByHeight` | ✅ ported | `service::conformance::service_get_block_by_height_shape` + `service_get_block_by_height_missing` |
 | `TestServiceGetHeight` | ✅ ported | `service::conformance::service_get_height_shape` + `service_get_height_empty_chain` |
@@ -294,22 +294,19 @@ owned by M8.23.
 | `issueTx` | justified trivial delegation: decode/parse (typed body) + submit through the `TxIssuer` seam — the SAME dedupe → verify → mempool-add path inbound gossip uses (`TxGossipHandler::handle_gossiped_tx` + `SyntacticTxVerifier`, the seam `AvmVm` already owns). Outbound re-gossip of the admitted tx is the recorded live-`Network::gossip` M8 handoff |
 | `getAssetDescription` | CB58 asset id only (the Go alias lookup needs the VM alias store) |
 
-### Bridged stubs (3) — registered, always `-32000` "not yet implemented"
+### Live as of M8.23b (formerly bridged stubs + missing)
 
-| Method | Blocking seam |
+| Method | As-built |
 |---|---|
-| `getUTXOs` | address→UTXO index (`avax.GetPaginatedUTXOs`) + shared-memory atomic UTXOs (`avax.GetAtomicUTXOs`) |
-| `getBalance` | address→UTXO index (`avax.GetAllUTXOs`) |
-| `getAllBalances` | address→UTXO index (`avax.GetAllUTXOs`) |
+| `getUTXOs` | LIVE: address→UTXO index (`State::utxo_ids`; flat `addr ++ utxoID` sorted layout — node-local deviation from Go's insertion-ordered `linkeddb`) + the `get_paginated_utxos` port of `avax.GetPaginatedUTXOs` + the shared-memory `Indexed` atomic path (`avax.GetAtomicUTXOs`). Error strings byte-equal to Go. Remaining seam: the node-level `BCLookup` aliaser (`ChainLookup`) — `"P"`/`"C"` `sourceChain` aliases need `ava-node` wiring; chain-id strings resolve via the built-in fallback |
+| `getBalance` | LIVE: `avax.GetAllUTXOs` over the address index; strict / `includePartial` semantics; secp `TransferOutput`s only (Go's own TODO). Remaining seam: VM asset aliaser (`"AVAX"` as `assetID`) |
+| `getAllBalances` | LIVE: same machinery; reply sorted by asset id (Go set order is random); `PrimaryAliasOrDefault` is always the CB58 id (no asset aliaser) |
+| `getTxFee` | LIVE: static `{txFee, createAssetTxFee}` from the VM `Config` (wired via `Service::with_fees` in `create_handlers`) |
 
-Registered-but-stubbed keeps the wire surface honest: the method exists (Go
-clients get a `-32000` body naming the deferral) rather than `-32601`.
-
-### Missing (1) + out-of-scope extensions
+### Out-of-scope extensions
 
 | Method / mount | Blocking seam |
 |---|---|
-| `getTxFee` | VM fee-config exposure to the service (`vm.txFee`/`createAssetTxFee`; Go-deprecated method) |
 | `"/wallet"` extension (`wallet.issueTx` — the only exported method at the Go oracle) | out of scope: keystore / key-management boundary of the Rust port |
 
 Recorded transport deferral: Go wraps each handler with the `vm.metrics`

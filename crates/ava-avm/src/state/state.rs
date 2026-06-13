@@ -31,12 +31,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ava_database::{
-    Batch, BatchOps, Database, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb, VersionDb,
+    Batch, BatchOps, Database, Iteratee, Iterator as DbIterator, KeyValueDeleter, KeyValueReader,
+    KeyValueWriter, PrefixDb, VersionDb,
 };
 use ava_types::id::Id;
+use ava_types::short_id::ShortId;
 
 use crate::error::{Error, Result};
 use crate::state::chain::{Chain, ReadOnlyChain, UtxoBytes};
+use crate::txs::executor::semantic::Utxo;
 
 /// `utxoPrefix` — the UTXO sub-store namespace.
 const UTXO_PREFIX: &[u8] = b"utxo";
@@ -48,6 +51,20 @@ const BLOCK_ID_PREFIX: &[u8] = b"blockID";
 const BLOCK_PREFIX: &[u8] = b"block";
 /// `singletonPrefix` — the singleton store namespace.
 const SINGLETON_PREFIX: &[u8] = b"singleton";
+/// `indexPrefix` — the address → UTXO index namespace (Go
+/// `vms/components/avax/utxo_state.go` `indexPrefix`). Keys are the flat
+/// `addr(20) ++ utxoID(32)` concatenation (Go nests a per-address `prefixdb` +
+/// `linkeddb`; the flat sorted layout is the documented as-built deviation —
+/// node-local, never on the wire, sorted-by-UTXO-ID pagination).
+const INDEX_PREFIX: &[u8] = b"index";
+
+/// The flat `addr(20) ++ utxoID(32)` index key.
+fn index_key(addr: &ShortId, utxo_id: Id) -> Vec<u8> {
+    let mut key = Vec::with_capacity(52);
+    key.extend_from_slice(addr.as_bytes());
+    key.extend_from_slice(utxo_id.as_bytes());
+    key
+}
 
 /// `isInitializedKey` — singleton key for the initialized marker.
 const IS_INITIALIZED_KEY: &[u8] = &[0x00];
@@ -72,6 +89,7 @@ pub struct State<D: Database> {
     block_id_db: PrefixDb<VersionDb<D>>,
     block_db: PrefixDb<VersionDb<D>>,
     singleton_db: PrefixDb<VersionDb<D>>,
+    index_db: PrefixDb<VersionDb<D>>,
 
     // ----- scalar singletons (in-memory, written through to `singleton_db`) -----
     last_accepted: Id,
@@ -96,6 +114,7 @@ impl<D: Database> State<D> {
             block_id_db: PrefixDb::new_arc(BLOCK_ID_PREFIX, Arc::clone(&db)),
             block_db: PrefixDb::new_arc(BLOCK_PREFIX, Arc::clone(&db)),
             singleton_db: PrefixDb::new_arc(SINGLETON_PREFIX, Arc::clone(&db)),
+            index_db: PrefixDb::new_arc(INDEX_PREFIX, Arc::clone(&db)),
             db,
             last_accepted: Id::EMPTY,
             timestamp: UNIX_EPOCH,
@@ -196,6 +215,7 @@ impl<D: Database> State<D> {
             block_id_db: PrefixDb::new_arc(BLOCK_ID_PREFIX, Arc::clone(&db)),
             block_db: PrefixDb::new_arc(BLOCK_PREFIX, Arc::clone(&db)),
             singleton_db: PrefixDb::new_arc(SINGLETON_PREFIX, Arc::clone(&db)),
+            index_db: PrefixDb::new_arc(INDEX_PREFIX, Arc::clone(&db)),
             db,
             last_accepted: self.last_accepted,
             timestamp: self.timestamp,
@@ -206,6 +226,36 @@ impl<D: Database> State<D> {
 impl<D: Database> ReadOnlyChain for State<D> {
     fn get_utxo(&self, utxo_id: Id) -> Result<UtxoBytes> {
         Ok(self.utxo_db.get(utxo_id.as_bytes())?)
+    }
+
+    /// `avax.utxoState.UTXOIDs` — paginated ids of UTXOs referencing `addr`,
+    /// in sorted byte order (see [`ReadOnlyChain::utxo_ids`] for the as-built
+    /// ordering note vs Go's insertion-ordered `linkeddb`).
+    fn utxo_ids(&self, addr: &ShortId, previous: Id, limit: usize) -> Result<Vec<Id>> {
+        // Go: `iter := indexList.NewIteratorWithStart(start[:])` then skips the
+        // `start` key itself — start at `addr ++ previous` (inclusive), skip
+        // the exact `previous` id, collect at most `limit`.
+        let start = index_key(addr, previous);
+        let mut iter = self
+            .index_db
+            .new_iterator_with_start_and_prefix(&start, addr.as_bytes());
+        let mut utxo_ids = Vec::new();
+        while utxo_ids.len() < limit && iter.next() {
+            let Some(key) = iter.key() else { break };
+            // Strip the 20-byte address from the flat `addr ++ utxoID` key.
+            let Some(id_bytes) = key.get(ShortId::EMPTY.as_bytes().len()..) else {
+                continue;
+            };
+            let Ok(utxo_id) = Id::from_slice(id_bytes) else {
+                continue;
+            };
+            if utxo_id == previous {
+                continue;
+            }
+            utxo_ids.push(utxo_id);
+        }
+        iter.error()?;
+        Ok(utxo_ids)
     }
 
     fn get_tx(&self, tx_id: Id) -> Result<Vec<u8>> {
@@ -235,11 +285,31 @@ impl<D: Database> Chain for State<D> {
         // A versiondb put never fails observably (it buffers into the overlay);
         // swallow the (impossible-unless-closed) error to match Go's `AddUTXO`,
         // which records into an in-memory map.
+        //
+        // Address index (Go `utxoState.PutUTXO`): parse the opaque bytes back
+        // into the typed `avax.UTXO` and index every owning address. Bytes that
+        // do not parse (opaque test fixtures / non-`Addressable` payloads — Go's
+        // `Addressable` downcast failure) are stored but not indexed.
         let _ = self.utxo_db.put(id.as_bytes(), &utxo);
+        if let Ok(parsed) = Utxo::unmarshal(&utxo) {
+            for addr in parsed.out.addresses() {
+                let _ = self.index_db.put(&index_key(addr, id), &[]);
+            }
+        }
     }
 
     fn delete_utxo(&mut self, id: Id) {
+        // Go `utxoState.DeleteUTXO` fetches the UTXO first (a no-op when
+        // absent) so the address index rows can be removed alongside.
+        let existing = self.utxo_db.get(id.as_bytes()).ok();
         let _ = self.utxo_db.delete(id.as_bytes());
+        if let Some(bytes) = existing
+            && let Ok(parsed) = Utxo::unmarshal(&bytes)
+        {
+            for addr in parsed.out.addresses() {
+                let _ = self.index_db.delete(&index_key(addr, id));
+            }
+        }
     }
 
     fn add_tx(&mut self, tx_id: Id, bytes: Vec<u8>) {

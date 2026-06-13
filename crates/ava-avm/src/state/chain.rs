@@ -22,8 +22,9 @@
 use std::time::SystemTime;
 
 use ava_types::id::Id;
+use ava_types::short_id::ShortId;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// The opaque codec bytes of an `avax.UTXO` (the protocol-relevant value layout).
 ///
@@ -63,6 +64,30 @@ pub trait ReadOnlyChain: Send + Sync {
 
     /// `GetTimestamp` — the current chain time.
     fn get_timestamp(&self) -> SystemTime;
+
+    /// `avax.UTXOReader.UTXOIDs` — the ids of UTXOs referencing `addr`,
+    /// starting strictly after `previous` (pass [`Id::EMPTY`] to start at the
+    /// beginning), at most `limit` ids (M8.23b address → UTXO index).
+    ///
+    /// Ordering note (as-built): ids return in **sorted byte order** (the
+    /// flat `addr ++ utxoID` index key layout). Go's `utxoState` keeps a
+    /// per-address `linkeddb` whose iteration order is insertion-based; the
+    /// ordering is node-local (never on the wire), and the sorted order keeps
+    /// pagination deterministic (00 §6.1).
+    ///
+    /// Only the persisted base [`State`](super::state::State) maintains the
+    /// index (Go: `avax.UTXOReader` is implemented by `avax.utxoState`; a
+    /// `Diff` has no `UTXOIDs`), so the default is an error.
+    ///
+    /// # Errors
+    /// Returns an error if this state view carries no address index or the
+    /// read fails.
+    fn utxo_ids(&self, addr: &ShortId, previous: Id, limit: usize) -> Result<Vec<Id>> {
+        let _ = (addr, previous, limit);
+        Err(Error::Service(
+            "address→UTXO index unavailable on this state view".to_owned(),
+        ))
+    }
 }
 
 /// `state.Chain` — the read+write surface over X-Chain state, shared by the
