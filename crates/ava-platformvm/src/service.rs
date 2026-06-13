@@ -39,7 +39,7 @@
 //! `BTreeMap<_, _>` snapshots and emit results sorted by validation id / node id
 //! so the JSON ordering is canonical and reproducible.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -51,16 +51,36 @@ use ava_database::Database;
 use ava_types::constants::get_hrp;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_types::short_id::ShortId;
+use ava_utils::sampler::new_deterministic_weighted_without_replacement;
+use ava_utils::sampler::weighted_without_replacement::WeightedWithoutReplacement;
 use ava_validators::state::ValidatorState;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{Error, Result};
 use crate::jsonrpc::{RpcError, ServiceRegistry};
-use crate::state::chain::Chain;
+use crate::state::chain::{Chain, UtxoBytes};
 use crate::state::l1_validator::L1Validator;
+use crate::state::staker::Staker;
 use crate::state::state::State;
 use crate::status::Status;
-use crate::txs::fee::gas::GasState;
+use crate::txs::Tx;
+use crate::txs::components::Output;
+use crate::txs::executor::StakingConfig;
+use crate::txs::fee::dynamic_calculator::{
+    K as DYNAMIC_FEE_K, MAX_CAPACITY, MAX_PER_SECOND, MIN_PRICE as DYNAMIC_FEE_MIN_PRICE,
+    TARGET_PER_SECOND, WEIGHTS,
+};
+use crate::txs::fee::gas::{GasState, calculate_price};
+use crate::utxo::Utxo;
+use crate::validators::fee as validator_fee;
+
+/// `maxGetUTXOsAddrs` — `getUTXOs` address-count cap (`service.go:51`).
+const MAX_GET_UTXOS_ADDRS: usize = 1024;
+/// `maxGetStakeAddrs` — `getStake` address-count cap (`service.go:54`).
+const MAX_GET_STAKE_ADDRS: usize = 256;
+/// `maxPageSize` — `getUTXOs` page-size cap (`service.go:57`).
+const MAX_PAGE_SIZE: usize = 1024;
 
 /// avalanchego `utils/json` numeric encodings: integers as quoted decimal
 /// strings (`json.Uint64` ⇒ `"1234"`).
@@ -105,6 +125,48 @@ pub mod avajson {
             Some(s) => s.parse::<u64>().map(Some).map_err(serde::de::Error::custom),
             None => Ok(None),
         }
+    }
+
+    /// Serialize a `u32` as a quoted decimal string (`json.Uint32`).
+    ///
+    /// # Errors
+    /// Propagates the serializer's error.
+    pub fn serialize_u32<S: Serializer>(v: &u32, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&v.to_string())
+    }
+
+    /// Deserialize from either a quoted decimal string or a bare JSON number —
+    /// the two forms `utils/json` integers accept on the wire.
+    ///
+    /// # Errors
+    /// Returns a deserialization error on any other JSON shape.
+    pub fn deserialize_lenient_u64<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        match serde_json::Value::deserialize(d)? {
+            serde_json::Value::Number(n) => n
+                .as_u64()
+                .ok_or_else(|| serde::de::Error::custom("integer out of range")),
+            serde_json::Value::String(s) => s.parse::<u64>().map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom(
+                "expected a number or quoted decimal string",
+            )),
+        }
+    }
+
+    /// Serialize a `BTreeMap<Id, u64>` as `{ assetID: "amount" }` (Go
+    /// `map[ids.ID]avajson.Uint64`, deterministic key order via the BTreeMap).
+    ///
+    /// # Errors
+    /// Propagates the serializer's error.
+    pub fn serialize_balance_map<S: Serializer>(
+        m: &std::collections::BTreeMap<ava_types::id::Id, u64>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(Some(m.len()))?;
+        for (k, v) in m {
+            map.serialize_entry(k, &v.to_string())?;
+        }
+        map.end()
     }
 }
 
@@ -171,45 +233,30 @@ pub struct GetTimestampReply {
     pub timestamp: String,
 }
 
-/// `platformvm.GetFeeStateReply`.
+/// `platformvm.GetFeeStateReply` — embeds `gas.State` (`capacity`/`excess`)
+/// plus `price`/`timestamp`. Go's `gas.Gas`/`gas.Price` are bare `uint64`s
+/// with **no** custom JSON marshaler, so these are plain JSON numbers (NOT the
+/// quoted `json.Uint64` convention).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetFeeStateReply {
     /// Remaining gas capacity.
-    #[serde(
-        serialize_with = "avajson::serialize_u64",
-        deserialize_with = "avajson::deserialize_u64"
-    )]
     pub capacity: u64,
     /// Accumulated gas excess (the price input).
-    #[serde(
-        serialize_with = "avajson::serialize_u64",
-        deserialize_with = "avajson::deserialize_u64"
-    )]
     pub excess: u64,
-    /// The current dynamic gas price.
-    #[serde(
-        serialize_with = "avajson::serialize_u64",
-        deserialize_with = "avajson::deserialize_u64"
-    )]
+    /// The current dynamic gas price
+    /// (`gas.CalculatePrice(MinPrice, excess, K)`).
     pub price: u64,
     /// The chain timestamp (RFC3339).
     pub timestamp: String,
 }
 
-/// `platformvm.GetValidatorFeeStateReply`.
+/// `platformvm.GetValidatorFeeStateReply` (plain JSON numbers, same rationale
+/// as [`GetFeeStateReply`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetValidatorFeeStateReply {
     /// The L1-validator continuous-fee excess.
-    #[serde(
-        serialize_with = "avajson::serialize_u64",
-        deserialize_with = "avajson::deserialize_u64"
-    )]
     pub excess: u64,
     /// The current validator fee price.
-    #[serde(
-        serialize_with = "avajson::serialize_u64",
-        deserialize_with = "avajson::deserialize_u64"
-    )]
     pub price: u64,
     /// The chain timestamp (RFC3339).
     pub timestamp: String,
@@ -390,6 +437,458 @@ pub struct GetTxStatusResponse {
 }
 
 // ---------------------------------------------------------------------------
+// M8.23a typed bodies — the 15 previously-missing platform.* methods
+// ---------------------------------------------------------------------------
+
+/// `platformvm.GetBalanceRequest` — `{"addresses"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetBalanceRequest {
+    /// The bech32 P-Chain addresses to sum over.
+    pub addresses: Vec<String>,
+}
+
+/// `avax.UTXOID` JSON shape — `{"txID", "outputIndex"}` (the `Symbol` field is
+/// `json:"-"`; `OutputIndex` is a bare `uint32` ⇒ a JSON number).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiUtxoId {
+    /// The producing tx.
+    #[serde(rename = "txID")]
+    pub tx_id: Id,
+    /// The output index within that tx.
+    #[serde(rename = "outputIndex")]
+    pub output_index: u32,
+}
+
+/// `platformvm.GetBalanceResponse`. The scalar AVAX fields duplicate the maps'
+/// AVAX entries for backwards compatibility (Go comment, `service.go:123`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetBalanceResponse {
+    /// Total AVAX balance, in nAVAX.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub balance: u64,
+    /// Unlocked AVAX.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub unlocked: u64,
+    /// Locked-stakeable AVAX.
+    #[serde(
+        rename = "lockedStakeable",
+        serialize_with = "avajson::serialize_u64"
+    )]
+    pub locked_stakeable: u64,
+    /// Locked, not-stakeable AVAX.
+    #[serde(
+        rename = "lockedNotStakeable",
+        serialize_with = "avajson::serialize_u64"
+    )]
+    pub locked_not_stakeable: u64,
+    /// Per-asset totals.
+    #[serde(serialize_with = "avajson::serialize_balance_map")]
+    pub balances: BTreeMap<Id, u64>,
+    /// Per-asset unlocked amounts.
+    #[serde(serialize_with = "avajson::serialize_balance_map")]
+    pub unlockeds: BTreeMap<Id, u64>,
+    /// Per-asset locked-stakeable amounts.
+    #[serde(
+        rename = "lockedStakeables",
+        serialize_with = "avajson::serialize_balance_map"
+    )]
+    pub locked_stakeables: BTreeMap<Id, u64>,
+    /// Per-asset locked-not-stakeable amounts.
+    #[serde(
+        rename = "lockedNotStakeables",
+        serialize_with = "avajson::serialize_balance_map"
+    )]
+    pub locked_not_stakeables: BTreeMap<Id, u64>,
+    /// The contributing UTXO ids (`null` when none, matching Go's nil slice).
+    #[serde(rename = "utxoIDs")]
+    pub utxo_ids: Option<Vec<ApiUtxoId>>,
+}
+
+/// `platformvm.Index` — a `getUTXOs` pagination cursor (`{"address","utxo"}`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UtxoIndex {
+    /// The address cursor (bech32).
+    #[serde(default)]
+    pub address: String,
+    /// The UTXO-id cursor (CB58).
+    #[serde(default)]
+    pub utxo: String,
+}
+
+/// `api.GetUTXOsArgs`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetUTXOsArgs {
+    /// The addresses whose UTXOs are fetched.
+    pub addresses: Vec<String>,
+    /// The chain to fetch from (`""`/this chain = local; otherwise atomic
+    /// shared-memory UTXOs — a recorded deferral here).
+    #[serde(rename = "sourceChain")]
+    pub source_chain: String,
+    /// The pagination start cursor (exclusive).
+    #[serde(rename = "startIndex")]
+    pub start_index: UtxoIndex,
+    /// The page-size cap (`json.Uint64`; `0`/`>1024` clamps to 1024).
+    #[serde(deserialize_with = "avajson::deserialize_lenient_u64")]
+    pub limit: u64,
+    /// The reply encoding (`hex` default / `hexnc`).
+    pub encoding: String,
+}
+
+/// `api.GetUTXOsReply`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetUTXOsReply {
+    /// The number of UTXOs returned.
+    #[serde(rename = "numFetched", serialize_with = "avajson::serialize_u64")]
+    pub num_fetched: u64,
+    /// The encoded UTXOs.
+    pub utxos: Vec<String>,
+    /// The end cursor (pass as the next `startIndex`).
+    #[serde(rename = "endIndex")]
+    pub end_index: UtxoIndex,
+    /// The encoding used.
+    pub encoding: String,
+}
+
+/// `platformvm.GetSubnetArgs` — `{"subnetID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetSubnetArgs {
+    /// The queried subnet.
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+/// `platformvm.GetSubnetResponse`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetSubnetResponse {
+    /// `false` for elastic subnets and L1-converted subnets.
+    #[serde(rename = "isPermissioned")]
+    pub is_permissioned: bool,
+    /// The owner's control-key addresses (bech32).
+    #[serde(rename = "controlKeys")]
+    pub control_keys: Vec<String>,
+    /// The owner threshold.
+    #[serde(serialize_with = "avajson::serialize_u32")]
+    pub threshold: u32,
+    /// The owner locktime.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub locktime: u64,
+    /// The elastic-subnet transform tx (empty id when permissioned).
+    #[serde(rename = "subnetTransformationTxID")]
+    pub subnet_transformation_tx_id: Id,
+    /// The L1-conversion id (empty id when unconverted).
+    #[serde(rename = "conversionID")]
+    pub conversion_id: Id,
+    /// The L1 manager chain (empty id when unconverted).
+    #[serde(rename = "managerChainID")]
+    pub manager_chain_id: Id,
+    /// The L1 manager address (`types.JSONByteSlice`: `null` or `0x…`).
+    #[serde(rename = "managerAddress")]
+    pub manager_address: Option<String>,
+}
+
+/// `platformvm.APISubnet`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ApiSubnet {
+    /// The subnet id.
+    pub id: Id,
+    /// The owner's control-key addresses (bech32).
+    #[serde(rename = "controlKeys")]
+    pub control_keys: Vec<String>,
+    /// The owner threshold.
+    #[serde(serialize_with = "avajson::serialize_u32")]
+    pub threshold: u32,
+}
+
+/// `platformvm.GetSubnetsArgs` — `{"ids"}` (empty fetches all).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetSubnetsArgs {
+    /// The subnets to describe; empty lists every subnet.
+    pub ids: Vec<Id>,
+}
+
+/// `platformvm.GetSubnetsResponse`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetSubnetsResponse {
+    /// The matching subnets (the primary network included).
+    pub subnets: Vec<ApiSubnet>,
+}
+
+/// `platformvm.SampleValidatorsArgs` — `{"size", "subnetID"}`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct SampleValidatorsArgs {
+    /// The sample size (`json.Uint16`).
+    #[serde(deserialize_with = "avajson::deserialize_lenient_u64")]
+    pub size: u64,
+    /// The sampled subnet (defaults to the primary network).
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+impl Default for SampleValidatorsArgs {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            subnet_id: Id::EMPTY,
+        }
+    }
+}
+
+/// `status.BlockchainStatus` — JSON string statuses
+/// (`vms/platformvm/status/blockchain_status.go`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockchainStatus {
+    /// The chain is not known to exist.
+    #[default]
+    #[serde(rename = "Unknown")]
+    UnknownChain,
+    /// The chain's create-chain tx is accepted.
+    Created,
+    /// The create-chain tx is in the preferred (not yet accepted) chain.
+    Preferred,
+    /// This node validates the chain.
+    Validating,
+    /// This node is syncing the chain.
+    Syncing,
+}
+
+/// `platformvm.GetBlockchainStatusArgs` — `{"blockchainID"}` (a string: Go
+/// accepts an alias or an id; only ids resolve here — no chain registry seam).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetBlockchainStatusArgs {
+    /// The queried blockchain id.
+    #[serde(rename = "blockchainID")]
+    pub blockchain_id: String,
+}
+
+/// `platformvm.GetBlockchainStatusReply`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetBlockchainStatusReply {
+    /// The blockchain's status.
+    pub status: BlockchainStatus,
+}
+
+/// `platformvm.APIBlockchain`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ApiBlockchain {
+    /// The blockchain id.
+    pub id: Id,
+    /// The (non-unique) human-readable chain name.
+    pub name: String,
+    /// The validating subnet.
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+    /// The VM the chain runs.
+    #[serde(rename = "vmID")]
+    pub vm_id: Id,
+}
+
+/// `platformvm.GetBlockchainsResponse`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetBlockchainsResponse {
+    /// Every blockchain that exists (custom subnets first, primary last).
+    pub blockchains: Vec<ApiBlockchain>,
+}
+
+/// `api.FormattedTx` — the `issueTx` payload (`{"tx", "encoding"}`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct FormattedTx {
+    /// The encoded signed-tx bytes.
+    pub tx: String,
+    /// The payload encoding (`hex` default / `hexnc`).
+    pub encoding: String,
+}
+
+/// `api.JSONTxID` — `{"txID"}`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct JsonTxId {
+    /// The issued tx id.
+    #[serde(rename = "txID")]
+    pub tx_id: Id,
+}
+
+/// `platformvm.GetStakeArgs` — `api.JSONAddresses` + `validatorsOnly` +
+/// `encoding`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetStakeArgs {
+    /// The addresses whose stake is summed.
+    pub addresses: Vec<String>,
+    /// Restrict to validators (skip delegators).
+    #[serde(rename = "validatorsOnly")]
+    pub validators_only: bool,
+    /// The staked-output encoding (`hex` default / `hexnc`).
+    pub encoding: String,
+}
+
+/// `platformvm.GetStakeReply`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetStakeReply {
+    /// Total AVAX staked, in nAVAX.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub staked: u64,
+    /// Per-asset staked amounts.
+    #[serde(serialize_with = "avajson::serialize_balance_map")]
+    pub stakeds: BTreeMap<Id, u64>,
+    /// The staked outputs (`avax.TransferableOutput` codec bytes, encoded).
+    #[serde(rename = "stakedOutputs")]
+    pub outputs: Vec<String>,
+    /// The encoding used.
+    pub encoding: String,
+}
+
+/// `platformvm.GetMinStakeArgs` — `{"subnetID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetMinStakeArgs {
+    /// The queried subnet (primary network default).
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+/// `platformvm.GetMinStakeReply`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetMinStakeReply {
+    /// The minimum validator bond.
+    #[serde(
+        rename = "minValidatorStake",
+        serialize_with = "avajson::serialize_u64"
+    )]
+    pub min_validator_stake: u64,
+    /// The minimum delegation.
+    #[serde(
+        rename = "minDelegatorStake",
+        serialize_with = "avajson::serialize_u64"
+    )]
+    pub min_delegator_stake: u64,
+}
+
+/// `platformvm.GetTotalStakeArgs` — `{"subnetID"}`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct GetTotalStakeArgs {
+    /// The queried subnet (primary network default).
+    #[serde(rename = "subnetID")]
+    pub subnet_id: Id,
+}
+
+/// `platformvm.GetTotalStakeReply` — `stake` is the deprecated alias of
+/// `weight`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetTotalStakeReply {
+    /// Deprecated: equals `weight`.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub stake: u64,
+    /// The subnet's total validator weight.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub weight: u64,
+}
+
+/// `platformvm.GetRewardUTXOsReply`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetRewardUTXOsReply {
+    /// The number of UTXOs returned.
+    #[serde(rename = "numFetched", serialize_with = "avajson::serialize_u64")]
+    pub num_fetched: u64,
+    /// The encoded reward UTXOs.
+    pub utxos: Vec<String>,
+    /// The encoding used.
+    pub encoding: String,
+}
+
+/// `platformvm.GetAllValidatorsAtArgs` — `{"height"}` (`platformapi.Height`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct GetAllValidatorsAtArgs {
+    /// The queried height (`json.Uint64` or `"proposed"`).
+    #[serde(deserialize_with = "de_height")]
+    pub height: u64,
+}
+
+impl Default for GetAllValidatorsAtArgs {
+    fn default() -> Self {
+        Self { height: 0 }
+    }
+}
+
+/// `validators.Warp` JSON shape (`{"publicKey","weight","nodeIDs"}`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct JsonWarpValidator {
+    /// The compressed BLS key (`formatting.HexNC`).
+    #[serde(rename = "publicKey")]
+    pub public_key: String,
+    /// The summed weight of the nodes sharing this key.
+    #[serde(serialize_with = "avajson::serialize_u64")]
+    pub weight: u64,
+    /// The node ids sharing this key.
+    #[serde(rename = "nodeIDs")]
+    pub node_ids: Vec<NodeId>,
+}
+
+/// `validators.WarpSet` JSON shape (`{"validators","totalWeight"}`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct JsonWarpSet {
+    /// The keyed validators, sorted by uncompressed public-key bytes.
+    pub validators: Vec<JsonWarpValidator>,
+    /// The total subnet weight (keyless validators included).
+    #[serde(rename = "totalWeight", serialize_with = "avajson::serialize_u64")]
+    pub total_weight: u64,
+}
+
+/// `platformvm.GetAllValidatorsAtReply` — `{"validatorSets": {subnetID: …}}`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetAllValidatorsAtReply {
+    /// The per-subnet canonical validator sets at the queried height.
+    #[serde(rename = "validatorSets")]
+    pub validator_sets: BTreeMap<Id, JsonWarpSet>,
+}
+
+/// `gas.Config` — the `getFeeConfig` reply. Go's `gas.Gas`/`gas.Price` are
+/// bare `uint64`s with **no** custom JSON marshaler ⇒ plain JSON numbers.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetFeeConfigReply {
+    /// The per-dimension complexity → gas weights.
+    pub weights: [u64; 4],
+    /// Maximum storable gas.
+    #[serde(rename = "maxCapacity")]
+    pub max_capacity: u64,
+    /// Gas refill rate per second.
+    #[serde(rename = "maxPerSecond")]
+    pub max_per_second: u64,
+    /// Target gas use per second.
+    #[serde(rename = "targetPerSecond")]
+    pub target_per_second: u64,
+    /// Minimum gas price.
+    #[serde(rename = "minPrice")]
+    pub min_price: u64,
+    /// The exponential-price excess conversion constant.
+    #[serde(rename = "excessConversionConstant")]
+    pub excess_conversion_constant: u64,
+}
+
+/// `fee.Config` — the `getValidatorFeeConfig` reply (plain JSON numbers, same
+/// rationale as [`GetFeeConfigReply`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct GetValidatorFeeConfigReply {
+    /// Maximum active L1 validators.
+    pub capacity: u64,
+    /// Target active L1 validators.
+    pub target: u64,
+    /// Minimum continuous-fee price (nAVAX/s).
+    #[serde(rename = "minPrice")]
+    pub min_price: u64,
+    /// The exponential-price excess conversion constant.
+    #[serde(rename = "excessConversionConstant")]
+    pub excess_conversion_constant: u64,
+}
+
+// ---------------------------------------------------------------------------
 // The state seam + the read service
 // ---------------------------------------------------------------------------
 
@@ -428,6 +927,34 @@ pub trait ServiceState: Send + Sync {
     fn get_block(&self, id: Id) -> Result<Vec<u8>>;
     /// `State::get_block_id_at_height` — the accepted block id at `height`.
     fn get_block_id_at_height(&self, height: u64) -> Option<Id>;
+    /// `avax.UTXOReader.UTXOIDs` — up to `limit` UTXO ids referencing `addr`,
+    /// strictly greater than `previous`, ascending (`State::utxo_ids`).
+    fn utxo_ids(&self, addr: &ShortId, previous: Id, limit: usize) -> Vec<Id>;
+    /// [`Chain::get_utxo`] — the stored canonical bytes of the UTXO `id`.
+    ///
+    /// # Errors
+    /// Propagates the state read error (absent UTXO included).
+    fn get_utxo(&self, id: Id) -> Result<UtxoBytes>;
+    /// [`Chain::subnets`] — the created subnet ids (`state.GetSubnetIDs`).
+    fn subnets(&self) -> Vec<Id>;
+    /// [`Chain::get_subnet_owner`] — the codec bytes of `subnet`'s owner.
+    ///
+    /// # Errors
+    /// Propagates the state read error (absent owner included).
+    fn get_subnet_owner(&self, subnet: Id) -> Result<Vec<u8>>;
+    /// [`Chain::get_subnet_manager`] — the L1-conversion (manager) bytes.
+    ///
+    /// # Errors
+    /// Propagates the state read error (absent conversion included).
+    fn get_subnet_manager(&self, subnet: Id) -> Result<Vec<u8>>;
+    /// [`Chain::get_reward_utxos`] — the reward UTXOs of staker tx `tx_id`.
+    fn get_reward_utxos(&self, tx_id: Id) -> Vec<UtxoBytes>;
+    /// [`Chain::current_stakers`] — the current staker set
+    /// (`state.GetCurrentStakerIterator`).
+    fn current_stakers(&self) -> Vec<Staker>;
+    /// [`Chain::pending_stakers`] — the pending staker set
+    /// (`state.GetPendingStakerIterator`).
+    fn pending_stakers(&self) -> Vec<Staker>;
 }
 
 impl<D: Database + 'static> ServiceState for State<D> {
@@ -457,6 +984,30 @@ impl<D: Database + 'static> ServiceState for State<D> {
     }
     fn get_block_id_at_height(&self, height: u64) -> Option<Id> {
         State::get_block_id_at_height(self, height)
+    }
+    fn utxo_ids(&self, addr: &ShortId, previous: Id, limit: usize) -> Vec<Id> {
+        State::utxo_ids(self, addr, previous, limit)
+    }
+    fn get_utxo(&self, id: Id) -> Result<UtxoBytes> {
+        Chain::get_utxo(self, id)
+    }
+    fn subnets(&self) -> Vec<Id> {
+        Chain::subnets(self)
+    }
+    fn get_subnet_owner(&self, subnet: Id) -> Result<Vec<u8>> {
+        Chain::get_subnet_owner(self, subnet)
+    }
+    fn get_subnet_manager(&self, subnet: Id) -> Result<Vec<u8>> {
+        Chain::get_subnet_manager(self, subnet)
+    }
+    fn get_reward_utxos(&self, tx_id: Id) -> Vec<UtxoBytes> {
+        Chain::get_reward_utxos(self, tx_id)
+    }
+    fn current_stakers(&self) -> Vec<Staker> {
+        Chain::current_stakers(self)
+    }
+    fn pending_stakers(&self) -> Vec<Staker> {
+        Chain::pending_stakers(self)
     }
 }
 
@@ -636,25 +1187,39 @@ impl Service {
         Ok(out)
     }
 
-    /// `getFeeState` — the dynamic gas fee state.
+    /// `getFeeState` — the dynamic gas fee state, with the live exponential
+    /// price `gas.CalculatePrice(MinPrice, excess, ExcessConversionConstant)`
+    /// (the dynamic-fee config is identical on every network, specs 21 §1).
     pub fn get_fee_state(&self) -> GetFeeStateReply {
         let s = self.state.fee_state();
         GetFeeStateReply {
             capacity: s.capacity,
             excess: s.excess,
-            // Price computation needs the chain's dynamic-fee config; the
-            // read-only seam exposes the excess input. Reported as the excess
-            // sentinel until the fee-config seam lands (deferred, M4.28).
-            price: 0,
+            price: calculate_price(DYNAMIC_FEE_MIN_PRICE, s.excess, DYNAMIC_FEE_K),
             timestamp: format_timestamp(self.state.timestamp()),
         }
     }
 
-    /// `getValidatorFeeState` — the L1-validator continuous-fee state.
+    /// The network's `fee.Config.ExcessConversionConstant` (mainnet "double
+    /// every day" / Fuji "double every hour"; other network ids fall back to
+    /// the mainnet constant — the per-network genesis-config plumb is M8's
+    /// ava-genesis).
+    fn validator_fee_k(&self) -> u64 {
+        // `constants.FujiID == 5`.
+        if self.network_id == 5 {
+            validator_fee::K_FUJI
+        } else {
+            validator_fee::K_MAINNET
+        }
+    }
+
+    /// `getValidatorFeeState` — the L1-validator continuous-fee state, with
+    /// the live price `gas.CalculatePrice(MinPrice, excess, K)`.
     pub fn get_validator_fee_state(&self) -> GetValidatorFeeStateReply {
+        let excess = self.state.l1_validator_excess();
         GetValidatorFeeStateReply {
-            excess: self.state.l1_validator_excess(),
-            price: 0,
+            excess,
+            price: calculate_price(validator_fee::MIN_PRICE, excess, self.validator_fee_k()),
             timestamp: format_timestamp(self.state.timestamp()),
         }
     }
@@ -669,11 +1234,22 @@ impl Service {
         Ok(ValidatedByResponse { subnet_id })
     }
 
-    /// `validates` — the blockchains validated by `subnet`.
-    pub fn validates(&self, subnet: Id) -> ValidatesResponse {
-        ValidatesResponse {
-            blockchain_ids: self.state.chains(subnet),
+    /// `validates` — the blockchains validated by `subnet`. A non-primary
+    /// `subnet` must resolve to an accepted `CreateSubnetTx`
+    /// (`service.go:1315`).
+    pub fn validates(&self, subnet: Id) -> Result<ValidatesResponse> {
+        if subnet != Id::EMPTY {
+            let bytes = self.state.get_tx(subnet).map_err(|e| {
+                Error::Service(format!("problem retrieving subnet \"{subnet}\": {e}"))
+            })?;
+            let tx = Tx::parse(crate::txs::codec::Codec(), &bytes).map_err(Error::Codec)?;
+            if !matches!(tx.unsigned, crate::txs::UnsignedTx::CreateSubnet(_)) {
+                return Err(Error::Service(format!("\"{subnet}\" is not a subnet")));
+            }
         }
+        Ok(ValidatesResponse {
+            blockchain_ids: self.state.chains(subnet),
+        })
     }
 
     /// `getTxStatus` — the status of `tx`. Read-only sync only checks the
@@ -1058,7 +1634,7 @@ impl RpcService {
         &self,
         args: ValidatesArgs,
     ) -> std::result::Result<ValidatesResponse, RpcError> {
-        Ok(self.service.validates(args.subnet_id))
+        self.service.validates(args.subnet_id).map_err(server_err)
     }
 
     /// `platform.getTxStatus` (Go `Service.GetTxStatus`, `service.go:1500`).

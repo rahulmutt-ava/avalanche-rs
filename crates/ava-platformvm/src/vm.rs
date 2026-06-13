@@ -137,6 +137,35 @@ impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
             .state()
             .get_block_id_at_height(height)
     }
+    fn utxo_ids(
+        &self,
+        addr: &ava_types::short_id::ShortId,
+        previous: Id,
+        limit: usize,
+    ) -> Vec<Id> {
+        crate::state::State::utxo_ids(self.shared.manager.lock().state(), addr, previous, limit)
+    }
+    fn get_utxo(&self, id: Id) -> Result<crate::state::chain::UtxoBytes> {
+        Chain::get_utxo(self.shared.manager.lock().state(), id)
+    }
+    fn subnets(&self) -> Vec<Id> {
+        Chain::subnets(self.shared.manager.lock().state())
+    }
+    fn get_subnet_owner(&self, subnet: Id) -> Result<Vec<u8>> {
+        Chain::get_subnet_owner(self.shared.manager.lock().state(), subnet)
+    }
+    fn get_subnet_manager(&self, subnet: Id) -> Result<Vec<u8>> {
+        Chain::get_subnet_manager(self.shared.manager.lock().state(), subnet)
+    }
+    fn get_reward_utxos(&self, tx_id: Id) -> Vec<crate::state::chain::UtxoBytes> {
+        Chain::get_reward_utxos(self.shared.manager.lock().state(), tx_id)
+    }
+    fn current_stakers(&self) -> Vec<crate::state::staker::Staker> {
+        Chain::current_stakers(self.shared.manager.lock().state())
+    }
+    fn pending_stakers(&self) -> Vec<crate::state::staker::Staker> {
+        Chain::pending_stakers(self.shared.manager.lock().state())
+    }
 }
 
 /// `platformvm.VM` — the P-Chain Snowman VM over the [`DynDb`]-adapted engine
