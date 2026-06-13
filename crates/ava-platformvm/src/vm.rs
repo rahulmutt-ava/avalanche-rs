@@ -137,12 +137,7 @@ impl<D: Database + 'static> crate::service::ServiceState for VmServiceState<D> {
             .state()
             .get_block_id_at_height(height)
     }
-    fn utxo_ids(
-        &self,
-        addr: &ava_types::short_id::ShortId,
-        previous: Id,
-        limit: usize,
-    ) -> Vec<Id> {
+    fn utxo_ids(&self, addr: &ava_types::short_id::ShortId, previous: Id, limit: usize) -> Vec<Id> {
         crate::state::State::utxo_ids(self.shared.manager.lock().state(), addr, previous, limit)
     }
     fn get_utxo(&self, id: Id) -> Result<crate::state::chain::UtxoBytes> {
@@ -177,10 +172,12 @@ struct DeferredIssuer;
 
 impl crate::service::TxIssuer for DeferredIssuer {
     fn issue_tx(&self, _tx: crate::txs::Tx) -> std::result::Result<(), String> {
-        Err("RPC issuance not yet wired (deferred: the P-Chain mempool is \
+        Err(
+            "RPC issuance not yet wired (deferred: the P-Chain mempool is \
              un-shared on PlatformVm; shared-mempool + gossip admission is M8 \
              node assembly)"
-            .to_owned())
+                .to_owned(),
+        )
     }
 }
 

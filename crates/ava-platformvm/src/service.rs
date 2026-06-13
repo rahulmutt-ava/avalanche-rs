@@ -48,11 +48,11 @@ use ava_crypto::address;
 use ava_crypto::bls::PublicKey;
 use ava_crypto::hashing::checksum;
 use ava_database::Database;
+use ava_secp256k1fx::OutputOwners;
 use ava_types::constants::get_hrp;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
-use ava_secp256k1fx::OutputOwners;
 use ava_utils::sampler::new_deterministic_weighted_without_replacement;
 use ava_utils::sampler::weighted_without_replacement::WeightedWithoutReplacement;
 use ava_validators::state::ValidatorState;
@@ -214,14 +214,13 @@ fn encode_bytes(bytes: &[u8], encoding: &str) -> Result<(String, String)> {
 /// or an unsupported encoding.
 fn decode_bytes(s: &str, encoding: &str) -> Result<Vec<u8>> {
     let hexpart = s.strip_prefix("0x").unwrap_or(s);
-    let raw =
-        hex::decode(hexpart).map_err(|e| Error::Service(format!("invalid hex: {e}")))?;
+    let raw = hex::decode(hexpart).map_err(|e| Error::Service(format!("invalid hex: {e}")))?;
     match encoding {
         "" | "hex" => {
-            if raw.len() < 4 {
-                return Err(Error::Service("input too short for checksum".to_owned()));
-            }
-            let split = raw.len() - 4;
+            let split = raw
+                .len()
+                .checked_sub(4)
+                .ok_or_else(|| Error::Service("input too short for checksum".to_owned()))?;
             let (payload, cs) = raw.split_at(split);
             if checksum(payload, 4) != cs {
                 return Err(Error::Service("invalid input checksum".to_owned()));
@@ -607,10 +606,7 @@ pub struct GetBalanceResponse {
     #[serde(serialize_with = "avajson::serialize_u64")]
     pub unlocked: u64,
     /// Locked-stakeable AVAX.
-    #[serde(
-        rename = "lockedStakeable",
-        serialize_with = "avajson::serialize_u64"
-    )]
+    #[serde(rename = "lockedStakeable", serialize_with = "avajson::serialize_u64")]
     pub locked_stakeable: u64,
     /// Locked, not-stakeable AVAX.
     #[serde(
@@ -939,18 +935,12 @@ pub struct GetRewardUTXOsReply {
 }
 
 /// `platformvm.GetAllValidatorsAtArgs` — `{"height"}` (`platformapi.Height`).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct GetAllValidatorsAtArgs {
     /// The queried height (`json.Uint64` or `"proposed"`).
     #[serde(deserialize_with = "de_height")]
     pub height: u64,
-}
-
-impl Default for GetAllValidatorsAtArgs {
-    fn default() -> Self {
-        Self { height: 0 }
-    }
 }
 
 /// `validators.Warp` JSON shape (`{"publicKey","weight","nodeIDs"}`).
@@ -1692,7 +1682,7 @@ impl Service {
                 if out.len() >= limit {
                     break;
                 }
-                let remaining = limit - out.len();
+                let remaining = limit.saturating_sub(out.len());
                 let ids = self.state.utxo_ids(addr, previous, remaining);
                 if ids.is_empty() {
                     break;
@@ -1749,7 +1739,8 @@ impl Service {
         // Elastic-subnet transform state is not ported; `isPermissioned`
         // therefore reflects only the L1-conversion slot below.
         if let Ok(bytes) = self.state.get_subnet_manager(subnet) {
-            let conversion = crate::txs::executor::l1_executor::SubnetConversion::unmarshal(&bytes)?;
+            let conversion =
+                crate::txs::executor::l1_executor::SubnetConversion::unmarshal(&bytes)?;
             response.is_permissioned = false;
             response.conversion_id = conversion.conversion_id;
             response.manager_chain_id = conversion.chain_id;
@@ -1869,11 +1860,15 @@ impl Service {
     /// Returns [`Error::Service`] on a missing or unparsable blockchain id.
     pub fn get_blockchain_status(&self, blockchain_id: &str) -> Result<GetBlockchainStatusReply> {
         if blockchain_id.is_empty() {
-            return Err(Error::Service("argument 'blockchainID' not given".to_owned()));
+            return Err(Error::Service(
+                "argument 'blockchainID' not given".to_owned(),
+            ));
         }
-        let id = blockchain_id
-            .parse::<Id>()
-            .map_err(|e| Error::Service(format!("problem parsing blockchainID {blockchain_id:?}: {e}")))?;
+        let id = blockchain_id.parse::<Id>().map_err(|e| {
+            Error::Service(format!(
+                "problem parsing blockchainID {blockchain_id:?}: {e}"
+            ))
+        })?;
 
         if self.node_validates(id) {
             return Ok(GetBlockchainStatusReply {
@@ -1954,9 +1949,7 @@ impl Service {
             let bytes = self.state.get_tx(staker.tx_id)?;
             let tx = Tx::parse(crate::txs::codec::Codec(), &bytes).map_err(Error::Codec)?;
             for out in stake_outs_of(&tx.unsigned) {
-                let owned = output_addresses(&out.out)
-                    .iter()
-                    .any(|a| addrs.contains(a));
+                let owned = output_addresses(&out.out).iter().any(|a| addrs.contains(a));
                 if !owned {
                     continue;
                 }
@@ -2060,11 +2053,7 @@ impl Service {
     ///
     /// # Errors
     /// Returns [`Error::Service`] on a validator-set read failure.
-    pub async fn sample_validators(
-        &self,
-        subnet: Id,
-        size: u16,
-    ) -> Result<SampleValidatorsReply> {
+    pub async fn sample_validators(&self, subnet: Id, size: u16) -> Result<SampleValidatorsReply> {
         let set = self
             .validators
             .get_current_validator_set(subnet)
@@ -2091,10 +2080,14 @@ impl Service {
         // satisfied; with `want <= nodes.len()` it always succeeds.
         let indices = sampler.sample(want).unwrap_or_default();
 
-        let mut sampled: Vec<NodeId> =
-            indices.into_iter().filter_map(|i| nodes.get(i).copied()).collect();
+        let mut sampled: Vec<NodeId> = indices
+            .into_iter()
+            .filter_map(|i| nodes.get(i).copied())
+            .collect();
         sampled.sort();
-        Ok(SampleValidatorsReply { validators: sampled })
+        Ok(SampleValidatorsReply {
+            validators: sampled,
+        })
     }
 
     /// `getTotalStake` — the total validator weight of `subnet`
@@ -2109,7 +2102,9 @@ impl Service {
             .await
             .map_err(|e| Error::Service(format!("couldn't get total weight: {e}")))?
             .0;
-        let weight = set.values().fold(0u64, |acc, v| acc.saturating_add(v.weight));
+        let weight = set
+            .values()
+            .fold(0u64, |acc, v| acc.saturating_add(v.weight));
         Ok(GetTotalStakeReply {
             stake: weight,
             weight,
@@ -2136,7 +2131,9 @@ impl Service {
             .validators
             .get_warp_validator_sets(resolved)
             .await
-            .map_err(|e| Error::Service(format!("failed to get validator sets at {resolved}: {e}")))?;
+            .map_err(|e| {
+                Error::Service(format!("failed to get validator sets at {resolved}: {e}"))
+            })?;
 
         let mut validator_sets = BTreeMap::new();
         for (subnet, warp) in sets {
@@ -2697,10 +2694,7 @@ impl RpcService {
     ///
     /// # Errors
     /// `-32000` on a decode/parse failure or a rejected issuance.
-    pub async fn issue_tx(
-        &self,
-        args: FormattedTx,
-    ) -> std::result::Result<JsonTxId, RpcError> {
+    pub async fn issue_tx(&self, args: FormattedTx) -> std::result::Result<JsonTxId, RpcError> {
         let tx = self.service.parse_issue_tx(&args).map_err(server_err)?;
         let tx_id = tx.id();
         self.issuer
@@ -2730,7 +2724,9 @@ impl RpcService {
         &self,
         args: GetMinStakeArgs,
     ) -> std::result::Result<GetMinStakeReply, RpcError> {
-        self.service.get_min_stake(args.subnet_id).map_err(server_err)
+        self.service
+            .get_min_stake(args.subnet_id)
+            .map_err(server_err)
     }
 
     /// `platform.getTotalStake` (Go `Service.GetTotalStake`,
@@ -2837,6 +2833,7 @@ mod conformance {
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
 
+    use assert_matches::assert_matches;
     use ava_crypto::bls::{PublicKey, SecretKey};
     use ava_database::MemDb;
     use ava_types::id::Id;
@@ -3085,6 +3082,209 @@ mod conformance {
         // validator snapshot); a missing height yields an error, not a panic.
         let err = service.get_block_by_height(99).unwrap_err();
         let _ = err; // shape only: it is the Custom "no block" sentinel path.
+    }
+
+    // -----------------------------------------------------------------------
+    // M8.23a — the newly-bridged method bodies
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn service_get_balance_empty_state() {
+        let (service, ..) = seeded_service();
+        // No UTXOs seeded ⇒ all-zero balances, nil utxoIDs (Go: nil slice).
+        let addr = service.format_address(&[0x33; 20]).expect("fmt");
+        let reply = service
+            .get_balance(&GetBalanceRequest {
+                addresses: vec![addr],
+            })
+            .expect("balance");
+        assert_eq!(reply.balance, 0);
+        assert!(reply.balances.is_empty(), "no per-asset balances");
+        let j = serde_json::to_value(&reply).expect("json");
+        assert_eq!(
+            j["balance"],
+            serde_json::json!("0"),
+            "scalar AVAX as string"
+        );
+        assert!(j["utxoIDs"].is_null(), "nil utxoIDs serialize to null");
+    }
+
+    #[test]
+    fn service_get_balance_rejects_bad_address() {
+        let (service, ..) = seeded_service();
+        let err = service
+            .get_balance(&GetBalanceRequest {
+                addresses: vec!["not-an-address".to_owned()],
+            })
+            .unwrap_err();
+        assert_matches!(err, Error::Service(_));
+    }
+
+    #[test]
+    fn service_get_utxos_requires_addresses() {
+        let (service, ..) = seeded_service();
+        let err = service.get_utxos(&GetUTXOsArgs::default()).unwrap_err();
+        assert_matches!(err, Error::Service(_));
+    }
+
+    #[test]
+    fn service_get_utxos_source_chain_deferred() {
+        let (service, ..) = seeded_service();
+        let addr = service.format_address(&[0x33; 20]).expect("fmt");
+        let err = service
+            .get_utxos(&GetUTXOsArgs {
+                addresses: vec![addr],
+                source_chain: "X".to_owned(),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert_matches!(err, Error::Service(_));
+    }
+
+    #[test]
+    fn service_get_subnets_includes_primary() {
+        let (service, ..) = seeded_service();
+        // No created subnets seeded ⇒ exactly the primary network.
+        let reply = service.get_subnets(&[]).expect("subnets");
+        assert_eq!(reply.subnets.len(), 1, "primary network only");
+        assert_eq!(reply.subnets[0].id, Id::EMPTY);
+        assert!(reply.subnets[0].control_keys.is_empty());
+        assert_eq!(reply.subnets[0].threshold, 0);
+    }
+
+    #[test]
+    fn service_get_subnet_rejects_primary() {
+        let (service, ..) = seeded_service();
+        let err = service.get_subnet(Id::EMPTY).unwrap_err();
+        assert_matches!(err, Error::Service(_));
+    }
+
+    #[test]
+    fn service_get_blockchains_empty() {
+        let (service, ..) = seeded_service();
+        let reply = service.get_blockchains().expect("blockchains");
+        assert!(reply.blockchains.is_empty(), "no chains seeded");
+    }
+
+    #[test]
+    fn service_get_blockchain_status_unknown() {
+        let (service, ..) = seeded_service();
+        let reply = service
+            .get_blockchain_status(&Id::from([0x55; 32]).to_string())
+            .expect("status");
+        assert_eq!(reply.status, BlockchainStatus::UnknownChain);
+    }
+
+    #[test]
+    fn service_get_min_stake_primary() {
+        let (service, ..) = seeded_service();
+        let reply = service.get_min_stake(Id::EMPTY).expect("min stake");
+        assert_eq!(reply.min_validator_stake, 2_000 * AVAX);
+        assert_eq!(reply.min_delegator_stake, 25 * AVAX);
+        // Non-primary subnet is a recorded deferral.
+        assert_matches!(
+            service.get_min_stake(Id::from([0x77; 32])),
+            Err(Error::Service(_))
+        );
+    }
+
+    #[test]
+    fn service_get_fee_config_shape() {
+        let (service, ..) = seeded_service();
+        let cfg = service.get_fee_config();
+        assert_eq!(cfg.min_price, 1);
+        let j = serde_json::to_value(&cfg).expect("json");
+        // gas.Config fields are bare uint64 ⇒ plain JSON numbers.
+        assert!(j["maxCapacity"].as_u64().is_some());
+        assert!(j["weights"].is_array());
+    }
+
+    #[test]
+    fn service_get_validator_fee_config_shape() {
+        let (service, ..) = seeded_service();
+        let cfg = service.get_validator_fee_config();
+        assert_eq!(cfg.capacity, 20_000);
+        assert_eq!(cfg.target, 10_000);
+        assert_eq!(cfg.min_price, 512);
+    }
+
+    #[test]
+    fn service_get_reward_utxos_empty() {
+        let (service, ..) = seeded_service();
+        let reply = service
+            .get_reward_utxos(Id::from([0x01; 32]), "hex")
+            .expect("reward utxos");
+        assert_eq!(reply.num_fetched, 0);
+        assert_eq!(reply.encoding, "hex");
+    }
+
+    #[test]
+    fn service_get_stake_empty() {
+        let (service, ..) = seeded_service();
+        // The seeded read-state carries no staker txs, so the stake walk is
+        // empty even though the manager holds validators.
+        let addr = service.format_address(&[0x33; 20]).expect("fmt");
+        let reply = service
+            .get_stake(&GetStakeArgs {
+                addresses: vec![addr],
+                validators_only: false,
+                encoding: "hex".to_owned(),
+            })
+            .expect("stake");
+        assert_eq!(reply.staked, 0);
+        assert!(reply.outputs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn service_get_total_stake_sums_current_set() {
+        let (service, ..) = seeded_service();
+        // The manager holds two validators (1000 + 2000 AVAX).
+        let reply = service
+            .get_total_stake(Id::EMPTY)
+            .await
+            .expect("total stake");
+        assert_eq!(reply.weight, 3_000 * AVAX);
+        assert_eq!(reply.stake, reply.weight, "deprecated alias equals weight");
+    }
+
+    #[tokio::test]
+    async fn service_sample_validators_sorted_subset() {
+        let (service, node_a, node_b, ..) = seeded_service();
+        // Go's `WeightedWithoutReplacement.Sample` draws `size` distinct WEIGHT
+        // positions (not indices), so the same node MAY appear more than once
+        // (weight-proportional); the reply is `utils.Sort`-ed (ascending,
+        // duplicates kept). Assert the count, sortedness, and membership only.
+        let reply = service
+            .sample_validators(Id::EMPTY, 2)
+            .await
+            .expect("sample");
+        assert_eq!(reply.validators.len(), 2, "size honoured");
+        assert!(
+            reply.validators.windows(2).all(|w| w[0] <= w[1]),
+            "ascending order"
+        );
+        for n in &reply.validators {
+            assert!(*n == node_a || *n == node_b, "sampled node is in the set");
+        }
+
+        // Zero-size sample is empty.
+        let empty = service
+            .sample_validators(Id::EMPTY, 0)
+            .await
+            .expect("sample 0");
+        assert!(empty.validators.is_empty());
+    }
+
+    #[test]
+    fn service_parse_issue_tx_rejects_bad_payload() {
+        let (service, ..) = seeded_service();
+        let err = service
+            .parse_issue_tx(&FormattedTx {
+                tx: "0xdead".to_owned(),
+                encoding: "hex".to_owned(),
+            })
+            .unwrap_err();
+        assert_matches!(err, Error::Service(_));
     }
 
     // -----------------------------------------------------------------------

@@ -748,6 +748,12 @@ impl<D: Database> Chain for State<D> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
 mod tests {
     use super::*;
     use ava_database::MemDb;
@@ -793,10 +799,18 @@ mod tests {
         // addr_a sees u1+u2; addr_b sees u2+u3 (ascending utxo-id order).
         let mut a_ids = vec![u1.input_id(), u2.input_id()];
         a_ids.sort();
-        assert_eq!(s.utxo_ids(&addr_a, Id::EMPTY, usize::MAX), a_ids, "addr_a index");
+        assert_eq!(
+            s.utxo_ids(&addr_a, Id::EMPTY, usize::MAX),
+            a_ids,
+            "addr_a index"
+        );
         let mut b_ids = vec![u2.input_id(), u3.input_id()];
         b_ids.sort();
-        assert_eq!(s.utxo_ids(&addr_b, Id::EMPTY, usize::MAX), b_ids, "addr_b index");
+        assert_eq!(
+            s.utxo_ids(&addr_b, Id::EMPTY, usize::MAX),
+            b_ids,
+            "addr_b index"
+        );
 
         // Pagination: previous is exclusive; limit truncates.
         assert_eq!(
@@ -808,8 +822,14 @@ mod tests {
 
         // Deleting u2 removes it from both addresses.
         s.delete_utxo(u2.input_id());
-        assert_eq!(s.utxo_ids(&addr_a, Id::EMPTY, usize::MAX), vec![u1.input_id()]);
-        assert_eq!(s.utxo_ids(&addr_b, Id::EMPTY, usize::MAX), vec![u3.input_id()]);
+        assert_eq!(
+            s.utxo_ids(&addr_a, Id::EMPTY, usize::MAX),
+            vec![u1.input_id()]
+        );
+        assert_eq!(
+            s.utxo_ids(&addr_b, Id::EMPTY, usize::MAX),
+            vec![u3.input_id()]
+        );
 
         // Unknown address: empty.
         let addr_c = ShortId::from_slice(&[0x0C; 20]).expect("addr");
