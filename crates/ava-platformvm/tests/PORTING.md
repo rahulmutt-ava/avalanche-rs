@@ -506,10 +506,15 @@ extension `""` (Go `vm.go:451-466`), served through the in-process
 `ava-api → ava-config → ava-genesis → ava-platformvm` is a package cycle; the
 `#[rpc_service]` macro is shared via the leaf `ava-api-macros` crate and the
 dispatch core is pinned to `ava-api`'s by parity tests). The Go set is the 31
-exported `Service` methods; **16 are bridged**, 15 are missing. Full parity is
-owned by M8.23.
+exported `Service` methods; **as of M8.23a all 31 are bridged** (method-set
+parity). The remaining deferrals are reply-shape / seam refinements noted
+per row below; the recorded-Go differential harness (golden vectors) is a
+separate task.
 
-### Bridged (16) — exact Go wire names
+### Bridged (31) — exact Go wire names
+
+M8.22 bridged 16; **M8.23a (this task) bridged the remaining 15** + upgraded
+the locally-reachable PARTIAL shapes.
 
 | Method | Notes |
 |---|---|
@@ -520,35 +525,47 @@ owned by M8.23.
 | `getCurrentValidators` | PARTIAL reply shape: no delegator/uptime/owner attributes yet (needs the staker-attributes cache + owner formatting) |
 | `getL1Validator` | PARTIAL reply shape: read-relevant subset (no remaining-balance/owner fields) |
 | `getValidatorsAt` | `height` accepts `json.Uint64` + `"proposed"` (decode parity); `"proposed"` resolves to `MaxUint64`, which fails the height lookup until the proposer-height seam lands |
-| `getFeeState` | `price` is a recorded `0` sentinel (needs the dynamic-fee config seam) |
-| `getValidatorFeeState` | same `price` sentinel |
+| `getFeeState` | M8.23a: `price` is now the live `gas.CalculatePrice(MinPrice, excess, K)`; `capacity`/`excess`/`price` are plain JSON numbers (Go `gas.Gas`/`gas.Price` are bare `uint64`, no marshaler) |
+| `getValidatorFeeState` | M8.23a: live `price`; plain JSON numbers (same rationale) |
 | `validatedBy` | |
 | `validates` | |
 | `getTxStatus` | accepted-state only: `Committed`/`Unknown` (the mempool/preferred-chain `Processing`/`Dropped` walk needs the builder seam) |
 | `getTx` | `hex`/`hexnc` encodings; `json` (typed tx JSON) deferred |
 | `getBlock` | `hex`/`hexnc`; `json` (typed block JSON) deferred |
 | `getBlockByHeight` | same encoding note |
-| `getStakingAssetID` | justified trivial addition: primary network = `ctx.AVAXAssetID` (already on the chain context); a non-primary subnet surfaces Go's `failed fetching subnet transformation…: not found` (elastic-subnet transform state not ported) |
+| `getStakingAssetID` | primary network = `ctx.AVAXAssetID`; a non-primary subnet surfaces Go's `failed fetching subnet transformation…: not found` (elastic-subnet transform state not ported) |
+| `getBalance` | **M8.23a** — `avax.GetAllUTXOs` over the address→UTXO index (M8.23a state seam); full locktime/stakeable-lock classification; scalar AVAX fields duplicate the maps' AVAX entry (Go backwards-compat). Multi-asset/locktime parity complete |
+| `getUTXOs` | **M8.23a** — local `avax.GetPaginatedUTXOs` port (ascending `(addr,utxoID)` page, `limit` clamp 1024, end-cursor). DEFERRED: cross-chain `sourceChain` atomic UTXOs (`avax.GetAtomicUTXOs`) — needs the shared-memory seam (M8); requesting a non-empty `sourceChain` returns a clear error |
+| `getSubnet` | **M8.23a** — `state.GetSubnetOwner` decode (control keys/threshold/locktime) + L1-conversion (`manager*`) slot. DEFERRED: elastic-subnet `GetSubnetTransformation` (`isPermissioned`/`subnetTransformationTxID` reflect only the L1-conversion slot; transform state not ported) |
+| `getSubnets` | **M8.23a** — `state.GetSubnetIDs` + per-subnet owner; primary network always included. DEFERRED: the elastic-transform branch (no transform state) |
+| `sampleValidators` | **M8.23a** — weighted-without-replacement over the current validator set (`ValidatorState::get_current_validator_set`); mirrors Go's WWR weight-position draw (duplicate node ids possible, `utils.Sort`-ed). RNG is non-deterministic in Go (untestable for byte parity) |
+| `getBlockchainStatus` | **M8.23a** — accepted-state walk: `Validating` (node validates the chain's subnet) / `Created` (accepted create-chain tx) / `Unknown`. DEFERRED: the chain-alias `Syncing` + preferred-but-unaccepted `Preferred` cases (need the chain registry + preferred-chain state-manager seams) |
+| `getBlockchains` | **M8.23a** — `state.GetChains` over every subnet + primary, decoding each `CreateChainTx` (name/vmID) |
+| `issueTx` | **M8.23a** — decode/parse fully ported; the wire handler admits through the `TxIssuer` mempool seam. DEFERRED at runtime: the production seam is a `DeferredIssuer` (the P-Chain mempool is un-shared on `PlatformVm`; shared-mempool + gossip admission is M8 node assembly). Local conformance uses a recording issuer |
+| `getStake` | **M8.23a** — walks the current+pending staker sets, decodes each staker tx's `stake_outs`, sums the outputs owned by the queried addresses (no separate staker-attributes cache needed) |
+| `getMinStake` | **M8.23a** — primary network from `StakingConfig` (2000/25 AVAX). DEFERRED: non-primary (elastic) subnets need the transform-subnet state (returns Go's `failed fetching subnet transformation…`); the per-network (Fuji) min-stake plumb is ava-genesis |
+| `getTotalStake` | **M8.23a** — summed from `get_current_validator_set` (the `vm.Validators.TotalWeight` equivalent); `stake` is the deprecated alias of `weight` |
+| `getRewardUTXOs` | **M8.23a** — `state.GetRewardUTXOs` index, encoded per `hex`/`hexnc` |
+| `getAllValidatorsAt` | **M8.23a** — `get_warp_validator_sets(height)` grouped into the Go `validators.Warp` JSON shape (by compressed pubkey, sorted by uncompressed bytes); `"proposed"` resolves via `get_minimum_height` |
+| `getFeeConfig` | **M8.23a** — the dynamic-fee `gas.Config` constants (`WEIGHTS`/capacity/rates/min-price/K); plain JSON numbers |
+| `getValidatorFeeConfig` | **M8.23a** — the validator continuous-fee `fee.Config` (capacity/target/min-price/per-network K); plain JSON numbers |
 
-### Missing (15) — blocking seam per method
+### Acronym-method `#[rpc(name)]` overrides (exact-remainder dispatch)
 
-| Method | Blocking seam |
-|---|---|
-| `getBalance` | address→UTXO index (`avax.GetAllUTXOs`) |
-| `getUTXOs` | address→UTXO index + shared-memory atomic UTXOs (`avax.GetPaginatedUTXOs`/`GetAtomicUTXOs`) |
-| `getSubnet` | subnet owner / transform-subnet state reads (`state.GetSubnetOwner`) |
-| `getSubnets` | subnet list state read (`state.GetSubnetIDs`) |
-| `sampleValidators` | validators-set sampler seam (`vm.Validators.Sample`) |
-| `getBlockchainStatus` | chain-existence walk over the preferred chain + `nodeValidates` |
-| `getBlockchains` | all-subnets chain listing state read |
-| `issueTx` | shared mempool handle + verified RPC issuance (`vm.issueTxFromRPC`); the P-Chain mempool currently lives un-shared on `PlatformVm` |
-| `getStake` | staker UTXO outputs via the staker-attributes cache |
-| `getMinStake` | per-network staking config plumb (ava-genesis, M8) + transform-subnet state for elastic subnets |
-| `getTotalStake` | validators total-weight seam (`vm.Validators.TotalWeight`) |
-| `getRewardUTXOs` | reward-UTXO state index |
-| `getAllValidatorsAt` | all-subnets validator-sets-at-height query seam |
-| `getFeeConfig` | dynamic-fee (`gas.Config`) plumb into the VM |
-| `getValidatorFeeConfig` | validator-fee (`fee.Config`) plumb into the VM |
+`GetUTXOs`, `GetRewardUTXOs`, and `GetStakingAssetID`, `GetL1Validator` carry
+`#[rpc(name = "…")]` so the snake_case ident pascalizes to the exact Go wire
+name; the default pascalization (`GetUtxos`/`GetRewardUtxos`) must MISS, which
+the `platform_method_set_matches_bridged` test asserts.
+
+### Remaining deferrals (reply-shape / runtime seams, post-M8.23a)
+
+- `getUTXOs` cross-chain `sourceChain` atomic UTXOs (shared-memory seam, M8).
+- `issueTx` runtime admission (shared P-Chain mempool + gossip, M8 node assembly).
+- Elastic-subnet transform state (`getSubnet`/`getSubnets`/`getMinStake`/`getStakingAssetID`).
+- `getCurrentValidators`/`getL1Validator` delegator/uptime/owner attributes.
+- `getTx`/`getBlock` `json` (typed) encoding.
+- `getBlockchainStatus` chain-alias `Syncing` + `Preferred` (chain registry + preferred-chain state manager).
+- The recorded-Go differential harness (golden wire vectors) — separate task.
 
 Recorded transport deferral: Go wraps each handler with the `vm.metrics`
 request interceptor (`vm.go:455-456`) — deferred with the proposervm M8.22
