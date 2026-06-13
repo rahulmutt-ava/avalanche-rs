@@ -677,9 +677,23 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 - [ ] **Step 4 — Confirm green:** all commands above pass; `git status` clean after any vector regen.
 - [ ] **Step 5 — Commit:** `M8: node/config/api/wallet/genesis exit gate green (full node drop-in)`
 
----
-
-## Spec coverage check
+> **PARTIAL-VERIFY (2026-06-13, post-M8.31 merge 5b8c26e).** The five named exit-gate tests were
+> reverified GREEN on `main` after M8.31: `golden::flag_parity` ✓ + `golden::genesis_block_id` ✓ +
+> `prop::config_precedence` ✓ (`cargo nextest run -p ava-config -p ava-genesis -E 'test(flag_parity)+test(genesis_block_id)+test(config_precedence)'`),
+> `differential::api_parity` ✓ (8 tests, `cargo test -p ava-api --test differential_api_parity`),
+> `differential::indexer_parity` ✓ (`cargo test -p ava-indexer`). Also: `cargo build --workspace` ✓,
+> `cargo build -p avalanchers` ✓, `cargo clippy --workspace --all-targets` ✓ (clean, 3m41s, all crates
+> incl. avalanchers), `cargo nextest run -p avalanchers` ✓ (7/7), `scripts/single_runtime_lint.sh` ✓,
+> ava-saevm-core healthy under process isolation (`gc_settled_ancestry` passes alone; its `cargo test`
+> failure is a shared-process-parallelism artifact, not a regression).
+> **STILL OPEN (not this session):** (1) the single literal `cargo nextest run --profile ci` /
+> `--workspace` command cannot complete in the current sandbox — nextest wedges at its `--list` phase
+> for most crates on a blocking-stdin fd-inheritance quirk (see memory `nextest-list-stdin-hang-gotcha`;
+> verify per-package via `cargo test -p X < /dev/null` instead, or run in the Nix-wrapped
+> `./scripts/run_task.sh test-unit` on a non-sandboxed host); (2) `tests/exit_gate.rs` aggregator not
+> yet added; (3) `bazel-gazelle-generate` + `deps-tidy` for the still-missing BUILD.bazel on
+> ava-api/ava-api-macros/ava-node/avalanchers (carried handoff); (4) `./avalanchers` /
+> `--network-id=fuji` live lifecycle smoke. M8.32 NOT marked DONE pending these.
 
 | Spec section | Covered by task(s) | Notes / deferrals |
 |---|---|---|
