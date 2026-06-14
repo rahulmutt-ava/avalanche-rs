@@ -1,0 +1,65 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_secp256k1fx",
+    srcs = [
+        "src/error.rs",
+        "src/fx.rs",
+        "src/instance.rs",
+        "src/lib.rs",
+        "src/types.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:assert_matches",
+        "@crates//:hex",
+        "@crates//:proptest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_codec",
+    srcs = ["tests/golden_codec.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/secp256k1fx/vectors.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "prop_multisig",
+    srcs = ["tests/prop_multisig.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/secp256k1fx/vectors.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_secp256k1fx",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:assert_matches",
+        "@crates//:hex",
+        "@crates//:proptest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)

@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_params",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "compile_fail",
+    srcs = ["tests/compile_fail.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:trybuild"],
+)
+
+rust_test(
+    name = "tau_discipline",
+    srcs = ["tests/tau_discipline.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_saevm_params"],
+)

@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_gasprice",
+    srcs = [
+        "src/block_cache.rs",
+        "src/config.rs",
+        "src/lib.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-saevm/intmath:ava_saevm_intmath",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "estimator",
+    srcs = ["tests/estimator.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_gasprice",
+        "//crates/ava-saevm/types:ava_saevm_types",
+    ],
+)
+
+rust_test(
+    name = "ava_saevm_gasprice_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_saevm_gasprice",
+)

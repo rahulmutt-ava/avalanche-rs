@@ -3,15 +3,38 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 rust_library(
     name = "ava_differential",
     srcs = [
+        "src/atomic.rs",
         "src/driver.rs",
         "src/lib.rs",
         "src/network.rs",
         "src/observation.rs",
         "src/program.rs",
+        "src/saevm.rs",
+        "src/xchain.rs",
     ],
     compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:arbitrary"],
+    deps = [
+        "//crates/ava-avm:ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/core:ava_saevm_core",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arbitrary",
+        "@crates//:hex",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
 )
 
 rust_test(
@@ -34,13 +57,67 @@ rust_test(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":ava_differential",
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-message:ava_message",
         "//crates/ava-network:ava_network",
-        "//crates/ava-types:ava_types",
-        "//crates/ava-version:ava_version",
         "@crates//:tokio",
         "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "exit_gate",
+    srcs = ["tests/exit_gate.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "sae_recovery",
+    srcs = ["tests/sae_recovery.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "sae_streaming",
+    srcs = ["tests/sae_streaming.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "xchain_issue_tx",
+    srcs = ["tests/xchain_issue_tx.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "ava_differential_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_differential",
+    deps = [
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-network:ava_network",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
     ],
 )

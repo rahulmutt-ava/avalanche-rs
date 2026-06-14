@@ -9,32 +9,38 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 rust_library(
     name = "avalanchers_lib",
     srcs = [
+        "src/app.rs",
         "src/lib.rs",
         "src/wiring/chains.rs",
         "src/wiring/mod.rs",
     ],
-    crate_name = "avalanchers",
     compile_data = ["Cargo.toml"],
+    crate_name = "avalanchers",
+    proc_macro_deps = ["@crates//:async-trait"],
     visibility = ["//visibility:public"],
     deps = [
-        "@crates//:async-trait",
+        "//crates/ava-chains:ava_chains",
+        "//crates/ava-config:ava_config",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-engine:ava_engine",
+        "//crates/ava-node:ava_node",
+        "//crates/ava-proposervm:ava_proposervm",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:anyhow",
         "@crates//:prometheus",
         "@crates//:rcgen",
         "@crates//:ring",
         "@crates//:rustls-pemfile",
+        "@crates//:serde",
         "@crates//:thiserror",
         "@crates//:tokio",
         "@crates//:tokio-util",
-        "//crates/ava-chains:ava-chains",
-        "//crates/ava-crypto:ava-crypto",
-        "//crates/ava-database:ava-database",
-        "//crates/ava-engine:ava-engine",
-        "//crates/ava-proposervm:ava-proposervm",
-        "//crates/ava-snow:ava-snow",
-        "//crates/ava-types:ava-types",
-        "//crates/ava-utils:ava-utils",
-        "//crates/ava-validators:ava-validators",
-        "//crates/ava-vm:ava-vm",
     ],
 )
 
@@ -44,8 +50,14 @@ rust_binary(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [
+        ":avalanchers_lib",
+        "//crates/ava-config:ava_config",
+        "//crates/ava-node:ava_node",
+        "//crates/ava-version:ava_version",
+        "@crates//:anyhow",
         "@crates//:clap",
-        "//crates/ava-version:ava-version",
+        "@crates//:serde_json",
+        "@crates//:tokio",
     ],
 )
 
@@ -71,7 +83,22 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":avalanchers_lib",
+        "//crates/ava-version:ava_version",
         "@crates//:tokio",
-        "//crates/ava-version:ava-version",
     ],
+)
+
+rust_test(
+    name = "cli",
+    srcs = ["tests/cli.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde_json"],
+)
+
+rust_test(
+    name = "avalanchers_lib_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":avalanchers_lib",
+    deps = ["@crates//:serde_json"],
 )

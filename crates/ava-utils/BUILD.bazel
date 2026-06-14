@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_utils",
@@ -22,4 +22,112 @@ rust_library(
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:bs58",
+        "@crates//:indexmap",
+        "@crates//:num-bigint",
+        "@crates//:parking_lot",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "bits",
+    srcs = ["tests/bits.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_utils"],
+)
+
+rust_test(
+    name = "clock_parity",
+    srcs = ["tests/clock_parity.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "golden_cb58_codec",
+    srcs = ["tests/golden_cb58_codec.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:assert_matches",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_rng",
+    srcs = ["tests/golden_rng.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_samplers",
+    srcs = ["tests/golden_samplers.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_uint64_inclusive",
+    srcs = ["tests/golden_uint64_inclusive.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "linked",
+    srcs = ["tests/linked.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_utils"],
+)
+
+rust_test(
+    name = "proptests",
+    srcs = ["tests/proptests.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "safemath",
+    srcs = ["tests/safemath.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_utils",
+        "@crates//:assert_matches",
+    ],
 )

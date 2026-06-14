@@ -1,0 +1,82 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_blocks",
+    srcs = [
+        "src/lib.rs",
+        "src/lifecycle.rs",
+        "src/parse.rs",
+        "src/settlement.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arc-swap",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "block_hash_golden",
+    srcs = ["tests/block_hash_golden.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "@crates//:hex",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "lifecycle",
+    srcs = ["tests/lifecycle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_blocks",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arc-swap",
+    ],
+)
+
+rust_test(
+    name = "parse_block_fuzz_smoke",
+    srcs = ["tests/parse_block_fuzz_smoke.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_blocks",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "settlement",
+    srcs = ["tests/settlement.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_blocks",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/params:ava_saevm_params",
+    ],
+)
+
+rust_test(
+    name = "ava_saevm_blocks_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_saevm_blocks",
+)

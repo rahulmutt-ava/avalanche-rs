@@ -1,0 +1,9 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "decode_never_overreads",
+    srcs = ["fuzz_targets/decode_never_overreads.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//crates/ava-message:ava_message"],
+)

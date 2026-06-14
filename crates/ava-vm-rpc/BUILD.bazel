@@ -1,0 +1,88 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_vm_rpc",
+    srcs = [
+        "src/guest/mod.rs",
+        "src/host/block.rs",
+        "src/host/mod.rs",
+        "src/host/subprocess.rs",
+        "src/lib.rs",
+        "src/proxy/aliasreader.rs",
+        "src/proxy/appsender.rs",
+        "src/proxy/mod.rs",
+        "src/proxy/rpcdb.rs",
+        "src/proxy/sharedmemory.rs",
+        "src/proxy/validatorstate.rs",
+        "src/proxy/warp.rs",
+        "src/runtime.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:anyhow",
+        "@crates//:bytes",
+        "@crates//:libc",
+        "@crates//:parking_lot",
+        "@crates//:prost-types",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "handshake",
+    srcs = ["tests/handshake.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "proxy",
+    srcs = ["tests/proxy.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "build.rs",
+    proc_macro_deps = ["@crates//:tonic-build"],
+    visibility = ["//visibility:public"],
+)

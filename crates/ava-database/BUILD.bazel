@@ -1,0 +1,153 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_database",
+    srcs = [
+        "src/batch.rs",
+        "src/corruptabledb.rs",
+        "src/error.rs",
+        "src/heightindex.rs",
+        "src/helpers.rs",
+        "src/lib.rs",
+        "src/linkeddb.rs",
+        "src/memdb.rs",
+        "src/meterdb.rs",
+        "src/prefixdb.rs",
+        "src/traits.rs",
+        "src/versiondb.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-types:ava_types",
+        "@crates//:anyhow",
+        "@crates//:lru",
+        "@crates//:parking_lot",
+        "@crates//:prometheus",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "conformance_corruptabledb",
+    srcs = ["tests/conformance_corruptabledb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_heightindex",
+    srcs = ["tests/conformance_heightindex.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_memdb",
+    srcs = ["tests/conformance_memdb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_meterdb",
+    srcs = ["tests/conformance_meterdb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_prefixdb",
+    srcs = ["tests/conformance_prefixdb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_rocksdb",
+    srcs = ["tests/conformance_rocksdb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_rpcdb",
+    srcs = ["tests/conformance_rpcdb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "conformance_versiondb",
+    srcs = ["tests/conformance_versiondb.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "golden_linkeddb",
+    srcs = ["tests/golden_linkeddb.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/linkeddb/node_codec.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_database",
+        "@crates//:hex",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_meterdb_metrics",
+    srcs = ["tests/golden_meterdb_metrics.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/meterdb/metric_names.json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "golden_prefix",
+    srcs = ["tests/golden_prefix.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/prefix/prefix_namespacing.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_database",
+        "@crates//:hex",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "migrate",
+    srcs = ["tests/migrate.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "build.rs",
+    proc_macro_deps = ["@crates//:tonic-build"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "ava_database_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_database",
+    deps = ["@crates//:hex"],
+)

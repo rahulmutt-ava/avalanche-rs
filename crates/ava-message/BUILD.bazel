@@ -1,0 +1,146 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_message",
+    srcs = [
+        "src/builder.rs",
+        "src/codec.rs",
+        "src/error.rs",
+        "src/frame.rs",
+        "src/lib.rs",
+        "src/ops.rs",
+        "src/proto.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+        "@crates//:flate2",
+        "@crates//:prost",
+        "@crates//:thiserror",
+        "@crates//:zstd",
+    ],
+)
+
+rust_test(
+    name = "builder",
+    srcs = ["tests/builder.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+    ],
+)
+
+rust_test(
+    name = "codec_roundtrip",
+    srcs = ["tests/codec_roundtrip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "@crates//:assert_matches",
+        "@crates//:bytes",
+        "@crates//:flate2",
+        "@crates//:prost",
+    ],
+)
+
+rust_test(
+    name = "frame",
+    srcs = ["tests/frame.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "@crates//:assert_matches",
+        "@crates//:bytes",
+    ],
+)
+
+rust_test(
+    name = "golden",
+    srcs = ["tests/golden.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:pretty_assertions",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "ops_table",
+    srcs = ["tests/ops_table.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_message"],
+)
+
+rust_test(
+    name = "prop_frame",
+    srcs = ["tests/prop_frame.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "@crates//:bytes",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "prop_fuzz_smoke",
+    srcs = ["tests/prop_fuzz_smoke.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "proto_smoke",
+    srcs = ["tests/proto_smoke.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "@crates//:prost",
+    ],
+)
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "build.rs",
+    proc_macro_deps = ["@crates//:tonic-build"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "ava_message_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_message",
+    deps = [
+        "@crates//:assert_matches",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)

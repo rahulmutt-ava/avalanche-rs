@@ -3,9 +3,13 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 rust_binary(
     name = "xtask",
     srcs = [
+        "src/check_sae_lints.rs",
+        "src/gen_flags.rs",
+        "src/gen_genesis.rs",
         "src/lint_determinism.rs",
         "src/main.rs",
         "src/porting.rs",
+        "src/saevm_exit_gate.rs",
         "src/test.rs",
         "src/vectors.rs",
     ],

@@ -1,0 +1,50 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_archivedb",
+    srcs = [
+        "src/lib.rs",
+        "src/value.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "golden_encoding",
+    srcs = ["tests/golden_encoding.rs"],
+    compile_data = [
+        "../../tests/vectors/archivedb/key_encoding.json",
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_archivedb",
+        "@crates//:hex",
+        "@crates//:pretty_assertions",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "versioned",
+    srcs = ["tests/versioned.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_archivedb",
+        "//crates/ava-database:ava_database",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "ava_archivedb_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_archivedb",
+)

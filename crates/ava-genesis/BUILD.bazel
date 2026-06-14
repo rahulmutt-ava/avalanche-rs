@@ -1,0 +1,82 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_genesis",
+    srcs = [
+        "src/bootstrappers.rs",
+        "src/build.rs",
+        "src/chains.rs",
+        "src/config.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/params.rs",
+        "src/recent_start.rs",
+        "src/split.rs",
+        "src/unparsed.rs",
+        "src/validate.rs",
+    ],
+    compile_data = [
+        "Cargo.toml",
+        "data/bootstrappers.json",
+        "data/genesis_fuji.json",
+        "data/genesis_local.json",
+        "data/genesis_mainnet.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-avm:ava_avm",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-platformvm:ava_platformvm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "@crates//:base64",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "golden_genesis_block_id",
+    srcs = ["tests/golden_genesis_block_id.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/genesis/genesis_test.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_genesis",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-platformvm:ava_platformvm",
+        "@crates//:hex",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_genesis_extras",
+    srcs = ["tests/golden_genesis_extras.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_genesis",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-version:ava_version",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "ava_genesis_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_genesis",
+    deps = [
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+    ],
+)

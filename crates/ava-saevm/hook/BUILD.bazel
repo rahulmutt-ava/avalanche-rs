@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_hook",
+    srcs = [
+        "src/lib.rs",
+        "src/op.rs",
+        "src/settled.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/intmath:ava_saevm_intmath",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "op",
+    srcs = ["tests/op.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_hook",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+    ],
+)

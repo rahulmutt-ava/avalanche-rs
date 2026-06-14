@@ -1,0 +1,136 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_core",
+    srcs = [
+        "src/block_handle.rs",
+        "src/frontier.rs",
+        "src/lib.rs",
+        "src/recovery.rs",
+        "src/rpc.rs",
+        "src/settle.rs",
+        "src/vm.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/adaptor:ava_saevm_adaptor",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arc-swap",
+        "@crates//:parking_lot",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "frontier",
+    srcs = ["tests/frontier.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+    ],
+)
+
+rust_test(
+    name = "golden",
+    srcs = ["tests/golden.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/adaptor:ava_saevm_adaptor",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:parking_lot",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "invariants",
+    srcs = ["tests/invariants.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-saevm/testutil:ava_saevm_testutil",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "lifecycle",
+    srcs = ["tests/lifecycle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/adaptor:ava_saevm_adaptor",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "recovery",
+    srcs = ["tests/recovery.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/adaptor:ava_saevm_adaptor",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "rpc_labels",
+    srcs = ["tests/rpc_labels.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+    ],
+)

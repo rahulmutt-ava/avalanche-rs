@@ -1,0 +1,229 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_merkledb",
+    srcs = [
+        "src/codec.rs",
+        "src/db.rs",
+        "src/error.rs",
+        "src/hashing.rs",
+        "src/history.rs",
+        "src/key.rs",
+        "src/lib.rs",
+        "src/maybe.rs",
+        "src/node.rs",
+        "src/node_store.rs",
+        "src/proof.rs",
+        "src/trie.rs",
+        "src/view.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "@crates//:arc-swap",
+        "@crates//:bytes",
+        "@crates//:lru",
+        "@crates//:parking_lot",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "firewood_sha",
+    srcs = ["tests/firewood_sha.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "golden_firewood_ethhash",
+    srcs = ["tests/golden_firewood_ethhash.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/firewood/ethhash/accounts_root.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "golden_key",
+    srcs = ["tests/golden_key.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_node_codec",
+    srcs = ["tests/golden_node_codec.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_proof",
+    srcs = ["tests/golden_proof.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_range_proof",
+    srcs = ["tests/golden_range_proof.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_root",
+    srcs = ["tests/golden_root.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "prop_fuzz_smoke",
+    srcs = ["tests/prop_fuzz_smoke.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "@crates//:arbitrary",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "prop_merkle",
+    srcs = ["tests/prop_merkle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "prop_proof",
+    srcs = ["tests/prop_proof.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "prop_workheap",
+    srcs = ["tests/prop_workheap.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "sync_roundtrip",
+    srcs = ["tests/sync_roundtrip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:proptest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "view",
+    srcs = ["tests/view.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        "//crates/ava-database:ava_database",
+        "@crates//:assert_matches",
+    ],
+)
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "build.rs",
+    proc_macro_deps = ["@crates//:tonic-build"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "ava_merkledb_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_merkledb",
+)

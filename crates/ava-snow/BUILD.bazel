@@ -1,0 +1,94 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_snow",
+    srcs = [
+        "src/acceptor.rs",
+        "src/choices.rs",
+        "src/context.rs",
+        "src/decidable.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/snowball/binary_slush.rs",
+        "src/snowball/binary_snowball.rs",
+        "src/snowball/binary_snowflake.rs",
+        "src/snowball/consensus.rs",
+        "src/snowball/mod.rs",
+        "src/snowball/nnary_snowball.rs",
+        "src/snowball/nnary_snowflake.rs",
+        "src/snowball/parameters.rs",
+        "src/snowball/tree.rs",
+        "src/snowball/unary_snowball.rs",
+        "src/snowball/unary_snowflake.rs",
+        "src/snowman/block.rs",
+        "src/snowman/consensus.rs",
+        "src/snowman/mod.rs",
+        "src/snowman/topological.rs",
+        "src/state.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "@crates//:arc-swap",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "conformance_battery",
+    srcs = ["tests/conformance_battery.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_snow"],
+)
+
+rust_test(
+    name = "golden_snowball",
+    srcs = ["tests/golden_snowball.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_snow",
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "golden_tree",
+    srcs = ["tests/golden_tree.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+    ],
+)
+
+rust_test(
+    name = "prop_safety",
+    srcs = ["tests/prop_safety.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "ava_snow_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_snow",
+)

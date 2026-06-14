@@ -1,0 +1,296 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_network",
+    srcs = [
+        "src/config.rs",
+        "src/dialer.rs",
+        "src/error.rs",
+        "src/identity.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/nat/mod.rs",
+        "src/nat/port_mapper.rs",
+        "src/network/bloom.rs",
+        "src/network/ip_tracker.rs",
+        "src/network/mod.rs",
+        "src/network/net_impl.rs",
+        "src/network/peer_set.rs",
+        "src/network/testutil.rs",
+        "src/network/tracked_ip.rs",
+        "src/peer/handle.rs",
+        "src/peer/handshake.rs",
+        "src/peer/ip.rs",
+        "src/peer/ip_signer.rs",
+        "src/peer/message_queue.rs",
+        "src/peer/metrics.rs",
+        "src/peer/mod.rs",
+        "src/peer/peer.rs",
+        "src/peer/testutil.rs",
+        "src/peer/tls_config.rs",
+        "src/peer/upgrader.rs",
+        "src/peer/verifier.rs",
+        "src/router.rs",
+        "src/throttling/inbound_conn_upgrade.rs",
+        "src/throttling/inbound_msg_byte.rs",
+        "src/throttling/mod.rs",
+        "src/throttling/outbound_msg.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "@crates//:arc-swap",
+        "@crates//:bytes",
+        "@crates//:igd-next",
+        "@crates//:parking_lot",
+        "@crates//:prometheus",
+        "@crates//:proptest",
+        "@crates//:ring",
+        "@crates//:rustls",
+        "@crates//:rustls-pemfile",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-rustls",
+        "@crates//:tokio-util",
+        "@crates//:x509-parser",
+    ],
+)
+
+rust_test(
+    name = "golden_tls",
+    srcs = ["tests/golden_tls.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "handshake",
+    srcs = ["tests/handshake.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-version:ava_version",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "inbound_throttler",
+    srcs = ["tests/inbound_throttler.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-types:ava_types",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "ip_gossip",
+    srcs = ["tests/ip_gossip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+    ],
+)
+
+rust_test(
+    name = "message_queue",
+    srcs = ["tests/message_queue.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-types:ava_types",
+        "@crates//:bytes",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "metrics",
+    srcs = ["tests/metrics.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:prometheus",
+    ],
+)
+
+rust_test(
+    name = "metrics_increments",
+    srcs = ["tests/metrics_increments.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:prometheus",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "nat",
+    srcs = ["tests/nat.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "network_dispatch",
+    srcs = ["tests/network_dispatch.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "peer_actor",
+    srcs = ["tests/peer_actor.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-message:ava_message",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "ping_pong",
+    srcs = ["tests/ping_pong.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-version:ava_version",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "prop_handshake",
+    srcs = ["tests/prop_handshake.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-version:ava_version",
+        "@crates//:proptest",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "signed_ip",
+    srcs = ["tests/signed_ip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-crypto:ava_crypto",
+        "@crates//:assert_matches",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "tls_config",
+    srcs = ["tests/tls_config.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:rustls",
+    ],
+)
+
+rust_test(
+    name = "tls_handshake",
+    srcs = ["tests/tls_handshake.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:rcgen",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "traits",
+    srcs = ["tests/traits.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "//crates/ava-message:ava_message",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "verifier",
+    srcs = ["tests/verifier.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:assert_matches",
+        "@crates//:hex",
+        "@crates//:rcgen",
+        "@crates//:rustls",
+    ],
+)
+
+rust_test(
+    name = "ava_network_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_network",
+    deps = [
+        "@crates//:assert_matches",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:rcgen",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)

@@ -1,0 +1,77 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_simplex",
+    srcs = [
+        "src/block.rs",
+        "src/canoto.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/messages.rs",
+        "src/parameters.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "engine",
+    srcs = ["tests/engine.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_simplex",
+        "//crates/ava-engine:ava_engine",
+        "//crates/ava-types:ava_types",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "golden",
+    srcs = ["tests/golden.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/block_canoto.hex",
+        "tests/vectors/qc_canoto.hex",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":ava_simplex"],
+)
+
+rust_test(
+    name = "parameters",
+    srcs = ["tests/parameters.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_simplex",
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "qc",
+    srcs = ["tests/qc.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_simplex",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "ava_simplex_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_simplex",
+)

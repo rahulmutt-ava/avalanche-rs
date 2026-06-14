@@ -1,0 +1,74 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_config",
+    srcs = [
+        "src/chain_config.rs",
+        "src/defaults.rs",
+        "src/duration.rs",
+        "src/error.rs",
+        "src/flags.rs",
+        "src/keys.rs",
+        "src/lib.rs",
+        "src/node.rs",
+        "src/parse.rs",
+        "src/precedence.rs",
+        "src/subnets.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-engine:ava_engine",
+        "//crates/ava-genesis:ava_genesis",
+        "//crates/ava-logging:ava_logging",
+        "//crates/ava-network:ava_network",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "@crates//:base64",
+        "@crates//:clap",
+        "@crates//:proptest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:serde_yaml",
+        "@crates//:thiserror",
+        "@crates//:toml",
+    ],
+)
+
+rust_test(
+    name = "golden_flag_parity",
+    srcs = ["tests/golden_flag_parity.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_config",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "prop_config_precedence",
+    srcs = ["tests/prop_config_precedence.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_config",
+        "@crates//:base64",
+        "@crates//:proptest",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "ava_config_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_config",
+    deps = [
+        "@crates//:assert_matches",
+        "@crates//:tempfile",
+    ],
+)

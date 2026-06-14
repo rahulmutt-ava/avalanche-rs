@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "ava_warp",
+    srcs = [
+        "src/error.rs",
+        "src/lib.rs",
+        "src/message.rs",
+        "src/payload.rs",
+        "src/signer.rs",
+        "src/verifier.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["//crates/ava-codec-derive:ava_codec_derive"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-validators:ava_validators",
+        "@crates//:thiserror",
+    ],
+)

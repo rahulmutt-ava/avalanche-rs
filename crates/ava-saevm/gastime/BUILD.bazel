@@ -1,0 +1,40 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_gastime",
+    srcs = [
+        "src/config.rs",
+        "src/lib.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-saevm/intmath:ava_saevm_intmath",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:ruint",
+    ],
+)
+
+rust_test(
+    name = "gastime_golden",
+    srcs = ["tests/gastime_golden.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_gastime",
+        "//crates/ava-vm:ava_vm",
+    ],
+)
+
+rust_test(
+    name = "gastime_prop",
+    srcs = ["tests/gastime_prop.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_gastime",
+        "@crates//:proptest",
+        "@crates//:ruint",
+    ],
+)

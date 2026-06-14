@@ -1,0 +1,37 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_adaptor",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "adaptor_conformance",
+    srcs = ["tests/adaptor_conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_adaptor",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)

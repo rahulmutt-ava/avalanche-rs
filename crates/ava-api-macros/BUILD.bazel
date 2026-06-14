@@ -1,7 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_proc_macro")
 
 rust_proc_macro(
-    name = "ava_codec_derive",
+    name = "ava_api_macros",
     srcs = ["src/lib.rs"],
     compile_data = ["Cargo.toml"],
     proc_macro_deps = ["@crates//:quote"],

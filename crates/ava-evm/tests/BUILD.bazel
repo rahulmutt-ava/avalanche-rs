@@ -1,0 +1,30 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "vectors/cchain/reexecute/genesis_to_1/genesis_to_1.json",
+    ],
+    crate_root = "build.rs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "@crates//:hex",
+        "@crates//:parking_lot",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "build_script_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":build_script",
+    deps = ["//crates/ava-types:ava_types"],
+)

@@ -1,0 +1,76 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_indexer",
+    srcs = [
+        "src/acceptor.rs",
+        "src/container.rs",
+        "src/error.rs",
+        "src/index.rs",
+        "src/indexer.rs",
+        "src/lib.rs",
+        "src/service.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-api:ava_api",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:axum",
+        "@crates//:chrono",
+        "@crates//:hex",
+        "@crates//:parking_lot",
+        "@crates//:serde",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "differential_indexer_parity",
+    srcs = ["tests/differential_indexer_parity.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/indexer/indexer_parity.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_indexer",
+        "//crates/ava-api:ava_api",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "@crates//:axum",
+        "@crates//:hex",
+        "@crates//:pretty_assertions",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tower",
+    ],
+)
+
+rust_test(
+    name = "ava_indexer_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_indexer",
+    deps = [
+        "//crates/ava-api:ava_api",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "@crates//:pretty_assertions",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tower",
+    ],
+)

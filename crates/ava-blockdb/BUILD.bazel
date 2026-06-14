@@ -1,0 +1,68 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_blockdb",
+    srcs = [
+        "src/config.rs",
+        "src/data.rs",
+        "src/error.rs",
+        "src/format.rs",
+        "src/index.rs",
+        "src/lib.rs",
+        "src/recovery.rs",
+        "src/store.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:lru",
+        "@crates//:parking_lot",
+        "@crates//:thiserror",
+        "@crates//:twox-hash",
+        "@crates//:zstd",
+    ],
+)
+
+rust_test(
+    name = "golden_format",
+    srcs = ["tests/golden_format.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/blockdb/blockdb_vectors.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_blockdb",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "prop_roundtrip",
+    srcs = ["tests/prop_roundtrip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_blockdb",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "recovery",
+    srcs = ["tests/recovery.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_blockdb",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "ava_blockdb_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_blockdb",
+)

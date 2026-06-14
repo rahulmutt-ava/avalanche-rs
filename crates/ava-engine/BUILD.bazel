@@ -1,0 +1,194 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_engine",
+    srcs = [
+        "src/common/engine.rs",
+        "src/common/error.rs",
+        "src/common/handler.rs",
+        "src/common/mod.rs",
+        "src/common/no_ops.rs",
+        "src/common/sender.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/networking/benchlist.rs",
+        "src/networking/handler.rs",
+        "src/networking/message_queue.rs",
+        "src/networking/mod.rs",
+        "src/networking/router.rs",
+        "src/networking/timeout.rs",
+        "src/networking/tracker.rs",
+        "src/snowman/adaptor.rs",
+        "src/snowman/bootstrap/acceptor.rs",
+        "src/snowman/bootstrap/interval.rs",
+        "src/snowman/bootstrap/mod.rs",
+        "src/snowman/engine.rs",
+        "src/snowman/getter.rs",
+        "src/snowman/issuer.rs",
+        "src/snowman/mod.rs",
+        "src/snowman/poll.rs",
+        "src/snowman/syncer.rs",
+        "src/snowman/voter.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:futures",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "bootstrap",
+    srcs = [
+        "tests/bootstrap.rs",
+        "tests/support/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/bootstrap.rs",
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "engine_flows",
+    srcs = [
+        "tests/engine_flows.rs",
+        "tests/support/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/engine_flows.rs",
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "handler",
+    srcs = ["tests/handler.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "prop_liveness",
+    srcs = [
+        "tests/prop_liveness.rs",
+        "tests/support/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/prop_liveness.rs",
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:proptest",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "prop_preference",
+    srcs = [
+        "tests/prop_preference.rs",
+        "tests/support/mod.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_root = "tests/prop_preference.rs",
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:proptest",
+        "@crates//:sha2",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "router",
+    srcs = ["tests/router.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "timeout",
+    srcs = ["tests/timeout.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_engine",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:assert_matches",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "ava_engine_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_engine",
+    deps = [
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+    ],
+)

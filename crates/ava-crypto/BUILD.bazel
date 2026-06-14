@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_crypto",
@@ -24,4 +24,116 @@ rust_library(
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:bech32",
+        "@crates//:blst",
+        "@crates//:hex",
+        "@crates//:rcgen",
+        "@crates//:ring",
+        "@crates//:ripemd",
+        "@crates//:secp256k1",
+        "@crates//:sha2",
+        "@crates//:sha3",
+        "@crates//:thiserror",
+        "@crates//:time",
+        "@crates//:x509-parser",
+        "@crates//:zeroize",
+    ],
+)
+
+rust_test(
+    name = "golden_bls",
+    srcs = ["tests/golden_bls.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_encodings",
+    srcs = ["tests/golden_encodings.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_nodeid",
+    srcs = ["tests/golden_nodeid.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "golden_secp",
+    srcs = ["tests/golden_secp.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "hashing",
+    srcs = ["tests/hashing.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "local_signer",
+    srcs = ["tests/local_signer.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_crypto"],
+)
+
+rust_test(
+    name = "proptests",
+    srcs = ["tests/proptests.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "ava_crypto_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_crypto",
+    deps = [
+        "@crates//:rcgen",
+        "@crates//:rustls-pemfile",
+    ],
 )

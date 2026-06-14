@@ -1,0 +1,12 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "decode_block",
+    srcs = ["fuzz_targets/decode_block.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+    ],
+)

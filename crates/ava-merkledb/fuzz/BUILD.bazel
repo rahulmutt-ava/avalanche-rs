@@ -1,0 +1,17 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "node_codec",
+    srcs = ["fuzz_targets/node_codec.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//crates/ava-merkledb:ava_merkledb"],
+)
+
+rust_binary(
+    name = "op_stream",
+    srcs = ["fuzz_targets/op_stream.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//crates/ava-merkledb:ava_merkledb"],
+)

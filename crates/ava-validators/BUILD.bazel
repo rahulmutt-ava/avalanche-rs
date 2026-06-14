@@ -1,0 +1,72 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_validators",
+    srcs = [
+        "src/connected.rs",
+        "src/error.rs",
+        "src/lib.rs",
+        "src/manager.rs",
+        "src/set.rs",
+        "src/state.rs",
+        "src/state_adapters.rs",
+        "src/uptime/error.rs",
+        "src/uptime/locked.rs",
+        "src/uptime/manager.rs",
+        "src/uptime/mod.rs",
+        "src/uptime/state.rs",
+        "src/validator.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "prop_sampling",
+    srcs = ["tests/prop_sampling.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_validators",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:assert_matches",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "state_connected",
+    srcs = ["tests/state_connected.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_validators",
+        "//crates/ava-types:ava_types",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "uptime",
+    srcs = ["tests/uptime.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_validators",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:tokio",
+    ],
+)

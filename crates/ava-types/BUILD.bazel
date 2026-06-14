@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_types",
@@ -15,4 +15,65 @@ rust_library(
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-utils:ava_utils",
+        "@crates//:hex",
+        "@crates//:parking_lot",
+        "@crates//:serde",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "aliaser",
+    srcs = ["tests/aliaser.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_types"],
+)
+
+rust_test(
+    name = "constants",
+    srcs = ["tests/constants.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_types"],
+)
+
+rust_test(
+    name = "golden_cb58",
+    srcs = ["tests/golden_cb58.rs"],
+    compile_data = [
+        "../../tests/vectors/ids/cb58.json",
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_types",
+        "@crates//:hex",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "id_ops",
+    srcs = ["tests/id_ops.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_types",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "proptests",
+    srcs = ["tests/proptests.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_types",
+        "@crates//:proptest",
+    ],
 )

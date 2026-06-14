@@ -1,0 +1,36 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_evm_reth",
+    srcs = ["src/lib.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:alloy-consensus",
+        "@crates//:alloy-eips",
+        "@crates//:alloy-evm",
+        "@crates//:alloy-genesis",
+        "@crates//:alloy-primitives",
+        "@crates//:alloy-rlp",
+        "@crates//:reth-chainspec",
+        "@crates//:reth-ethereum-forks",
+        "@crates//:reth-ethereum-primitives",
+        "@crates//:reth-evm",
+        "@crates//:reth-evm-ethereum",
+        "@crates//:reth-network-peers",
+        "@crates//:reth-primitives-traits",
+        "@crates//:reth-revm",
+        "@crates//:reth-storage-api",
+        "@crates//:reth-trie-common",
+        "@crates//:revm",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "facade_pins",
+    srcs = ["tests/facade_pins.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_evm_reth"],
+)

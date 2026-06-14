@@ -1,0 +1,121 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_exec",
+    srcs = [
+        "src/driver.rs",
+        "src/error.rs",
+        "src/events.rs",
+        "src/eventual.rs",
+        "src/execute_step.rs",
+        "src/executor.rs",
+        "src/lib.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/db:ava_saevm_db",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-saevm/worstcase:ava_saevm_worstcase",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arc-swap",
+        "@crates//:parking_lot",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "backpressure",
+    srcs = ["tests/backpressure.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_exec",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/db:ava_saevm_db",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-saevm/worstcase:ava_saevm_worstcase",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "determinism",
+    srcs = ["tests/determinism.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_exec",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/db:ava_saevm_db",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/testutil:ava_saevm_testutil",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:alloy-consensus",
+        "@crates//:alloy-primitives",
+        "@crates//:arc-swap",
+        "@crates//:proptest",
+        "@crates//:secp256k1",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "events",
+    srcs = ["tests/events.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_exec",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "execute_step",
+    srcs = ["tests/execute_step.rs"],
+    compile_data = [
+        "../../ava-evm/tests/vectors/cchain/reexecute/genesis_to_1/genesis_to_1.json",
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_exec",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/db:ava_saevm_db",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-saevm/worstcase:ava_saevm_worstcase",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arc-swap",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)

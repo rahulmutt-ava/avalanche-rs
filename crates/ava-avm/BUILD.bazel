@@ -1,0 +1,397 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_avm",
+    srcs = [
+        "src/block/builder.rs",
+        "src/block/executor.rs",
+        "src/block/mod.rs",
+        "src/block/parser.rs",
+        "src/block/standard_block.rs",
+        "src/config.rs",
+        "src/error.rs",
+        "src/factory.rs",
+        "src/fx/dispatch.rs",
+        "src/fx/mod.rs",
+        "src/fx/secp.rs",
+        "src/fx_index.rs",
+        "src/jsonrpc.rs",
+        "src/lib.rs",
+        "src/mempool.rs",
+        "src/network/atomic.rs",
+        "src/network/gossip.rs",
+        "src/network/mod.rs",
+        "src/network/tx_verifier.rs",
+        "src/nftfx/fx.rs",
+        "src/nftfx/mod.rs",
+        "src/nftfx/types.rs",
+        "src/propertyfx/fx.rs",
+        "src/propertyfx/mod.rs",
+        "src/propertyfx/types.rs",
+        "src/service.rs",
+        "src/state/chain.rs",
+        "src/state/diff.rs",
+        "src/state/init.rs",
+        "src/state/mod.rs",
+        "src/state/state.rs",
+        "src/state/versions.rs",
+        "src/txs/base_tx.rs",
+        "src/txs/codec.rs",
+        "src/txs/components.rs",
+        "src/txs/create_asset.rs",
+        "src/txs/credential.rs",
+        "src/txs/executor/backend.rs",
+        "src/txs/executor/consts.rs",
+        "src/txs/executor/exec.rs",
+        "src/txs/executor/mod.rs",
+        "src/txs/executor/semantic.rs",
+        "src/txs/executor/syntactic.rs",
+        "src/txs/export.rs",
+        "src/txs/import.rs",
+        "src/txs/initial_state.rs",
+        "src/txs/mod.rs",
+        "src/txs/operation.rs",
+        "src/txs/operation_tx.rs",
+        "src/txs/tx.rs",
+        "src/vm.rs",
+        "src/vm/dyndb.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = [
+        "//crates/ava-api-macros:ava_api_macros",
+        "//crates/ava-codec-derive:ava_codec_derive",
+        "@crates//:async-trait",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-chains:ava_chains",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-platformvm:ava_platformvm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:arc-swap",
+        "@crates//:assert_matches",
+        "@crates//:bytes",
+        "@crates//:hex",
+        "@crates//:parking_lot",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
+        "@crates//:rstest",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "atomic_xp",
+    srcs = ["tests/atomic_xp.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-chains:ava_chains",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-platformvm:ava_platformvm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "block_lifecycle",
+    srcs = ["tests/block_lifecycle.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:assert_matches",
+        "@crates//:parking_lot",
+    ],
+)
+
+rust_test(
+    name = "builder",
+    srcs = ["tests/builder.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "error_variants",
+    srcs = ["tests/error_variants.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_avm"],
+)
+
+rust_test(
+    name = "executor",
+    srcs = ["tests/executor.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "fx_dispatch",
+    srcs = ["tests/fx_dispatch.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "fx_secp",
+    srcs = ["tests/fx_secp.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:assert_matches",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "golden_block_hash",
+    srcs = ["tests/golden_block_hash.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "golden_tx_codec",
+    srcs = ["tests/golden_tx_codec.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "gossip",
+    srcs = ["tests/gossip.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "nftfx_types",
+    srcs = ["tests/nftfx_types.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+    ],
+)
+
+rust_test(
+    name = "nftfx_verify",
+    srcs = ["tests/nftfx_verify.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "propertyfx_types",
+    srcs = ["tests/propertyfx_types.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "propertyfx_verify",
+    srcs = ["tests/propertyfx_verify.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "semantic",
+    srcs = ["tests/semantic.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "state_init",
+    srcs = ["tests/state_init.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "state_utxo",
+    srcs = ["tests/state_utxo.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "syntactic",
+    srcs = ["tests/syntactic.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "tx_types",
+    srcs = ["tests/tx_types.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "vm_conformance",
+    srcs = ["tests/vm_conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:serde_json",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "ava_avm_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_avm",
+    proc_macro_deps = ["//crates/ava-api-macros:ava_api_macros"],
+    deps = [
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:bytes",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)

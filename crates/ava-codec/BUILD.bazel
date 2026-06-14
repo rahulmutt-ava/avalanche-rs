@@ -1,10 +1,11 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_codec",
     srcs = [
         "src/codectest.rs",
         "src/error.rs",
+        "src/ids.rs",
         "src/lib.rs",
         "src/linearcodec.rs",
         "src/manager.rs",
@@ -13,4 +14,64 @@ rust_library(
     compile_data = ["Cargo.toml"],
     proc_macro_deps = ["//crates/ava-codec-derive:ava_codec_derive"],
     visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-types:ava_types",
+        "@crates//:parking_lot",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "conformance",
+    srcs = ["tests/conformance.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "derive",
+    srcs = ["tests/derive.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_codec"],
+)
+
+rust_test(
+    name = "golden_codec",
+    srcs = ["tests/golden_codec.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_codec",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "packer",
+    srcs = ["tests/packer.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_codec",
+        "@crates//:assert_matches",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "proptests",
+    srcs = ["tests/proptests.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_codec",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "ava_codec_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_codec",
 )

@@ -1,0 +1,33 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_types",
+    srcs = [
+        "src/execution.rs",
+        "src/lib.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "execution_codec",
+    srcs = ["tests/execution_codec.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_types",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:proptest",
+    ],
+)

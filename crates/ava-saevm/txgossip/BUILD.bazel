@@ -1,0 +1,41 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_txgossip",
+    srcs = [
+        "src/lib.rs",
+        "src/priority.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "gossipers",
+    srcs = ["tests/gossipers.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_txgossip",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "priority",
+    srcs = ["tests/priority.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_txgossip",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "@crates//:hex",
+        "@crates//:pretty_assertions",
+        "@crates//:proptest",
+    ],
+)

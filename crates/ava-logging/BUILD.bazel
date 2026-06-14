@@ -3,16 +3,31 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 rust_library(
     name = "ava_logging",
     srcs = [
+        "src/format.rs",
         "src/level.rs",
         "src/lib.rs",
+        "src/rolling.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
-    deps = ["@crates//:thiserror"],
+    deps = [
+        "@crates//:chrono",
+        "@crates//:flate2",
+        "@crates//:parking_lot",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tracing",
+        "@crates//:tracing-appender",
+        "@crates//:tracing-subscriber",
+    ],
 )
 
 rust_test(
     name = "ava_logging_test",
     compile_data = ["Cargo.toml"],
     crate = ":ava_logging",
+    deps = [
+        "@crates//:assert_matches",
+        "@crates//:tempfile",
+    ],
 )

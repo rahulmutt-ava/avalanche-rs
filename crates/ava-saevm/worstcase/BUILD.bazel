@@ -1,0 +1,55 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_saevm_worstcase",
+    srcs = [
+        "src/lib.rs",
+        "src/state.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "bounds_prop",
+    srcs = ["tests/bounds_prop.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_worstcase",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "worstcase",
+    srcs = ["tests/worstcase.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_worstcase",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:pretty_assertions",
+    ],
+)

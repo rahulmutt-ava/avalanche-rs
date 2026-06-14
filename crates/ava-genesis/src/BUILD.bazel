@@ -1,0 +1,23 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "build.rs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-avm:ava_avm",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-platformvm:ava_platformvm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_test(
+    name = "build_script_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":build_script",
+)

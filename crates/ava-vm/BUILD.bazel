@@ -1,0 +1,146 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_vm",
+    srcs = [
+        "src/app.rs",
+        "src/app_sender.rs",
+        "src/block/batched.rs",
+        "src/block/chain_vm.rs",
+        "src/block/mod.rs",
+        "src/block/state_sync.rs",
+        "src/block/with_context.rs",
+        "src/components/avax/mod.rs",
+        "src/components/avax/shared_memory.rs",
+        "src/components/chain/mod.rs",
+        "src/components/chain/state.rs",
+        "src/components/gas.rs",
+        "src/components/mod.rs",
+        "src/components/verify.rs",
+        "src/connector.rs",
+        "src/error.rs",
+        "src/fx.rs",
+        "src/health.rs",
+        "src/lib.rs",
+        "src/middleware/meter.rs",
+        "src/middleware/mod.rs",
+        "src/middleware/traced.rs",
+        "src/testutil.rs",
+        "src/vm.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "@crates//:futures",
+        "@crates//:num-bigint",
+        "@crates//:prometheus",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "chain_state",
+    srcs = ["tests/chain_state.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "@crates//:futures",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "conformance_vm",
+    srcs = ["tests/conformance_vm.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "fx",
+    srcs = ["tests/fx.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-utils:ava_utils",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "golden_avax",
+    srcs = ["tests/golden_avax.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "golden_gas",
+    srcs = ["tests/golden_gas.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "middleware",
+    srcs = ["tests/middleware.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "@crates//:prometheus",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "ava_vm_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_vm",
+    proc_macro_deps = ["@crates//:async-trait"],
+    deps = [
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "@crates//:assert_matches",
+        "@crates//:proptest",
+    ],
+)

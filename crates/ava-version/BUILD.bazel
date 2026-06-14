@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_version",
@@ -11,4 +11,46 @@ rust_library(
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-types:ava_types",
+        "@crates//:bs58",
+        "@crates//:chrono",
+        "@crates//:serde",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "golden_upgrade",
+    srcs = ["tests/golden_upgrade.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_version",
+        "//crates/ava-types:ava_types",
+        "@crates//:chrono",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "proptests",
+    srcs = ["tests/proptests.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_version",
+        "//crates/ava-types:ava_types",
+        "@crates//:chrono",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "version",
+    srcs = ["tests/version.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_version"],
 )
