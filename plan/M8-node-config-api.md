@@ -686,14 +686,29 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 > incl. avalanchers), `cargo nextest run -p avalanchers` ✓ (7/7), `scripts/single_runtime_lint.sh` ✓,
 > ava-saevm-core healthy under process isolation (`gc_settled_ancestry` passes alone; its `cargo test`
 > failure is a shared-process-parallelism artifact, not a regression).
-> **STILL OPEN (not this session):** (1) the single literal `cargo nextest run --profile ci` /
-> `--workspace` command cannot complete in the current sandbox — nextest wedges at its `--list` phase
-> for most crates on a blocking-stdin fd-inheritance quirk (see memory `nextest-list-stdin-hang-gotcha`;
-> verify per-package via `cargo test -p X < /dev/null` instead, or run in the Nix-wrapped
-> `./scripts/run_task.sh test-unit` on a non-sandboxed host); (2) `tests/exit_gate.rs` aggregator not
-> yet added; (3) `bazel-gazelle-generate` + `deps-tidy` for the still-missing BUILD.bazel on
-> ava-api/ava-api-macros/ava-node/avalanchers (carried handoff); (4) `./avalanchers` /
-> `--network-id=fuji` live lifecycle smoke. M8.32 NOT marked DONE pending these.
+> **UPDATE (2026-06-14).** Re-audited the four "still open" items empirically:
+> - **(1) full `cargo nextest run --profile ci` — NOT sandbox-blocked; earlier framing disproven.**
+>   The 2026-06-13 "list-phase hang" was a property of *that session's spawning-shell stdin* (a
+>   blocking/open-pipe fd 0), not of the nono sandbox. Retested: this sandbox's fd 0 is EOF, and the
+>   crates the note named as hanging run CLEAN under nextest — `ava-indexer` 18/18 (0.5s),
+>   `ava-network` 55/55 (10.8s), `ava-api` 96/96 (0.6s); `cargo nextest list` also works. So a full
+>   `--workspace` run is gated only by build cost (reth/firewood/saevm), not a hang. (Memory
+>   `nextest-list-stdin-hang-gotcha` corrected.)
+> - **(2) `tests/exit_gate.rs` aggregator — DONE (commit 37f3341).** Lives at
+>   `tests/differential/tests/exit_gate.rs` (repo-root `tests/` is not a crate; `ava-differential` is
+>   the canonical cross-cutting home). Source-presence gate: asserts each of the 5 named exit tests
+>   exists as a `#[test]`/`#[tokio::test]` fn in its owning crate; fails loudly on rename/removal
+>   (red-check verified). `cargo nextest run -p ava-differential -E 'test(all_m8_exit_gate_tests_registered)'` ✓.
+> - **(3) BUILD.bazel regen — DONE (commit c7d4674).** The real scope was the *entire* bazel layer:
+>   gazelle generated 52 missing per-crate BUILD.bazel + refreshed 10 stale tracked ones (only 13
+>   were committed; the rest of M1–M8 never had theirs). `bazel-check-metadata` (gazelle + bazel-fmt +
+>   check-clean-branch) is now clean & idempotent. **Pre-existing, NOT fixed here** (orthogonal to
+>   BUILD-file metadata, dates to initial "Bazel setup, few tests failing"): `bazel-build`/`bazel-test`
+>   fail on a crate_universe `cargo tree` error for excluded/fuzz manifests; `cargo deny` advisories +
+>   licenses (firewood v0.5.0) fail in `deps-tidy`.
+> - **(4) `./avalanchers` / `--network-id=fuji` live lifecycle smoke — STILL OPEN.** Not sandbox-blocked
+>   (network is open, localhost binds work); just not yet run — needs the full `avalanchers` build.
+> M8.32 still NOT marked DONE pending (4) + the pre-existing bazel-build/test + cargo-deny gates.
 
 | Spec section | Covered by task(s) | Notes / deferrals |
 |---|---|---|
