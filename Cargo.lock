@@ -1477,6 +1477,7 @@ dependencies = [
  "assert_matches",
  "ava-types",
  "bytes",
+ "criterion",
  "flate2",
  "hex",
  "pretty_assertions",
