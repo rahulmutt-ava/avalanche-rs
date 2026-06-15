@@ -21,6 +21,10 @@ ava-types = { path = "../ava-types" }
 # linkeddb (§2.7) persists its doubly-linked-list nodes via the M0 linearcodec
 # (byte-exact, §10.6).
 ava-codec = { path = "../ava-codec" }
+# The R2 import facade (04 §11, 26 §6) names the destination RocksDB dir for
+# `CURRENT_DATABASE` (`v1.4.5`). Optional + pulled in only by the `migrate`
+# feature; ava-version depends only on ava-types, so no cycle (03 §0).
+ava-version = { path = "../ava-version", optional = true }
 
 # meterdb (§2.5) wraps any Database in Prometheus counters/gauges under the exact
 # Go metric names (calls/duration/size, method label). linkeddb (§2.7) caches
@@ -73,7 +77,7 @@ rpcdb = [ "dep:prost", "dep:tonic", "dep:tokio", "dep:bytes" ]
 # concrete on-disk readers are best-effort: `RocksDbCompatSource` (leveldb fast
 # path) additionally needs the `rocksdb` feature; the Pebble path is a documented
 # Go-sidecar design with a stub spawn (see docs/migration.md).
-migrate = [  ]
+migrate = [ "dep:ava-version" ]
 
 [build-dependencies]
 # Generates the rpcdb tonic client/server + prost types from

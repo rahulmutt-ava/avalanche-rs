@@ -34,6 +34,10 @@ pub mod versiondb;
 
 #[cfg(feature = "migrate")]
 pub mod migrate;
+#[cfg(feature = "migrate")]
+pub use migrate::import::{
+    GoBackend, ImportError, ImportOptions, ImportReport, current_db_dir_name, detect_backend,
+};
 
 #[cfg(feature = "rocksdb")]
 pub mod rocksdb;

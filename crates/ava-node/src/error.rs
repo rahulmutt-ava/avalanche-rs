@@ -63,6 +63,28 @@ pub enum Error {
     #[error("problem initializing database: {0}")]
     DatabaseInit(String),
 
+    /// Step 11 (pre-open): the configured data directory was written by a Go
+    /// node (or a prior `PREV_DATABASE` schema) in a backend the Rust node
+    /// cannot open in place (Pebble/goleveldb, 04 §11 / 26 §6). The node
+    /// **refuses to start** rather than silently corrupting it; run the offline
+    /// import tool first or bootstrap fresh from the network (04 §11.5).
+    #[error(
+        "refusing to open foreign data directory {path}: detected a {backend} \
+         schema-version folder the Rust node cannot open in place. Run the \
+         offline import tool (`avalanchers db migrate`, 04 §11) to migrate it to \
+         RocksDB ({current}), or bootstrap fresh from the network (04 §11.5)."
+    )]
+    ForeignDataDir {
+        /// The data directory that was refused.
+        path: std::path::PathBuf,
+        /// The foreign backend / schema folder detected (e.g. `pebble`,
+        /// `v1.0.0`).
+        backend: String,
+        /// The RocksDB schema-version folder the node would have opened
+        /// (`CURRENT_DATABASE`).
+        current: &'static str,
+    },
+
     /// Step 11: the persisted genesis hash does not match the configured
     /// genesis (byte-stable Go message).
     #[error(

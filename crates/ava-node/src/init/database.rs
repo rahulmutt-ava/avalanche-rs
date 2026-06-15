@@ -177,6 +177,12 @@ pub fn init_database(config: &Config, metrics: &NodeMetrics) -> Result<Arc<dyn D
         tracing::warn!("--db-read-only is not supported yet; opening read-write");
     }
 
+    // Pre-open guard (26 §6 / 04 §11): refuse a foreign/older Go data dir
+    // (Pebble / PREV_DATABASE) rather than opening it in place and corrupting
+    // it. Runs strictly before the open, so it never touches the
+    // `ungracefulShutdown` marker written below.
+    crate::init::db_init::precheck_data_dir(&config.database_config)?;
+
     let db = open_backend(&config.database_config, &meter_registry)?;
 
     let expected_genesis_hash = ava_crypto::hashing::sha256(&config.genesis_bytes);
