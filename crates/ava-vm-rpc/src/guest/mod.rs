@@ -100,13 +100,56 @@ impl<V: ChainVm + 'static> VmServer<V> {
 impl<V: ChainVm + 'static> VmService for VmServer<V> {
     async fn initialize(
         &self,
-        _request: Request<vm::InitializeRequest>,
+        request: Request<vm::InitializeRequest>,
     ) -> Result<Response<vm::InitializeResponse>, Status> {
-        // The host-driven VM.Initialize (which dials back the db/server callback
-        // services and constructs the guest-side proxies the inner VM consumes)
-        // is wired in M3.25 once the proxy clients exist. For M3.24 the guest is
-        // pre-initialized by its caller. Report the current last-accepted
-        // snapshot so the host can seed its cache. See tests/PORTING.md.
+        let req = request.into_inner();
+
+        // 1. Dial the `proto/rpcdb` Database server (`db_server_addr`) and build
+        //    the guest-side `RpcDatabase` the inner VM consumes (07 §5.2/§5.4).
+        //    `rpcdb::dial` is synchronous (it owns a current-thread runtime and
+        //    `block_on`s each RPC), so it must be driven off the async runtime
+        //    context — dial it on a blocking thread (04 §1.2).
+        let db_addr = req.db_server_addr.clone();
+        let db_client = tokio::task::spawn_blocking(move || crate::proxy::rpcdb::dial(&db_addr))
+            .await
+            .map_err(|e| Status::internal(format!("db dial task: {e}")))?
+            .map_err(|e| Status::internal(format!("dial db_server_addr: {e}")))?;
+        let db: Arc<dyn ava_database::DynDatabase> = Arc::new(db_client);
+
+        // 2. Dial the callback-bundle server (`server_addr`) for the appsender.
+        //    The full bundle also serves sharedmemory/aliasreader/validatorstate/
+        //    warp; the inner VM here consumes only the db + appsender (the other
+        //    proxies are constructed by the node-assembly path — see
+        //    tests/PORTING.md).
+        let app_sender: Arc<dyn ava_vm::app_sender::AppSender> = Arc::new(
+            crate::proxy::appsender::dial(&req.server_addr)
+                .await
+                .map_err(|e| Status::internal(format!("dial server_addr: {e}")))?,
+        );
+
+        // 3. Map the InitializeRequest identity fields onto a ChainContext.
+        let chain_ctx = request_to_chain_context(&req)
+            .map_err(|e| Status::invalid_argument(format!("InitializeRequest: {e}")))?;
+
+        // 4. Run the inner VM's `initialize` with the proxied handles.
+        {
+            let mut vm = self.vm.lock().await;
+            vm.initialize(
+                &self.token,
+                chain_ctx,
+                db,
+                &req.genesis_bytes,
+                &req.upgrade_bytes,
+                &req.config_bytes,
+                Vec::new(),
+                app_sender,
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        }
+
+        // 5. Report the post-initialize last-accepted snapshot so the host can
+        //    seed its client-side `chain.State` cache.
         let vm = self.vm.lock().await;
         let last = vm
             .last_accepted(&self.token)
@@ -572,6 +615,51 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
             err: vm::Error::StateSyncNotImplemented as i32,
         }))
     }
+}
+
+/// Maps an [`InitializeRequest`](vm::InitializeRequest) onto an
+/// [`Arc<ChainContext>`](ava_snow::ChainContext) (07 §5.2).
+///
+/// Identity fields map verbatim. Empty id/node-id byte fields decode to the
+/// zero id (Go's `ids.Empty`). The BLS `public_key` is the 96-byte uncompressed
+/// form (`bls.PublicKeyToUncompressedBytes`); an empty field means no key. The
+/// fork schedule is reconstructed from `network_id` (the host sends
+/// `network_upgrades = None` for the in-process path — see `tests/PORTING.md`).
+fn request_to_chain_context(
+    req: &vm::InitializeRequest,
+) -> std::result::Result<Arc<ava_snow::ChainContext>, String> {
+    let id_or_empty = |b: &[u8]| -> std::result::Result<Id, String> {
+        if b.is_empty() {
+            Ok(Id::EMPTY)
+        } else {
+            Id::from_slice(b).map_err(|e| e.to_string())
+        }
+    };
+    let node_id = if req.node_id.is_empty() {
+        ava_types::node_id::NodeId::default()
+    } else {
+        ava_types::node_id::NodeId::from_slice(&req.node_id).map_err(|e| e.to_string())?
+    };
+    let public_key = if req.public_key.is_empty() {
+        None
+    } else {
+        Some(
+            ava_crypto::bls::PublicKey::from_uncompressed(&req.public_key)
+                .map_err(|e| e.to_string())?,
+        )
+    };
+    Ok(Arc::new(ava_snow::ChainContext {
+        network_id: req.network_id,
+        subnet_id: id_or_empty(&req.subnet_id)?,
+        chain_id: id_or_empty(&req.chain_id)?,
+        node_id,
+        public_key,
+        network_upgrades: ava_version::upgrade::get_config(req.network_id),
+        x_chain_id: id_or_empty(&req.x_chain_id)?,
+        c_chain_id: id_or_empty(&req.c_chain_id)?,
+        avax_asset_id: id_or_empty(&req.avax_asset_id)?,
+        chain_data_dir: std::path::PathBuf::from(&req.chain_data_dir),
+    }))
 }
 
 /// Maps a wire [`vm::State`] enum value to an [`EngineState`], or `None` for the

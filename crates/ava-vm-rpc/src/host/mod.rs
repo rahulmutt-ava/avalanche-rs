@@ -36,7 +36,7 @@ use crate::pb::vm::vm_client::VmClient;
 use crate::pb::vm::{
     self, AppGossipMsg, AppRequestFailedMsg, AppRequestMsg, AppResponseMsg, BuildBlockRequest,
     ConnectedRequest, DisconnectedRequest, GetBlockIdAtHeightRequest, GetBlockRequest,
-    ParseBlockRequest, SetPreferenceRequest, SetStateRequest,
+    InitializeRequest, ParseBlockRequest, SetPreferenceRequest, SetStateRequest,
 };
 use crate::runtime::{Handshake, RuntimeServiceImpl};
 use ava_vm::app::{AppError, AppHandler};
@@ -97,6 +97,50 @@ fn id_from_bytes(b: &[u8]) -> Id {
     Id::from_slice(b).unwrap_or(Id::EMPTY)
 }
 
+/// Maps an [`Id`] to its wire bytes.
+fn id_bytes(id: Id) -> bytes::Bytes {
+    bytes::Bytes::copy_from_slice(&id.to_bytes())
+}
+
+/// Encodes the [`ChainContext`] identity + the genesis/upgrade/config bytes +
+/// the two callback addresses into an [`InitializeRequest`] (07 §5.2).
+///
+/// `network_upgrades` is left `None`: the fork schedule is carried in
+/// `chain_ctx.network_upgrades`, but the proto `NetworkUpgrades` mapping is a
+/// node-assembly follow-up (the in-process Rust↔Rust guest reconstructs the
+/// schedule from `network_id`). See `tests/PORTING.md`.
+fn chain_context_to_request(
+    chain_ctx: &ChainContext,
+    genesis_bytes: &[u8],
+    upgrade_bytes: &[u8],
+    config_bytes: &[u8],
+    db_server_addr: String,
+    server_addr: String,
+) -> InitializeRequest {
+    let public_key = chain_ctx
+        .public_key
+        .as_ref()
+        .map(|pk| bytes::Bytes::copy_from_slice(&pk.serialize()))
+        .unwrap_or_default();
+    InitializeRequest {
+        network_id: chain_ctx.network_id,
+        subnet_id: id_bytes(chain_ctx.subnet_id),
+        chain_id: id_bytes(chain_ctx.chain_id),
+        node_id: bytes::Bytes::copy_from_slice(chain_ctx.node_id.as_bytes()),
+        public_key,
+        x_chain_id: id_bytes(chain_ctx.x_chain_id),
+        c_chain_id: id_bytes(chain_ctx.c_chain_id),
+        avax_asset_id: id_bytes(chain_ctx.avax_asset_id),
+        chain_data_dir: chain_ctx.chain_data_dir.to_string_lossy().into_owned(),
+        genesis_bytes: bytes::Bytes::copy_from_slice(genesis_bytes),
+        upgrade_bytes: bytes::Bytes::copy_from_slice(upgrade_bytes),
+        config_bytes: bytes::Bytes::copy_from_slice(config_bytes),
+        db_server_addr,
+        server_addr,
+        network_upgrades: None,
+    }
+}
+
 /// The host-side rpcchainvm client: a [`ChainVm`] backed by a dialed VM channel.
 ///
 /// The last-accepted id is tracked **client-side** (a faithful port of Go, where
@@ -109,6 +153,10 @@ pub struct RpcChainVm {
     last_accepted: Arc<Mutex<Id>>,
     /// Cancels the spawned runtime-server task on drop.
     runtime_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Cancels the callback-bundle servers (rpcdb at `db_server_addr` +
+    /// appsender at `server_addr`) stood up at [`initialize`](Vm::initialize).
+    /// Fired on `shutdown` and on drop so the gRPC servers stop with the VM.
+    callback_shutdown: CancellationToken,
 }
 
 impl RpcChainVm {
@@ -199,6 +247,7 @@ impl RpcChainVm {
             client,
             last_accepted: Arc::new(Mutex::new(last_accepted)),
             runtime_shutdown: Mutex::new(Some(shutdown_tx)),
+            callback_shutdown: CancellationToken::new(),
         })
     }
 
@@ -234,7 +283,21 @@ impl Drop for RpcChainVm {
         if let Some(tx) = self.runtime_shutdown.lock().take() {
             let _ = tx.send(());
         }
+        // Stop the rpcdb / appsender callback servers stood up at `initialize`.
+        self.callback_shutdown.cancel();
     }
+}
+
+/// Binds an ephemeral loopback listener; returns `(addr, incoming)` so the
+/// caller can learn the bound address before spawning the server on it. The
+/// guest dials `addr` back at `VM.Initialize` (the callback-bundle servers).
+async fn bind_callback_listener() -> Result<(String, tokio_stream::wrappers::TcpListenerStream)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(dial_err)?;
+    let addr = listener.local_addr().map_err(dial_err)?.to_string();
+    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+    Ok((addr, incoming))
 }
 
 #[async_trait]
@@ -375,20 +438,72 @@ impl Vm for RpcChainVm {
     async fn initialize(
         &mut self,
         _token: &CancellationToken,
-        _chain_ctx: Arc<ChainContext>,
-        _db: Arc<dyn DynDatabase>,
-        _genesis_bytes: &[u8],
-        _upgrade_bytes: &[u8],
-        _config_bytes: &[u8],
+        chain_ctx: Arc<ChainContext>,
+        db: Arc<dyn DynDatabase>,
+        genesis_bytes: &[u8],
+        upgrade_bytes: &[u8],
+        config_bytes: &[u8],
         _fxs: Vec<Fx>,
-        _app_sender: Arc<dyn AppSender>,
+        app_sender: Arc<dyn AppSender>,
     ) -> Result<()> {
-        // The host-side `initialize` (which stands up the proxied db/server
-        // callback gRPC servers, encodes the ChainContext into
-        // InitializeRequest, and sends VM.Initialize) is wired in M3.25 once the
-        // proxy servers exist. For M3.24 the roundtrip drives an already-
-        // initialized guest VM. See tests/PORTING.md.
-        Err(Error::RemoteVmNotImplemented)
+        // 1. Stand up the `proto/rpcdb` Database server over the host's db at an
+        //    ephemeral loopback port (`db_server_addr`). The guest dials it back
+        //    and builds the `RpcDatabase` the inner VM consumes (07 §5.2/§5.4).
+        let (db_server_addr, db_incoming) = bind_callback_listener().await?;
+        let db_service = crate::proxy::rpcdb::serve(db).into_service();
+        {
+            let token = self.callback_shutdown.clone();
+            tokio::spawn(async move {
+                let _ = tonic::transport::Server::builder()
+                    .add_service(db_service)
+                    .serve_with_incoming_shutdown(db_incoming, async move {
+                        token.cancelled().await;
+                    })
+                    .await;
+            });
+        }
+
+        // 2. Stand up the callback-bundle server (`server_addr`). The full
+        //    avalanchego bundle serves sharedmemory + aliasreader + appsender +
+        //    validatorstate + warp + grpc.health; the in-process Rust↔Rust path
+        //    exercises the appsender service (the others are stood up by the node
+        //    assembly with concrete impls — see tests/PORTING.md). Sharing one
+        //    ephemeral listener across the bundle matches Go's single
+        //    `server_addr` for all callback services.
+        let (server_addr, cb_incoming) = bind_callback_listener().await?;
+        let app_service = crate::proxy::appsender::serve(app_sender).into_service();
+        {
+            let token = self.callback_shutdown.clone();
+            tokio::spawn(async move {
+                let _ = tonic::transport::Server::builder()
+                    .add_service(app_service)
+                    .serve_with_incoming_shutdown(cb_incoming, async move {
+                        token.cancelled().await;
+                    })
+                    .await;
+            });
+        }
+
+        // 3. Encode the ChainContext identity + the two callback addrs into the
+        //    InitializeRequest and send `VM.Initialize` over the dialed channel.
+        let resp = self
+            .client()
+            .initialize(chain_context_to_request(
+                &chain_ctx,
+                genesis_bytes,
+                upgrade_bytes,
+                config_bytes,
+                db_server_addr,
+                server_addr,
+            ))
+            .await
+            .map_err(rpc_err)?
+            .into_inner();
+
+        // 4. Seed the client-side last-accepted snapshot from the response
+        //    (mirrors Go seeding `chain.State` from the Initialize response).
+        *self.last_accepted.lock() = id_from_bytes(&resp.last_accepted_id);
+        Ok(())
     }
 
     async fn set_state(&mut self, _token: &CancellationToken, state: EngineState) -> Result<()> {
@@ -407,6 +522,8 @@ impl Vm for RpcChainVm {
 
     async fn shutdown(&mut self, _token: &CancellationToken) -> Result<()> {
         self.client().shutdown(()).await.map_err(rpc_err)?;
+        // Stop the rpcdb / appsender callback servers stood up at `initialize`.
+        self.callback_shutdown.cancel();
         Ok(())
     }
 
