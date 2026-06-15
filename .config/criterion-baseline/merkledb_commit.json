@@ -1,0 +1,7 @@
+{
+  "bench_id": "merkledb_commit",
+  "crate": "ava-merkledb",
+  "bench_target": "merkledb_commit",
+  "mean_ns": 165025.1,
+  "note": "Advisory local baseline (see README.md). Padded above the measured local mean to absorb run-to-run variance; real CI baselines are regenerated per-runner."
+}
