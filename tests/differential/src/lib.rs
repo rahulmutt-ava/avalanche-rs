@@ -25,6 +25,7 @@ pub mod atomic;
 pub mod driver;
 pub mod network;
 pub mod observation;
+pub mod plugin;
 pub mod program;
 pub mod saevm;
 pub mod xchain;

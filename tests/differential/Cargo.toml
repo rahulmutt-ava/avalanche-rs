@@ -16,6 +16,15 @@ publish = false
 # is also `#[ignore]`d so it never runs unless the env gate is set). The recorded
 # fallback arm runs every CI run with no feature flag.
 interop = [  ]
+# Gates the *live* two-binary / plugin-interop arms of the M9 mixed-network and
+# rpcchainvm tests: `mixed_network_smoke` (boots a live Go+Rust tmpnet) and
+# `plugin_rust_in_go` (a Rust test-VM plugin hosted by a live Go node). Both need
+# an external Go `avalanchego` binary at `$AVALANCHEGO_PATH` (+ a built
+# `avalanchers`), so they are also `#[ignore]`d and never run in CI / this
+# sandbox; only a scheduled/nightly job or `--features live -- --ignored` turns
+# them on. The pure-Rust offline arms (Observation normalization, config
+# determinism, in-process handshake) run every CI run with no feature flag.
+live = [  ]
 
 [dependencies]
 arbitrary = { workspace = true }
@@ -48,7 +57,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = [ "io-util", "macros", "time", "rt-multi-thread" ] }
+tokio = { workspace = true, features = [ "io-util", "macros", "net", "process", "time", "rt-multi-thread" ] }
 tokio-util = { workspace = true }
 
 [dev-dependencies]
