@@ -1,0 +1,7 @@
+{
+  "bench_id": "secp256k1_verify",
+  "crate": "ava-crypto",
+  "bench_target": "signature",
+  "mean_ns": 23747.4,
+  "note": "Advisory local baseline (see README.md). Padded above the measured local mean to absorb run-to-run variance; real CI baselines are regenerated per-runner."
+}
