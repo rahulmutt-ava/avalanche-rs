@@ -4,6 +4,7 @@ rust_library(
     name = "ava_version",
     srcs = [
         "src/application.rs",
+        "src/compat_table.rs",
         "src/compatibility.rs",
         "src/error.rs",
         "src/lib.rs",
@@ -16,6 +17,7 @@ rust_library(
         "@crates//:bs58",
         "@crates//:chrono",
         "@crates//:serde",
+        "@crates//:serde_json",
         "@crates//:thiserror",
     ],
 )
@@ -53,4 +55,16 @@ rust_test(
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [":ava_version"],
+)
+
+rust_test(
+    name = "compat_matrix",
+    srcs = ["tests/compat_matrix.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_version",
+        "@crates//:pretty_assertions",
+        "@crates//:serde_json",
+    ],
 )

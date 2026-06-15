@@ -55,6 +55,7 @@ rust_library(
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-database:ava_database",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
         "//crates/ava-snow:ava_snow",
         "//crates/ava-types:ava_types",
         "//crates/ava-utils:ava_utils",
@@ -511,5 +512,19 @@ rust_test(
         "@crates//:serde_json",
         "@crates//:tempfile",
         "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "min_gas",
+    srcs = ["tests/min_gas.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_evm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "@crates//:tempfile",
     ],
 )

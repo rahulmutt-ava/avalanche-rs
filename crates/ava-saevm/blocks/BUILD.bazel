@@ -44,6 +44,7 @@ rust_test(
     deps = [
         ":ava_saevm_blocks",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
         "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
         "//crates/ava-saevm/types:ava_saevm_types",
         "//crates/ava-vm:ava_vm",
@@ -71,7 +72,9 @@ rust_test(
     deps = [
         ":ava_saevm_blocks",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
         "//crates/ava-saevm/params:ava_saevm_params",
+        "//crates/ava-vm:ava_vm",
     ],
 )
 

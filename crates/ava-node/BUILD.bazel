@@ -11,6 +11,7 @@ rust_library(
         "src/init/bootstrappers.rs",
         "src/init/chain_manager.rs",
         "src/init/database.rs",
+        "src/init/db_init.rs",
         "src/init/dispatchers.rs",
         "src/init/health.rs",
         "src/init/identity.rs",

@@ -86,3 +86,80 @@ cargo_build_script(
     proc_macro_deps = ["@crates//:tonic-build"],
     visibility = ["//visibility:public"],
 )
+
+rust_test(
+    name = "proxy_sharedmemory",
+    srcs = ["tests/proxy_sharedmemory.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "proxy_validatorstate",
+    srcs = ["tests/proxy_validatorstate.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "proxy_warp_aliasreader",
+    srcs = ["tests/proxy_warp_aliasreader.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "vm_initialize",
+    srcs = ["tests/vm_initialize.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)

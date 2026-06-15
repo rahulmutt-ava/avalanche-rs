@@ -38,3 +38,14 @@ rust_test(
         "@crates//:ruint",
     ],
 )
+
+rust_test(
+    name = "gastime_new",
+    srcs = ["tests/gastime_new.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_gastime",
+        "//crates/ava-vm:ava_vm",
+    ],
+)

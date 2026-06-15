@@ -151,3 +151,10 @@ rust_test(
     crate = ":ava_database",
     deps = ["@crates//:hex"],
 )
+
+rust_test(
+    name = "go_dir_import",
+    srcs = ["tests/go_dir_import.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
