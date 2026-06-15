@@ -64,6 +64,27 @@ cargo nextest run -p ava-codec
 cargo nextest run -p ava-snow -E 'test(TestName)'
 ```
 
+### Live Go oracle (`avalanchego` binary, for differential tests)
+
+A buildable Go `avalanchego` checkout lives at **`~/avalanchego`** and a built
+binary at **`~/avalanchego/build/avalanchego`** (`avalanchego/1.14.2`,
+`rpcchainvm=45`). This unblocks the **live-Go differential/interop tests** that
+need a real Go node or plugin host (M9 Wave 0+ tasks: `differential::plugin_rust_in_go`,
+`plugin_go_in_rust`, `mixed_network`, `test-upgrade`, `test-reexecute`, the
+version/compat matrix). Build / refresh it with:
+
+```sh
+cd ~/avalanchego && ./scripts/build.sh   # CGO + firewood ffi v0.6.0; ld macOS-version warnings are harmless
+~/avalanchego/build/avalanchego --version
+```
+
+Point the live tests at it via the tmpnet `AVALANCHEGO_PATH` env var (Go-binary
+path). It is also the home of the **env-gated in-repo Go-oracle emitters** copied
+into `~/avalanchego` per the M5/M6/M7/M8 recorded-oracle pattern (the differential
+harness, `specs/02` §9 / §11). Keep it in sync: its HEAD commit is the upstream
+oracle pin — re-`build.sh` after pulling, and re-verify `rpcchainvm=45` +
+firewood ffi tag before trusting live roots (`specs/04` §4.2 upstream-delta).
+
 ## Lint & format
 
 ```sh
