@@ -16,6 +16,15 @@ pub enum Error {
     /// of out-of-order configs. (`upgrade/upgrade.go`)
     #[error("upgrade times are not monotonically non-decreasing")]
     InvalidUpgradeTimes,
+
+    /// The embedded `compatibility.json` could not be parsed into the
+    /// rpcchainvm-protocol → versions table.
+    ///
+    /// Mirrors a failure to load Go's `//go:embed compatibility.json`
+    /// (`version/compatibility.go`). The embedded file is a committed,
+    /// byte-parity-tested input, so this should never occur in practice.
+    #[error("invalid embedded compatibility.json: {0}")]
+    CompatibilityTable(String),
 }
 
 /// Crate-wide `Result` alias.
