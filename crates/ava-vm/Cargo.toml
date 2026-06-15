@@ -39,7 +39,7 @@ sha2 = { workspace = true, optional = true }
 [features]
 # Exposes the in-memory `TestVm` + `vm_conformance!` battery (07 §10) so the
 # integration test (and downstream VMs) can run the generic conformance suite.
-testutil = ["dep:tokio", "dep:sha2"]
+testutil = [ "dep:tokio", "dep:sha2" ]
 
 [dev-dependencies]
 proptest = { workspace = true }

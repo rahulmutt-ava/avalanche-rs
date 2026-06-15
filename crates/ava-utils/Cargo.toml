@@ -22,13 +22,13 @@ parking_lot = { workspace = true }
 # chrono powers formatting conveniences; tokio backs the injectable Clock's
 # monotonic reading (M0.12) so tests compose with `start_paused`.
 chrono = { workspace = true }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = [ "time" ] }
 
 [dev-dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
-tokio = { version = "1", features = ["time", "macros", "rt", "test-util"] }
+tokio = { version = "1", features = [ "time", "macros", "rt", "test-util" ] }
 proptest = { workspace = true }
 rstest = { workspace = true }
 assert_matches = { workspace = true }

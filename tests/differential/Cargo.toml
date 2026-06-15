@@ -15,7 +15,7 @@ publish = false
 # scheduled/nightly job or an explicit `--features interop` turns it on (the test
 # is also `#[ignore]`d so it never runs unless the env gate is set). The recorded
 # fallback arm runs every CI run with no feature flag.
-interop = []
+interop = [  ]
 
 [dependencies]
 arbitrary = { workspace = true }

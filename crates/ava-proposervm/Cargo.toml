@@ -59,7 +59,7 @@ tonic-build = { workspace = true }
 [features]
 # Exposes the in-memory test inner VM helpers so the integration test (and
 # downstream crates) can drive `ProposerVm` over `ava_vm::testutil::TestVm`.
-testutil = ["ava-vm/testutil"]
+testutil = [ "ava-vm/testutil" ]
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -70,8 +70,8 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 # `test-util` enables `#[tokio::test(start_paused = true)]` virtual time for the
 # slot-wait build path (no wall-clock sleeps).
-tokio = { workspace = true, features = ["test-util"] }
-ava-vm = { path = "../ava-vm", features = ["testutil"] }
+tokio = { workspace = true, features = [ "test-util" ] }
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 # Staking-cert generation + ECDSA P-256 signing for the build-block test.
 rcgen = { workspace = true }
 ring = { workspace = true }

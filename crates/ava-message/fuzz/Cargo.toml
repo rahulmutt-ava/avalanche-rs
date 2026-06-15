@@ -25,7 +25,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 # The decode body lives in ava-message behind the `fuzzing` feature, so the fuzz
 # target and the stable smoke test share one implementation.
-ava-message = { path = "..", features = ["fuzzing"] }
+ava-message = { path = "..", features = [ "fuzzing" ] }
 
 [[bin]]
 name = "decode_never_overreads"

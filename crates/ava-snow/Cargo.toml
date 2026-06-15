@@ -28,7 +28,7 @@ tokio-util = { workspace = true }
 # In-memory test-VM cluster scaffolding (TestVm/TestBlock/Cluster) used by the
 # safety proptest harness (M3.1) and the consensus battery (M3.5). Off by
 # default so the production surface stays lean.
-testutil = []
+testutil = [  ]
 
 [dev-dependencies]
 proptest = { workspace = true }

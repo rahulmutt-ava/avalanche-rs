@@ -76,12 +76,12 @@ ava-utils = { path = "../ava-utils" }
 # Keccak GLOBALLY for the build — see report; per-crate `cargo test -p ava-evm`
 # is the supported test path; an all-features workspace build is an M6-exit-gate
 # cross-cutting concern, not this task's.
-firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, features = ["ethhash"] }
+firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, features = [ "ethhash" ] }
 # `firewood::db::DbConfig` needs a `NodeHashAlgorithm` (not re-exported by
 # firewood's public API); pull `firewood-storage` from the same rev for
 # `NodeHashAlgorithm::compile_option()`. Its `ethhash` feature must track
 # `firewood/ethhash` (both flip the global hash mode).
-firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, features = ["ethhash"] }
+firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, features = [ "ethhash" ] }
 # Fixed-width big integers for the AP3 base-fee window math (spec 21 §4a): the
 # base fee is a 256-bit wei quantity and the delta computation can exceed u64.
 # No floats (spec 00 §6.1); all U256 ops are checked/saturating.
@@ -121,7 +121,7 @@ assert_matches = { workspace = true }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }
 # The `tests/chainvm.rs` engine harness drives the async `ChainVm`/`Vm` surface.
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = [ "macros", "rt", "rt-multi-thread" ] }
 tokio-util = { workspace = true }
 # Building the secp256k1fx TransferInput/TransferOutput/OutputOwners payloads the
 # atomic-tx golden-vector tests embed in the reused X-Chain fx component enums.

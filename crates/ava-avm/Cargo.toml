@@ -64,7 +64,7 @@ pretty_assertions = { workspace = true }
 hex = { workspace = true }
 # The generic VM-conformance battery (`vm_conformance!`, 07 §10) + the async
 # runtime the battery's `#[tokio::test]`s and the M5.19 unit tests run on.
-ava-vm = { path = "../ava-vm", features = ["testutil"] }
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 # M5.20 ATOMIC-1 cross-chain round-trip (`tests/atomic_xp.rs`): the REAL

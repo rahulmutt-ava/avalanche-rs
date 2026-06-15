@@ -40,14 +40,14 @@ tokio = { workspace = true, features = [ "macros", "rt" ] }
 # Off by default: the round-based BFT engine stub presenting the
 # common::Engine/Handler surface (specs 06 §8). The parameters + canoto
 # messages + block wrapper are always compiled.
-default = []
+default = [  ]
 simplex = [
-    "dep:ava-engine",
-    "dep:ava-validators",
-    "dep:ava-vm",
-    "dep:async-trait",
-    "dep:serde_json",
-    "dep:tracing",
+  "dep:ava-engine",
+  "dep:ava-validators",
+  "dep:ava-vm",
+  "dep:async-trait",
+  "dep:serde_json",
+  "dep:tracing",
 ]
 
 [lints]

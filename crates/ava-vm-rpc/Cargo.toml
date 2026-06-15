@@ -16,7 +16,7 @@ ava-vm = { path = "../ava-vm" }
 ava-snow = { path = "../ava-snow" }
 # DynDatabase (rpcdb proxy), the rpcdb proto client/server building blocks reused
 # by the guest-side RpcDatabase / host-side DatabaseServer (M3.25).
-ava-database = { path = "../ava-database", features = ["rpcdb"] }
+ava-database = { path = "../ava-database", features = [ "rpcdb" ] }
 # ValidatorState (validatorstate proxy), GetValidatorOutput / WarpSet (M3.25).
 ava-validators = { path = "../ava-validators" }
 # BLS PublicKey/Signature for the warp Signer proxy + validator public keys.
@@ -45,7 +45,7 @@ tokio-util = { workspace = true }
 # bind an ephemeral port *first*, learn its address, then serve on it). Report:
 # candidate to promote to a workspace dep when the node assembly (M3.28) also
 # needs ephemeral-port gRPC servers.
-tokio-stream = { version = "0.1", features = ["net"] }
+tokio-stream = { version = "0.1", features = [ "net" ] }
 
 # Linux Pdeathsig (PR_SET_PDEATHSIG) in the audited pre_exec closure (00 §7.6);
 # non-Linux falls back to kill-on-drop. libc is the minimal FFI surface.
@@ -60,8 +60,8 @@ tonic-build = { workspace = true }
 [dev-dependencies]
 # The host/guest roundtrip + proxy tests host an in-process tonic server over a
 # loopback TCP port and spawn the guest as a thread/subprocess.
-ava-vm = { path = "../ava-vm", features = ["testutil"] }
-ava-database = { path = "../ava-database", features = ["rpcdb"] }
+ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
+ava-database = { path = "../ava-database", features = [ "rpcdb" ] }
 tokio = { workspace = true }
 
 # NOTE: this crate does NOT use `[lints] workspace = true` because the workspace

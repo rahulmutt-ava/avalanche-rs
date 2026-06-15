@@ -50,7 +50,7 @@ chrono = { workspace = true }
 serde_json = { workspace = true }
 # JSON-RPC read-service request/response types (M4.28 `service.rs`/`client.rs`):
 # field names + avajson string-encoded ints, bech32 addrs, hex BLS keys.
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = [ "derive" ] }
 # Hex (`0x…`) encoding of compressed BLS public keys in API replies (M4.28).
 hex = { workspace = true }
 # The `#[rpc_service("platform")]` registration macro (M8.22) so the bridged
@@ -66,7 +66,7 @@ thiserror = { workspace = true }
 # The RocksDB backend powers the M4.13 `conformance::state_roundtrip` temp-dir
 # case; enabling the feature here (dev-only) makes `RocksDb` available to the
 # integration tests without pulling the C++ FFI into the library build.
-ava-database = { path = "../ava-database", features = ["rocksdb"] }
+ava-database = { path = "../ava-database", features = [ "rocksdb" ] }
 # The M3 Snowman bootstrapper (`Bootstrapper`/`Config`/`Sender`) drives the
 # M4.27 `differential::pchain_sync_to_tip` height-0 bootstrap test end-to-end.
 # Dev-only: the bootstrap loop is exercised by the test, not the library (no
