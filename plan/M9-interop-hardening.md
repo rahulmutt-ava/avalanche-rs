@@ -71,9 +71,44 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 
 ---
 
+> **WAVE 2026-06-15 (in-process plugin interop) MERGED.** Three parallel worktree agents on disjoint
+> files in `ava-vm-rpc`, merged `--no-ff` with zero conflicts; `cargo nextest run -p ava-vm-rpc` =
+> **10/10 green**, `cargo clippy -p ava-vm-rpc --all-targets -- -D warnings` clean.
+> - **M9.6 ∥ M9.8** (merge `da1bcb9`): sharedmemory `get/indexed/apply` round-trip + warp `Signer`
+>   sign/verify + aliasreader `lookup/primary_alias/aliases` round-trips, each against a real loopback
+>   gRPC server boundary (`tests/proxy_sharedmemory.rs`, `tests/proxy_warp_aliasreader.rs`). No proxy
+>   source bugs found — the M3.25 proxy impls were correct as-is.
+> - **M9.7** (merge `4752635`): `validatorstate::decode_public_key` now dispatches on length
+>   (96 → `from_uncompressed`, 48 → `from_compressed`); round-trip test asserts a real BLS key
+>   survives the wire. AS-BUILT: the documented "fidelity gap" was a *false positive* — `blst`'s
+>   `key_validate` already auto-sniffs compression, so the old `from_compressed`-on-96-bytes path
+>   worked at runtime; the fix makes it explicit/correct and removes the stale gap wording.
+> - **M9.10 ∥ M9.11** (merge `49e4ec8`): host `RpcChainVm::initialize` + guest `VmServer::initialize`
+>   wired end-to-end — the host stands up the `proto/rpcdb` Database server (`db_server_addr`) + an
+>   appsender callback server (`server_addr`) on ephemeral loopback, packs `ChainContext` →
+>   `InitializeRequest`, sends `VM.Initialize`, and seeds client-side last-accepted; the guest dials
+>   both back, builds the `RpcDatabase`/`RpcAppSender` proxies, maps the request → `ChainContext`, and
+>   runs the inner VM. `tests/vm_initialize.rs::rust_host_initializes_rust_guest` (went red on
+>   `RemoteVmNotImplemented`, now green) drives a VM that does a real `put`/`get` over the **proxied**
+>   db at `initialize`, then build→verify→accept. **Retires placeholder #1 in `tests/PORTING.md`.**
+>   DEFERRED to node-assembly (documented inline + PORTING.md): the full callback bundle at
+>   `server_addr` currently serves appsender only — sharedmemory/aliasreader/validatorstate/warp +
+>   `grpc.health` need concrete host impls supplied by the node-assembly path; and
+>   `InitializeRequest.network_upgrades` is sent `None` (guest reconstructs the fork schedule from
+>   `network_id`) pending the proto `NetworkUpgrades` round-trip.
+>
+> Net effect: **Wave 0 (M9.1–M9.3 minus the live-Go entry M9.3) and Wave 1 (M9.4–M9.9) are complete
+> in-process; Wave 2's in-process legs (M9.10/M9.11) are complete.** Remaining M9 frontier — all
+> require a live external Go `avalanchego` binary / tmpnet (not runnable in the current sandbox):
+> M9.3 (`plugin_rust_in_go`), M9.12 (`plugin_go_in_rust`), M9.13 (four-way wire matrix),
+> M9.14/M9.15 (mixed network), M9.16/M9.17 (Go-dir import + upgrade), M9.18 (load), M9.19 (reexecute),
+> M9.20 (crash injection), M9.21 (bench-guard), M9.22 (version/compat), M9.23 (acceptance gate).
+
+---
+
 ## Tasks
 
-### Task M9.1: Reverse-dial handshake — host (node) side
+### Task M9.1: Reverse-dial handshake — host (node) side ✅ DONE (M3.24)
 **Crate/area:** `ava-vm-rpc` (`host` + `runtime`)  ·  **Depends on:** M3 (ava-vm-rpc scaffolding), M8 (ava-node spawn integration)  ·  **Spec:** `07` §5.1 (handshake step list), `26` §5, `00` §11.1.1
 **Files:** `crates/ava-vm-rpc/src/runtime.rs`, `crates/ava-vm-rpc/src/host/spawn.rs`, `crates/ava-vm-rpc/tests/handshake_host.rs`
 - [ ] **Step 1 — Red:** Write `handshake_host_initialize_records_vm_addr` in `tests/handshake_host.rs`: stand up the host `Runtime` gRPC server on an ephemeral loopback TCP port; act as a fake plugin that reads the addr from a captured env value, dials the Runtime, and calls `Initialize { protocol_version: RPC_CHAIN_VM_PROTOCOL, addr: "127.0.0.1:<vport>" }`. Assert the host's `Initialize` handler returns `Ok` and exposes the recorded `vm_addr` to the spawner. Assert constants verbatim: `ENGINE_ADDRESS_KEY == "AVALANCHE_VM_RUNTIME_ENGINE_ADDR"`, `RPC_CHAIN_VM_PROTOCOL == 45`, `DEFAULT_HANDSHAKE_TIMEOUT == Duration::from_secs(5)`.
@@ -82,7 +117,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc handshake_host_initialize_records_vm_addr` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: reverse-dial handshake host side (Runtime.Initialize, v45, env+timeout)`
 
-### Task M9.2: Reverse-dial handshake — guest (plugin) side (`ava_vm_rpc::serve`)
+### Task M9.2: Reverse-dial handshake — guest (plugin) side (`ava_vm_rpc::serve`) ✅ DONE (M3.24)
 **Crate/area:** `ava-vm-rpc` (`guest` + `serve`)  ·  **Depends on:** M9.1  ·  **Spec:** `07` §5.1 (guest steps 4–6,10), §5.3, `00` §11.1.1
 **Files:** `crates/ava-vm-rpc/src/serve.rs`, `crates/ava-vm-rpc/src/guest/mod.rs`, `crates/ava-vm-rpc/tests/handshake_guest.rs`
 - [ ] **Step 1 — Red:** Write `serve_dials_back_and_serves_vm`: spawn an in-process fake host (serving `Runtime`) that publishes its addr via env; call `ava_vm_rpc::serve(test_vm).await` in a task; assert the fake host receives `Initialize { protocol_version: 45, addr }` and that the guest then serves `VM` + `grpc.health` on `addr` reporting `SERVING`.
@@ -100,7 +135,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_rust_in_go` → passes (handshake v45 completes Rust-plugin-in-Go-host).
 - [ ] **Step 5 — Commit:** `differential: plugin_rust_in_go — Rust test-VM completes v45 reverse-dial under a Go host`
 
-### Task M9.4: Proxied `rpcdb` callback service round-trip
+### Task M9.4: Proxied `rpcdb` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::rpcdb_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::rpcdb`  ·  **Depends on:** M9.2, M1 (ava-database `DynDatabase`)  ·  **Spec:** `07` §5.2/§5.3/§5.4 (rpcdb row: server-side iterator handles, batched `IteratorNext`, `ErrEnumToError`)
 **Files:** `crates/ava-vm-rpc/src/proxy/rpcdb.rs`, `crates/ava-vm-rpc/tests/proxy_rpcdb.rs`
 - [ ] **Step 1 — Red:** Write `rpcdb_proxy_roundtrips_against_server`: stand up the node side serving `proto/rpcdb` `Database` over an in-memory `DynDatabase`; on the plugin side construct `RpcDatabase` (the dialing client) implementing `DynDatabase`; assert `put/get/delete/has`, a batch write, and an iterator-with-prefix all behave like the underlying memdb, and that a missing key maps to `Error::NotFound` via the `ErrEnumToError` table.
@@ -109,7 +144,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc rpcdb_proxy_roundtrips_against_server` → passes. Also run `cargo nextest run -p ava-vm-rpc proxy_rpcdb` to cover iterator edge cases.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: rpcdb proxy round-trip (iterator handles, ErrEnumToError)`
 
-### Task M9.5: Proxied `appsender` callback service round-trip
+### Task M9.5: Proxied `appsender` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::appsender_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::appsender`  ·  **Depends on:** M9.2, M3 (`AppSender` trait `07` §2.6, `AppError` §2.2)  ·  **Spec:** `07` §5.4 (appsender row), §9 (AppError i32 codes cross wire)
 **Files:** `crates/ava-vm-rpc/src/proxy/appsender.rs`, `crates/ava-vm-rpc/tests/proxy_appsender.rs`
 - [ ] **Step 1 — Red:** Write `appsender_proxy_preserves_app_error_codes`: node serves `proto/appsender` `AppSender`; plugin uses `RpcAppSender` (dialing client) implementing `AppSender`; assert `send_app_request`/`send_app_response`/`send_app_gossip` reach the server with identical bytes, and that `send_app_error(code, message)` carries the **exact i32 code** (`ErrUndefined=0`, `ErrTimeout=-1`) across the wire.
@@ -118,7 +153,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc proxy_appsender` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: appsender proxy round-trip (exact AppError i32 codes)`
 
-### Task M9.6: Proxied `sharedmemory` callback service round-trip
+### Task M9.6: Proxied `sharedmemory` callback service round-trip ✅ DONE (2026-06-15; `tests/proxy_sharedmemory.rs`)
 **Crate/area:** `ava-vm-rpc::proxy::sharedmemory`  ·  **Depends on:** M9.2, M3 (`SharedMemory` `07` §3.1), M5 (atomic UTXO bytes)  ·  **Spec:** `07` §5.4 (sharedmemory row), §3.1, `27` §2.3 (ATOMIC-1)
 **Files:** `crates/ava-vm-rpc/src/proxy/sharedmemory.rs`, `crates/ava-vm-rpc/tests/proxy_sharedmemory.rs`
 - [ ] **Step 1 — Red:** Write `sharedmemory_proxy_get_indexed_apply`: node serves `proto/sharedmemory` over a real `ava-chains` `SharedMemory`; plugin uses `RpcSharedMemory` (client) implementing `SharedMemory`; assert `get(peer, keys)` returns `len == keys.len()`, `indexed(...)` paginates `(values, last_trait, last_key)`, and `apply(requests, batches)` commits atomically so a peer chain can `get` the exported UTXO bytes (ATOMIC-1).
@@ -127,7 +162,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc proxy_sharedmemory` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: sharedmemory proxy round-trip (get/indexed/apply, ATOMIC-1 export)`
 
-### Task M9.7: Proxied `validatorState` callback service round-trip
+### Task M9.7: Proxied `validatorState` callback service round-trip ✅ DONE (2026-06-15; `tests/proxy_validatorstate.rs`)
 **Crate/area:** `ava-vm-rpc::proxy::validatorstate`  ·  **Depends on:** M9.2, M3/M4 (`ValidatorState` `06`/`08`)  ·  **Spec:** `07` §5.2/§5.4 (validatorState row)
 **Files:** `crates/ava-vm-rpc/src/proxy/validatorstate.rs`, `crates/ava-vm-rpc/tests/proxy_validatorstate.rs`
 - [ ] **Step 1 — Red:** Write `validatorstate_proxy_matches_source`: node serves `proto/validatorState` over a P-Chain-backed `ValidatorState`; plugin uses `RpcValidatorState` client; assert the windower-relevant queries (current height, validator set at height, subnet→ ID) return values byte-identical to the source `ValidatorState` (so a hosted VM's proposervm windower samples identically — R1 surface).
@@ -136,7 +171,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc proxy_validatorstate` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: validatorState proxy round-trip (windower-parity view)`
 
-### Task M9.8: Proxied `warp` Signer + `aliasreader` callback services round-trip
+### Task M9.8: Proxied `warp` Signer + `aliasreader` callback services round-trip ✅ DONE (2026-06-15; `tests/proxy_warp_aliasreader.rs`)
 **Crate/area:** `ava-vm-rpc::proxy::{warp,aliasreader}`  ·  **Depends on:** M9.2, M0 (`warp::Signer` ava-crypto), M3 (`AliaserReader` `06`)  ·  **Spec:** `07` §5.4 (warp + aliasreader rows)
 **Files:** `crates/ava-vm-rpc/src/proxy/warp.rs`, `crates/ava-vm-rpc/src/proxy/aliasreader.rs`, `crates/ava-vm-rpc/tests/proxy_warp_aliasreader.rs`
 - [ ] **Step 1 — Red:** Write `warp_signer_proxy_signs` and `aliasreader_proxy_resolves`: node serves `proto/warp` (`Signer`) and `proto/aliasreader` (`AliasReader` = `bc_lookup`); plugin uses `RpcWarpSigner` + `RpcAliasReader` clients; assert a warp `sign(msg)` produces a signature that verifies against the node's BLS key (golden vector from M0 crypto), and `lookup(alias)`/`primary_alias(chainID)` resolve identically to the node's aliaser.
@@ -145,7 +180,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc proxy_warp_aliasreader` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: warp Signer + aliasreader proxy round-trips`
 
-### Task M9.9: Protocol-version mismatch + handshake-timeout sentinels (v45 exact equality)
+### Task M9.9: Protocol-version mismatch + handshake-timeout sentinels (v45 exact equality) ✅ DONE (M3.24; `tests/handshake.rs`)
 **Crate/area:** `ava-vm-rpc::runtime` + `ava-version`  ·  **Depends on:** M9.1  ·  **Spec:** `26` §5 (exact equality, `ProtocolVersionMismatch` message shape), `07` §5.1 (`HandshakeFailed`), §9 (sentinels)
 **Files:** `crates/ava-vm-rpc/src/runtime.rs`, `crates/ava-vm-rpc/tests/handshake_errors.rs`
 - [ ] **Step 1 — Red:** Write `check_protocol_rejects_mismatch` and `handshake_times_out`: assert `check_protocol(45, path) == Ok(())`; `check_protocol(44, path)` ⇒ `Err(RuntimeError::ProtocolVersionMismatch)` matched via `assert_matches!`, with a log/message naming both versions and the plugin path (`26` §5); and that a guest that never dials back within `DEFAULT_HANDSHAKE_TIMEOUT` ⇒ host returns `Error::HandshakeFailed` and kills the child.
@@ -154,7 +189,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc handshake_errors` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: v45 exact-equality + handshake-timeout sentinels`
 
-### Task M9.10: `VmServer<V: ChainVm>` — guest serves the full `proto/vm` VM service
+### Task M9.10: `VmServer<V: ChainVm>` — guest serves the full `proto/vm` VM service ✅ DONE in-process (2026-06-15; full callback bundle deferred to node-assembly)
 **Crate/area:** `ava-vm-rpc::guest`  ·  **Depends on:** M9.2–M9.8 (proxies the guest constructs at Initialize), M3 (`ChainVm`)  ·  **Spec:** `07` §5.3, §5.4 (vm row incl. batched/statesync/withcontext RPCs)
 **Files:** `crates/ava-vm-rpc/src/guest/vm_server.rs`, `crates/ava-vm-rpc/tests/vm_server.rs`
 - [ ] **Step 1 — Red:** Write `vm_server_runs_conformance_battery`: construct a `VmServer<TestVm>`; at its `Initialize` it dials back `db_server_addr`/`server_addr` and builds the `RpcDatabase`/`RpcSharedMemory`/`RpcAliasReader`/`RpcValidatorState`/`RpcWarpSigner`/`RpcAppSender` proxies the inner VM consumes; then drive the `vm_conformance!` battery (`07` §10) over the gRPC boundary (init→genesis LA; build/verify/accept advances LA+height; parse round-trips bytes; `Err(NotFound)` for unknown id/height; optional-capability probes via batched/statesync RPCs).
@@ -163,7 +198,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc vm_server` → passes (in-process Rust-host ⇄ Rust-guest).
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: VmServer<V> full proto/vm VM service (guest serves, dials callbacks at Initialize)`
 
-### Task M9.11: `RpcChainVm` host client — full `ChainVm` over the dialed channel
+### Task M9.11: `RpcChainVm` host client — full `ChainVm` over the dialed channel ✅ DONE in-process (2026-06-15; `tests/vm_initialize.rs`; full callback bundle + ghttp/host-factory deferred to node-assembly)
 **Crate/area:** `ava-vm-rpc::host`  ·  **Depends on:** M9.1, M9.4–M9.8, M3 (`ChainVm`), M8 (chains pipeline)  ·  **Spec:** `07` §5.2, §5.4, §8.1 (rpcchainvm host factory)
 **Files:** `crates/ava-vm-rpc/src/host/rpc_chain_vm.rs`, `crates/ava-vm-rpc/tests/host_client.rs`
 - [ ] **Step 1 — Red:** Write `rpc_chain_vm_hosts_rust_guest`: launch the M9.10 `VmServer` as an out-of-process plugin via `serve`; on the host build `RpcChainVm` (implements full `ChainVm`); before `Initialize`, host stands up `db_server_addr` (serving `proto/rpcdb`) and `server_addr` (serving sharedmemory/aliasreader/appsender/validatorState/warp + `grpc.health`). Run the `vm_conformance!` battery through `RpcChainVm` and assert identical block bytes/IDs/last-accepted as the in-process VM.

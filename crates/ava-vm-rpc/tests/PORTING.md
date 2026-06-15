@@ -35,17 +35,25 @@ four-way interop matrix). Linux `PR_SET_PDEATHSIG` is set in the audited
 
 ## Faithful placeholders / deferred surface
 
-1. **Host `RpcChainVm::initialize` (the wire `VM.Initialize`) — M3.25.** The Go
-   host, before sending `VM.Initialize`, stands up the `proto/rpcdb` `Database`
-   server (`db_server_addr`) and the callback bundle server (`server_addr`:
-   sharedmemory / aliasreader / appsender / validatorstate / warp / health),
-   encodes the `ChainContext` into `InitializeRequest`, and on the response seeds
-   the client-side `chain.State`. Until the proxy servers land (M3.25),
-   [`crate::host::RpcChainVm::initialize`] returns
-   [`ava_vm::Error::RemoteVmNotImplemented`] and the guest `VM.Initialize`
-   handler just reports the current last-accepted snapshot. The M3.24 roundtrip
-   therefore drives an **already-initialized** guest VM (`init_test_vm`), which
-   is sufficient to exercise build→verify→accept→last_accepted over the wire.
+1. **Host + guest `VM.Initialize` — ✅ DONE (M9.10/M9.11, 2026-06-15).** The host
+   [`crate::host::RpcChainVm::initialize`] now stands up the `proto/rpcdb`
+   `Database` server (`db_server_addr`) and an appsender callback server
+   (`server_addr`) on ephemeral loopback (cancelled on `shutdown`/`Drop` via a
+   `callback_shutdown` token), encodes the `ChainContext` + genesis/upgrade/config
+   bytes + the two addrs into `InitializeRequest` (`chain_context_to_request`),
+   sends `VM.Initialize`, and seeds the client-side last-accepted from the
+   response. The guest [`crate::guest::VmServer::initialize`] dials both addrs
+   back, builds the `RpcDatabase`/`RpcAppSender` proxies, maps the request →
+   `ChainContext` (`request_to_chain_context`), and runs the inner VM.
+   `tests/vm_initialize.rs::rust_host_initializes_rust_guest` exercises a VM that
+   does a real `put`/`get` over the **proxied** db at `initialize`, then
+   build→verify→accept over the wire.
+   **DEFERRED to node-assembly:** the callback bundle at `server_addr` currently
+   serves appsender only — the full Go bundle also serves sharedmemory /
+   aliasreader / validatorstate / warp / `grpc.health`, which need concrete host
+   impls supplied by the node-assembly path; and `InitializeRequest.network_upgrades`
+   is sent `None` (the guest reconstructs the fork schedule from `network_id`)
+   pending the proto `NetworkUpgrades` round-trip.
 
 2. **`LastAccepted` is client-side state, not an RPC.** `proto/vm` has no
    `LastAccepted` RPC; Go tracks it in the `chain.State` decorator (seeded at
@@ -131,18 +139,19 @@ node serves). Symmetry: plugin dials, node serves (07 §5.3). Tested by
   (`lookup`/`primary_alias`/`aliases`); re-export / replace it from `ava-chains`
   once M3.26 lands.
 
-### Public-key deserialization gap (report — `ava-crypto` change recommended)
+### Public-key deserialization — ✅ CLOSED (M9.7, 2026-06-15)
 
 `proto/validatorstate` carries BLS public keys as **uncompressed** 96-byte bytes
-(`bls.PublicKeyToUncompressedBytes`). `ava-crypto` exposes
-`PublicKey::serialize()` (host → wire, used by the server) and
-`PublicKey::from_compressed()` (compressed only) but **no `from_uncompressed`**.
-The guest-side decode therefore tries `from_compressed` and yields `None` for the
-uncompressed form (`proxy::validatorstate::decode_public_key`). **Recommended
-central change:** add `PublicKey::from_uncompressed` to `ava-crypto` and use it
-here so the validator-set round-trip is lossless. Not exercised by the M3.25
-named tests (rpcdb/appsender), so it does not block the gate, but it must be
-closed before the validatorstate proxy is relied on (M3.26/M5).
+(`bls.PublicKeyToUncompressedBytes`). `proxy::validatorstate::decode_public_key`
+now dispatches on length: `96 → PublicKey::from_uncompressed`,
+`48 → PublicKey::from_compressed`, empty/other → `None`. `ava-crypto` already
+exposed `from_uncompressed` (no central change needed). `tests/proxy_validatorstate.rs::validatorstate_proxy_matches_source`
+asserts a real BLS key survives the round-trip losslessly.
+**AS-BUILT correction:** the earlier "yields `None` for the uncompressed form"
+claim was a *false positive* — `blst`'s `key_validate` auto-sniffs the
+compression flag, so the old `from_compressed(96-byte)` path actually worked at
+runtime. The fix makes the length dispatch explicit and removes the stale gap
+wording; it is a correctness/clarity improvement, not a live bugfix.
 
 ### Recommended `ava_snow::Error` change (re-stated from item 3)
 
