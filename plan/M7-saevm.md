@@ -461,8 +461,20 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [ ] **Step 4 — Confirm green:** gastime + blocks + core + differential green; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
 - [ ] **Step 5 — Commit:** `sae(gastime): accept base fee (starting price) in new() [Go 3a5cba4a61]`
 
-### Task M7.37: `cchain` `ParseBlock` verifies extData hash **[UPSTREAM DELTA — added 2026-06-15]** ⬜ TODO
+### Task M7.37: `cchain` `ParseBlock` verifies extData hash **[UPSTREAM DELTA — added 2026-06-15]** ⬜ TODO — BLOCKED on M7.22 (LARGE; needs a wire-representation decision)
 **Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.22 extData marshaling/commit (the `TODO(M7.22)` at `cchain/src/hooks.rs:377`/`:441` — must land first; no `parse_block` override exists yet)  ·  **Spec:** `11` §8 + `10` §9 upstream-delta (Go `5896c92fee` #5447)
+
+> **FEASIBILITY FINDING (2026-06-15c, read-only scout).** M7.37 cannot land without first building M7.22, and **M7.22 is itself a LARGE task that requires an architectural decision**, because the SAE block has no place to carry `extData`:
+> - The SAE block is a stock `SealedBlock<RethBlock>` (`blocks/src/lifecycle.rs:159`) where `RethBlock = alloy_consensus::Block<TransactionSigned>` (`ava-evm-reth/src/lib.rs:208`) — a **bare Ethereum block** with a 3-field RLP body `[Header, Txs, Uncles]` and **no 4th extData field**, by deliberate design (lifecycle.rs comment: "RLP/keccak-identical to a geth/libevm block"). The SAE wire codec (`blocks/src/parse.rs:52`) decodes only the standard shape.
+> - The SAE header is the **standard alloy `Header`** (no `ext_data_hash` field). Go commits `ExtDataHash` into the header (the 16th field of coreth's `AvaHeader`); the SAE header cannot hold it without forking alloy. (The C-Chain M6 `ava-evm` block — `ava-evm/src/block.rs:286` `ext_data: Vec<u8>` + `AvaHeader::ext_data_hash` at `:100` + the 5-field `decode_ava_evm_block` at `:764` — DOES carry extData, but that representation is not threaded into the SAE block type.)
+> - `build_block` (`cchain/src/hooks.rs:363`,`:432`) currently emits a header-only `RethBlock::uncle(header)` and discards `_end_of_block_ops`; `EmptyAtomicSource` (`cchain/src/vm.rs:198`) returns no ops. So extData is entirely unwired.
+> - Primitives that DO exist: `keccak256` + `alloy_rlp` (`ava-evm-reth/src/lib.rs:83`,`:86`), `EMPTY_EXT_DATA_HASH` + `empty_ext_data_hash()` (`ava-evm/src/block.rs:51`,`:1017`). So `CalcExtDataHash = keccak256(RLP(extData))` (Go `block_ext.go:153`, with the empty-string special case) is trivially portable once a carrier exists.
+>
+> **Two viable approaches (user/architecture decision — `00` §7.7 / `11` §8 reuse boundary):**
+> - **(A) Extend the SAE/C-Chain block to carry extData** (a `SaeBlockWithExtData` wrapper or a side field on the cchain `Block`, with the 4th-RLP-field codec at the C-Chain boundary, mirroring M6's `decode_ava_evm_block`). Higher fidelity to coreth's on-wire block; larger change to the C-Chain build/parse/rebuild path (overlaps the still-deferred M7.21 C-Chain builder).
+> - **(B) Keep extData external to the SAE block** and have the C-Chain `parse_block` override decode the 4th RLP field from the **raw bytes** (not the block type), verify `keccak256(RLP(extData))` vs the committed hash, then reject mismatches — leaving the SAE core EVM-neutral. Looser coupling; the SAE `Block`'s ID still = header hash, so the override is exactly the boundary Go added.
+>
+> **Recommendation:** approach (B), routed through the C-Chain hooks (co-landing the minimum of M7.21/M7.22 needed), keeps the SAE core unforked. **Non-gating:** Helicon is unscheduled on all networks and SAE C-Chain interop is not yet exercised, so this is correct-but-dormant parity — safe to schedule alongside the M7.21 C-Chain builder rather than rushed in isolation.
 **Files:** `crates/ava-saevm/cchain/src/vm.rs` (a `parse_block` override over `sae::Vm::parse_block`), `crates/ava-saevm/cchain/tests/`, `cchain/cchaintest/` analog (Go added `cchaintest/blocks.go` helpers).
 > **Why added:** Go's `cchain.VM.ParseBlock` now recomputes `CalcExtDataHash(BlockExtData(eth))`
 > = `keccak256(RLP(extData))` and rejects the block if it differs from
