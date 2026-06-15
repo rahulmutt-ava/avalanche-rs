@@ -460,6 +460,22 @@ job on x86-64/aarch64 Linux.)
   show a bench win **and** pass the differential suite (§9 differential) proving
   no behavior change.
 
+> **AS-BUILT (M9.21, `cargo xtask bench-guard`).** The implemented gate reads each
+> bench's mean point estimate **directly from criterion's
+> `target/criterion/<id>/new/estimates.json`** and compares it to a committed
+> advisory baseline under `.config/criterion-baseline/<id>.json` — simpler and
+> more deterministic than driving `criterion --save-baseline`/`cargo-criterion`,
+> and it needs no extra tool. The pure comparison (`over_threshold`) is unit-tested
+> with a synthetic 2× regression that must trip the gate. Two design notes vs the
+> text above: (1) the gate currently takes a **single global** `--threshold`
+> (default 0.10); the "per-bench threshold" is not yet wired (a future per-entry
+> override on the `GUARDED` table). (2) Committed baselines are **machine-specific
+> and advisory** (padded above a local run); real CI baselines must be regenerated
+> per-runner — see `.config/criterion-baseline/README.md`. The initial `GUARDED`
+> set is a **seed of 2** (`ava-codec` codec round-trip, `ava-crypto` secp256k1
+> verify); the rest of the §9 list (merkledb commit, mempool push/pop, message
+> framing, rpcchainvm RPC round-trip) is added as those benches land.
+
 ---
 
 ## 10. Porting Go tests + the suites (e2e / load / upgrade / reexecute)
@@ -517,6 +533,18 @@ state/merkle roots match the recorded expected roots. Because the expected roots
 come from the Go node, **this is a differential test on recorded data** — cheaper
 than a live two-binary run and ideal for CI. Block export/import format reuses the
 Go `blockexport` artifacts.
+
+> **AS-BUILT (M9.19, crate `ava-reexecute` at `tests/reexecute/`).** The reusable
+> harness (`replay_cchain(&ReexecuteCase) -> ReexecuteRoots`) is a verbatim lift of
+> the M6.6 C-Chain reexecute pipeline (`crates/ava-evm/tests/cchain_state_root.rs`):
+> Firewood-ethhash propose→commit genesis, decode EIP-2718 txs, `execute_batch`,
+> bundle→proposal post-root. `cargo xtask test-reexecute` (the pre-existing
+> `TestReexecute` subcommand) runs it. The **C-Chain leg (`reexecute_cchain_range`)
+> is green** against the committed `genesis_to_1` blockexport fixture. The **P/X
+> leg (`reexecute_px_range`) is deferred** (`#[ignore]`, panics if forced): no
+> Go-recorded P/X `blockexport` roots exist in the repo yet. Follow-up: record a P/X
+> `blockexport` fixture, add a `replay_px` + P/X `ReexecuteCase` equivalent, and
+> gate the live arm behind the crate's reserved `px` feature.
 
 ---
 
