@@ -1233,6 +1233,7 @@ dependencies = [
  "anyhow",
  "ava-codec",
  "ava-types",
+ "ava-version",
  "bytes",
  "hex",
  "lru 0.12.5",

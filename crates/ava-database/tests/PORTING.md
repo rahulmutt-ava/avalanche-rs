@@ -222,6 +222,17 @@ No Go test counterpart (this is the Rust migration tool, 04 §11 / 00 R2).
 | — (R2 `--verify roots` mismatch detection) | `unit::verify_roots_detects_mismatch` | ported |
 | — (R2 `--verify none` no-op) | `unit::verify_none_is_noop` | ported |
 
+## Rust-side additions — R2 import facade + backend detection (M9.16)
+
+No Go test counterpart (the import facade over the M1.24 engine, 04 §11 / 26 §6).
+
+| Go source (test) | Rust counterpart (`tests/go_dir_import.rs`, `src/migrate/import.rs`) | Status |
+|---|---|---|
+| — (R2 facade: detect ⇒ create `v1.4.5/` RocksDB ⇒ copy ⇒ verify) | `rocksdb_facade::imports_go_pebble_dir_to_rocksdb` | ported |
+| — (26 §6 schema-folder backend detection: `v1.4.5/`⇒leveldb, `pebble/`⇒pebble) | `tests::detect_goleveldb_folder` / `detect_pebble_folder` | ported |
+| — (04 §11.2 refuse foreign/unknown dir, never open-in-place) | `rocksdb_facade::refuses_unsupported_dir` / `tests::detect_refuses_unknown_folder` | ported |
+| — (R2 default `--verify roots` after import) | `rocksdb_facade::import_runs_roots_verify_by_default` | ported |
+
 ## Notes / deviations
 
 - **leveldb + pebbledb backends are deliberately not ported** (`na`): per 00

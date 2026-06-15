@@ -25,6 +25,12 @@
 //!
 //! ## This module
 //!
+//! - [`import`] — the higher-level facade (M9.16): detect the Go backend by its
+//!   schema-version folder name (26 §6), open the source, create a fresh RocksDB
+//!   dir named `CURRENT_DATABASE`, stream via [`migrate`], then verify. The
+//!   detection/refusal primitives ([`import::detect_backend`],
+//!   [`import::GoBackend`], [`import::ImportError`]) are feature-free so the
+//!   node-side refusal (`ava-node`) can use them without RocksDB.
 //! - [`GoDbSource`] — a backend-agnostic source: every Go pair, in lexicographic
 //!   key order, **verbatim** (no byte transformation).
 //! - [`migrate`] — the byte-exact copy driver: batched bulk-ingest with a 64 MiB
@@ -37,6 +43,7 @@
 //!   re-derivation ([`verify::RootVerifier`]) so this module never depends on
 //!   `ava-merkledb` (concrete wiring lands with the CLI in M12).
 
+pub mod import;
 pub mod leveldb;
 pub mod pebble;
 pub mod verify;

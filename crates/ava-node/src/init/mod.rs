@@ -19,6 +19,7 @@ pub mod api_services;
 pub mod bootstrappers;
 pub mod chain_manager;
 pub mod database;
+pub mod db_init;
 pub mod dispatchers;
 pub mod health;
 pub mod identity;
