@@ -1,0 +1,7 @@
+{
+  "bench_id": "rpcchainvm_roundtrip",
+  "crate": "ava-vm-rpc",
+  "bench_target": "rpcchainvm_roundtrip",
+  "mean_ns": 53403.1,
+  "note": "Advisory local baseline (see README.md). Padded above the measured local mean to absorb run-to-run variance; real CI baselines are regenerated per-runner. gRPC loopback round-trip is variance-prone, hence the wider pad."
+}

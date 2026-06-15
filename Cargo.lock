@@ -2071,6 +2071,7 @@ dependencies = [
  "ava-version",
  "ava-vm",
  "bytes",
+ "criterion",
  "libc",
  "parking_lot",
  "prost 0.13.5",
