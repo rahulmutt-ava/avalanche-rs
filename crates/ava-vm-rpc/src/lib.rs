@@ -42,6 +42,14 @@ use std::time::Duration;
 // keep `unused_crate_dependencies` quiet.
 use {anyhow as _, thiserror as _};
 
+// `criterion` is a dev-dependency used only by the `rpcchainvm_roundtrip` bench
+// (perf-gate canary; specs/02 §9). This crate's lib has no `#[cfg(test)]` code to
+// reference it, so the lib-test compilation unit would otherwise flag it as an
+// unused dev-dependency under the inlined `#![warn(unused_crate_dependencies)]`.
+// Reference it under test config to keep the lint quiet (same idiom as above).
+#[cfg(test)]
+use criterion as _;
+
 pub mod guest;
 pub mod host;
 pub mod proxy;

@@ -63,6 +63,15 @@ tonic-build = { workspace = true }
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 ava-database = { path = "../ava-database", features = [ "rpcdb" ] }
 tokio = { workspace = true }
+# Critical-path perf-gate canary bench for `cargo xtask bench-guard`
+# (specs/02 §9): a single proxied rpcdb gRPC round-trip across the loopback
+# rpcchainvm boundary.
+criterion = { workspace = true }
+
+# rpcchainvm RPC round-trip perf-gate canary (specs/02 §9; plan M9.21).
+[[bench]]
+name = "rpcchainvm_roundtrip"
+harness = false
 
 # NOTE: this crate does NOT use `[lints] workspace = true` because the workspace
 # pins `unsafe_code = "forbid"`, which cannot be locally downgraded. The host
