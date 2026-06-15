@@ -83,3 +83,10 @@ tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "t
 # Real on-disk scratch dirs for the firewood roundtrip / ethhash golden tests
 # (firewood is a disk-backed DB). Already in the workspace lock; pinned locally.
 tempfile = "3"
+criterion = { workspace = true }
+
+# Critical-path bench for `cargo xtask bench-guard` (specs/02 §9): insert a
+# representative key/value batch into a fresh MerkleDb and commit (root compute).
+[[bench]]
+name = "merkledb_commit"
+harness = false
