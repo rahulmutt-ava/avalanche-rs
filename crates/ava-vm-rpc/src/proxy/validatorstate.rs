@@ -7,14 +7,12 @@
 //! guest [`ValidatorState`] over the channel); the node **serves** ([`serve`] →
 //! a [`ValidatorStateServer`] wrapping the host's `Arc<dyn ValidatorState>`).
 //!
-//! **Public-key deserialization gap.** The wire carries BLS public keys as
-//! *uncompressed* 96-byte bytes (`bls.PublicKeyToUncompressedBytes`).
-//! `ava-crypto` exposes [`PublicKey::serialize`] (host → wire, used by [`serve`])
-//! but no `from_uncompressed` (wire → key). The guest-side decode therefore
-//! tries [`PublicKey::from_compressed`] and, failing that (the common
-//! uncompressed case), yields `None`. **This is a real fidelity gap** — add
-//! `PublicKey::from_uncompressed` to `ava-crypto` and use it here. Recorded in
-//! `tests/PORTING.md`.
+//! **BLS public-key wire encoding.** The wire carries BLS public keys as
+//! *uncompressed* 96-byte bytes (Go `bls.PublicKeyToUncompressedBytes`).
+//! The host encodes with [`PublicKey::serialize`] (96-byte uncompressed) and the
+//! guest decodes with [`PublicKey::from_uncompressed`], so uncompressed keys
+//! round-trip correctly. The decoder also accepts the 48-byte compressed form for
+//! forward compatibility. An empty slice or any other length yields `None`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -24,7 +22,7 @@ use parking_lot::Mutex;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
-use ava_crypto::bls::PublicKey;
+use ava_crypto::bls::{PUBLIC_KEY_LEN, PublicKey, UNCOMPRESSED_PUBLIC_KEY_LEN};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_validators::ValidatorState;
@@ -43,15 +41,18 @@ use crate::pb::validatorstate::{
     WarpValidator, WarpValidatorSet,
 };
 
-/// Decodes an optional BLS public key from its wire (uncompressed) bytes.
+/// Decodes an optional BLS public key from its wire bytes.
 ///
-/// See the module-level gap note: only the compressed form round-trips today;
-/// an uncompressed key yields `None`.
+/// The wire carries 96-byte uncompressed keys (Go `bls.PublicKeyToUncompressedBytes`).
+/// The 48-byte compressed form is also accepted for forward compatibility.
+/// Returns `None` for an empty slice or any other length.
 fn decode_public_key(b: &[u8]) -> Option<PublicKey> {
-    if b.is_empty() {
-        return None;
+    match b.len() {
+        0 => None,
+        UNCOMPRESSED_PUBLIC_KEY_LEN => PublicKey::from_uncompressed(b).ok(),
+        PUBLIC_KEY_LEN => PublicKey::from_compressed(b).ok(),
+        _ => None,
     }
-    PublicKey::from_compressed(b).ok()
 }
 
 /// Encodes an optional public key to its wire (uncompressed) bytes.
