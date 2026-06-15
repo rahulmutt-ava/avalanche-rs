@@ -1623,6 +1623,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-reexecute"
+version = "0.1.0"
+dependencies = [
+ "ava-database",
+ "ava-evm",
+ "ava-evm-reth",
+ "hex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-saevm-adaptor"
 version = "0.1.0"
 dependencies = [

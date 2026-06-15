@@ -38,6 +38,7 @@ members = [
   "crates/ava-saevm/testutil",
   "xtask",
   "tests/differential",
+  "tests/reexecute",
 ]
 exclude = [ "crates/ava-saevm" ]
 

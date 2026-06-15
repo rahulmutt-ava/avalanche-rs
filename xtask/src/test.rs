@@ -184,12 +184,13 @@ pub fn test_differential(seed: Option<u64>, recorded: bool) -> anyhow::Result<()
     cargo(&["test", "-p", "ava-differential"])
 }
 
-/// `test-reexecute`: reexecute golden block ranges, compare state roots.
+/// `test-reexecute`: replay recorded block ranges through the Rust VMs and
+/// assert the resulting state/merkle roots match the Go-recorded expected roots
+/// (specs/02 §10.5/§11.1 recorded-oracle mode, M9.19).
 ///
-/// SCAFFOLD: owned by tier-X task X.13 (and deepened by the VM milestones).
+/// Runs the `ava-reexecute` crate (the C-Chain leg is green against the committed
+/// `genesis_to_1` fixture; the P/X leg is `#[ignore]`d pending recorded P/X
+/// `blockexport` fixtures — see `tests/reexecute/tests/PORTING.md`).
 pub fn test_reexecute() -> anyhow::Result<()> {
-    eprintln!(
-        "xtask test-reexecute: reexecute suite is owned by tier-X task X.13 (deepened M4–M7)."
-    );
-    Ok(())
+    cargo(&["nextest", "run", "-p", "ava-reexecute"])
 }
