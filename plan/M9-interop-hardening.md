@@ -120,6 +120,27 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `version_interop` leg, and the M9.23 acceptance gate. M9.21 (bench-guard) is pure-Rust but needs
 >   benches authored from scratch across crates.
 
+> **WAVE 2026-06-15e (interop-harness frontier) MERGED.** Two parallel worktree agents (`/tmp/wt-m93`,
+> `/tmp/wt-m914`) on disjoint files, branched off a prep commit (`62ce482`: registers `pub mod plugin;` +
+> the `live` Cargo feature + `net`/`process` tokio features so agents never touch the shared
+> `tests/differential/Cargo.toml`/`lib.rs`); merged `--no-ff` **zero-conflict**, re-verified in main tree.
+> - **M9.3 OFFLINE ARM COMPLETE** (`crates/ava-vm-rpc/examples/testvm_plugin.rs` + `tests/differential/{src/plugin.rs,tests/plugin_rust_in_go.rs}`):
+>   a real Rust v45 plugin binary (`FixedGenesisVm` → `guest::serve`) proven offline by spawning it as a black-box
+>   subprocess and asserting it dials back the runtime addr (guest half of the reverse-dial) + fails-fast without the env.
+>   Live Go-host arm gated. (`ava-differential` deliberately doesn't dep `ava-vm-rpc` → subprocess, not in-process.)
+> - **M9.14 HARNESS + OFFLINE ARM COMPLETE** (`tests/differential/{src/network.rs,src/observation.rs,tests/mixed_network_smoke.rs}`):
+>   mixed-binary `Network::start` driver + `BinaryMix`/`NodeIdentity` (deterministic-from-seed) + a strengthened
+>   `Observation::normalized()` (strip timestamps/uptime, mask node_id/ip, sort validator/peer sets, BTreeMap order)
+>   + a hand-rolled JSON-RPC-over-`tokio::net::TcpStream` `collect()`. Offline arms (determinism + normalization
+>   round-trip) run every CI; live bring-up arm gated.
+>
+> Both follow the established `interop_handshake.rs` precedent: **live arm `#[cfg(feature="live")] #[ignore]` (needs
+> `$AVALANCHEGO_PATH` + built `avalanchers`, never runs in CI/sandbox); offline arm runs every CI run.** Net effect:
+> **M9.3 + M9.14 land their CI-runnable halves**; their live two-binary halves + the downstream live tasks (M9.12, M9.13,
+> M9.15, M9.17, M9.18, M9.20, M9.22-`version_interop`, M9.23) remain nightly/operator-gated. `cargo nextest run -p
+> ava-differential` = **15/15**, `-p ava-vm-rpc` = **10/10**, clippy `--all-targets -D warnings` clean, `--features live
+> --tests` compiles, fmt clean.
+
 ---
 
 ## Tasks
@@ -142,14 +163,34 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc serve_dials_back_and_serves_vm` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: reverse-dial handshake guest side (serve: read env, dial back, serve VM+health)`
 
-### Task M9.3: `differential::plugin_rust_in_go` — minimal Rust test-VM hosted by a Go node (TDD ENTRY POINT)
+### Task M9.3: `differential::plugin_rust_in_go` — minimal Rust test-VM hosted by a Go node (TDD ENTRY POINT) ✅ OFFLINE ARM DONE (2026-06-15); live Go-host arm gated
 **Crate/area:** `ava-differential` + `ava-vm-rpc`  ·  **Depends on:** M9.1, M9.2  ·  **Spec:** `16` §3 (M9 entry), `07` §5.1, `02` §11
 **Files:** `tests/differential/src/plugin.rs`, `tests/differential/tests/plugin_rust_in_go.rs`, `crates/ava-vm-rpc/examples/testvm_plugin.rs`
-- [ ] **Step 1 — Red:** Write `differential::plugin_rust_in_go` in `tests/differential/tests/plugin_rust_in_go.rs`: build the minimal Rust test-VM plugin binary (`examples/testvm_plugin.rs` calling `ava_vm_rpc::serve`); launch a **Go** `avalanchego` node (via tmpnet, `AVALANCHEGO_PATH`=Go binary) configured to host this Rust plugin as a custom VM. Assert the Go host completes `Runtime.Initialize` reverse-dial (Go logs the plugin connected at protocol 45) and the chain reaches `Initialize` on the VM side. This is the linchpin: it asserts only the handshake, not yet traffic.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential plugin_rust_in_go` → fails (plugin example / Go-host wiring not built). Confirm the failure is the handshake not completing, not a harness compile error.
-- [ ] **Step 3 — Green:** Implement `examples/testvm_plugin.rs` (a trivial `ChainVm` returning a fixed genesis last-accepted). Implement `plugin.rs` harness helpers: `build_rust_plugin()`, `launch_go_host_with_plugin(plugin_path)`, `assert_handshake_complete()`. Ensure the Go node's plugin dir / VM-id alias is configured so the Go `rpcchainvm` host spawns our binary with `AVALANCHE_VM_RUNTIME_ENGINE_ADDR`.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_rust_in_go` → passes (handshake v45 completes Rust-plugin-in-Go-host).
-- [ ] **Step 5 — Commit:** `differential: plugin_rust_in_go — Rust test-VM completes v45 reverse-dial under a Go host`
+- [x] **Step 1 — Red:** Write `differential::plugin_rust_in_go` in `tests/differential/tests/plugin_rust_in_go.rs`: build the minimal Rust test-VM plugin binary (`examples/testvm_plugin.rs` calling `ava_vm_rpc::serve`); launch a **Go** `avalanchego` node (via tmpnet, `AVALANCHEGO_PATH`=Go binary) configured to host this Rust plugin as a custom VM. Assert the Go host completes `Runtime.Initialize` reverse-dial (Go logs the plugin connected at protocol 45) and the chain reaches `Initialize` on the VM side. This is the linchpin: it asserts only the handshake, not yet traffic.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential plugin_rust_in_go` → fails (plugin example / Go-host wiring not built). Confirm the failure is the handshake not completing, not a harness compile error.
+- [x] **Step 3 — Green:** Implement `examples/testvm_plugin.rs` (a trivial `ChainVm` returning a fixed genesis last-accepted). Implement `plugin.rs` harness helpers: `build_rust_plugin()`, `launch_go_host_with_plugin(plugin_path)`, `assert_handshake_complete()`. Ensure the Go node's plugin dir / VM-id alias is configured so the Go `rpcchainvm` host spawns our binary with `AVALANCHE_VM_RUNTIME_ENGINE_ADDR`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_rust_in_go` → passes (offline arm; live Go-host arm gated `#[cfg(feature="live")] #[ignore]`).
+- [x] **Step 5 — Commit:** `differential: plugin_rust_in_go — Rust test-VM completes v45 reverse-dial under a Go host`
+
+> **AS-BUILT (merge of `m93-plugin-rust-in-go`, 2026-06-15).** `crates/ava-vm-rpc/examples/testvm_plugin.rs` is a
+> standalone plugin binary — a trivial `FixedGenesisVm` (`ChainVm` adapted from `tests/vm_initialize.rs`'s
+> `DbProbeVm`, minus the proxied-db round-trip; seeds a fixed height-0 genesis as last-accepted, builds/parses/gets
+> linear children) under `#[tokio::main(multi_thread)]` calling `ava_vm_rpc::guest::serve(vm, &token)`. Registered
+> via a `[[example]]` entry in `crates/ava-vm-rpc/Cargo.toml` (no new deps). **Offline arm** (`plugin_rust_in_go_builds_and_serves`,
+> runs every CI run): `build_rust_plugin()` builds the example, then `assert_plugin_dials_back()` spawns it as a
+> **real subprocess** with `AVALANCHE_VM_RUNTIME_ENGINE_ADDR` pointing at a loopback listener the harness owns and
+> asserts the plugin dials back within 10s (the guest half of the v45 reverse-dial) — and `assert_plugin_fails_without_env()`
+> asserts it fails fast (non-zero exit) with the env var removed. **★ DESIGN NOTE:** `ava-differential` intentionally
+> does NOT depend on `ava-vm-rpc`, so the offline proof is black-box subprocess-driven (not in-process
+> `guest::serve_with_addr`); the full in-process `Runtime.Initialize`+`VM`/health proof already lives in
+> `ava-vm-rpc`'s own `tests/handshake.rs`/`tests/vm_initialize.rs` (M9.1/M9.2/M9.10/M9.11). **Live arm** (`plugin_rust_in_go_live`,
+> `#[cfg(feature="live")] #[ignore]`, returns early if `$AVALANCHEGO_PATH` unset): `launch_go_host_with_plugin` spawns
+> the Go binary and scans stdout for the protocol-45-plugin-connected marker — but does NOT synthesize the
+> subnet/blockchain that triggers the Go host to spawn the plugin. **Nightly-operator handoff:** supply `$AVALANCHEGO_PATH`
+> (rpcchainvm 45) + a data dir whose `plugins/` holds the Rust binary renamed to its VM id + a genesis/subnet that
+> instantiates a chain on that VM (via `$AVALANCHEGO_EXTRA_ARGS`); documented inline as `LIVE-ARM:`. Verified in main
+> tree: `cargo nextest run -p ava-differential` 15/15, `-p ava-vm-rpc` 10/10, clippy `--all-targets -D warnings` clean,
+> `--features live --tests` compiles. **M9.12 (plugin_go_in_rust) will reuse `plugin.rs`** for the reverse direction.
 
 ### Task M9.4: Proxied `rpcdb` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::rpcdb_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::rpcdb`  ·  **Depends on:** M9.2, M1 (ava-database `DynDatabase`)  ·  **Spec:** `07` §5.2/§5.3/§5.4 (rpcdb row: server-side iterator handles, batched `IteratorNext`, `ErrEnumToError`)
@@ -241,14 +282,39 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_wire_identity_matrix` → passes.
 - [ ] **Step 5 — Commit:** `differential: rpcchainvm four-way wire-identity matrix (proto/vm byte goldens)`
 
-### Task M9.14: `ava-differential` mixed Go+Rust network bring-up + Observation
+### Task M9.14: `ava-differential` mixed Go+Rust network bring-up + Observation ✅ HARNESS + OFFLINE ARM DONE (2026-06-15); live bring-up arm gated
 **Crate/area:** `ava-differential`  ·  **Depends on:** M8 (avalanchers bin, all chains), M2 (handshake interop)  ·  **Spec:** `02` §11.1 (two-binary live), §11.3 (Observation), §11.4 (normalization), `26` §9(4)
 **Files:** `tests/differential/src/network.rs`, `tests/differential/src/observation.rs`, `tests/differential/tests/mixed_network_smoke.rs`
-- [ ] **Step 1 — Red:** Write `mixed_network_bringup_smoke`: start a tmpnet network of N nodes where node `i` is alternately Go (`AVALANCHEGO_PATH`=Go) and Rust (`AVALANCHEGO_PATH`=Rust), identical genesis/config/seed (deterministic node IDs/TLS per `02` §11.4); assert all nodes complete handshakes, exchange PeerLists, and a Go node logs the Rust peer's version as `avalanchego/1.14.2` (`26` §9(4)). Assert `Observation::collect(node).normalized()` returns a comparable per-chain (LA block ID+height, state/merkle root, sorted validator set).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network_bringup_smoke` → fails.
-- [ ] **Step 3 — Green:** Implement `network.rs` (`Network::start(BinaryMix, &cfg)`, mixed-binary tmpnet driver) and `observation.rs` (`Observation::collect` over `info`/`platform`/X/C RPC + reexecute roots; `.normalized()` strips timestamps/per-instance fields, sorts collections per `02` §11.4).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential mixed_network_bringup_smoke` → passes.
-- [ ] **Step 5 — Commit:** `differential: mixed Go+Rust tmpnet bring-up + normalized Observation`
+- [x] **Step 1 — Red:** Write `mixed_network_bringup_smoke`: start a tmpnet network of N nodes where node `i` is alternately Go (`AVALANCHEGO_PATH`=Go) and Rust (`AVALANCHEGO_PATH`=Rust), identical genesis/config/seed (deterministic node IDs/TLS per `02` §11.4); assert all nodes complete handshakes, exchange PeerLists, and a Go node logs the Rust peer's version as `avalanchego/1.14.2` (`26` §9(4)). Assert `Observation::collect(node).normalized()` returns a comparable per-chain (LA block ID+height, state/merkle root, sorted validator set).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network_bringup_smoke` → fails.
+- [x] **Step 3 — Green:** Implement `network.rs` (`Network::start(BinaryMix, &cfg)`, mixed-binary tmpnet driver) and `observation.rs` (`Observation::collect` over `info`/`platform`/X/C RPC + reexecute roots; `.normalized()` strips timestamps/per-instance fields, sorts collections per `02` §11.4).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential mixed_network` → passes (offline arms; live bring-up arm gated `#[cfg(feature="live")] #[ignore]`).
+- [x] **Step 5 — Commit:** `differential: mixed Go+Rust tmpnet bring-up + normalized Observation`
+
+> **AS-BUILT (merge of `m914-mixed-net`, 2026-06-15).** `network.rs` (kept `Binary`/`NetworkConfig`, extended):
+> `BinaryMix::from_config(&cfg)` → deterministic alternating slot assignment (slot 0 = Go, `[Go,Rust,Go,…]`, §11.4);
+> `NodeIdentity` derives a per-slot splitmix64 seed → `node_seed` hex + recognizable `NodeID-seed-<hex>` placeholder
+> + distinct staking ports (no RNG crate pulled in). `Network::start(mix, &cfg)` spawns each slot via
+> `tokio::process::Command` selecting `$AVALANCHEGO_PATH` (Go) / `avalanchers` (`$AVALANCHERS_PATH` or
+> conventional `target/{release,debug}`); `shutdown()`/`Drop` kill children. `observation.rs`: strengthened
+> `Observation::normalized()` (§11.4) — **strips** `info/timestamp`+`info/uptime`, **masks** `info/node_id`+`info/ip`
+> → `<masked>`, **sorts** set members in `P/validators`,`P/peers`,`X/validators`, and keys the whole record through a
+> `BTreeMap` (last-write dedup, deterministic order, never leaks HashMap order; idempotent). `collect(api_base)` scrapes
+> a live node's JSON-RPC (`info.getNodeID/getNodeVersion`, `platform.getHeight/getCurrentValidators`, `eth_blockNumber`)
+> via a **hand-rolled HTTP/1.1 POST over `tokio::net::TcpStream`** (no HTTP-client crate — honors the "no second crate"
+> rule). **Offline arms** (run every CI run, no feature): `mixed_network_config_is_deterministic` (mix/identity reproducible
+> from seed, distinct-per-slot, seed-sensitive) + `observation_normalization_round_trips` (timestamp/instance-ID/order
+> differences compare equal post-normalize; genuine LA/root/validator-membership divergence compares unequal; idempotent).
+> **Live arm** (`mixed_network_bringup_smoke`, `#[cfg(feature="live")] #[ignore]`, early-returns if `$AVALANCHEGO_PATH`
+> unset): `Network::start` → `await_all_connected` → `go_node_logged_peer_version("avalanchego/1.14.2")` (`26` §9(4)) →
+> `Observation::collect().normalized()`. **★ Honest deferrals (M9.15 handoff):** (1) real TLS staking-cert derivation
+> is a credible sketch — `node_seed` is reproducible/distinct-per-slot (all the offline gate needs) but the live operator
+> must feed it into the real cert generator so the i-th Go and i-th Rust node share a node ID, plus supply the genesis
+> allocation + bootstrap-IP set (`spawn_node` passes `--http-port`/`--staking-port`/`--data-dir`/`--network-id=local`/
+> `--staking-tls-cert-seed`); documented inline on `Network::start`. (2) `await_all_connected` uses observation
+> field-count as a connectivity proxy (poll-with-deadline + kill-on-timeout structure is real) — sharpen to parse
+> `info.peers` once a live net boots. Verified in main tree: `cargo nextest run -p ava-differential` 15/15 (incl. both
+> offline arms), clippy `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
 ### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip
 **Crate/area:** `ava-differential`  ·  **Depends on:** M9.14, M4/M5/M6/M7 (P/X/C/SAE)  ·  **Spec:** `16` §5(2), `02` §11.3 (peer/handshake row: "both reach the same height; no fork")
