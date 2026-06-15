@@ -1,0 +1,7 @@
+{
+  "bench_id": "mempool_push_pop",
+  "crate": "ava-avm",
+  "bench_target": "mempool_push_pop",
+  "mean_ns": 36576.7,
+  "note": "Advisory local baseline (see README.md). Padded above the measured local mean to absorb run-to-run variance; real CI baselines are regenerated per-runner."
+}
