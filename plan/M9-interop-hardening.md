@@ -308,7 +308,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential crash_injection` → passes.
 - [ ] **Step 5 — Commit:** `hardening: crash-injection suite (CC-ATOMIC, two-sided shared-memory consistency)`
 
-### Task M9.21: `bench-guard` perf gates 🟡 GATE + SEED BENCHES DONE (2026-06-15); full §9 bench set is a follow-up
+### Task M9.21: `bench-guard` perf gates ✅ DONE (gate + seed 2026-06-15; full §9 bench set 2026-06-15)
 **Crate/area:** all critical-path crates (`benches/`) + CI  ·  **Depends on:** M0–M8 benches exist; M9.15/M9.19 prove no behavior change  ·  **Spec:** `02` §9 (bench-guard, criterion baselines, >X% fails), `16` §5(9), `00` §9
 **Files:** `xtask/src/commands/bench_guard.rs`, `.config/criterion-baseline/`, crate `benches/*.rs` (as needed)
 - [x] **Step 1 — Red:** Write `bench_guard_holds`: run the critical-path criterion benches (codec encode/decode, merkledb commit, signature verify, mempool push/pop, message framing, plus the M9 hot paths — rpcchainvm RPC round-trip) and assert each is within threshold (default 10%) of the committed baseline; a synthetic regressed bench must make the guard **fail** (proves the gate works).
@@ -317,7 +317,36 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [x] **Step 4 — Confirm green:** `cargo xtask bench-guard` → passes against committed baselines.
 - [x] **Step 5 — Commit:** `ci: bench-guard perf gates (criterion baselines, >X% regression fails)`
 
-> **AS-BUILT (merge `52fede0`).** `cargo xtask bench-guard` (new `BenchGuard { threshold }` subcommand → `xtask/src/bench_guard.rs`) runs a guarded set of criterion benches, reads each bench's mean point estimate from `target/criterion/<id>/new/estimates.json`, compares to a committed advisory baseline under `.config/criterion-baseline/<id>.json`, and fails on a >threshold (default 10%, `--threshold <fraction>`) regression. Pure comparison `over_threshold(base,new,threshold)` + a dependency-free `estimates.json`/baseline scanner are unit-tested (5 tests incl. `over_threshold_trips_on_regression` proving a 2× regression trips). **Seed bench set (2 of the §9 list):** `ava-codec` `codec_roundtrip` (`Packer` encode→decode) + `ava-crypto` `secp256k1_verify` — each criterion-configured for sub-second runs (`sample_size(10)`, `measurement_time(500ms)`). `criterion` added once to root `[workspace.dependencies]`. Verified in main tree: `cargo nextest run -p xtask` 5/5; `cargo xtask bench-guard` EXIT 0 (~48s incl. compile); clippy clean. **FOLLOW-UPS (fold into `02` §9):** (1) extend `GUARDED` to the full §9 set (merkledb commit, mempool push/pop, message framing, rpcchainvm RPC round-trip) as those benches land; (2) the gate currently takes a single global `--threshold` — per-bench overrides are not yet wired; (3) committed baselines are machine-specific/advisory (`.config/criterion-baseline/README.md`) — real CI baselines regenerate per-runner; the impl reads `estimates.json` directly rather than criterion's `--save-baseline` flow, which §9 may want to reflect.
+> **AS-BUILT (merge `52fede0`).** `cargo xtask bench-guard` (new `BenchGuard { threshold }` subcommand → `xtask/src/bench_guard.rs`) runs a guarded set of criterion benches, reads each bench's mean point estimate from `target/criterion/<id>/new/estimates.json`, compares to a committed advisory baseline under `.config/criterion-baseline/<id>.json`, and fails on a >threshold (default 10%, `--threshold <fraction>`) regression. Pure comparison `over_threshold(base,new,threshold)` + a dependency-free `estimates.json`/baseline scanner are unit-tested (5 tests incl. `over_threshold_trips_on_regression` proving a 2× regression trips). **Seed bench set (2 of the §9 list):** `ava-codec` `codec_roundtrip` (`Packer` encode→decode) + `ava-crypto` `secp256k1_verify` — each criterion-configured for sub-second runs (`sample_size(10)`, `measurement_time(500ms)`). `criterion` added once to root `[workspace.dependencies]`. Verified in main tree: `cargo nextest run -p xtask` 5/5; `cargo xtask bench-guard` EXIT 0 (~48s incl. compile); clippy clean. **FOLLOW-UPS (fold into `02` §9):** (1) ✅ DONE — `GUARDED` extended to the full §9 set; (2) the gate currently takes a single global `--threshold` — per-bench overrides are not yet wired; (3) committed baselines are machine-specific/advisory (`.config/criterion-baseline/README.md`) — real CI baselines regenerate per-runner; the impl reads `estimates.json` directly rather than criterion's `--save-baseline` flow, which §9 may want to reflect.
+
+> **AS-BUILT — full §9 bench set (merges `5786de4`/`bd52d78`/`2b1a92f`/`37e300d`, 2026-06-15).** Four parallel
+> worktree agents (one disjoint crate each, no shared-file edits; orchestrator wired the single shared `GUARDED`
+> list at merge) added the remaining §9 critical-path benches, bringing `GUARDED` to **6**:
+> - **`ava-merkledb` `merkledb_commit`** — insert 100 KV pairs into a fresh in-memory `MerkleDb`
+>   (`BranchFactor::TwoFiftySix` over `ava_database::MemDb`), open a view, `commit()`, read `get_merkle_root()`
+>   (the "merkledb commit" hot path). Baseline 165025.1 ns.
+> - **`ava-message` `message_framing`** — `MsgBuilder::marshal`(`Compression::None`)→`unmarshal` round-trip of a
+>   representative `p2p::Get` message (outbound→inbound wire framing). Baseline 138.6 ns.
+> - **`ava-avm` `mempool_push_pop`** — `Mempool::add` (push 64 pre-built `BaseTx`) → `peek`+`remove` FIFO drain.
+>   Baseline 36576.7 ns.
+> - **`ava-vm-rpc` `rpcchainvm_roundtrip`** — one proxied `RpcDatabase::get` round-trip across an in-process
+>   loopback `proto/rpcdb` server (server+client stood up once outside the timed loop). Baseline 53403.1 ns
+>   (25% pad — loopback gRPC is variance-prone).
+>
+> Each bench mirrors the seed style (short-run criterion config `sample_size(10)`/`measurement_time(500ms)`/
+> `warm_up_time(200ms)`); baselines are advisory padded means under `.config/criterion-baseline/`. Verified in main
+> tree: `cargo xtask bench-guard` = **"all 6 critical-path benches within threshold"**, EXIT 0; `cargo nextest run
+> -p xtask` 5/5; `cargo clippy -p {ava-merkledb,ava-message,ava-avm,ava-vm-rpc,xtask} --all-targets -- -D warnings`
+> clean. ★ **Lint gotcha (reusable):** a `criterion` dev-dep used only by a `benches/*.rs` target trips
+> `unused_crate_dependencies` on the crate's *lib-test* compilation unit — but only for crates that enforce that
+> lint. Crates with **no `[lints]` opt-in** (ava-merkledb, ava-vm-rpc's lib uses an inline `#![warn(...)]`) are
+> unaffected at the Cargo-lints level; crates with `[lints] workspace = true` (ava-avm, ava-message) must **inline
+> the full root `[workspace.lints.*]` tables** (Cargo forbids mixing `workspace = true` with an override) and set
+> `unused_crate_dependencies = "allow"` (verified: all 10 root lints copied exactly, only that one value changed).
+> ava-vm-rpc, whose lib carries an inline `#![warn(unused_crate_dependencies)]` (it can't use `[lints] workspace`
+> due to an audited `unsafe` block) and has no `#[cfg(test)]` lib code, needed a 2-line `#[cfg(test)] use criterion
+> as _;` shim mirroring the existing `use {anyhow as _, thiserror as _};` idiom (a Cargo `[lints] allow` cannot
+> override a source-attribute `#![warn]`).
 
 ### Task M9.22: Version-string / compatibility-matrix interop conformance 🟡 GOLDEN LEGS DONE (2026-06-15); live `version_interop` deferred to M9.14
 **Crate/area:** `ava-version` + `ava-network` + `ava-api`  ·  **Depends on:** M2 (handshake), M8 (`info.getNodeVersion`), M9.14  ·  **Spec:** `26` §9 (test plan), `16` §5(2)

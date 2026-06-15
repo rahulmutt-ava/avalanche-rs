@@ -471,10 +471,18 @@ job on x86-64/aarch64 Linux.)
 > (default 0.10); the "per-bench threshold" is not yet wired (a future per-entry
 > override on the `GUARDED` table). (2) Committed baselines are **machine-specific
 > and advisory** (padded above a local run); real CI baselines must be regenerated
-> per-runner — see `.config/criterion-baseline/README.md`. The initial `GUARDED`
-> set is a **seed of 2** (`ava-codec` codec round-trip, `ava-crypto` secp256k1
-> verify); the rest of the §9 list (merkledb commit, mempool push/pop, message
-> framing, rpcchainvm RPC round-trip) is added as those benches land.
+> per-runner — see `.config/criterion-baseline/README.md`. The `GUARDED` set is now
+> the **full §9 list of 6** (`ava-codec` `codec_roundtrip`, `ava-crypto`
+> `secp256k1_verify`, `ava-merkledb` `merkledb_commit`, `ava-message`
+> `message_framing`, `ava-avm` `mempool_push_pop`, `ava-vm-rpc`
+> `rpcchainvm_roundtrip`); `cargo xtask bench-guard` reports "all 6 critical-path
+> benches within threshold". ★ A `criterion` dev-dep used only by a `benches/*.rs`
+> target trips `unused_crate_dependencies` on the lib-test compilation unit for any
+> crate that enforces that lint: crates with `[lints] workspace = true` must inline
+> the full root lint tables and set `unused_crate_dependencies = "allow"`; a crate
+> whose lib carries an inline `#![warn(unused_crate_dependencies)]` needs a
+> `#[cfg(test)] use criterion as _;` shim instead (a Cargo `[lints] allow` cannot
+> override a source-attribute `#![warn]`).
 
 ---
 

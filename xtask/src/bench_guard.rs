@@ -4,9 +4,11 @@
 //! `bench-guard` — the critical-path criterion perf gate (specs/02 §9, 16 §5(9),
 //! 00 §9).
 //!
-//! Runs a SMALL representative set of critical-path criterion benches (codec
-//! encode/decode round-trip + secp256k1 signature verify — the operations spec
-//! §9 calls out), reads criterion's per-bench mean point estimate from
+//! Runs a SMALL representative set of critical-path criterion benches — the
+//! operations spec §9 calls out: codec encode/decode round-trip, secp256k1
+//! signature verify, merkledb commit, message framing, mempool push/pop, and the
+//! rpcchainvm proxied RPC round-trip — reads criterion's per-bench mean point
+//! estimate from
 //! `target/criterion/<bench>/new/estimates.json`, compares each against the
 //! committed advisory baseline under `.config/criterion-baseline/<bench>.json`,
 //! and FAILS if any bench's mean exceeds its baseline by more than the threshold
@@ -50,6 +52,26 @@ const GUARDED: &[GuardedBench] = &[
         crate_name: "ava-crypto",
         bench_target: "signature",
         bench_id: "secp256k1_verify",
+    },
+    GuardedBench {
+        crate_name: "ava-merkledb",
+        bench_target: "merkledb_commit",
+        bench_id: "merkledb_commit",
+    },
+    GuardedBench {
+        crate_name: "ava-message",
+        bench_target: "message_framing",
+        bench_id: "message_framing",
+    },
+    GuardedBench {
+        crate_name: "ava-avm",
+        bench_target: "mempool_push_pop",
+        bench_id: "mempool_push_pop",
+    },
+    GuardedBench {
+        crate_name: "ava-vm-rpc",
+        bench_target: "rpcchainvm_roundtrip",
+        bench_id: "rpcchainvm_roundtrip",
     },
 ];
 
