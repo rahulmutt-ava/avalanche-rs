@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bench_guard;
 mod check_sae_lints;
 mod gen_flags;
 mod gen_genesis;
@@ -78,6 +79,13 @@ enum Command {
     /// Re-freeze the ava-genesis golden vectors from the Go oracle
     /// (`genesis.FromConfig` byte dumps + golden IDs; specs 23 §7, M8.8).
     GenGenesis,
+    /// Run the critical-path criterion benches and fail on a >threshold
+    /// regression vs the committed baselines (specs/02 §9, 16 §5(9), 00 §9).
+    BenchGuard {
+        /// Regression threshold as a fraction (default 0.10 == 10%).
+        #[arg(long)]
+        threshold: Option<f64>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -95,5 +103,6 @@ fn main() -> anyhow::Result<()> {
         Command::GenFlags => gen_flags::run(),
         Command::SaevmExitGate => saevm_exit_gate::run(),
         Command::GenGenesis => gen_genesis::run(),
+        Command::BenchGuard { threshold } => bench_guard::run(threshold),
     }
 }

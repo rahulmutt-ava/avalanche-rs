@@ -22,7 +22,14 @@ serde_json = { workspace = true }
 proptest = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
+criterion = { workspace = true }
 
 [features]
 # `testutil` exposes the generic codec conformance suite (codectest analogue).
 testutil = [  ]
+
+# Critical-path bench for `cargo xtask bench-guard` (specs/02 §9): Packer
+# encode/decode round-trip.
+[[bench]]
+name = "codec"
+harness = false

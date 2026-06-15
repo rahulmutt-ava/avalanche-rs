@@ -1,0 +1,7 @@
+{
+  "bench_id": "codec_roundtrip",
+  "crate": "ava-codec",
+  "bench_target": "codec",
+  "mean_ns": 53.6,
+  "note": "Advisory local baseline (see README.md). Padded above the measured local mean to absorb run-to-run variance; real CI baselines are regenerated per-runner."
+}
