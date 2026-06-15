@@ -73,6 +73,17 @@ criterion = { workspace = true }
 name = "rpcchainvm_roundtrip"
 harness = false
 
+# Minimal Rust test-VM plugin binary for the v45 guest protocol (plan M9.3): the
+# binary a Go (or Rust) rpcchainvm host spawns as a custom VM. Built by the
+# `differential::plugin_rust_in_go` harness via
+# `cargo build -p ava-vm-rpc --example testvm_plugin`. It links only crates
+# already present in `[dependencies]`/`[dev-dependencies]` (ava-vm/-snow/-database/
+# -crypto/-types/-version + async-trait/parking_lot/tokio/tokio-util/serde_json),
+# so it adds no new dependency edges.
+[[example]]
+name = "testvm_plugin"
+path = "examples/testvm_plugin.rs"
+
 # NOTE: this crate does NOT use `[lints] workspace = true` because the workspace
 # pins `unsafe_code = "forbid"`, which cannot be locally downgraded. The host
 # subprocess launcher needs one audited `unsafe` `pre_exec` for the Linux
