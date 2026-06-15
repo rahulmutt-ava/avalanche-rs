@@ -1,0 +1,35 @@
+[package]
+name = "ava-reexecute"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Reexecute test harness: replay recorded block ranges → Go-recorded state/merkle roots (specs/02 §10.5/§11.1, M9.19)."
+publish = false
+
+[features]
+# Gates the *live* P/X reexecute arm once `blockexport`-style P/X fixtures exist
+# (M9.19 follow-up). The C-Chain leg runs every CI run with no feature flag; the
+# P/X leg is `#[ignore]`d until its recorded fixtures land (mirrors the
+# `ava-differential` `interop` feature deferral pattern).
+px = [  ]
+
+[dependencies]
+# The C-Chain reexecute leg drives the REAL reth `BlockExecutor` + Firewood-ethhash
+# state-root pipeline (ported from `crates/ava-evm/tests/cchain_state_root.rs`), so
+# the harness links `ava-evm` (chainspec/evmconfig/state) + the reth primitives it
+# decodes blocks into + the K/V backend Firewood needs. No VM depends on
+# `ava-reexecute` (no dependency cycle).
+ava-evm = { path = "../../crates/ava-evm" }
+ava-evm-reth = { path = "../../crates/ava-evm-reth" }
+ava-database = { path = "../../crates/ava-database" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+tempfile = "3"
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
