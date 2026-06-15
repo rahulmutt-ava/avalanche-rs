@@ -679,15 +679,15 @@ impl ava_evm_reth::StorageRootProvider for FirewoodStateView {
     ) -> ProviderResult<B256> {
         // Returns the `storage_root` field encoded in the account leaf RLP.
         //
-        // > **As-built (M6.25, spec 10 §17.2.1/§17.9).** Firewood-ethhash derives
-        // > per-account storage roots INTERNALLY at hash time and does NOT expose
-        // > them through the v0.5 read/proof API, nor does it rewrite the stored
-        // > leaf value — the value is exactly the bytes we wrote, whose 3rd field
-        // > is the empty-trie sentinel ([`rlp_account`]). So for an account WITH
-        // > storage this returns the sentinel rather than the live sub-trie root
-        // > (`eth_getProof.storageHash` is correspondingly limited). Surfacing the
-        // > live sub-trie root is the G8 soft upstream firewood ask (§17.9).
-        // > Absent account => the empty-trie root.
+        // > **As-built (M6.25, spec 10 §17.2.1/§17.9; firewood v0.6.0).**
+        // > Firewood-ethhash derives per-account storage roots INTERNALLY at hash
+        // > time. As of v0.6.0 it also *persists the computed storageRoot in the
+        // > account node value* and returns it on read-back ("persist computed
+        // > storageRoot in account node values", v0.6.0 release notes), lifting
+        // > the v0.5 limitation where the read API returned exactly the bytes we
+        // > wrote (3rd field = empty-trie sentinel, [`rlp_account`]). So for an
+        // > account WITH storage this now returns the real live sub-trie root,
+        // > matching `eth_getProof.storageHash`. Absent account => empty-trie root.
         match self.val(&account_key(&address))? {
             Some(rlp) => decode_account_storage_root(&rlp),
             None => Ok(EMPTY_ROOT_HASH),

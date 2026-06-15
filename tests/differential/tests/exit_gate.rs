@@ -79,6 +79,13 @@ const EXIT_GATES: &[ExitGate] = &[
 ];
 
 /// Workspace root, derived from this crate's manifest dir (`<root>/tests/differential`).
+// `allow-expect-in-tests` only exempts `#[test]` bodies, not this shared helper; the
+// manifest-dir shape is a compile-time invariant of the workspace layout, so a panic here
+// is the correct failure mode.
+#[expect(
+    clippy::expect_used,
+    reason = "manifest-dir layout is a workspace invariant"
+)]
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
