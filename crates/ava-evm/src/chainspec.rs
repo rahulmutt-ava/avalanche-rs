@@ -240,6 +240,15 @@ pub struct NetworkUpgrades {
     pub fortuna: u64,
     /// Granite activation (unix seconds).
     pub granite: u64,
+    /// Helicon activation (unix seconds).
+    ///
+    /// Unlike the other phases, Helicon is **not** an [`AvaPhase`] — coreth maps
+    /// it to no Ethereum upgrade, so it does not participate in `fork_at` /
+    /// `revm_spec_id`. It is carried separately here purely to gate the ACP-194
+    /// minimum-gas-consumption floor in the gas-charge path (M7.35, spec 11;
+    /// coreth `params/hooks_libevm.go` `RulesExtra.MinimumGasConsumption` keys
+    /// on `IsHelicon`). Currently unscheduled on all networks ([`u64::MAX`]).
+    pub helicon: u64,
 }
 
 /// Converts a `chrono` [`DateTime<Utc>`] to a `u64` unix second, mapping any
@@ -275,7 +284,17 @@ impl NetworkUpgrades {
             etna: to_unix_secs(cfg.etna_time),
             fortuna: to_unix_secs(cfg.fortuna_time),
             granite: to_unix_secs(cfg.granite_time),
+            helicon: to_unix_secs(cfg.helicon_time),
         }
+    }
+
+    /// Whether the ACP-194 minimum-gas-consumption floor is active at
+    /// `timestamp` (Helicon activated, `timestamp >= helicon`). Mirrors coreth
+    /// `RulesExtra.IsHelicon` (`params/hooks_libevm.go`); Helicon is currently
+    /// unscheduled on every network, so this is `false` on all live blocks.
+    #[must_use]
+    pub fn is_helicon(&self, timestamp: u64) -> bool {
+        timestamp >= self.helicon
     }
 
     /// Activation timestamp for a phase. `Launch` is active from the dawn of time
@@ -396,6 +415,14 @@ impl AvaChainSpec {
             }
         }
         current
+    }
+
+    /// Whether the ACP-194 minimum-gas-consumption floor is active at
+    /// `timestamp` (Helicon activated). Mirrors coreth `RulesExtra.IsHelicon`
+    /// (`params/hooks_libevm.go`); see [`NetworkUpgrades::is_helicon`].
+    #[must_use]
+    pub fn is_helicon(&self, timestamp: u64) -> bool {
+        self.network_upgrades.is_helicon(timestamp)
     }
 
     /// The revm Ethereum [`SpecId`] coreth pins for the active Avalanche phase at

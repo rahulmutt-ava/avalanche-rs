@@ -81,6 +81,7 @@ fn ap3_chain_spec(chain_id: u64) -> AvaChainSpec {
         etna: FAR_FUTURE,
         fortuna: FAR_FUTURE,
         granite: FAR_FUTURE,
+        helicon: u64::MAX,
     };
     AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(chain_id), false)
 }

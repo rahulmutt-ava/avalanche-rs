@@ -44,6 +44,7 @@ fn all_active_spec() -> AvaChainSpec {
         etna: 0,
         fortuna: 0,
         granite: 0,
+        helicon: u64::MAX,
     };
     AvaChainSpec::from_parts(all_active, Chain::from_id(43114), false)
 }

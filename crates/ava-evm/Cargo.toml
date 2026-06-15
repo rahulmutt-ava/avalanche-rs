@@ -115,6 +115,12 @@ tokio-util = { workspace = true }
 # is already in the workspace lock (via reth's graph); arc-swap is a workspace dep.
 dashmap = "6"
 arc-swap = { workspace = true }
+# M7.35 ACP-194 minimum-gas-consumption floor: the SAE hook crate owns the
+# `minimum_gas_consumption(limit) = ceil(limit/Lambda)` formula + `Lambda`
+# (mirrors coreth `vms/saevm/hook` `MinimumGasConsumption`). `AvaHandler`
+# applies it in the gas-charge path gated on Helicon (spec 11). ava-saevm-hook
+# does NOT depend on ava-evm, so there is no cycle.
+ava-saevm-hook = { path = "../ava-saevm/hook" }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
