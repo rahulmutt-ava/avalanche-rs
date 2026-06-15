@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod application;
+pub mod compat_table;
 pub mod compatibility;
 pub mod error;
 pub mod upgrade;
@@ -29,4 +30,5 @@ pub use application::{
     APPLICATION_NAME, Application, CLIENT, CURRENT, CURRENT_DATABASE, MINIMUM_COMPATIBLE,
     PREV_DATABASE, PREV_MINIMUM_COMPATIBLE, RPC_CHAIN_VM_PROTOCOL,
 };
+pub use compat_table::rpc_chain_vm_protocol_compatibility;
 pub use error::{Error, Result};
