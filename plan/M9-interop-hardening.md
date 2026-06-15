@@ -104,6 +104,22 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > M9.14/M9.15 (mixed network), M9.16/M9.17 (Go-dir import + upgrade), M9.18 (load), M9.19 (reexecute),
 > M9.20 (crash injection), M9.21 (bench-guard), M9.22 (version/compat), M9.23 (acceptance gate).
 
+> **WAVE 2026-06-15b (pure-Rust frontier) MERGED.** Two parallel worktree agents on disjoint crates,
+> merged `--no-ff` zero-conflict (`59fa2e6`, `bbb87a6`); re-verified in main tree.
+> - **M9.16 COMPLETE** (`ava-database` + `ava-node`): Go-dir → RocksDB import facade over the existing
+>   `migrate/` engine + node-side foreign-dir refusal (`precheck_data_dir` → `Error::ForeignDataDir`),
+>   `tests/go_dir_import.rs`. **This task did NOT need a live Go node** (folder-name detection + verbatim
+>   KV copy; real on-disk Pebble/leveldb fixture deferred to the M12 sidecar — facade driven via injected
+>   `GoDbSource`). `cargo nextest -p ava-database --features migrate,rocksdb` 50/50, `-p ava-node` 19/19.
+> - **M9.22 GOLDEN LEGS COMPLETE** (`ava-version`): `golden::{compatibility_matrix, compatibility_json_byte_parity,
+>   node_version_reply}` + committed byte-identical `compatibility.json`. The 4th leg
+>   `differential::version_interop` (live floor-drop) is **deferred to M9.14** (mixed-net harness). 21/21.
+> ★ Correction to the banner above: **M9.16 was never live-Go-gated**, and M9.22's bulk is pure-golden —
+>   only its `version_interop` leg needs the live mixed net. Remaining live-Go-gated frontier: M9.3, M9.12,
+>   M9.13, M9.14, M9.15, M9.17, M9.18, M9.19 (replay leg can be recorded-oracle), M9.20, the M9.22
+>   `version_interop` leg, and the M9.23 acceptance gate. M9.21 (bench-guard) is pure-Rust but needs
+>   benches authored from scratch across crates.
+
 ---
 
 ## Tasks
@@ -243,14 +259,16 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential mixed_network` → passes (live mode; run on the nightly budget).
 - [ ] **Step 5 — Commit:** `differential: mixed_network — live Go+Rust, all chains, no fork, same tip`
 
-### Task M9.16: Go-data-dir → RocksDB import path (R2 migration)
+### Task M9.16: Go-data-dir → RocksDB import path (R2 migration) ✅ DONE (2026-06-15; `tests/go_dir_import.rs`)
 **Crate/area:** `ava-database` + `ava-node`  ·  **Depends on:** M1 (RocksDB backend, R2 scoped), M8 (node init)  ·  **Spec:** `26` §6 (DB version folder detection), `00` §4.4 / §11.2 R2, `04` R2, `27` §4 (marker)
-**Files:** `crates/ava-database/src/import.rs`, `crates/ava-node/src/db_init.rs`, `crates/ava-database/tests/go_dir_import.rs`
-- [ ] **Step 1 — Red:** Write `imports_go_pebble_dir_to_rocksdb` and `refuses_unsupported_dir`: given a captured Go-written Pebble/LevelDB data dir (fixture under `tests/vectors/migration/`), assert the import produces a RocksDB dir named `v1.4.5` (`CURRENT_DATABASE`) whose key/value set equals the source's; and that pointing the node at a foreign/older dir without invoking the import triggers the documented refusal (not an in-place open that corrupts).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-database go_dir_import` → fails.
-- [ ] **Step 3 — Green:** Implement `import.rs`: detect the source backend by the schema-version folder name (`26` §6); stream all KV pairs into a fresh RocksDB dir named `CURRENT_DATABASE`. Implement `db_init.rs` detection: if the data dir is a `PREV_DATABASE`/foreign backend, run the import (or refuse with a clear error if import is not requested), never open-in-place. Wire the `ungracefulShutdown` marker semantics (`27` §4).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-database go_dir_import` → passes.
-- [ ] **Step 5 — Commit:** `ava-database: Go-dir → RocksDB import path (R2) + node refusal of foreign dirs`
+**Files:** `crates/ava-database/src/migrate/import.rs` (facade over the existing `migrate/` engine), `crates/ava-node/src/init/db_init.rs`, `crates/ava-database/tests/go_dir_import.rs`
+- [x] **Step 1 — Red:** Write `imports_go_pebble_dir_to_rocksdb` and `refuses_unsupported_dir`: given a captured Go-written Pebble/LevelDB data dir (fixture under `tests/vectors/migration/`), assert the import produces a RocksDB dir named `v1.4.5` (`CURRENT_DATABASE`) whose key/value set equals the source's; and that pointing the node at a foreign/older dir without invoking the import triggers the documented refusal (not an in-place open that corrupts).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-database go_dir_import` → fails.
+- [x] **Step 3 — Green:** Implement `import.rs`: detect the source backend by the schema-version folder name (`26` §6); stream all KV pairs into a fresh RocksDB dir named `CURRENT_DATABASE`. Implement `db_init.rs` detection: if the data dir is a `PREV_DATABASE`/foreign backend, run the import (or refuse with a clear error if import is not requested), never open-in-place. Wire the `ungracefulShutdown` marker semantics (`27` §4).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-database go_dir_import` → passes.
+- [x] **Step 5 — Commit:** `ava-database: Go-dir → RocksDB import path (R2) + node refusal of foreign dirs`
+
+> **AS-BUILT (merge `59fa2e6`).** The import facade lives at `crates/ava-database/src/migrate/import.rs` (under the existing `migrate` module, not a top-level `import.rs`) — it wraps the already-present `migrate()` verbatim-copy driver. Public API (re-exported from `lib.rs` under the `migrate` feature): `GoBackend{Goleveldb,Pebble}` + `detect_backend(path)` (folder-name detection, **feature-free** so `ava-node` reuses it without pulling RocksDB), `ImportError`, `ImportOptions`/`ImportReport`, `current_db_dir_name()`, and the rocksdb-gated `import_go_dir(...)` / `import_source_into_rocksdb(&dyn GoDbSource, ...)`. Node-side refusal is `crates/ava-node/src/init/db_init.rs::precheck_data_dir(...)` (called by `init/database.rs` *before* the open; never touches the `ungracefulShutdown` marker — that stays owned by `init/database.rs`), surfacing the new typed `Error::ForeignDataDir{path,backend,current}`. **Test-fixture note:** no real captured Go Pebble/LevelDB dir was synthesized (the Pebble sidecar spawn is a documented M12 stub; RocksDB writes RocksDB-format not classic LevelDB), so `imports_go_pebble_dir_to_rocksdb` drives the facade through the **real on-disk RocksDB write path** with an injected `GoDbSource` (`VecSource` mirroring the `04` §10 layout) and re-opens the resulting `v1.4.5/` dir to assert byte-for-byte KV equality + cursor. Verified in main tree: `cargo nextest run -p ava-database --features migrate,rocksdb` = **50/50**, `-p ava-node` = **19/19**, clippy `--all-features` clean. The goleveldb fast-path (`RocksDbCompatSource`) and merkleized `RootVerifier` wiring remain for the M12 CLI.
 
 ### Task M9.17: `test-upgrade` — Go→Rust across an activation height (incl. Go-dir import)
 **Crate/area:** `tests/upgrade` + `xtask`  ·  **Depends on:** M9.16, M9.14 (mixed-net driver), M8  ·  **Spec:** `02` §10.4, `16` §5(8), `26` §7 (rolling-upgrade moving floor), `00` §4.4
@@ -297,14 +315,17 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo xtask bench-guard` → passes against committed baselines.
 - [ ] **Step 5 — Commit:** `ci: bench-guard perf gates (criterion baselines, >X% regression fails)`
 
-### Task M9.22: Version-string / compatibility-matrix interop conformance
+### Task M9.22: Version-string / compatibility-matrix interop conformance 🟡 GOLDEN LEGS DONE (2026-06-15); live `version_interop` deferred to M9.14
 **Crate/area:** `ava-version` + `ava-network` + `ava-api`  ·  **Depends on:** M2 (handshake), M8 (`info.getNodeVersion`), M9.14  ·  **Spec:** `26` §9 (test plan), `16` §5(2)
 **Files:** `crates/ava-version/tests/compat_matrix.rs`, `tests/differential/tests/version_interop.rs`, `crates/ava-version/compatibility.json`
-- [ ] **Step 1 — Red:** Write `golden::compatibility_matrix`, `golden::compatibility_json_byte_parity`, `golden::node_version_reply`, and `differential::version_interop`: assert `Application{avalanchego,1,14,2}.display() == "avalanchego/1.14.2"`; the `compatible()` table cells from `26` §9(3) (newer-major reject, below-floor reject, fork-boundary cut-over reject, different-name accept, mid-connection transition); `compatibility.json` parses byte-identically to the committed Go file; `info.getNodeVersion` reply matches Go field-for-field (modulo build-specific `gitCommit`/`go`); and in the mixed net a Rust node lowered below the Go floor is dropped by Go, and vice-versa (`26` §9(4)).
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-version compat_matrix && cargo nextest run -p ava-differential version_interop` → fails for any uncovered cell.
-- [ ] **Step 3 — Green:** Fill any gaps in `Compatibility::compatible`, the embedded `compatibility.json`, and the `info.getNodeVersion` reply so all cells pass; commit `compatibility.json` byte-identical to the Go tree with a provenance note.
-- [ ] **Step 4 — Confirm green:** both commands → pass.
-- [ ] **Step 5 — Commit:** `ava-version: handshake compatibility-matrix + version-string interop conformance`
+- [x] **Step 1 — Red:** Write `golden::compatibility_matrix`, `golden::compatibility_json_byte_parity`, `golden::node_version_reply`, and `differential::version_interop`: assert `Application{avalanchego,1,14,2}.display() == "avalanchego/1.14.2"`; the `compatible()` table cells from `26` §9(3) (newer-major reject, below-floor reject, fork-boundary cut-over reject, different-name accept, mid-connection transition); `compatibility.json` parses byte-identically to the committed Go file; `info.getNodeVersion` reply matches Go field-for-field (modulo build-specific `gitCommit`/`go`); and in the mixed net a Rust node lowered below the Go floor is dropped by Go, and vice-versa (`26` §9(4)).
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-version compat_matrix && cargo nextest run -p ava-differential version_interop` → fails for any uncovered cell.
+- [x] **Step 3 — Green:** Fill any gaps in `Compatibility::compatible`, the embedded `compatibility.json`, and the `info.getNodeVersion` reply so all cells pass; commit `compatibility.json` byte-identical to the Go tree with a provenance note.
+- [x] **Step 4 — Confirm green:** golden legs pass (`cargo nextest run -p ava-version compat_matrix`).
+- [x] **Step 5 — Commit:** `ava-version: handshake compatibility-matrix + version-string golden conformance (live version_interop deferred)`
+
+> **AS-BUILT (merge `bbb87a6`).** The three pure-Rust golden legs are complete and verified in main tree (`cargo nextest run -p ava-version` = **21/21, 1 skipped**; clippy `--all-features` clean). `crates/ava-version/compatibility.json` was copied **byte-identical** (1426 B, `cmp`-verified) from the Go tree's `version/compatibility.json` @ upstream `0b0b57143c`, with a `compatibility.json.md` provenance sidecar; a new `src/compat_table.rs` embeds it via `include_str!` (panic-free `LazyLock<Result<..>>` + fallible `rpc_chain_vm_protocol_compatibility()` accessor) — `serde_json` moved dev-dep → dep. `golden::compatibility_matrix` covers every §9(3) cell with two mock clocks straddling a fork; `golden::compatibility_json_byte_parity` asserts embed==file==reparsed-table and protocol 45 ⇒ `[v1.14.2]`; `golden::node_version_reply` pins version-string display + the `info.getNodeVersion` fields ava-version owns (`version`/`databaseVersion`/`rpcProtocolVersion` incl. the `json.Uint32` string form `"45"`).
+> **DEFERRED — `differential::version_interop` (`26` §9(4)):** the live mixed Go+Rust floor-drop test belongs in `tests/differential/tests/version_interop.rs`, NOT in `ava-version` (a T0 primitive must not depend on `ava-differential`/`ava-network`/`ava-api`). Blocked on the **M9.14** mixed-network harness (the `ava-differential` `network.rs` is still a ~35-line scaffold). Recorded as an `#[ignore]`d `version_interop_deferred` stub + PORTING note. The full `info.getNodeVersion` JSON reply (incl. `gitCommit`/`vmVersions`) is already golden-tested at the `ava-api` layer (`crates/ava-api/src/info/mod.rs`).
 
 ### Task M9.23: Final acceptance gate (16 §5 definition of done)
 **Crate/area:** all crates + `xtask` + CI  ·  **Depends on:** M9.1–M9.22 (every prior M9 task) + M0–M8 exit gates  ·  **Spec:** `16` §5 (the full checklist), `02` §10.1 (PORTING.md), §13, `00` §11.7
