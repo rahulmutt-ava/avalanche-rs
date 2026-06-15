@@ -73,6 +73,29 @@ serde_json = { workspace = true }
 # Neither depends on `ava-avm`, so this is a leaf dev-dep (no cycle).
 ava-chains = { path = "../ava-chains" }
 ava-platformvm = { path = "../ava-platformvm" }
+# Benchmarking harness for the critical-path perf gate (`cargo xtask
+# bench-guard`; specs/02 §9 / M9.21): the mempool push/pop canary.
+criterion = { workspace = true }
 
-[lints]
-workspace = true
+# Critical-path bench for `cargo xtask bench-guard` (specs/02 §9): the X-Chain
+# mempool push → pop hot path.
+[[bench]]
+name = "mempool_push_pop"
+harness = false
+
+# Inlined from [workspace.lints] to override unused_crate_dependencies for the bench-only criterion dev-dep; keep in sync with root Cargo.toml.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+# Overrides the inherited "warn": criterion is a dev-dep used only by the
+# bench target, so the lib's test compilation unit sees it as unused.
+unused_crate_dependencies = "allow"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+todo = "warn"
+dbg_macro = "deny"
