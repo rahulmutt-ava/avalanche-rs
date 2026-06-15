@@ -71,7 +71,11 @@ fn genesis() -> Arc<Block> {
     let g = Arc::new(
         Block::new(eth_block(0, 0, B256::ZERO, 0, 0, 0, B256::ZERO), None, None).expect("genesis"),
     );
-    g.mark_synchronous().expect("mark synchronous");
+    g.mark_synchronous((
+        ava_vm::components::gas::Gas(0),
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))
+    .expect("mark synchronous");
     g
 }
 
@@ -79,7 +83,12 @@ fn genesis() -> Arc<Block> {
 fn bounds() -> WorstCaseBounds {
     WorstCaseBounds {
         max_base_fee: Price(7),
-        latest_end_time: GasTime::new(0, 0, 0, ava_saevm_gastime::GasPriceConfig::default()),
+        latest_end_time: GasTime::new(
+            0,
+            0,
+            ava_vm::components::gas::Price(0),
+            ava_saevm_gastime::GasPriceConfig::default(),
+        ),
         min_op_burner_balances: Vec::new(),
     }
 }

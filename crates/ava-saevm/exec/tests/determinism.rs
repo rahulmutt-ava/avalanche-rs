@@ -157,14 +157,23 @@ fn sae_genesis() -> Arc<Block> {
     let g = Arc::new(
         Block::new(SealedBlock::seal_slow(RethBlock::uncle(header)), None, None).expect("genesis"),
     );
-    g.mark_synchronous().expect("mark synchronous");
+    g.mark_synchronous((
+        ava_vm::components::gas::Gas(0),
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))
+    .expect("mark synchronous");
     g
 }
 
 /// A static-priced gas clock at `unix` whose `price()` equals `BASE_FEE` (static
 /// pricing pins the excess at its minimum so `price() == min_price`).
 fn static_clock(unix: u64) -> GasTime {
-    GasTime::new(unix, 1, 0, GasPriceConfig::new(BASE_FEE, 87, true))
+    GasTime::new(
+        unix,
+        1,
+        ava_vm::components::gas::Price(0),
+        GasPriceConfig::new(BASE_FEE, 87, true),
+    )
 }
 
 /// A worst-case bound permitting any base fee (the bound check is exercised by
@@ -172,7 +181,12 @@ fn static_clock(unix: u64) -> GasTime {
 fn permissive_bounds() -> WorstCaseBounds {
     WorstCaseBounds {
         max_base_fee: Price(u64::MAX),
-        latest_end_time: GasTime::new(0, 1, 0, GasPriceConfig::default()),
+        latest_end_time: GasTime::new(
+            0,
+            1,
+            ava_vm::components::gas::Price(0),
+            GasPriceConfig::default(),
+        ),
         min_op_burner_balances: Vec::new(),
     }
 }

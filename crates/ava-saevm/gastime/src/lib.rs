@@ -169,19 +169,51 @@ pub struct GasTime {
 }
 
 impl GasTime {
-    /// Creates a new [`GasTime`] at the given Unix `unix_seconds`.
+    /// Creates a new [`GasTime`] at the given Unix `unix_seconds`, derived from a
+    /// starting **price** (the "base fee").
     ///
     /// The consumption of `target * TARGET_TO_RATE` units of gas is equivalent
     /// to a tick of one second. `target` is clamped to
-    /// `[MIN_TARGET, MAX_TARGET]`; the proxy-clock rate is pinned to
-    /// `R = TARGET_TO_RATE * target`. Under static pricing the starting excess
-    /// is forced to zero. After construction, [`enforce_min_excess`] is applied.
+    /// `[MIN_TARGET, MAX_TARGET]`; the starting excess is derived from
+    /// `starting_price` via [`excess_for_price`] (the inverse of the ACP-176
+    /// price exponential, `excess ≈ ln(price) * K`). The proxy-clock rate is
+    /// pinned to `R = TARGET_TO_RATE * target`. Under static pricing the
+    /// starting excess is forced to zero. After construction,
+    /// [`enforce_min_excess`] is applied.
     ///
-    /// Mirrors Go's `gastime.New` / `FromProxyTime`.
+    /// Mirrors Go's `gastime.New`, which converts the starting price to an
+    /// excess via `excessForPrice(price, excessScalingFactor(target, scaling))`
+    /// and then delegates to `newFromExcess`.
     ///
     /// [`enforce_min_excess`]: GasTime::enforce_min_excess
     #[must_use]
     pub fn new(
+        unix_seconds: u64,
+        target: u64,
+        starting_price: Price,
+        config: GasPriceConfig,
+    ) -> Self {
+        let target = clamp_target(target);
+        let k = excess_scaling_factor_of(config.target_to_excess_scaling(), target);
+        let excess = excess_for_price(starting_price.0, k);
+        Self::from_excess(unix_seconds, target, excess, config)
+    }
+
+    /// Creates a new [`GasTime`] at the given Unix `unix_seconds`, derived from a
+    /// starting **excess** `x` directly.
+    ///
+    /// Like [`new`], but takes the ACP-176 excess `x` instead of converting a
+    /// starting price. `target` is clamped to `[MIN_TARGET, MAX_TARGET]`; the
+    /// proxy-clock rate is pinned to `R = TARGET_TO_RATE * target`. Under static
+    /// pricing the excess is forced to zero. After construction,
+    /// [`enforce_min_excess`] is applied.
+    ///
+    /// Mirrors Go's `gastime.newFromExcess` / `FromProxyTime`.
+    ///
+    /// [`new`]: GasTime::new
+    /// [`enforce_min_excess`]: GasTime::enforce_min_excess
+    #[must_use]
+    pub fn from_excess(
         unix_seconds: u64,
         target: u64,
         starting_excess: u64,

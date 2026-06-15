@@ -461,6 +461,12 @@ fn build_genesis() -> std::result::Result<Arc<Block>, ava_saevm_blocks::Error> {
     };
     let eth = SealedBlock::seal_slow(RethBlock::uncle(header));
     let genesis = Arc::new(Block::new(eth, None, None)?);
-    genesis.mark_synchronous()?;
+    // Mirror Go's `MarkSynchronous(hooks, ...)`, which seeds the post-block gas
+    // clock from `hooks.GasConfigAfter(header)`. The C-Chain hook returns a fixed
+    // (1_000_000 target, default ACP-176 config) — see `CChainHooks::gas_config_after`.
+    genesis.mark_synchronous((
+        crate::hooks::GAS_CONFIG_AFTER_TARGET,
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))?;
     Ok(genesis)
 }

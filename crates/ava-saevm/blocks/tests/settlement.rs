@@ -49,7 +49,11 @@ fn build_chain(count: u64, last_settled_at: &[u64]) -> Vec<Arc<Block>> {
             // Synchronous (self-settling) genesis.
             let b = Block::new(eth, None, None).expect("genesis");
             let b = Arc::new(b);
-            b.mark_synchronous().expect("mark_synchronous");
+            b.mark_synchronous((
+                ava_vm::components::gas::Gas(0),
+                ava_saevm_gastime::GasPriceConfig::default(),
+            ))
+            .expect("mark_synchronous");
             chain.push(b);
         } else {
             let parent = Arc::clone(&chain[(height - 1) as usize]);

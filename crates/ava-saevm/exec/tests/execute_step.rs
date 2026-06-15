@@ -65,7 +65,12 @@ fn empty_block(number: u64, parent_hash: B256) -> SealedBlock<RethBlock> {
 fn bounds(max_base_fee: u64) -> WorstCaseBounds {
     WorstCaseBounds {
         max_base_fee: Price(max_base_fee),
-        latest_end_time: GasTime::new(0, 1, 0, GasPriceConfig::default()),
+        latest_end_time: GasTime::new(
+            0,
+            1,
+            ava_vm::components::gas::Price(0),
+            GasPriceConfig::default(),
+        ),
         min_op_burner_balances: Vec::new(),
     }
 }
@@ -74,7 +79,12 @@ fn bounds(max_base_fee: u64) -> WorstCaseBounds {
 /// test pin the realised base fee deterministically (static pricing holds the
 /// excess at its minimum, so `price() == min_price`).
 fn static_clock(unix: u64, base_fee: u64) -> GasTime {
-    GasTime::new(unix, 1, 0, GasPriceConfig::new(base_fee, 87, true))
+    GasTime::new(
+        unix,
+        1,
+        ava_vm::components::gas::Price(0),
+        GasPriceConfig::new(base_fee, 87, true),
+    )
 }
 
 /// The coreth `TestApricotPhase3Config` upgrade schedule the `genesis_to_1`
@@ -103,7 +113,11 @@ fn ap3_london_upgrades() -> NetworkUpgrades {
 /// A genesis SAE block (synchronous) whose hash a child can be built against.
 fn genesis() -> Arc<Block> {
     let g = Arc::new(Block::new(empty_block(0, B256::ZERO), None, None).expect("genesis"));
-    g.mark_synchronous().expect("mark synchronous");
+    g.mark_synchronous((
+        ava_vm::components::gas::Gas(0),
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))
+    .expect("mark synchronous");
     g
 }
 

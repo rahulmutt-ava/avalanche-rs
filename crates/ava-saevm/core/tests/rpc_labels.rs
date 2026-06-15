@@ -38,7 +38,11 @@ fn eth_block(number: u64, timestamp: u64, parent_hash: B256) -> SealedBlock<Reth
 
 fn genesis() -> Arc<Block> {
     let g = Arc::new(Block::new(eth_block(0, 0, B256::ZERO), None, None).expect("genesis"));
-    g.mark_synchronous().expect("mark synchronous");
+    g.mark_synchronous((
+        ava_vm::components::gas::Gas(0),
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))
+    .expect("mark synchronous");
     g
 }
 

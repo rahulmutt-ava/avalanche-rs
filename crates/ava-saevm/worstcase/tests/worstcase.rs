@@ -37,7 +37,7 @@ fn config() -> GasPriceConfig {
 }
 
 fn clock(target: u64, excess: u64) -> GasTime {
-    GasTime::new(0, target, excess, config())
+    GasTime::from_excess(0, target, excess, config())
 }
 
 // --- in-memory state seam --------------------------------------------------

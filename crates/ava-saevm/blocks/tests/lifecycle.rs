@@ -45,7 +45,11 @@ fn artefacts() -> ExecutionArtefacts {
 /// Builds a genesis + child pair; genesis is synchronous.
 fn genesis_and_child() -> (Arc<Block>, Arc<Block>) {
     let g = Arc::new(Block::new(eth_block(0, B256::ZERO), None, None).expect("genesis"));
-    g.mark_synchronous().expect("sync");
+    g.mark_synchronous((
+        ava_vm::components::gas::Gas(0),
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))
+    .expect("sync");
     let child = Arc::new(
         Block::new(
             eth_block(1, g.hash()),

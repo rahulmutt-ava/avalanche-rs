@@ -35,7 +35,7 @@ proptest! {
         excess in 0u64..u64::MAX,
         min_price in 1u64..=10_000u64,
     ) {
-        let tm = GasTime::new(0, target, excess, cfg(min_price));
+        let tm = GasTime::from_excess(0, target, excess, cfg(min_price));
         prop_assert!(tm.price().0 >= min_price);
     }
 
@@ -46,7 +46,7 @@ proptest! {
         excess in 0u64..1_000_000_000u64,
         used in 0u64..1_000_000_000u64,
     ) {
-        let mut tm = GasTime::new(0, target, excess, cfg(1));
+        let mut tm = GasTime::from_excess(0, target, excess, cfg(1));
         let before = tm.excess().0;
         tm.tick(used);
         prop_assert!(tm.excess().0 >= before);
@@ -60,7 +60,7 @@ proptest! {
         new_target in 1u64..=1_000_000u64,
         excess in 0u64..1_000_000u64,
     ) {
-        let mut tm = GasTime::new(0, old_target, excess, cfg(1));
+        let mut tm = GasTime::from_excess(0, old_target, excess, cfg(1));
         let old_x = tm.excess().0;
         tm.after_block(0, new_target, cfg(1));
 
@@ -83,7 +83,7 @@ proptest! {
     ) {
         // Construct with excess 0 so enforce_min_excess drives excess to the
         // minimum that satisfies min_price.
-        let tm = GasTime::new(0, target, 0, cfg(min_price));
+        let tm = GasTime::from_excess(0, target, 0, cfg(min_price));
         prop_assert!(tm.price().0 >= min_price);
     }
 
@@ -96,8 +96,8 @@ proptest! {
         sec_a in 0u64..1_000_000u64,
         delta in 1u64..1_000_000u64,
     ) {
-        let a = GasTime::new(sec_a, target_a, 0, cfg(1));
-        let b = GasTime::new(sec_a + delta, target_b, 0, cfg(1));
+        let a = GasTime::from_excess(sec_a, target_a, 0, cfg(1));
+        let b = GasTime::from_excess(sec_a + delta, target_b, 0, cfg(1));
         prop_assert_eq!(a.compare(&b), std::cmp::Ordering::Less);
         prop_assert_eq!(b.compare(&a), std::cmp::Ordering::Greater);
         prop_assert_eq!(a.compare(&a), std::cmp::Ordering::Equal);
