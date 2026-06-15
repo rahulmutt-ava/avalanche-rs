@@ -18,7 +18,7 @@ parking_lot = { workspace = true }
 # tracing-subscriber 0.3 provides the layered registry, reload handles, and the
 # custom `FormatEvent` hook the §5.4 design depends on (the workspace's 0.2 is a
 # transitive pin only).
-tracing-subscriber = { version = "0.3.20", features = ["registry", "fmt", "env-filter", "ansi"] }
+tracing-subscriber = { version = "0.3.20", features = [ "registry", "fmt", "env-filter", "ansi" ] }
 # Non-blocking appender wrapper around our size-aware rolling writer (`rolling`).
 tracing-appender = "0.2.3"
 # gzip for lumberjack-equivalent compressed backups (specs/18 §5.3).

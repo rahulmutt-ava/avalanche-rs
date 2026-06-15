@@ -47,7 +47,7 @@ serde_json = { workspace = true }
 [features]
 # Exposes the in-memory test VM helpers so the pipeline + differential tests can
 # build the full wrapping stack around `ava_vm::testutil::TestVm`.
-testutil = ["ava-vm/testutil", "ava-proposervm/testutil"]
+testutil = [ "ava-vm/testutil", "ava-proposervm/testutil" ]
 
 [dev-dependencies]
 tokio = { workspace = true, features = [ "rt", "sync", "macros", "time", "test-util" ] }

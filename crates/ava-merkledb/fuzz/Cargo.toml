@@ -25,11 +25,11 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-arbitrary = { version = "1", features = ["derive"] }
+arbitrary = { version = "1", features = [ "derive" ] }
 # The op-stream model + oracle check + decoder live in ava-merkledb behind the
 # `fuzzing` feature, so the fuzz targets and the stable smoke test share one
 # implementation.
-ava-merkledb = { path = "..", features = ["fuzzing"] }
+ava-merkledb = { path = "..", features = [ "fuzzing" ] }
 
 [[bin]]
 name = "op_stream"

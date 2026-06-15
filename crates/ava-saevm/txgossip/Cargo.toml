@@ -20,6 +20,6 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = [ "test-util" ] }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }

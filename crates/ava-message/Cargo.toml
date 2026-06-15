@@ -21,7 +21,7 @@ flate2 = { workspace = true }
 # Exposes `fuzz_support` (the canonical `decode_never_overreads` body shared by
 # the cargo-fuzz target and the stable `prop_fuzz_smoke` proptest). Enabled by
 # `crates/ava-message/fuzz` and by the `--all-features` verification gate.
-fuzzing = []
+fuzzing = [  ]
 
 [build-dependencies]
 # Compiles proto/p2p/p2p.proto into OUT_DIR (generated code is NOT committed).

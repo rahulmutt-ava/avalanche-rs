@@ -25,6 +25,6 @@ ava-vm = { path = "../../ava-vm" }
 ava-types = { path = "../../ava-types" }
 arc-swap = { workspace = true }
 parking_lot = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+tokio = { workspace = true, features = [ "macros", "rt", "time", "sync" ] }
 
 [dev-dependencies]

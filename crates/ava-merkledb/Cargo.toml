@@ -23,7 +23,7 @@ rayon = "1"
 # Structure-aware fuzz input model; optional, only pulled in by the `fuzzing`
 # feature (the standalone fuzz/ crate + the `--all-features` dev-test build).
 # Not yet in the root [workspace.dependencies]; pinned locally (see report).
-arbitrary = { version = "1", features = ["derive"], optional = true }
+arbitrary = { version = "1", features = [ "derive" ], optional = true }
 # State-sync protocol (M1.19, specs 04 §3.7 / 19 §4 / 15 §3.10). The proto
 # request/response frames are generated from proto/sync/sync.proto by build.rs,
 # gated on the `sync` feature so non-sync builds never invoke `protoc`.
@@ -37,22 +37,22 @@ tokio = { workspace = true, optional = true }
 # is exactly the revision the Go node's `firewood-go-ethhash/ffi v0.5.0` wraps.
 # Optional + gated behind the `firewood`/`firewood-ethhash` features so non-
 # firewood builds never pull it (it has a native/cmake-ish build).
-firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.5.0", default-features = false, optional = true }
+firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, optional = true }
 # `firewood::db::DbConfig` requires a `NodeHashAlgorithm` (firewood does not
 # re-export it from its public API), so we pull `firewood-storage` from the same
 # pinned rev just for `NodeHashAlgorithm::compile_option()`. Its `ethhash`
 # feature must track `firewood/ethhash` (both flip the global hash mode), so the
 # `firewood-ethhash` feature turns both on together.
-firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.5.0", default-features = false, optional = true }
+firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, optional = true }
 
 [features]
 # Exposes `fuzz_support` (the canonical DbOp op-stream + oracle check shared by
 # the cargo-fuzz targets and the stable `prop_fuzz_smoke` proptest). Enabled by
 # `crates/ava-merkledb/fuzz` and by the `--all-features` verification gate.
-fuzzing = ["dep:arbitrary"]
+fuzzing = [ "dep:arbitrary" ]
 # State-sync protocol: `SyncDb` trait, work-heap, Syncer, and the generated
 # `proto/sync` wire types (specs 04 §3.7, 19 §4, 15 §3.10).
-sync = ["dep:prost", "dep:tonic", "dep:tokio"]
+sync = [ "dep:prost", "dep:tonic", "dep:tokio" ]
 # Firewood backend in MerkleDB (SHA-256) hashing mode (specs 04 §4.1/§4.2, R3).
 # Wraps `firewood::db::{Db, DbConfig}` + `api::{Db, DbView, Proposal}` behind the
 # safe `firewood` module. The runtime `node_hash_algorithm` is bound to
@@ -60,26 +60,26 @@ sync = ["dep:prost", "dep:tonic", "dep:tokio"]
 # set (firewood's `ethhash` is a global compile-time switch).
 # Implies `sync`: M1.20 implements the `SyncDb` trait (M1.19) for the firewood
 # path, so the firewood backend always carries the state-sync protocol.
-firewood = ["dep:firewood", "dep:firewood-storage", "sync"]
+firewood = [ "dep:firewood", "dep:firewood-storage", "sync" ]
 # Firewood backend in Ethereum (Keccak-256 + Eth-MPT/RLP) hashing mode, used for
 # the EVM state root (specs 04 §4.1 ethhash, 15 §6). Turns on `firewood/ethhash`
 # (+ `firewood-storage/ethhash`), which globally switches firewood to Keccak
 # hashing. Implies `firewood`.
-firewood-ethhash = ["firewood", "firewood/ethhash", "firewood-storage/ethhash"]
+firewood-ethhash = [ "firewood", "firewood/ethhash", "firewood-storage/ethhash" ]
 
 [build-dependencies]
 # Compiles proto/sync/sync.proto into OUT_DIR when the `sync` feature is active.
 tonic-build = { workspace = true }
 
 [dev-dependencies]
-ava-database = { path = "../ava-database", features = ["testutil"] }
+ava-database = { path = "../ava-database", features = [ "testutil" ] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "sync", "time" ] }
 # Real on-disk scratch dirs for the firewood roundtrip / ethhash golden tests
 # (firewood is a disk-backed DB). Already in the workspace lock; pinned locally.
 tempfile = "3"

@@ -3144,7 +3144,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3248,8 +3248,8 @@ dependencies = [
 
 [[package]]
 name = "firewood"
-version = "0.5.0"
-source = "git+https://github.com/ava-labs/firewood?tag=v0.5.0#0695b91f280b138d3840ea0792ee52aff8be5c0b"
+version = "0.6.0"
+source = "git+https://github.com/ava-labs/firewood?tag=v0.6.0#f56b46762241d1cd4cbcd01a818dbfb5224b2e25"
 dependencies = [
  "aquamarine",
  "bytemuck",
@@ -3264,14 +3264,16 @@ dependencies = [
  "nonzero_ext",
  "parking_lot",
  "rayon",
+ "sha3 0.10.9",
+ "smallvec",
  "thiserror 2.0.18",
  "typed-builder",
 ]
 
 [[package]]
 name = "firewood-macros"
-version = "0.4.0"
-source = "git+https://github.com/ava-labs/firewood?tag=v0.5.0#0695b91f280b138d3840ea0792ee52aff8be5c0b"
+version = "0.5.0"
+source = "git+https://github.com/ava-labs/firewood?tag=v0.6.0#f56b46762241d1cd4cbcd01a818dbfb5224b2e25"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3280,16 +3282,16 @@ dependencies = [
 
 [[package]]
 name = "firewood-metrics"
-version = "0.5.0"
-source = "git+https://github.com/ava-labs/firewood?tag=v0.5.0#0695b91f280b138d3840ea0792ee52aff8be5c0b"
+version = "0.6.0"
+source = "git+https://github.com/ava-labs/firewood?tag=v0.6.0#f56b46762241d1cd4cbcd01a818dbfb5224b2e25"
 dependencies = [
  "metrics",
 ]
 
 [[package]]
 name = "firewood-storage"
-version = "0.5.0"
-source = "git+https://github.com/ava-labs/firewood?tag=v0.5.0#0695b91f280b138d3840ea0792ee52aff8be5c0b"
+version = "0.6.0"
+source = "git+https://github.com/ava-labs/firewood?tag=v0.6.0#f56b46762241d1cd4cbcd01a818dbfb5224b2e25"
 dependencies = [
  "aquamarine",
  "arc-swap",
@@ -6300,7 +6302,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6989,7 +6991,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7869,7 +7871,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

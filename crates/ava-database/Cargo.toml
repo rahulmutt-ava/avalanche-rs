@@ -34,8 +34,8 @@ lru = "0.12"
 # `rocksdb` crate; LZ4/Snappy compression matches avalanchego's leveldb tuning.
 # tempfile backs `RocksDb::open_temp` (a real on-disk dir, owned by the DB).
 rocksdb = { version = "0.22", optional = true, default-features = false, features = [
-    "lz4",
-    "snappy",
+  "lz4",
+  "snappy",
 ] }
 tempfile = { version = "3", optional = true }
 
@@ -58,14 +58,14 @@ bytes = { workspace = true, optional = true }
 [features]
 # The reusable conformance + proptest battery (specs/02 §7.2). Off by default so
 # production builds don't pull proptest; backend conformance tests enable it.
-testutil = ["dep:proptest"]
+testutil = [ "dep:proptest" ]
 # The on-disk RocksDB backend (§2.1). Off by default (needs the C++ FFI
 # toolchain); enabled by `--all-features` and the rocksdb conformance test.
-rocksdb = ["dep:rocksdb", "dep:tempfile"]
+rocksdb = [ "dep:rocksdb", "dep:tempfile" ]
 # The rpcdb gRPC client/server backend (§2.8, 15 §3.4). Off by default (needs the
 # proto toolchain: `protoc`); enabled by `--all-features` and the rpcdb
 # conformance test. Pulls tonic/prost/tokio/bytes + the tonic-build build-dep.
-rpcdb = ["dep:prost", "dep:tonic", "dep:tokio", "dep:bytes"]
+rpcdb = [ "dep:prost", "dep:tonic", "dep:tokio", "dep:bytes" ]
 # The R2 offline Go-data-dir import tool (04 §11, 00 §11.2 R2). Off by default;
 # wired into the CLI in M12. The backend-agnostic `GoDbSource` trait + the
 # byte-exact `migrate` driver + the pluggable `verify` need NO new third-party
@@ -73,7 +73,7 @@ rpcdb = ["dep:prost", "dep:tonic", "dep:tokio", "dep:bytes"]
 # concrete on-disk readers are best-effort: `RocksDbCompatSource` (leveldb fast
 # path) additionally needs the `rocksdb` feature; the Pebble path is a documented
 # Go-sidecar design with a stub spawn (see docs/migration.md).
-migrate = []
+migrate = [  ]
 
 [build-dependencies]
 # Generates the rpcdb tonic client/server + prost types from

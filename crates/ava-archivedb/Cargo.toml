@@ -14,7 +14,7 @@ thiserror = { workspace = true }
 ava-database = { path = "../ava-database" }
 
 [dev-dependencies]
-ava-database = { path = "../ava-database", features = ["testutil"] }
+ava-database = { path = "../ava-database", features = [ "testutil" ] }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 serde = { workspace = true }

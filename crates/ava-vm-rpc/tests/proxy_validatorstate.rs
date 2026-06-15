@@ -158,7 +158,10 @@ async fn validatorstate_proxy_matches_source() {
         .expect("get_minimum_height");
     assert_eq!(min_h, 10, "get_minimum_height");
 
-    let cur_h = client.get_current_height().await.expect("get_current_height");
+    let cur_h = client
+        .get_current_height()
+        .await
+        .expect("get_current_height");
     assert_eq!(cur_h, 200, "get_current_height");
 
     // --- subnet id round-trips ---

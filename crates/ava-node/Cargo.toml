@@ -70,7 +70,7 @@ tracing-opentelemetry = "0.28"
 # Passthrough to the on-disk RocksDB backend (04 §2.1). Off by default so the
 # inner-loop build skips the C++ FFI toolchain; `--all-features` (CI test-unit)
 # and the release binary enable it.
-rocksdb = ["ava-database/rocksdb"]
+rocksdb = [ "ava-database/rocksdb" ]
 
 [dev-dependencies]
 tempfile = "3"

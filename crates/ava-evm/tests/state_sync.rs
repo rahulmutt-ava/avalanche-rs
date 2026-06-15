@@ -279,13 +279,24 @@ fn state_proof_methods_serve_account_and_storage() {
     assert_eq!(absent.info, None);
 
     // storage_root reads the account leaf's encoded storage_root field. Firewood
-    // v0.5 derives the live sub-trie root internally and does NOT expose it, so
-    // the leaf carries the empty-trie sentinel (documented M6.25 limitation,
-    // spec 10 §17.9); a present account therefore reports EMPTY_ROOT_HASH here.
+    // v0.6.0 persists the computed storage_root in the account node value and
+    // returns it on read-back ("persist computed storageRoot in account node
+    // values", v0.6.0 release notes), lifting the v0.5 M6.25 limitation where the
+    // leaf carried the empty-trie sentinel (spec 10 §17.9). A present account
+    // with storage therefore now reports its real sub-trie root. This is the
+    // canonical Ethereum single-leaf storage root for {keccak256(slot): RLP(value)},
+    // verified independently by hand-rolled MPT-RLP + keccak256.
     let sroot = view
         .storage_root(addr, HashedStorage::default())
         .expect("storage root");
-    assert_eq!(sroot, ava_evm_reth::EMPTY_ROOT_HASH);
+    let expected_sroot = B256::from_slice(
+        &hex::decode("b2a7a5c7be18bfd198b66d435bb7e5bf65465c5b3f4a3499d2e5e0e2bc6678d8")
+            .expect("hex"),
+    );
+    assert_eq!(
+        sroot, expected_sroot,
+        "present account with storage reports its real firewood-derived storage root"
+    );
     // An absent account also reports the empty-trie root.
     let sroot_absent = view
         .storage_root(Address::repeat_byte(0x99), HashedStorage::default())
