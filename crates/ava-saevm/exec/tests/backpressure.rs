@@ -62,20 +62,34 @@ fn empty_sae_block(number: u64, parent_hash: B256) -> Arc<Block> {
 
 fn sae_genesis() -> Arc<Block> {
     let g = empty_sae_block(0, B256::ZERO);
-    g.mark_synchronous().expect("genesis synchronous");
+    g.mark_synchronous((
+        ava_vm::components::gas::Gas(0),
+        ava_saevm_gastime::GasPriceConfig::default(),
+    ))
+    .expect("genesis synchronous");
     g
 }
 
 fn permissive_bounds() -> WorstCaseBounds {
     WorstCaseBounds {
         max_base_fee: Price(u64::MAX),
-        latest_end_time: GasTime::new(0, 1, 0, GasPriceConfig::default()),
+        latest_end_time: GasTime::new(
+            0,
+            1,
+            ava_vm::components::gas::Price(0),
+            GasPriceConfig::default(),
+        ),
         min_op_burner_balances: Vec::new(),
     }
 }
 
 fn static_clock(unix: u64) -> GasTime {
-    GasTime::new(unix, 1, 0, GasPriceConfig::default())
+    GasTime::new(
+        unix,
+        1,
+        ava_vm::components::gas::Price(0),
+        GasPriceConfig::default(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +312,12 @@ impl StateMut for MemState {
 fn builder_refuses_when_worst_case_queue_full() {
     // Initial gas clock with a meaningful gas target so Ω_B > 0.
     let target = 1_000_000u64;
-    let clock = GasTime::new(0, target, 0, GasPriceConfig::default());
+    let clock = GasTime::new(
+        0,
+        target,
+        ava_vm::components::gas::Price(0),
+        GasPriceConfig::default(),
+    );
     let genesis_hash = B256::repeat_byte(0x00);
 
     let mut wc = State::new(

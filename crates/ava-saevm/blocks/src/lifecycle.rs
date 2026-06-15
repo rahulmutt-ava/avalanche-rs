@@ -16,10 +16,10 @@ use arc_swap::ArcSwapOption;
 use tokio::sync::Notify;
 
 use ava_evm_reth::{B256, RethBlock, SealedBlock};
-use ava_saevm_gastime::GasTime;
+use ava_saevm_gastime::{GasPriceConfig, GasTime};
 use ava_saevm_proxytime::Time;
 use ava_saevm_types::{Address, ExecutionResults, U256};
-use ava_vm::components::gas::Price;
+use ava_vm::components::gas::{Gas, Price};
 
 // ---------------------------------------------------------------------------
 // In-memory GC counter (specs/11 §10 invariant 8)
@@ -559,22 +559,37 @@ impl Block {
     ///
     /// Derives synthetic execution artefacts from the wire block (the synchronous
     /// block's results were already "settled" by the block itself): the
-    /// post-state root is the header `state_root`, the gas-time/base-fee are
-    /// placeholders since a synchronous block carries no SAE gas clock.
+    /// post-state root is the header `state_root`, the base fee is read from the
+    /// eth header (`None → 0`, matching Go's `nil → 0`; the reth header type is
+    /// already `Option<u64>`, so Go's `!IsUint64() → MaxUint64` cap is satisfied
+    /// by construction), and the gas clock is built via [`GasTime::new`] from the
+    /// post-block gas config (Go's `hooks.GasConfigAfter` result, passed in as
+    /// `gas_config`).
+    ///
+    /// `gas_config` is the `(target, config)` that goes into effect immediately
+    /// after this block — the hook's `gas_config_after(header)` return value.
     ///
     /// # Errors
     /// As [`Block::mark_executed`] / [`Block::mark_settled`].
-    pub fn mark_synchronous(self: &Arc<Self>) -> Result<(), Error> {
+    pub fn mark_synchronous(
+        self: &Arc<Self>,
+        gas_config: (Gas, GasPriceConfig),
+    ) -> Result<(), Error> {
         let header = self.eth.header();
-        let base_fee = header.base_fee_per_gas.map_or(Price(0), Price);
+        // The base fee must be capped at u64::MAX to avoid overflow in the gas
+        // clock (Go: nil → 0, !IsUint64() → MaxUint64). The reth header carries
+        // `base_fee_per_gas: Option<u64>`, so `None → 0` and `Some(v) → v` is the
+        // faithful equivalent — the value can never exceed u64::MAX.
+        let base_fee = header.base_fee_per_gas.unwrap_or(0);
+        let (target, config) = gas_config;
+        // Build the post-block gas clock from the target/config that take effect
+        // after this block, seeded with the block's base fee as the starting
+        // price. `ExecutionResults` stores only the proxy-clock instant (the
+        // base fee is persisted separately), so extract it via `GasTime::time`.
+        let exec_time = GasTime::new(header.timestamp, target.0, Price(base_fee), config);
         let results = ExecutionResults {
-            // A synchronous block carries no SAE gas clock; a fixed
-            // unit-rate instant at its build time is sufficient and never read
-            // by SAE settlement (it is self-settling). TODO(M7.21): when the
-            // last-pre-SAE handoff is wired, derive this from the hook's
-            // `GasConfigAfter` (Go `MarkSynchronous` uses `gastime.New`).
-            gas_time: Time::<u64>::new(header.timestamp, 0, 1),
-            base_fee,
+            gas_time: exec_time.time(),
+            base_fee: Price(base_fee),
             receipt_root: header.receipts_root,
             post_state_root: header.state_root,
         };
