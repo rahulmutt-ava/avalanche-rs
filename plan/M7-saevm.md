@@ -411,6 +411,73 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+## Post-milestone upstream-delta tasks (synced after the M7.32 gate)
+
+> These three landed in avalanchego **after** the M7 milestone gate passed (sync
+> window `cc3b103b91 → 0b0b57143c`, reviewed 2026-06-15). They are real
+> consensus/validation parity work, **not** preparatory/unconsumed code, but the
+> activating SAE fork (**Helicon**) is **currently unscheduled on all networks**
+> (`ava-version` `upgrade.rs`), so none of them gate live behavior today. Schedule
+> them before Helicon is scheduled / before SAE C-Chain interop is exercised.
+
+### Task M7.35: Enforce ACP-194 minimum-gas floor in the EVM gas-charge path **[UPSTREAM DELTA — added 2026-06-15]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain + ava-evm-reth  ·  **Depends on:** M7.9 (`hook::minimum_gas_consumption` ✅ exists), M6 EVM RulesHooks seam  ·  **Spec:** `11` §2.4 upstream-delta (Go `0b0b57143c` #5424)
+**Files:** the reth/ava-evm `RulesHooks`/gas-charge seam (the Rust analog of coreth `params/hooks_libevm.go::MinimumGasConsumption`), `crates/ava-saevm/cchain/` wiring, gas-charge tests.
+> **Why added:** Go flipped `RulesExtra.MinimumGasConsumption` from a no-op to
+> `hook.MinimumGasConsumption(limit) = ceil(limit/Lambda)` **gated on `IsHelicon`**,
+> and the libevm gas-charge path consults it — so a high-`gas_limit`/low-usage tx is
+> still charged `ceil(limit/Lambda)`, closing a queue-stuffing vector. The Rust
+> `hook::minimum_gas_consumption` already exists (M7.9, verified `hook/src/lib.rs:41`);
+> the gap is **wiring it into the revm/reth gas-charge path conditioned on the
+> Helicon fork**. Mirror Go's invariant: pre-Helicon = no-op (NOOPHooks), post = the
+> floor. Port Go's `hooks_libevm_test.go` cases (#5424) as the Red.
+- [ ] **Step 1 — Red:** test that a tx with high `gas_limit`, low actual gas, post-Helicon, is charged `ceil(gas_limit/Lambda)`; pre-Helicon is charged actual (no-op). Transcribe Go `params/hooks_libevm_test.go` + `cchain/vm_test.go` (#5424) cases.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-cchain -E 'test(min_gas)'` (or the ava-evm gas-charge test) → fails.
+- [ ] **Step 3 — Green:** wire `hook::minimum_gas_consumption` into the EVM RulesHooks gas-charge seam, gated on the Helicon fork; no-op fallback otherwise. No raw casts (SAE lint bar).
+- [ ] **Step 4 — Confirm green:** cchain + ava-evm green; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
+- [ ] **Step 5 — Commit:** `sae: enforce ACP-194 minimum gas consumption floor under Helicon [Go 0b0b57143c]`
+
+### Task M7.36: `gastime::new` takes starting **price** (base fee), not excess **[UPSTREAM DELTA — added 2026-06-15]** ⬜ TODO
+**Sub-crate:** ava-saevm-gastime + ava-saevm-blocks (+ ava-saevm-core)  ·  **Depends on:** M7.6 (gastime ✅), M7.11 (blocks ✅)  ·  **Spec:** `11` §2.2 + `21` §6 upstream-delta (Go `3a5cba4a61` #5485)
+**Files:** `crates/ava-saevm/gastime/src/lib.rs` (`new` signature, currently `starting_excess: u64` at `lib.rs:187`), `crates/ava-saevm/blocks/src/lifecycle.rs` (`mark_synchronous`, completing the `TODO(M7.21)` at `lifecycle.rs:573`), `crates/ava-saevm/core/src/` (drop the `ExcessAfterLastSynchronous` config field if present).
+> **Why added:** Go refactored `gastime.New` to accept `startingPrice gas.Price`
+> instead of `startingExcess` (caller can't meaningfully supply excess), converting
+> internally via `excessForPrice(price, K)` → new private `newFromExcess`; lifted
+> `excessScalingFactor` to a free fn (arg order swapped, math identical). Knock-ons:
+> `Block.MarkSynchronous` dropped `excessAfter` and now derives base fee from the
+> eth block's `BaseFee` (nil→0, `!IsUint64()`→`MaxUint64`); `sae.Config.ExcessAfterLastSynchronous`
+> removed. The Rust `GasTime::new` still takes `starting_excess`; `Block::mark_synchronous`
+> already reads `header.base_fee_per_gas` into a placeholder gas clock with a
+> `TODO(M7.21)` to derive it via the hook's `GasConfigAfter` + `gastime::new` — this
+> task completes that TODO with the new price-based signature. `excess_for_price`
+> binary search already exists (M7.6) — reuse it.
+- [ ] **Step 1 — Red:** test `GasTime::new(at, target, starting_price, cfg)` round-trips price↔excess (mirror Go `gastime_test.go` #5485 cases incl. the `MaxUint64` base-fee cap); `mark_synchronous` derives the gas clock from `GasConfigAfter` + capped base fee.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-gastime -E 'test(new)'` → fails (signature mismatch).
+- [ ] **Step 3 — Green:** change `new` to `starting_price: Price`, convert via `excess_for_price(price, excess_scaling_factor(target, scaling))`, keep a private `new_from_excess`; update `mark_synchronous` to derive base fee (nil→0, overflow→`u64::MAX`) and feed it; drop `ExcessAfterLastSynchronous`. Update all call sites.
+- [ ] **Step 4 — Confirm green:** gastime + blocks + core + differential green; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
+- [ ] **Step 5 — Commit:** `sae(gastime): accept base fee (starting price) in new() [Go 3a5cba4a61]`
+
+### Task M7.37: `cchain` `ParseBlock` verifies extData hash **[UPSTREAM DELTA — added 2026-06-15]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.22 extData marshaling/commit (the `TODO(M7.22)` at `cchain/src/hooks.rs:377`/`:441` — must land first; no `parse_block` override exists yet)  ·  **Spec:** `11` §8 + `10` §9 upstream-delta (Go `5896c92fee` #5447)
+**Files:** `crates/ava-saevm/cchain/src/vm.rs` (a `parse_block` override over `sae::Vm::parse_block`), `crates/ava-saevm/cchain/tests/`, `cchain/cchaintest/` analog (Go added `cchaintest/blocks.go` helpers).
+> **Why added:** Go's `cchain.VM.ParseBlock` now recomputes `CalcExtDataHash(BlockExtData(eth))`
+> = `keccak256(RLP(extData))` and rejects the block if it differs from
+> `GetHeaderExtra(header).ExtDataHash` — the block ID is the header hash (commits
+> `ExtDataHash`), so a tampered `extData` body keeps the same ID and the base SAE
+> `ParseBlock` is unaware of the C-Chain `extData` concept. This override is the
+> boundary that rejects such blocks before accept/persist/execute. The Rust cchain
+> port has **no `parse_block` override** and extData marshaling itself is still
+> `TODO(M7.22)`, so this rides on first landing extData marshal/commit. (Go's `TODO`
+> re. pre-AP1/pre-Helicon blocks that left `ExtDataHash` unset applies to the Rust
+> port too once pre-SAE history matters.)
+- [ ] **Step 1 — Red:** test that a cchain block whose `extData` body is mutated (header `ExtDataHash` unchanged) is rejected by `parse_block` with an `extData hash mismatch` error; a well-formed block parses. Mirror Go `cchain/vm_test.go` (#5447) + the `cchaintest/blocks.go` builders.
+- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-cchain -E 'test(ext_data_hash)'` → fails.
+- [ ] **Step 3 — Green:** add a `parse_block` override on the cchain VM: delegate to `sae::Vm::parse_block`, then compare header `ext_data_hash` vs `calc_ext_data_hash(block_ext_data(eth))`; error on mismatch. Requires extData marshaling (M7.22) landed.
+- [ ] **Step 4 — Confirm green:** cchain + differential green; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
+- [ ] **Step 5 — Commit:** `sae(cchain): verify SAE block extData hash in ParseBlock [Go 5896c92fee]`
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -421,16 +488,16 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §1.4 | Recovery after restart (rebuild A/E/S) | **M7.24**, M7.29, M7.28 |
 | `11` §1.5 | Data-flow (builder→executor→events) | M7.14, M7.15, M7.18, M7.20 |
 | `11` §2.1 | `proxytime::Time<D>` | M7.5, M7.4 (compare) |
-| `11` §2.2 | `gastime` SAE gas clock (before/tick/after_block, price) | M7.6 |
+| `11` §2.2 | `gastime` SAE gas clock (before/tick/after_block, price) | M7.6, **M7.36** (`new(starting_price)` delta) |
 | `11` §2.3 | Tau discipline (`BlockInstant`, no `Add<u64>`) | **M7.2** (trybuild compile-fail) |
-| `11` §2.4 | Derived block/queue limits (Ω_B, Ω_Q, min-gas) | M7.2, M7.13, M7.26 |
+| `11` §2.4 | Derived block/queue limits (Ω_B, Ω_Q, min-gas) | M7.2, M7.13, M7.26, **M7.35** (min-gas EVM enforcement delta) |
 | `11` §3 | Crate layout / sub-workspace + lint bar | M7.1 |
 | `11` §4 | Blocks: byte-exact format, codec, lifecycle, parse | M7.11, M7.8 (canoto), M7.31 (fuzz) |
 | `11` §5 | Adaptor → Snowman `ChainVm` | M7.10, M7.18 |
 | `11` §6 / §6.1 | saexec streaming engine; pure execute step | M7.14, M7.15 |
 | `11` §6.2 | Backpressure, ordering, recovery | M7.26, M7.24 |
 | `11` §7 | saedb: consensus-vs-execution state, Firewood-revision Tracker | M7.12 |
-| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23 |
+| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta) |
 | `11` §9.1 | Hooks (`Points`/`PointsG`, `Op`, `Settled`, `BlockBuilder`) | M7.9 |
 | `11` §9.2 | txgossip (mempool + push/pull + priority) | M7.20 |
 | `11` §9.3 | worst-case analysis + assertions | M7.13, M7.27 |
@@ -439,7 +506,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §12 | Test plan (determinism, recovery, worst-case, differential) | M7.16, M7.24, M7.27, M7.29, M7.30 |
 | `11` §13 | Perf (pipelining, rayon, lock-free frontiers) — observably-neutral | M7.12/M7.14 (pipelining), M7.13/M7.27 (rayon), M7.17 (lock-free), gated by M7.30 |
 | `21` §0 | `CalculatePrice` exponential (reused from fee crates) | M7.6 (golden table routed through `price()`) |
-| `21` §6 | SAE gas-as-time formulas + worked vectors | M7.5, M7.6, M7.3 (mul_div) |
+| `21` §6 | SAE gas-as-time formulas + worked vectors | M7.5, M7.6, M7.3 (mul_div), **M7.36** (`new(base fee)` delta) |
 | `27` §2.4 | CC-ORDER (state durable before pointer) | M7.12, M7.14 |
 | `27` §3 | Crash points C6 (mid-execute) | M7.24, M7.29 |
 | `27` §3.1 | Shared-memory two-sided consistency (ATOMIC-1) | M7.22 |

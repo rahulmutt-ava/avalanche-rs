@@ -10,10 +10,16 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `cc3b103b91` (2026-06-09) have been reviewed and folded in as **"Upstream
+> `0b0b57143c` (2026-06-12) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
 > `18`, `21`, `27`) and plan files (`plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `cc3b103b91`.
+> against newer avalanchego, start the review from `0b0b57143c`.
+>
+> The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
+> commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
+> C-Chain `ParseBlock` extData-hash verification (`5896c92fee`, #5447), and the
+> `gastime.New(baseFee)` refactor (`3a5cba4a61`, #5485) — into `11`/`21`/`10` and
+> `plan/M7` (tasks M7.35–M7.37).
 
 ## Read this first
 

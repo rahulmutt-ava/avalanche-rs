@@ -285,6 +285,18 @@ impl GasTime {
 }
 ```
 
+> **Upstream delta (avalanchego `3a5cba4a61`, #5485 — folded 2026-06-15).**
+> `gastime.New` now takes the **starting price** (`gas.Price`/`base fee`), not the
+> starting excess: `New(at, target, startingPrice, cfg)`. Internally it converts
+> price→excess via `excessForPrice(startingPrice, K)` and delegates to the new
+> private `newFromExcess`. The old `starting_excess` arg (and its
+> "difficult-for-a-caller-to-provide" `TODO`) are gone. Two knock-ons: (1)
+> `Block.MarkSynchronous` dropped its `excessAfter` parameter — it now derives the
+> base fee from the eth block's `BaseFee` (nil→0, overflow→`MaxUint64`) and feeds
+> it as the starting price; (2) `sae.Config.ExcessAfterLastSynchronous` was removed
+> entirely. The Rust `GasTime::new` (sketch below) and the `Block::mark_synchronous`
+> placeholder must mirror the new signature — see `plan/M7` M7.36.
+
 The **excess scaling factor** `K = TargetToExcessScaling · T` (capped to `u64`),
 and `price = max(min_price, e^(x/K))` computed by the **integer** exponential
 `gas::calculate_price` ported from `vms/components/gas` (`gasprice/...`). Defaults:
@@ -344,6 +356,18 @@ From `worstcase/state.go` + `params`:
 - **Min gas charged per tx** `max(gas_used, ceil(gas_limit/Lambda))`
   (`hook::MinimumGasConsumption = ceil(txLimit / Lambda)`) — prevents
   high-limit/low-usage queue-stuffing attacks.
+
+> **Upstream delta (avalanchego `0b0b57143c`, #5424 — folded 2026-06-15).** The
+> minimum-gas floor is now **enforced inside the EVM**, not just defined as a
+> param. `RulesExtra.MinimumGasConsumption` (coreth `params/hooks_libevm.go`) was
+> a no-op (`ethparams.NOOPHooks`); it now returns `hook.MinimumGasConsumption(limit)
+> = ceil(limit/Lambda)` **when `IsHelicon`** (the SAE fork — currently unscheduled
+> on all networks), falling back to the no-op pre-Helicon. The libevm gas-charge
+> path consults this hook so a tx with a high `gas_limit` but low actual usage is
+> still charged the floor. In the Rust port the `hook::minimum_gas_consumption`
+> function already exists (M7.9); the gap is **wiring it into the reth/ava-evm
+> `RulesHooks` gas-charge path gated on the Helicon fork** — see `plan/M7` M7.35
+> (touches the M6 `ava-evm-reth` EVM layer).
 
 ---
 
@@ -764,6 +788,22 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 >    **`last_executed_height`** (set in `sendPostExecutionEvents` and at
 >    `Executor` construction) — both on the `"sae"`-namespaced registry from
 >    `snowCtx.Metrics`. See `18` §2.11.
+
+> **Upstream delta (avalanchego `5896c92fee`, #5447 — folded 2026-06-15).**
+> `cchain.VM` now **overrides `ParseBlock`** to verify the block's `extData`
+> hashes to the `ExtDataHash` committed in its header, rejecting tampered blocks
+> *before* they are accepted/persisted/executed. The block ID is the header hash
+> (which commits `ExtDataHash`), so a block whose `extData` body was swapped keeps
+> the same ID — the SAE VM's own `ParseBlock` is unaware of the C-Chain `extData`
+> concept, making this override the boundary that catches the mismatch. The check:
+> decode via `vm.VM.ParseBlock`, then compare `GetHeaderExtra(eth.Header()).ExtDataHash`
+> against `CalcExtDataHash(BlockExtData(eth))` (= `keccak256(RLP(extData))`, see
+> `10` §9), erroring `extData hash does not match header` on mismatch. (A
+> `TODO` notes pre-AP1/pre-Helicon blocks that incorrectly left `ExtDataHash`
+> unset still need handling to fully retire coreth.) In the Rust port the cchain
+> `extData` marshaling itself is still a `TODO(M7.22)` (no `parse_block` override
+> exists yet) — so this verification rides on first landing extData
+> marshaling/commit; tracked as `plan/M7` M7.37.
 
 ### Reuse decision (binding cross-ref to `10`)
 

@@ -790,6 +790,14 @@ discipline, gated by fork:
 (`56e81f17…b421`) when `ExtData` is empty. (This resolves the M6.6 finding that the
 coreth header is not plain-`alloy::Header`-decodable — the extras above are why.)
 
+> **Upstream delta (avalanchego `5896c92fee`, #5447 — folded 2026-06-15).** The
+> SAE C-Chain VM now actively **verifies this `ExtDataHash` on parse**: its
+> `ParseBlock` recomputes `CalcExtDataHash(extData)` and rejects the block if it
+> differs from the header's committed value, since the block ID (= header hash)
+> commits `ExtDataHash` and so a swapped `extData` body keeps the same ID. The
+> formula here (`keccak256(RLP(extData))`) is the exact thing recomputed. See
+> `11` §8 for the override and `plan/M7` M7.37 for the Rust port task.
+
 > **Genesis-header subtlety (M6.8).** The **genesis** header's `ExtDataHash` is the
 > **zero hash** (`0x0000…0000`), **NOT** `EmptyExtDataHash` — coreth's `Genesis.toBlock`
 > leaves the field at its zero value (genesis carries no `ExtData`, so the hash is never

@@ -827,6 +827,23 @@ impl GasTime {
 
 ---
 
+> **Upstream delta (avalanchego `3a5cba4a61`, #5485 — folded 2026-06-15).**
+> `gastime.New` now accepts a **starting price** (base fee) instead of a starting
+> excess: `New(at, target, startingPrice gas.Price, c)`. It converts price→excess
+> with `excessForPrice(startingPrice, excessScalingFactor(target, K))` and
+> delegates to a private `newFromExcess(at, target, excess, c)` (the old
+> body). `excessScalingFactor` was also lifted to a free function
+> `excessScalingFactor(target, scalingFactor) = BoundedMultiply(target,
+> scalingFactor, MaxUint64)` (arg order swapped, mathematically identical). The
+> caller-side conversion: `Block.MarkSynchronous` no longer takes `excessAfter` —
+> it reads the eth block's `BaseFee` (nil→0, `!IsUint64()`→`MaxUint64`) and passes
+> it as the starting price (also `e.baseFee.SetUint64(baseFee)` directly rather
+> than `setBaseFee(*big.Int)`); `sae.Config.ExcessAfterLastSynchronous` is removed.
+> Worked example 1 above is unchanged (price↔excess is the same bijection, just
+> entered from the price end). Rust: change `GasTime::new`'s `starting_excess`
+> param to `starting_price` + reuse the existing `excess_for_price` binary search;
+> `plan/M7` M7.36.
+
 ### 6.x Upstream delta — `vms/saevm/cchain/dynamic` (ACP-176 / ACP-226 / ACP-283 exponent integrators)
 
 > **Added upstream post-snapshot** (`2750cc9e42`, #5481, 2026-06-09).
