@@ -1,0 +1,7 @@
+{
+  "bench_id": "message_framing",
+  "crate": "ava-message",
+  "bench_target": "message_framing",
+  "mean_ns": 138.6,
+  "note": "Advisory local baseline (see README.md). Padded above the measured local mean to absorb run-to-run variance; real CI baselines are regenerated per-runner."
+}

@@ -35,6 +35,30 @@ serde_json = { workspace = true }
 proptest = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
+criterion = { workspace = true }
 
-[lints]
-workspace = true
+# Mirrors `[workspace.lints]` (root Cargo.toml) but relaxes
+# `unused_crate_dependencies` to `allow`: the `message_framing` criterion bench
+# (below) needs `criterion` as a dev-dep, yet the lib-test compilation unit never
+# references it, so the workspace-level `warn` false-positives under `cargo clippy
+# --all-targets`. Cargo forbids mixing `lints.workspace = true` with per-lint
+# overrides, so the workspace set is inlined here (keep in sync with the root).
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_crate_dependencies = "allow"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+todo = "warn"
+dbg_macro = "deny"
+
+# Critical-path bench for `cargo xtask bench-guard` (specs/02 §9): P2P wire
+# message marshal/unmarshal framing round-trip.
+[[bench]]
+name = "message_framing"
+harness = false
