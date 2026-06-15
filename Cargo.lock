@@ -1318,6 +1318,7 @@ dependencies = [
  "ava-crypto",
  "ava-database",
  "ava-evm-reth",
+ "ava-saevm-hook",
  "ava-secp256k1fx",
  "ava-snow",
  "ava-types",

@@ -142,6 +142,7 @@ fn ap3_london_upgrades() -> NetworkUpgrades {
         etna: FAR_FUTURE,
         fortuna: FAR_FUTURE,
         granite: FAR_FUTURE,
+        helicon: u64::MAX,
     }
 }
 

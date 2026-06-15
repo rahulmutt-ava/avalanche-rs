@@ -49,6 +49,7 @@ fn staged_schedule() -> NetworkUpgrades {
         etna: 12_000,
         fortuna: 13_000,
         granite: 14_000,
+        helicon: u64::MAX,
     }
 }
 

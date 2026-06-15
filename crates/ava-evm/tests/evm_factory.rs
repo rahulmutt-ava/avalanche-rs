@@ -149,6 +149,7 @@ fn evm_factory_live_path() {
         etna: FAR_FUTURE,
         fortuna: FAR_FUTURE,
         granite: FAR_FUTURE,
+        helicon: u64::MAX,
     };
     let chain_spec =
         AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(CHAIN_ID), false);

@@ -58,6 +58,7 @@ fn far_future_upgrades() -> NetworkUpgrades {
         etna: FAR,
         fortuna: FAR,
         granite: FAR,
+        helicon: u64::MAX,
     }
 }
 

@@ -657,6 +657,11 @@ type AvaRevmEvm<DB, I> = RevmEvm<
 pub struct AvaHandler<EVM, ERROR, FRAME> {
     /// Whether gas refunds are disabled (ApricotPhase1+ — always on mainnet).
     disable_refund: bool,
+    /// Whether the ACP-194 minimum-gas-consumption floor is active (Helicon).
+    /// When set, [`AvaHandler::refund`] clamps the post-refund gas so the tx is
+    /// charged at least `ceil(gas_limit/Lambda)` (M7.35; coreth
+    /// `params/hooks_libevm.go` + libevm `consumeMinimumGas`).
+    min_gas_floor: bool,
     /// Generic-parameter carrier (no data).
     _phantom: AvaHandlerPhantom<EVM, ERROR, FRAME>,
 }
@@ -666,11 +671,13 @@ pub struct AvaHandler<EVM, ERROR, FRAME> {
 type AvaHandlerPhantom<EVM, ERROR, FRAME> = PhantomData<fn() -> (EVM, ERROR, FRAME)>;
 
 impl<EVM, ERROR, FRAME> AvaHandler<EVM, ERROR, FRAME> {
-    /// A handler with the AP1 refund switch set from the active fork.
+    /// A handler with the AP1 refund switch and the Helicon ACP-194 minimum-gas
+    /// floor switch set from the active fork.
     #[must_use]
-    pub fn new(disable_refund: bool) -> Self {
+    pub fn new(disable_refund: bool, min_gas_floor: bool) -> Self {
         Self {
             disable_refund,
+            min_gas_floor,
             _phantom: PhantomData,
         }
     }
@@ -707,6 +714,31 @@ where
             // stock path applies the quotient-2 rule coreth uses there).
             let spec = evm.ctx().cfg().spec().into();
             post_execution::refund(spec, exec_result.gas_mut(), eip7702_refund);
+        }
+
+        // ACP-194 minimum-gas-consumption floor (M7.35; coreth
+        // `params/hooks_libevm.go` `RulesExtra.MinimumGasConsumption` gated on
+        // `IsHelicon`, applied by libevm `state_transition.go` `consumeMinimumGas`
+        // AFTER the refund). A high-`gas_limit`/low-usage tx must still be charged
+        // `min(limit, ceil(limit/Lambda))` — closing the queue-stuffing vector.
+        // libevm clamps `gasRemaining = min(gasRemaining, limit - minConsume)`,
+        // i.e. `gasUsed = max(gasUsed, minConsume)`; the revm analog clamps the
+        // post-refund gas so `gas.used() >= floor`. When the floor binds it fully
+        // overrides any refund (exactly as libevm's clamp overrides the
+        // refund-raised `gasRemaining`). Pre-Helicon this is a no-op.
+        if self.min_gas_floor {
+            let gas = exec_result.gas_mut();
+            let limit = gas.limit();
+            // `min(limit, ...)` per coreth `consumeMinimumGas`; with `Lambda >= 1`
+            // the ceil-div never exceeds `limit`, but the clamp is kept for parity.
+            let floor = ava_saevm_hook::minimum_gas_consumption(limit).min(limit);
+            if gas.used() < floor {
+                // Override the post-refund gas so the reported used == floor:
+                // zero the refund (it is subsumed by the clamp) and set the spent
+                // gas to the floor (`set_spent` sets `remaining = limit - floor`).
+                gas.set_refund(0);
+                gas.set_spent(floor);
+            }
         }
     }
 
@@ -762,6 +794,10 @@ pub struct AvaEvm<DB: RevmDatabase, I> {
     inspect: bool,
     /// ApricotPhase1+ → gas refunds disabled (see [`AvaHandler`]).
     disable_refund: bool,
+    /// Helicon+ → ACP-194 minimum-gas-consumption floor active (see
+    /// [`AvaHandler`]). Currently unscheduled on all networks, so `false` on
+    /// every live block.
+    min_gas_floor: bool,
     /// Number of `transact_raw` calls so far — the next tx's index in the block.
     executed_txs: u64,
     /// The currently-executing tx index, shared with the precompile closures
@@ -807,7 +843,7 @@ where
 
         self.inner.ctx.set_tx(tx);
         let mut handler: AvaHandler<AvaRevmEvm<DB, I>, EVMError<DB::Error>, EthFrame> =
-            AvaHandler::new(self.disable_refund);
+            AvaHandler::new(self.disable_refund, self.min_gas_floor);
         let result = if self.inspect {
             handler.inspect_run(&mut self.inner)
         } else {
@@ -980,6 +1016,10 @@ impl AvaEvmFactory {
             inner,
             inspect,
             disable_refund: phase >= AvaPhase::ApricotPhase1,
+            // Helicon is not an `AvaPhase` (coreth maps it to no Ethereum
+            // upgrade), so the floor is gated on the chain spec's Helicon time
+            // directly (M7.35). Unscheduled everywhere → `false` on live blocks.
+            min_gas_floor: self.chain_spec.is_helicon(timestamp),
             executed_txs: 0,
             current_tx_index,
         }
