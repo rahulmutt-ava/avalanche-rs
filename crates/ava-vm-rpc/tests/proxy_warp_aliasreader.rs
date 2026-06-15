@@ -120,7 +120,10 @@ async fn warp_signer_proxy_signs() {
 
     // A different payload must NOT verify (sanity check).
     let wrong_sig = bls::verify(&public_key, &sig, b"wrong payload");
-    assert!(!wrong_sig, "signature must not verify for a different message");
+    assert!(
+        !wrong_sig,
+        "signature must not verify for a different message"
+    );
 
     shutdown.cancel();
 }
@@ -149,13 +152,19 @@ impl MockAliaserReader {
             let key = id.to_bytes().to_vec();
             by_alias.insert((*alias).to_string(), *id);
             // First alias for each id becomes the primary alias.
-            by_id.entry(key.clone()).or_insert_with(|| (*alias).to_string());
+            by_id
+                .entry(key.clone())
+                .or_insert_with(|| (*alias).to_string());
             all_aliases
                 .entry(key)
                 .or_default()
                 .push((*alias).to_string());
         }
-        MockAliaserReader { by_alias, by_id, all_aliases }
+        MockAliaserReader {
+            by_alias,
+            by_id,
+            all_aliases,
+        }
     }
 }
 
@@ -184,7 +193,7 @@ async fn aliasreader_proxy_resolves() {
 
     let mock = Arc::new(MockAliaserReader::new(&[
         ("Chain-A", chain_a),
-        ("C", chain_a),      // second alias for chain_a
+        ("C", chain_a), // second alias for chain_a
         ("Chain-B", chain_b),
     ]));
 
@@ -202,17 +211,28 @@ async fn aliasreader_proxy_resolves() {
     });
 
     // ---- Guest: dial and exercise the RpcAliasReader --------------------------------
-    let client = proxy::aliasreader::dial(&addr).await.expect("dial aliasreader");
+    let client = proxy::aliasreader::dial(&addr)
+        .await
+        .expect("dial aliasreader");
 
     // lookup: alias → chain id
     let resolved_a = client.lookup("Chain-A").await.expect("lookup Chain-A");
-    assert_eq!(resolved_a, chain_a, "lookup Chain-A should resolve to chain_a");
+    assert_eq!(
+        resolved_a, chain_a,
+        "lookup Chain-A should resolve to chain_a"
+    );
 
     let resolved_c = client.lookup("C").await.expect("lookup C");
-    assert_eq!(resolved_c, chain_a, "lookup C should also resolve to chain_a");
+    assert_eq!(
+        resolved_c, chain_a,
+        "lookup C should also resolve to chain_a"
+    );
 
     let resolved_b = client.lookup("Chain-B").await.expect("lookup Chain-B");
-    assert_eq!(resolved_b, chain_b, "lookup Chain-B should resolve to chain_b");
+    assert_eq!(
+        resolved_b, chain_b,
+        "lookup Chain-B should resolve to chain_b"
+    );
 
     // lookup: unknown alias → NotFound
     let not_found = client.lookup("no-such-alias").await;
@@ -222,10 +242,16 @@ async fn aliasreader_proxy_resolves() {
     );
 
     // primary_alias: chain id → primary alias
-    let primary_a = client.primary_alias(chain_a).await.expect("primary_alias chain_a");
+    let primary_a = client
+        .primary_alias(chain_a)
+        .await
+        .expect("primary_alias chain_a");
     assert_eq!(primary_a, "Chain-A", "primary alias of chain_a");
 
-    let primary_b = client.primary_alias(chain_b).await.expect("primary_alias chain_b");
+    let primary_b = client
+        .primary_alias(chain_b)
+        .await
+        .expect("primary_alias chain_b");
     assert_eq!(primary_b, "Chain-B", "primary alias of chain_b");
 
     // primary_alias: unknown chain → NotFound

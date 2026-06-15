@@ -105,8 +105,16 @@ impl SharedMemory for MockSharedMemory {
 
         // Sort deterministically: by (first matching trait, key).
         candidates.sort_by(|(ka, _, ta), (kb, _, tb)| {
-            let ta_first = traits.iter().find(|t| ta.contains(t)).cloned().unwrap_or_default();
-            let tb_first = traits.iter().find(|t| tb.contains(t)).cloned().unwrap_or_default();
+            let ta_first = traits
+                .iter()
+                .find(|t| ta.contains(t))
+                .cloned()
+                .unwrap_or_default();
+            let tb_first = traits
+                .iter()
+                .find(|t| tb.contains(t))
+                .cloned()
+                .unwrap_or_default();
             ta_first.cmp(&tb_first).then_with(|| ka.cmp(kb))
         });
 
@@ -118,7 +126,11 @@ impl SharedMemory for MockSharedMemory {
             candidates
                 .iter()
                 .position(|(k, _, elem_traits)| {
-                    let first = traits.iter().find(|t| elem_traits.contains(t)).cloned().unwrap_or_default();
+                    let first = traits
+                        .iter()
+                        .find(|t| elem_traits.contains(t))
+                        .cloned()
+                        .unwrap_or_default();
                     (first.as_slice(), k.as_slice()) >= (start_trait, start_key)
                 })
                 .unwrap_or(candidates.len())
@@ -134,9 +146,16 @@ impl SharedMemory for MockSharedMemory {
         let page = &candidates[..take];
 
         let values: Vec<Vec<u8>> = page.iter().map(|(_, v, _)| v.clone()).collect();
-        let last_trait: Vec<u8> = page.last().map(|(_, _, ts)| {
-            traits.iter().find(|t| ts.contains(t)).cloned().unwrap_or_default()
-        }).unwrap_or_default();
+        let last_trait: Vec<u8> = page
+            .last()
+            .map(|(_, _, ts)| {
+                traits
+                    .iter()
+                    .find(|t| ts.contains(t))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
         let last_key: Vec<u8> = page.last().map(|(k, _, _)| k.clone()).unwrap_or_default();
 
         Ok((values, last_trait, last_key))
@@ -152,10 +171,7 @@ impl SharedMemory for MockSharedMemory {
             }
             // Then put.
             for elem in reqs.put {
-                store.insert(
-                    (peer.clone(), elem.key),
-                    (elem.value, elem.traits),
-                );
+                store.insert((peer.clone(), elem.key), (elem.value, elem.traits));
             }
         }
         Ok(())
@@ -220,13 +236,17 @@ async fn sharedmemory_proxy_get_indexed_apply() {
         client.apply(put_requests, &[]).expect("apply (put)");
 
         // ---- get: values are addressable by key after apply ------------------------------------
-        let values = client.get(peer_a, &[b"k1".to_vec(), b"k2".to_vec()]).expect("get");
+        let values = client
+            .get(peer_a, &[b"k1".to_vec(), b"k2".to_vec()])
+            .expect("get");
         assert_eq!(values.len(), 2, "get must return len == keys.len()");
         assert_eq!(values[0], b"v1".to_vec(), "get k1");
         assert_eq!(values[1], b"v2".to_vec(), "get k2");
 
         // ---- get: unknown key returns empty bytes (default) ------------------------------------
-        let missing = client.get(peer_a, &[b"no-such-key".to_vec()]).expect("get missing");
+        let missing = client
+            .get(peer_a, &[b"no-such-key".to_vec()])
+            .expect("get missing");
         assert_eq!(missing.len(), 1, "get missing key must still return len==1");
         assert_eq!(missing[0], b"".as_slice(), "missing value should be empty");
 
@@ -237,13 +257,20 @@ async fn sharedmemory_proxy_get_indexed_apply() {
             .expect("indexed trait_x");
         assert_eq!(vals.len(), 1, "indexed trait_x should return 1 value");
         assert_eq!(vals[0], b"v1".to_vec(), "indexed trait_x value");
-        assert!(!last_t.is_empty() || !last_k.is_empty(), "indexed must return pagination cursor");
+        assert!(
+            !last_t.is_empty() || !last_k.is_empty(),
+            "indexed must return pagination cursor"
+        );
 
         // Ask for both traits with limit=1 — should return exactly 1 value.
         let (vals_paged, _, _) = client
             .indexed(peer_a, &[trait_x.clone(), trait_y.clone()], &[], &[], 1)
             .expect("indexed limit=1");
-        assert_eq!(vals_paged.len(), 1, "indexed with limit=1 should page to 1 result");
+        assert_eq!(
+            vals_paged.len(),
+            1,
+            "indexed with limit=1 should page to 1 result"
+        );
 
         // ---- apply: remove k1 from peer_a, then confirm get returns empty for it ---------------
         let remove_requests: BTreeMap<Id, Requests> = {
@@ -260,7 +287,9 @@ async fn sharedmemory_proxy_get_indexed_apply() {
         client.apply(remove_requests, &[]).expect("apply (remove)");
 
         // After removal, get k1 returns empty bytes; k2 is still present.
-        let after_remove = client.get(peer_a, &[b"k1".to_vec(), b"k2".to_vec()]).expect("get after remove");
+        let after_remove = client
+            .get(peer_a, &[b"k1".to_vec(), b"k2".to_vec()])
+            .expect("get after remove");
         assert_eq!(after_remove.len(), 2);
         assert_eq!(after_remove[0], b"".as_slice(), "k1 removed → empty");
         assert_eq!(after_remove[1], b"v2".to_vec(), "k2 still present");
@@ -268,7 +297,11 @@ async fn sharedmemory_proxy_get_indexed_apply() {
         // ---- peer_b is a separate namespace: peer_a puts are not visible there ----------------
         let cross_chain = client.get(peer_b, &[b"k2".to_vec()]).expect("get peer_b");
         assert_eq!(cross_chain.len(), 1);
-        assert_eq!(cross_chain[0], b"".as_slice(), "peer_b namespace is separate");
+        assert_eq!(
+            cross_chain[0],
+            b"".as_slice(),
+            "peer_b namespace is separate"
+        );
     })
     .await
     .expect("blocking sharedmemory client task");
