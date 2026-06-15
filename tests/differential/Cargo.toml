@@ -38,6 +38,11 @@ ava-saevm-core = { path = "../../crates/ava-saevm/core" }
 ava-saevm-blocks = { path = "../../crates/ava-saevm/blocks" }
 ava-saevm-types = { path = "../../crates/ava-saevm/types" }
 ava-saevm-proxytime = { path = "../../crates/ava-saevm/proxytime" }
+# `mark_synchronous` (M7.36) now takes the `(target, GasPriceConfig)` that goes
+# into effect after the synchronous genesis block (Go's `hooks.GasConfigAfter`).
+# A synchronous block self-settles, so its gas clock is never read by settlement;
+# the differential genesis uses the default config like the in-tree SAE tests.
+ava-saevm-gastime = { path = "../../crates/ava-saevm/gastime" }
 ava-evm-reth = { path = "../../crates/ava-evm-reth" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }

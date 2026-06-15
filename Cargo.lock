@@ -1265,6 +1265,7 @@ dependencies = [
  "ava-network",
  "ava-saevm-blocks",
  "ava-saevm-core",
+ "ava-saevm-gastime",
  "ava-saevm-proxytime",
  "ava-saevm-types",
  "ava-secp256k1fx",

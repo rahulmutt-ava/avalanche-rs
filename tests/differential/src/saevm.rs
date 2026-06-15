@@ -305,7 +305,12 @@ pub async fn replay_recovery_vector(
             source,
         })?;
     let genesis = Arc::new(genesis_block);
-    genesis.mark_synchronous().map_err(VectorError::Genesis)?;
+    genesis
+        .mark_synchronous((
+            ava_vm::components::gas::Gas(0),
+            ava_saevm_gastime::GasPriceConfig::default(),
+        ))
+        .map_err(VectorError::Genesis)?;
 
     // ---- parse every canonical height's body + execution results ----
     let mut canonical: BTreeMap<u64, (SealedBlock<RethBlock>, ExecutionResults)> = BTreeMap::new();
@@ -472,7 +477,12 @@ pub async fn replay_streaming_vector(json: &str) -> Result<Vec<StreamingBarrier>
             source,
         }
     })?);
-    genesis.mark_synchronous().map_err(VectorError::Genesis)?;
+    genesis
+        .mark_synchronous((
+            ava_vm::components::gas::Gas(0),
+            ava_saevm_gastime::GasPriceConfig::default(),
+        ))
+        .map_err(VectorError::Genesis)?;
 
     let frontier = Frontier::new(Arc::clone(&genesis));
 
