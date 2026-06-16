@@ -264,10 +264,44 @@
 > hazard-#5 violations** — `PlatformVm`/`AvmVm`/`EvmVm` `build_block` each stamped block time from
 > `SystemTime::now()` — all three fixed the same wave (injected `Arc<dyn Clock>`); the pass is now
 > **green workspace-wide and wired into `lint-all`/`lint-all-ci`**. The `Clock`/`RealClock`/`MockClock`
-> trait (PART B) was already in `ava-utils`. **STILL DEFERRED (not yet done):** the
-> `clippy::float_arithmetic`/`arithmetic_side_effects = deny` tightening on consensus crates (high
-> fan-out), the `determinism_repeat` N≥16 proptest, and the `.github/PULL_REQUEST_TEMPLATE.md`
-> tick-box checklist.
+> trait (PART B) was already in `ava-utils`.
+
+> **AS-BUILT (2026-06-16g) — X.19 deferred follow-ups RESOLVED.** The three items left open by
+> the 2026-06-16f pass are now done (two parallel-worktree agents + reconciliation):
+> - **`clippy::float_arithmetic` + `clippy::arithmetic_side_effects = deny` on the consensus crates**
+>   (hazards #2/#3). Applied as crate-level inner attributes in each `src/lib.rs` of `ava-snow`,
+>   `ava-engine`, `ava-proposervm`, `ava-validators`, `ava-simplex` (NOT command-line `-- -D` flags —
+>   inner attributes scope to the crate and avoid the M7.10 dependency-leak that forced
+>   `lint_saevm.sh --no-deps`). ~56 violations triaged: integer sites → `checked_*`/`saturating_*`
+>   (snowball confidence counters, `tree.rs` bit-prefix math, Kahn in-degree, `UNIX_EPOCH + Duration`
+>   reconstruction from persisted u64 seconds); the legitimate **non-consensus floats** got *targeted*
+>   `#[allow(clippy::float_arithmetic)]` with a spec-24-§B.3 justification — the adaptive-timeout
+>   averager (`ava-engine/networking/timeout.rs`, module-level), resource-usage tracker
+>   (`ava-engine/networking/tracker.rs`), and uptime/connectivity **percentages**
+>   (`ava-validators/{connected,uptime/manager}.rs`, mirroring Go's `float64(up)/float64(best)`). No
+>   blanket crate-wide float allow (so NEW consensus-path floats still trip). Only `ava-engine` needed
+>   `#![cfg_attr(test, allow(...))]` (one `#[cfg(test)]` `UNIX_EPOCH + Duration` helper); the other
+>   four crates' test modules were already arithmetic-clean. Verified: `cargo clippy --workspace
+>   --all-targets --all-features -- -D warnings` clean (no leakage), 132 consensus-crate tests green.
+>   *(Note: this only tightens the two named determinism lints; these three crates still lack a
+>   `[lints] workspace = true` opt-in, so the broader workspace restriction lints — `unwrap_used`
+>   etc. — are not yet enforced on them. Tracked as a separate, lower-priority follow-up.)*
+> - **`determinism_repeat` N≥16 proptest** (§B.6 headline test): `tests/differential/tests/determinism_repeat.rs`
+>   — `differential::determinism_repeat` runs the seeded `Program::from_seed`/`LockstepDriver` X-Chain
+>   replay **16×** (fresh driver each iteration) and asserts every run's `.normalized()` `Observation`
+>   vec is byte-identical to the first; mismatch prints `DIFFERENTIAL_SEED=<seed>`. A companion
+>   `determinism_repeat_detects_a_fork` proves the equality check is load-bearing (an injected
+>   divergence breaks it), so it can't degenerate into a tautology. Clock injection into the driver was
+>   deliberately NOT added (the X-Chain `build_block` wall-clock is already pinned by the harness's
+>   fixed `GENESIS_TS`); threading an `Arc<dyn Clock>` seam through `LockstepDriver` remains a separate
+>   follow-up.
+> - **`.github/PULL_REQUEST_TEMPLATE.md` determinism tick-box checklist**: found already present
+>   (the 7-box "Determinism audit" section keyed to spec 24 PART A) — the 2026-06-16f "deferred" note
+>   was stale; no change needed.
+>
+> **STILL DEFERRED (not yet done):** `clippy::cast_possible_truncation = warn` on consensus crates
+> (would surface broadly under `-D warnings`; left for a dedicated pass), and the optional cross-triple
+> (CI matrix) repeat of `determinism_repeat`.
 
 > **Deepens:** every consensus/codec/VM crate added later is in scope; the PR template checklist applies to any diff touching `ava-codec`/`ava-snow`/`ava-engine`/`ava-proposervm`/`ava-validators`/`ava-*vm`/`ava-utils` (24 §A.2).
 
