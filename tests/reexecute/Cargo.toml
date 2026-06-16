@@ -50,6 +50,10 @@ ava-vm = { path = "../../crates/ava-vm" }
 ava-secp256k1fx = { path = "../../crates/ava-secp256k1fx" }
 ava-snow = { path = "../../crates/ava-snow" }
 ava-types = { path = "../../crates/ava-types" }
+# `ava-utils::clock::MockClock` drives the P-Chain leg's injected clock (specs 24
+# hazard #5): `replay_pchain` pins it to the genesis timestamp so `build_block`'s
+# block-time read is deterministic without depending on the wall clock.
+ava-utils = { path = "../../crates/ava-utils" }
 ava-version = { path = "../../crates/ava-version" }
 ava-crypto = { path = "../../crates/ava-crypto" }
 async-trait = { workspace = true }

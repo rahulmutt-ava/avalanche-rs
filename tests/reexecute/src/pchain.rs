@@ -22,13 +22,16 @@
 //! VM over a seed-derived genesis (parse → `seed_state` → genesis block), admits a
 //! funded, signed [`CreateSubnetTx`] spending the genesis UTXO `U0`, then drives one
 //! `build → set_preference → verify → accept` cycle. The builder packs the admitted
-//! decision tx into a [`BanffStandardBlock`](ava_platformvm::block::banff) at height
-//! 1; with the genesis chain time pinned FAR in the FUTURE (so `now < parent_ts`,
-//! the X-Chain leg's clock-pinning trick), `verify_standard` resolves the block
-//! timestamp to the fixed genesis time (no future-time bound, no staker-change cap),
-//! so the block verifies + accepts cleanly and wall-clock-independently. The chain
-//! tip is therefore the accepted height-1 standard block. Every step is REAL VM code
-//! (no fabricated/hardcoded root).
+//! decision tx into a height-1
+//! [`BanffStandardBlock`](ava_platformvm::block::banff). The VM is constructed via
+//! [`PlatformVm::with_clock`](ava_platformvm::vm::PlatformVm::with_clock) with a
+//! [`MockClock`] pinned to the genesis timestamp (specs 24 hazard #5): `build_block`
+//! reads that injected clock — NOT the wall clock — so `next_block_time` resolves to
+//! `max(now, parent_ts)` = `GENESIS_TS` (the staker period ends 30 days later, so no
+//! staker-change cap fires) and the height-1 standard block deterministically stamps
+//! the genesis time across runs. Determinism therefore comes from the injected clock,
+//! NOT from future-pinning the genesis to keep `now` below the parent ts. The chain
+//! tip is the accepted height-1 standard block; every step is REAL VM code.
 //!
 //! The driver is bounded by the admitted-tx count (one), NOT "until the builder
 //! declines": the accept-side mempool drain is an un-wired P-Chain follow-up (the
@@ -61,7 +64,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tokio::runtime::Runtime;
@@ -89,6 +92,7 @@ use ava_snow::ChainContext;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
+use ava_utils::clock::MockClock;
 use ava_vm::app_sender::{AppSender, SendConfig};
 use ava_vm::block::ChainVm;
 use ava_vm::vm::Vm;
@@ -143,13 +147,14 @@ const BLS_SIG: [u8; 96] = [
     0x02, 0xb7, 0xe5, 0x22, 0x7b, 0x77, 0x55, 0x0a, 0xf1, 0x33, 0x0e, 0x5a, 0x71, 0xf8, 0xc3, 0x68,
 ];
 
-/// The genesis chain time, pinned FAR in the FUTURE (year ~2255) relative to any
-/// real run. The X-Chain leg's clock-pinning trick: because `now < GENESIS_TS`,
-/// `next_block_time` resolves to `max(now, parent_ts) = parent_ts = GENESIS_TS`
-/// with no wall-clock leak, and (with the validator period also future-pinned, see
-/// [`build_genesis`]) no staker-change cap fires — so the height-1 standard block
+/// The genesis chain time (year ~2255). The harness pins the VM's INJECTED
+/// [`MockClock`] to this same instant (see [`replay_pchain_async`]), so
+/// `next_block_time` resolves the height-1 block time to
+/// `max(now, parent_ts) = GENESIS_TS` deterministically — without reading the wall
+/// clock (specs 24 hazard #5). With the validator period also pinned at/after this
+/// time (see [`build_genesis`]) no staker-change cap fires, so the standard block
 /// carrying the admitted decision tx stamps the fixed genesis time and verifies +
-/// accepts deterministically across runs (no future-time bound on standard blocks).
+/// accepts identically across runs (no future-time bound on standard blocks).
 const GENESIS_TS: u64 = 9_000_000_000;
 
 /// A tiny deterministic bit-mixer (splitmix64 finalizer) — pure, no global state.
@@ -412,7 +417,19 @@ pub fn replay_pchain(seed: u64) -> Result<PchainReexecuteRoots> {
 
 async fn replay_pchain_async(seed: u64) -> Result<PchainReexecuteRoots> {
     let token = CancellationToken::new();
-    let mut vm = PlatformVm::new();
+    // Inject a `MockClock` pinned to the genesis timestamp (specs 24 hazard #5):
+    // `build_block`'s block-time read is now driven by this deterministic clock,
+    // NOT the wall clock. `next_block_time` resolves to `max(now, parent_ts) =
+    // GENESIS_TS` (the staker period ends 30 days later, so no cap fires), so the
+    // height-1 standard block deterministically stamps the genesis time across
+    // runs — determinism no longer depends on future-pinning the genesis to keep
+    // `now < parent_ts`. The genesis stays future-pinned only so its (unchanged)
+    // staker period and seeded-state byte layout match the recorded fixtures.
+    let pinned = UNIX_EPOCH
+        .checked_add(Duration::from_secs(GENESIS_TS))
+        .ok_or_else(|| Error::Pchain("genesis timestamp overflows SystemTime".into()))?;
+    let clock = MockClock::at(pinned);
+    let mut vm = PlatformVm::with_clock(Arc::new(clock));
     let db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
 
     let genesis = build_genesis(seed)?;
@@ -434,9 +451,9 @@ async fn replay_pchain_async(seed: u64) -> Result<PchainReexecuteRoots> {
 
     // Admit a funded, signed `CreateSubnetTx` spending the genesis UTXO `U0`
     // through the `mempool_add` seam BEFORE the build loop. The builder drains the
-    // mempool into a `BanffStandardBlock`; with the genesis time future-pinned the
-    // block verifies + accepts at the genesis timestamp (no future-time bound, no
-    // staker-change cap), advancing the chain to a height-1 standard block.
+    // mempool into a `BanffStandardBlock`; with the VM's injected clock pinned to the
+    // genesis timestamp the block stamps + verifies + accepts at that timestamp (no
+    // future-time bound, no staker-change cap), advancing to a height-1 standard block.
     let create_subnet = create_subnet_tx(seed, genesis_amount0(seed))?;
     vm.mempool_add(create_subnet)
         .map_err(|e| Error::Pchain(format!("mempool add: {e}")))?;
@@ -444,7 +461,7 @@ async fn replay_pchain_async(seed: u64) -> Result<PchainReexecuteRoots> {
     // Drive `build → set_preference → verify → accept` once per admitted decision
     // tx (exactly one here), mirroring the X-Chain leg's bounded driver. The single
     // call packs the admitted `CreateSubnetTx` into a height-1 `BanffStandardBlock`
-    // that verifies + accepts at the future-pinned genesis time. The loop is bounded
+    // that verifies + accepts at the injected-clock genesis time. The loop is bounded
     // by the admitted-tx count (NOT "until the builder declines"): the accept-side
     // mempool drain is an un-wired P-Chain follow-up (`vm.rs` build_block: "accepted
     // txs are removed on accept (a follow-up wires the accept-side drain)"), so the
