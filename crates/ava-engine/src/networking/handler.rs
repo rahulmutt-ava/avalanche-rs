@@ -68,6 +68,12 @@ impl HandlerMessage {
 /// composes onto this in M3.11+.
 #[async_trait]
 pub trait ChainEngine: Send {
+    /// Activation hook (Go `Engine.Start`). Called by the handler on the engine
+    /// active when the loop begins, and on the newly-active engine after every
+    /// state transition. Default no-op; the bootstrapper adapter overrides it to
+    /// begin frontier discovery.
+    async fn start(&mut self) {}
+
     /// Process one inbound op from `node`.
     async fn handle(&mut self, node: NodeId, op: InboundOp);
 
@@ -129,6 +135,10 @@ pub struct ChainHandler {
     state: EngineState,
     queue_rx: mpsc::Receiver<HandlerMessage>,
     msg_from_vm: mpsc::Receiver<VmEvent>,
+    /// Engine-requested state transitions (Go `Handler.transitionTo`). An active
+    /// engine adapter sends the next [`EngineState`] here; on receipt the handler
+    /// switches the active engine and calls its `start` hook.
+    transition_rx: mpsc::Receiver<EngineState>,
     gossip_frequency: Duration,
     halt: CancellationToken,
     tracker: TaskTracker,
@@ -138,7 +148,11 @@ impl ChainHandler {
     /// Build a handler + its push-side sink and VM-notification sender.
     ///
     /// `queue_capacity` bounds the inbound message queue; `gossip_frequency`
-    /// drives the gossip ticker.
+    /// drives the gossip ticker. `transition_rx` is the receiver end of a
+    /// [`transition_channel`](super::engine_adapter::transition_channel) whose
+    /// `tx` clones are handed to the engine adapters before registration, so an
+    /// active engine can request the handler move to a new
+    /// [`EngineState`] (e.g. the bootstrapper requesting `NormalOp`).
     #[must_use]
     pub fn new(
         engines: EngineManager,
@@ -146,6 +160,7 @@ impl ChainHandler {
         queue_capacity: usize,
         gossip_frequency: Duration,
         halt: CancellationToken,
+        transition_rx: mpsc::Receiver<EngineState>,
     ) -> (Self, ChainHandlerSink, mpsc::Sender<VmEvent>) {
         let (tx, queue_rx) = mpsc::channel(queue_capacity);
         let (vm_tx, msg_from_vm) = mpsc::channel(queue_capacity);
@@ -154,6 +169,7 @@ impl ChainHandler {
             state: initial_state,
             queue_rx,
             msg_from_vm,
+            transition_rx,
             gossip_frequency,
             halt,
             tracker: TaskTracker::new(),
@@ -187,10 +203,32 @@ impl ChainHandler {
         // Bounded async worker pool for App* messages.
         let mut async_pool: JoinSet<()> = JoinSet::new();
 
+        // Activate the initially-selected engine (Go `Engine.Start`).
+        if let Some(engine) = self.engines.active_mut(self.state) {
+            engine.start().await;
+        }
+
+        // Once all transition senders drop, `recv()` is permanently ready with
+        // `None`; gate the arm off so `biased` select doesn't busy-loop on it.
+        let mut transition_open = true;
+
         loop {
             tokio::select! {
                 biased;
                 () = self.halt.cancelled() => break,
+                maybe = self.transition_rx.recv(), if transition_open => {
+                    match maybe {
+                        Some(new_state) => {
+                            self.set_state(new_state);
+                            if let Some(engine) = self.engines.active_mut(self.state) {
+                                engine.start().await;
+                            }
+                        }
+                        // All transition senders dropped: keep running in the
+                        // current state (engines may still process ops).
+                        None => transition_open = false,
+                    }
+                }
                 maybe = self.queue_rx.recv() => {
                     match maybe {
                         Some(msg) => self.dispatch(msg, &mut async_pool).await,

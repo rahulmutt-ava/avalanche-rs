@@ -647,12 +647,18 @@ where
     // 7. Per-chain ChainHandler actor + register its sink with the router (which
     //    owns the AdaptiveTimeoutManager).
     let engines = EngineManager::new(EngineType::Snowman);
+    // M4.30a: the handler now takes the receiver end of an engine-transition
+    // channel. This chain wires no handler-driven engines yet (the engine is
+    // returned separately and driven directly), so the `tx` is dropped; M4.30b
+    // will register the engine adapters and hold the `tx`.
+    let (_transition_tx, transition_rx) = ava_engine::networking::transition_channel(8);
     let (handler, sink, _vm_tx) = ChainHandler::new(
         engines,
         EngineState::Initializing,
         1024,
         Duration::from_secs(1),
         token.clone(),
+        transition_rx,
     );
     router.add_chain(chain_id, Arc::new(sink.clone()));
 

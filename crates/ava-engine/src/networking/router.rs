@@ -93,6 +93,61 @@ pub enum InboundOp {
         /// Wire request ID.
         request_id: u32,
     },
+
+    // --- Bootstrap / consensus responses (M4.30a) --------------------------
+    /// `AcceptedFrontier` — a beacon's last-accepted frontier id (bootstrap).
+    AcceptedFrontier {
+        /// Wire request ID.
+        request_id: u32,
+        /// The beacon's last-accepted container id.
+        container_id: Id,
+    },
+    /// `Accepted` — a beacon's accepted subset of the queried frontier.
+    Accepted {
+        /// Wire request ID.
+        request_id: u32,
+        /// The accepted container ids.
+        container_ids: Vec<Id>,
+    },
+    /// `Ancestors` — a chain of fetched container bytes (newest-first).
+    Ancestors {
+        /// Wire request ID.
+        request_id: u32,
+        /// The fetched container bytes.
+        containers: Vec<Vec<u8>>,
+    },
+    /// `PushQuery` — a query carrying the queried container.
+    PushQuery {
+        /// Wire request ID.
+        request_id: u32,
+        /// The queried container bytes.
+        container: Vec<u8>,
+        /// The querier's requested height.
+        requested_height: u64,
+    },
+    /// `PullQuery` — a query naming the queried container by id.
+    PullQuery {
+        /// Wire request ID.
+        request_id: u32,
+        /// The queried container id.
+        container_id: Id,
+        /// The querier's requested height.
+        requested_height: u64,
+    },
+    /// `Chits` — a vote carrying the peer's preferred / preferred-at-height /
+    /// last-accepted ids (matches [`Sender::send_chits`](crate::common::sender::Sender::send_chits)).
+    Chits {
+        /// Wire request ID.
+        request_id: u32,
+        /// The peer's preferred container id.
+        preferred_id: Id,
+        /// The peer's preferred container id at the requested height.
+        preferred_id_at_height: Id,
+        /// The peer's last-accepted container id.
+        accepted_id: Id,
+        /// The peer's last-accepted height.
+        accepted_height: u64,
+    },
 }
 
 impl InboundOp {
