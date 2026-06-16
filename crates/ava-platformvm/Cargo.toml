@@ -78,5 +78,12 @@ rstest = { workspace = true }
 assert_matches = { workspace = true }
 pretty_assertions = { workspace = true }
 
+[features]
+# CI-gated live-Fuji differential arm (`differential::pchain_sync_to_tip_live_fuji`):
+# byte-exact sync-to-tip vs a real Fuji peer / the Go node. A documented deferred
+# stub — enabling it does NOT change the default build/test (the offline
+# recorded-oracle arm carries the M4.29 guarantee). See `tests/PORTING.md`.
+live-fuji = [  ]
+
 [lints]
 workspace = true

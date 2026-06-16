@@ -1263,7 +1263,15 @@ mod clock_injection {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+// Test-fixture arithmetic on known-small bounds (range heights, corpus indices)
+// is clearer than checked math; corpus/range indexing is bounded by asserted
+// lengths. Mirrors the `differential_validatorstate.rs` test-file allows.
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
 mod differential {
     //! `differential::pchain_sync_to_tip` (M4.27 — TDD ENTRY POINT #2, height-0
     //! subset): drive the M3 Snowman [`Bootstrapper`] end-to-end against a
@@ -1297,6 +1305,11 @@ mod differential {
 
     use ava_engine::common::sender::{SendConfig as EngineSendConfig, Sender};
     use ava_engine::snowman::bootstrap::{Bootstrapper, Config, Phase};
+
+    use crate::block::BlockBody;
+    use crate::block::apricot::{ApricotStandardBlock, CommonBlock};
+    use crate::block::banff::BanffStandardBlock;
+    use crate::state::chain::Chain;
 
     use super::*;
 
@@ -1483,12 +1496,13 @@ mod differential {
         (vm, genesis_id, genesis_block_bytes)
     }
 
-    /// `pchain_sync_to_tip` (height-0 subset): the bootstrapper drives the VM
-    /// from a recorded single-block frontier (= genesis) through frontier
-    /// discovery → agreement → fetch → execute → handoff, ending at height 0 with
+    /// `pchain_sync_to_tip_height0` (M4.27, the height-0 subset of the multi-block
+    /// [`pchain_sync_to_tip`]): the bootstrapper drives the VM from a recorded
+    /// single-block frontier (= genesis) through frontier discovery → agreement →
+    /// fetch → execute → handoff, ending at height 0 with
     /// `last_accepted == genesis_id`.
     #[tokio::test]
-    async fn pchain_sync_to_tip() {
+    async fn pchain_sync_to_tip_height0() {
         let token = CancellationToken::new();
         let (vm, genesis_id, genesis_block_bytes) = init_vm().await;
 
@@ -1572,5 +1586,463 @@ mod differential {
         assert_eq!(blk.id(), genesis_id);
         assert_eq!(blk.height(), 0);
         assert_eq!(blk.bytes(), genesis_block_bytes.as_slice());
+    }
+
+    // -----------------------------------------------------------------------
+    // M4.29 — `pchain_sync_to_tip` over a multi-block deterministic range.
+    // -----------------------------------------------------------------------
+
+    /// The Primary Network subnet id (the all-zero `Id`); the validator-set
+    /// projection in the digest is taken over this subnet.
+    const PRIMARY: Id = Id::EMPTY;
+
+    /// One recorded-oracle row: the observable P-Chain state at a single height.
+    ///
+    /// The corpus is a Rust-built recorded oracle (the byte-exact Go full-range
+    /// arm is the CI-gated `live-fuji` leg below). Block-codec byte-exactness vs
+    /// Go is already proven by `golden::pchain_block_hash` (M4.6); M4.29's value
+    /// is the **forward sync pipeline** — that the bootstrapper fetch→execute→
+    /// accept loop reconstructs the chain deterministically and that the
+    /// per-height VM accept path produces the recorded observations.
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+    struct SyncRow {
+        height: u64,
+        /// The block id (hex, 32 bytes).
+        block_id: String,
+        /// The block codec bytes (hex); `""` for the genesis row (height 0).
+        block_bytes: String,
+        /// The chain timestamp after accepting this block (Unix seconds).
+        timestamp: u64,
+        /// The P-Chain state-observation digest (hex, 32 bytes) — see
+        /// [`state_digest`]. This is **not** a merkle root: the P-Chain uses
+        /// flat-KV state (`08` §3.2), so the corpus records a deterministic
+        /// surrogate over the observable singletons + validator set.
+        state_digest: String,
+        /// The Primary-Network validator set after accepting this block,
+        /// `NodeId`-ascending.
+        validators: Vec<SyncValidator>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    struct SyncValidator {
+        /// Node id (hex, 20 bytes).
+        node_id: String,
+        weight: u64,
+        /// Compressed BLS key (hex, 48 bytes), or `""` for no key.
+        bls_key: String,
+    }
+
+    /// The full recorded-oracle scenario for one linear sync range.
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    struct SyncVectors {
+        description: String,
+        /// Rows for heights 0..=N (index == height).
+        rows: Vec<SyncRow>,
+    }
+
+    fn hex_encode(b: &[u8]) -> String {
+        let mut out = String::with_capacity(b.len() * 2);
+        for byte in b {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    }
+
+    fn hex_decode(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    /// The P-Chain **state-observation digest**: a deterministic `sha256` over a
+    /// canonical, sorted byte encoding of the observable state — NOT a merkle
+    /// root (the P-Chain has flat-KV state, `08` §3.2). The encoding is:
+    ///
+    /// `height_be ‖ last_accepted_id ‖ timestamp_secs_be ‖ primary_supply_be ‖
+    ///  (for each validator, NodeId-ascending: node_id ‖ weight_be ‖ bls_key)`
+    ///
+    /// where the validator set is the Primary-Network set at `height`. Stable and
+    /// sorted so the same observable state always hashes identically across the
+    /// bootstrapper arm and the per-height accept arm.
+    fn state_digest(
+        height: u64,
+        last_accepted: Id,
+        timestamp_secs: u64,
+        primary_supply: u64,
+        validators: &[SyncValidator],
+    ) -> [u8; 32] {
+        let mut buf: Vec<u8> = Vec::new();
+        buf.extend_from_slice(&height.to_be_bytes());
+        buf.extend_from_slice(last_accepted.as_bytes());
+        buf.extend_from_slice(&timestamp_secs.to_be_bytes());
+        buf.extend_from_slice(&primary_supply.to_be_bytes());
+        // `validators` is already NodeId-ascending (BTreeMap-projected); encode in
+        // that order so the digest is order-canonical.
+        for v in validators {
+            buf.extend_from_slice(&hex_decode(&v.node_id));
+            buf.extend_from_slice(&v.weight.to_be_bytes());
+            buf.extend_from_slice(&hex_decode(&v.bls_key));
+        }
+        ava_crypto::hashing::sha256(&buf)
+    }
+
+    /// Builds the deterministic linear range of `n` empty Banff standard blocks
+    /// over `genesis_id`/`genesis_time`: heights 1..=n, each stamping a chain time
+    /// that advances strictly forward (`genesis_time + i * STEP`). Empty Banff
+    /// standard blocks verify + accept with no wall-clock bound (`verify_standard`
+    /// only `advance_to_block_time`s then processes the empty tx list), so the
+    /// range is fully deterministic. Returns `(block_id, block_bytes, time_secs)`
+    /// per height in order.
+    fn build_linear_range(genesis_id: Id, genesis_time: u64, n: u64) -> Vec<(Id, Vec<u8>, u64)> {
+        const STEP: u64 = 100;
+        let codec = crate::txs::Codec();
+        let mut out = Vec::with_capacity(n as usize);
+        let mut parent = genesis_id;
+        for i in 1..=n {
+            let time = genesis_time + i * STEP;
+            let mut blk = Block::new(BlockBody::BanffStandard(BanffStandardBlock {
+                time,
+                apricot: ApricotStandardBlock {
+                    common: CommonBlock {
+                        parent_id: parent,
+                        height: i,
+                    },
+                    transactions: vec![],
+                },
+            }));
+            blk.initialize(codec)
+                .expect("initialize banff standard block");
+            let id = blk.id();
+            out.push((id, blk.bytes().to_vec(), time));
+            parent = id;
+        }
+        out
+    }
+
+    /// Projects the Primary-Network validator set at `height` to the corpus's
+    /// `NodeId`-ascending `(node_id, weight, bls_key)` shape (mirrors the M4.23
+    /// `validatorstate_parity` projection).
+    async fn project_validators(vm: &PlatformVm, height: u64) -> Vec<SyncValidator> {
+        let mgr = vm.validator_state().expect("validator manager");
+        let set = mgr
+            .get_validator_set(height, PRIMARY)
+            .await
+            .expect("get_validator_set");
+        // `get_validator_set` returns a `BTreeMap<NodeId, _>` → already ascending.
+        set.iter()
+            .map(|(node, out)| SyncValidator {
+                node_id: hex_encode(node.as_bytes()),
+                weight: out.weight,
+                bls_key: out
+                    .public_key
+                    .as_ref()
+                    .map(|k| hex_encode(&k.compress()))
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Observes `(timestamp_secs, last_accepted, primary_supply, height)` from the
+    /// VM's persisted state (the read-only `with_state` seam).
+    fn observe_state(vm: &PlatformVm) -> (u64, Id, u64, u64) {
+        vm.with_state(|s| {
+            let ts = s
+                .timestamp()
+                .duration_since(UNIX_EPOCH)
+                .expect("post-epoch ts")
+                .as_secs();
+            let supply = s.current_supply(PRIMARY).expect("primary supply");
+            (ts, s.last_accepted(), supply, s.height())
+        })
+        .expect("with_state")
+    }
+
+    const SYNC_ORACLE_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/vectors/platformvm/fuji_sync_oracle"
+    );
+
+    /// Loads the committed recorded-oracle corpus (the single `linear_range.json`).
+    fn load_sync_corpus() -> SyncVectors {
+        let path = format!("{SYNC_ORACLE_DIR}/linear_range.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read sync oracle corpus {path}: {e}"));
+        serde_json::from_str(&raw).expect("parse sync oracle corpus")
+    }
+
+    /// `pchain_sync_to_tip` (M4.29, multi-block): the **forward sync pipeline**
+    /// over a deterministic range of empty Banff standard blocks (heights 1..=N).
+    ///
+    /// Two arms, both against the committed recorded-oracle corpus and both
+    /// deterministic (synthetic/injected time only):
+    ///
+    /// 1. **Bootstrapper arm:** drive the whole chain through the real M3 Snowman
+    ///    [`Bootstrapper`] — the beacon reports the tip as its accepted frontier,
+    ///    a single `ancestors` reply serves the chain tip-first/genesis-last, the
+    ///    interval tree executes the range, and the node hands off to `NormalOp`
+    ///    with `last_accepted == tip_id` and `get_block(tip).height() == N`.
+    /// 2. **Per-height differential arm:** on a fresh VM, `parse_block → verify →
+    ///    accept` each block in order and assert `(block_id, timestamp,
+    ///    state_digest, validators)` equals the corpus row at that height.
+    #[tokio::test]
+    async fn pchain_sync_to_tip() {
+        let token = CancellationToken::new();
+        let corpus = load_sync_corpus();
+        let n = (corpus.rows.len() - 1) as u64;
+        assert!(n >= 1, "corpus must cover at least heights 0..=1");
+        assert_eq!(
+            corpus.rows[0].height, 0,
+            "row 0 must be the genesis observation"
+        );
+
+        let genesis = crate::genesis::test_synthetic_genesis();
+        let genesis_time = genesis.timestamp;
+        let (vm0, genesis_id, genesis_block_bytes) = init_vm().await;
+        // The corpus's genesis row must match THIS synthetic genesis.
+        assert_eq!(
+            corpus.rows[0].block_id,
+            hex_encode(genesis_id.as_bytes()),
+            "corpus genesis id must match the synthetic genesis"
+        );
+
+        let range = build_linear_range(genesis_id, genesis_time, n);
+        // The corpus block ids/bytes must match the deterministically rebuilt range.
+        for (i, (id, bytes, time)) in range.iter().enumerate() {
+            let row = &corpus.rows[i + 1];
+            assert_eq!(row.height, (i + 1) as u64, "row height order");
+            assert_eq!(
+                row.block_id,
+                hex_encode(id.as_bytes()),
+                "corpus block id at height {}",
+                i + 1
+            );
+            assert_eq!(
+                row.block_bytes,
+                hex_encode(bytes),
+                "corpus block bytes at height {}",
+                i + 1
+            );
+            assert_eq!(row.timestamp, *time, "corpus timestamp at height {}", i + 1);
+        }
+
+        // -------- Arm 1: the bootstrapper forward-sync pipeline. --------
+        let tip_id = range.last().expect("non-empty range").0;
+        let acceptor = Arc::new(NoOpAcceptor);
+        let ctx = Arc::new(ConsensusContext::new(
+            chain_ctx(),
+            "P".to_string(),
+            acceptor,
+            Arc::new(NoOpAcceptor),
+        ));
+        let sender = Arc::new(FetchSender::default());
+        let beacon = NodeId::from([10u8; 20]);
+        let mut beacons = BTreeMap::new();
+        beacons.insert(beacon, 1u64);
+
+        let boot_vm = Arc::new(AsyncMutex::new(vm0));
+        let cfg = Config {
+            subnet_id: Id::EMPTY,
+            ctx: ctx.clone(),
+            vm: Arc::clone(&boot_vm),
+            sender: sender.clone(),
+            beacons,
+            token: token.clone(),
+        };
+        let mut boot = Bootstrapper::new(cfg);
+
+        boot.start(0).await.expect("start");
+        assert_eq!(boot.phase(), Phase::DiscoveringFrontier);
+        assert_eq!(**ctx.state.load(), EngineState::Bootstrapping);
+
+        // The beacon reports the TIP as its accepted frontier + accepted set.
+        boot.accepted_frontier(beacon, 1, tip_id)
+            .await
+            .expect("accepted_frontier");
+        assert_eq!(boot.phase(), Phase::AgreeingFrontier);
+        boot.accepted(beacon, 2, &[tip_id]).await.expect("accepted");
+
+        // Answer GetAncestors with the full chain tip-first, genesis-last:
+        // [blk_N, …, blk_1, genesis]. `process_chain` walks parents within the
+        // reply (genesis is at the local last-accepted height → stops; no extra
+        // fetch). Drain any follow-up GetAncestors defensively.
+        let mut chain_reply: Vec<Vec<u8>> = range.iter().rev().map(|(_, b, _)| b.clone()).collect();
+        chain_reply.push(genesis_block_bytes.clone());
+
+        let mut answered = false;
+        loop {
+            let ga = sender.take_get_ancestors();
+            if ga.is_empty() {
+                break;
+            }
+            for (node, req, wanted) in ga {
+                if wanted == tip_id && !answered {
+                    boot.ancestors(node, req, &chain_reply)
+                        .await
+                        .expect("ancestors (full chain)");
+                    answered = true;
+                } else {
+                    // Any straggler fetch: serve the same full chain (the
+                    // interval tree dedups by height).
+                    boot.ancestors(node, req, &chain_reply)
+                        .await
+                        .expect("ancestors (straggler)");
+                }
+            }
+            if boot.is_finished() {
+                break;
+            }
+        }
+        assert!(
+            answered,
+            "bootstrapper must have requested the tip ancestry"
+        );
+        assert!(boot.is_finished(), "bootstrapper must hand off at the tip");
+        assert_eq!(boot.phase(), Phase::Finished);
+        assert_eq!(**ctx.state.load(), EngineState::NormalOp);
+
+        {
+            let vm = boot_vm.lock().await;
+            assert_eq!(
+                vm.last_accepted(&token).await.expect("last accepted"),
+                tip_id,
+                "bootstrap must accept up to the tip id"
+            );
+            let blk = vm.get_block(&token, tip_id).await.expect("get tip");
+            assert_eq!(blk.height(), n, "tip block is at height N");
+        }
+
+        // -------- Arm 2: per-height differential parity (fresh VM). --------
+        let (vm, _gid, _gbytes) = init_vm().await;
+        for (i, (id, bytes, _time)) in range.iter().enumerate() {
+            let height = (i + 1) as u64;
+            let row = &corpus.rows[i + 1];
+
+            let block = vm.parse_block(&token, bytes).await.expect("parse_block");
+            assert_eq!(block.id(), *id, "parsed block id at height {height}");
+            block.verify(&token).await.expect("verify");
+            block.accept(&token).await.expect("accept");
+
+            // Observe the post-accept state and project the validator set.
+            let (ts, last, supply, h) = observe_state(&vm);
+            assert_eq!(h, height, "state height at height {height}");
+            assert_eq!(last, *id, "last-accepted id at height {height}");
+
+            let validators = project_validators(&vm, height).await;
+            let digest = state_digest(height, last, ts, supply, &validators);
+
+            assert_eq!(
+                hex_encode(id.as_bytes()),
+                row.block_id,
+                "block id parity at height {height}"
+            );
+            assert_eq!(ts, row.timestamp, "timestamp parity at height {height}");
+            assert_eq!(
+                validators, row.validators,
+                "validator-set parity at height {height}"
+            );
+            assert_eq!(
+                hex_encode(&digest),
+                row.state_digest,
+                "state-digest parity at height {height}"
+            );
+        }
+    }
+
+    /// CI-gated live-Fuji arm (env `AVA_DIFF_LIVE` **or** feature `live-fuji`).
+    ///
+    /// This is a documented stub that does NOT run in CI and does NOT affect the
+    /// default build/test. When wired (deferred), it would sync from a real Fuji
+    /// peer to the network tip through this same bootstrapper and assert the same
+    /// invariants **byte-exact vs the Go node** (the recorded-oracle corpus above
+    /// proves the forward pipeline offline; this leg proves byte-parity live).
+    /// See `tests/PORTING.md` for the `--features live-fuji` invocation.
+    #[tokio::test]
+    async fn pchain_sync_to_tip_live_fuji() {
+        if cfg!(feature = "live-fuji") || std::env::var("AVA_DIFF_LIVE").is_ok() {
+            eprintln!(
+                "pchain_sync_to_tip_live_fuji: live-Fuji byte-exact sync arm is a \
+                 deferred stub (would sync to tip from a real Fuji peer and assert \
+                 byte-parity vs the Go node); see tests/PORTING.md."
+            );
+        }
+        // Default (CI) path: no-op — the offline recorded-oracle arm carries the
+        // M4.29 guarantee.
+    }
+
+    /// Builds one corpus row by observing the VM's post-accept state and
+    /// projecting the Primary-Network validator set at `height`.
+    async fn observe_row(vm: &PlatformVm, height: u64, block_bytes: String) -> SyncRow {
+        let (ts, last, supply, h) = observe_state(vm);
+        assert_eq!(h, height, "observed height matches expected");
+        let validators = project_validators(vm, height).await;
+        let digest = state_digest(height, last, ts, supply, &validators);
+        SyncRow {
+            height,
+            block_id: hex_encode(last.as_bytes()),
+            block_bytes,
+            timestamp: ts,
+            state_digest: hex_encode(&digest),
+            validators,
+        }
+    }
+
+    /// The recorded-oracle corpus generator for [`pchain_sync_to_tip`].
+    ///
+    /// Gated behind `GENERATE_PCHAIN_SYNC_ORACLE=1` so it never runs in CI (the
+    /// `validatorstate_parity` `gen_vectors` precedent). When set it builds the
+    /// deterministic linear range, replays it through a fresh VM (the INDEPENDENT
+    /// accept path), records the per-height observation, and writes the committed
+    /// `fuji_sync_oracle/linear_range.json`. The committed corpus is this
+    /// generator's output.
+    #[tokio::test]
+    async fn generate_sync_oracle() {
+        if std::env::var("GENERATE_PCHAIN_SYNC_ORACLE").is_err() {
+            return;
+        }
+        const N: u64 = 5;
+        let token = CancellationToken::new();
+
+        let genesis = crate::genesis::test_synthetic_genesis();
+        let genesis_time = genesis.timestamp;
+        let (vm, genesis_id, _genesis_bytes) = init_vm().await;
+
+        // Row 0: the genesis observation (block_bytes left empty per the corpus
+        // format; the loader matches the genesis id against the live genesis).
+        let mut rows = vec![observe_row(&vm, 0, String::new()).await];
+        assert_eq!(
+            rows[0].block_id,
+            hex_encode(genesis_id.as_bytes()),
+            "genesis row id"
+        );
+
+        // Heights 1..=N: accept each empty Banff standard block.
+        let range = build_linear_range(genesis_id, genesis_time, N);
+        for (i, (id, bytes, _time)) in range.iter().enumerate() {
+            let height = (i + 1) as u64;
+            let block = vm.parse_block(&token, bytes).await.expect("parse");
+            block.verify(&token).await.expect("verify");
+            block.accept(&token).await.expect("accept");
+            let row = observe_row(&vm, height, hex_encode(bytes)).await;
+            assert_eq!(
+                row.block_id,
+                hex_encode(id.as_bytes()),
+                "row id at {height}"
+            );
+            rows.push(row);
+        }
+
+        let vectors = SyncVectors {
+            description: "P-Chain forward-sync recorded oracle: 5 empty Banff standard blocks \
+                 over the synthetic genesis (heights 0..=5). state_digest is the \
+                 flat-KV state-observation surrogate (NOT a merkle root)."
+                .to_string(),
+            rows,
+        };
+        std::fs::create_dir_all(SYNC_ORACLE_DIR).expect("mkdir vectors");
+        let path = format!("{SYNC_ORACLE_DIR}/linear_range.json");
+        let json = serde_json::to_string_pretty(&vectors).expect("serialize");
+        std::fs::write(&path, json + "\n").expect("write corpus");
+        eprintln!("wrote {path}");
     }
 }

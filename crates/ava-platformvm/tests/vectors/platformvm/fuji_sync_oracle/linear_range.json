@@ -1,0 +1,89 @@
+{
+  "description": "P-Chain forward-sync recorded oracle: 5 empty Banff standard blocks over the synthetic genesis (heights 0..=5). state_digest is the flat-KV state-observation surrogate (NOT a merkle root).",
+  "rows": [
+    {
+      "height": 0,
+      "block_id": "464e8c21426749f1a83f8e9fcc1392b4268dad4f553ec298b97f4c386d9a3774",
+      "block_bytes": "",
+      "timestamp": 5,
+      "state_digest": "7db1096e7dbf29e6888b4442d73e6fb6ac3296bd4bccc7c10d2945d52eb5dff5",
+      "validators": [
+        {
+          "node_id": "1122334455667788112233445566778811223344",
+          "weight": 2000000000000,
+          "bls_key": "aff4acb4c5439b5d426cadf9e946d3a452f7de3414d1ad27336133211d8b90cf49fb97eebcdeeef714dc20f54ed0d4d1"
+        }
+      ]
+    },
+    {
+      "height": 1,
+      "block_id": "bc530a8eab27f70394c97439908b3036559fa4b013920cf5e6cf0fad95cdff5f",
+      "block_bytes": "0000000000200000000000000069464e8c21426749f1a83f8e9fcc1392b4268dad4f553ec298b97f4c386d9a3774000000000000000100000000",
+      "timestamp": 105,
+      "state_digest": "ad07c70c3891c6336920e9bd8af1cd5ba71f29c879e60e4e088e342c80e40374",
+      "validators": [
+        {
+          "node_id": "1122334455667788112233445566778811223344",
+          "weight": 2000000000000,
+          "bls_key": "aff4acb4c5439b5d426cadf9e946d3a452f7de3414d1ad27336133211d8b90cf49fb97eebcdeeef714dc20f54ed0d4d1"
+        }
+      ]
+    },
+    {
+      "height": 2,
+      "block_id": "625f82c26779e1a4748c580369da1974ef80e3d3132373e7e8b9c08a39695177",
+      "block_bytes": "00000000002000000000000000cdbc530a8eab27f70394c97439908b3036559fa4b013920cf5e6cf0fad95cdff5f000000000000000200000000",
+      "timestamp": 205,
+      "state_digest": "e7e3cf15db45ebe2fe93e761b642cffddcd411d8901492aab0292974933d1323",
+      "validators": [
+        {
+          "node_id": "1122334455667788112233445566778811223344",
+          "weight": 2000000000000,
+          "bls_key": "aff4acb4c5439b5d426cadf9e946d3a452f7de3414d1ad27336133211d8b90cf49fb97eebcdeeef714dc20f54ed0d4d1"
+        }
+      ]
+    },
+    {
+      "height": 3,
+      "block_id": "85b005ef7e1cb1b53ca188b271b42877a09af56b73cd905984a3665d55680ef1",
+      "block_bytes": "0000000000200000000000000131625f82c26779e1a4748c580369da1974ef80e3d3132373e7e8b9c08a39695177000000000000000300000000",
+      "timestamp": 305,
+      "state_digest": "c3933cfcf79dbb98c0589433e14c3a8af6c7276feb6b3b360a02fa742e43581f",
+      "validators": [
+        {
+          "node_id": "1122334455667788112233445566778811223344",
+          "weight": 2000000000000,
+          "bls_key": "aff4acb4c5439b5d426cadf9e946d3a452f7de3414d1ad27336133211d8b90cf49fb97eebcdeeef714dc20f54ed0d4d1"
+        }
+      ]
+    },
+    {
+      "height": 4,
+      "block_id": "9aa2d71be5dc892d30ea3e36c6c889ee143a01ed4101be9255daca1eca71e806",
+      "block_bytes": "000000000020000000000000019585b005ef7e1cb1b53ca188b271b42877a09af56b73cd905984a3665d55680ef1000000000000000400000000",
+      "timestamp": 405,
+      "state_digest": "defa69189605b332ae4afcc3f34408866afd88254088b72fa58562024e38be10",
+      "validators": [
+        {
+          "node_id": "1122334455667788112233445566778811223344",
+          "weight": 2000000000000,
+          "bls_key": "aff4acb4c5439b5d426cadf9e946d3a452f7de3414d1ad27336133211d8b90cf49fb97eebcdeeef714dc20f54ed0d4d1"
+        }
+      ]
+    },
+    {
+      "height": 5,
+      "block_id": "da33b5b2e422cf75e1c028332b04127744007cfc4ca0e25805d81c3aa9d2937a",
+      "block_bytes": "00000000002000000000000001f99aa2d71be5dc892d30ea3e36c6c889ee143a01ed4101be9255daca1eca71e806000000000000000500000000",
+      "timestamp": 505,
+      "state_digest": "4e4de5583183f8d26f43afcd8da6f737e5e4a1b5073c2f34cfadd3d771b1f33d",
+      "validators": [
+        {
+          "node_id": "1122334455667788112233445566778811223344",
+          "weight": 2000000000000,
+          "bls_key": "aff4acb4c5439b5d426cadf9e946d3a452f7de3414d1ad27336133211d8b90cf49fb97eebcdeeef714dc20f54ed0d4d1"
+        }
+      ]
+    }
+  ]
+}
