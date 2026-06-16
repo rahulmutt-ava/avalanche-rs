@@ -141,6 +141,28 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > ava-differential` = **15/15**, `-p ava-vm-rpc` = **10/10**, clippy `--all-targets -D warnings` clean, `--features live
 > --tests` compiles, fmt clean.
 
+> **WAVE 2026-06-16 (reverse-direction host + crash hardening) MERGED.** Two parallel worktree agents on disjoint
+> areas (`ava-vm-rpc` host-spawn vs `ava-differential` crash harness), merged into `main`; re-verified in main tree.
+> - **M9.12 OFFLINE ARM + PROTOCOL-44 REJECTION COMPLETE** (`crates/ava-vm-rpc/tests/host_subprocess.rs` +
+>   `tests/differential/{src/plugin.rs,tests/plugin_go_in_rust.rs}`): a Rust `RpcChainVm` host drives the
+>   `testvm_plugin` example as a **real OS subprocess** across the v45 reverse-dial (build/verify/accept/parse over
+>   the wire — the host-side process-boundary the in-process M9.11 test can't reach) + `rust_host_rejects_protocol_44`
+>   (the concrete "old node, 44" → `ProtocolVersionMismatch` at the `RpcChainVm::start` boundary). The differential
+>   side adds the host-dial-back black-box offline arm + the gated live Go-plugin-under-`avalanchers` arm. Live
+>   Go-plugin-in-Rust-host arm gated.
+> - **M9.20 OFFLINE ARM COMPLETE** (`tests/differential/{src/crash.rs,tests/crash_injection.rs}`): `FailpointDb`
+>   (N-th-mutation deterministic failure over a shared `Arc<MemDb>`) + `AcceptHarness` (CC-ATOMIC accept under a
+>   `CrashPoint` matrix, atomic-batch vs naive-per-key) prove the atomic accept recovers all-or-nothing + idempotently
+>   across every crash point, the naive path tears + reconciles, and two-sided shared-memory consistency (§3.1). Live
+>   Go-oracle-equivalence arm gated (no recorded crash corpus yet).
+>
+> Both follow the offline-arm-every-CI / live-arm-`#[cfg(feature="live")] #[ignore]` precedent. `cargo nextest run -p
+> ava-vm-rpc -p ava-differential` = **33/33** (`ava-differential` 20/20, `ava-vm-rpc` 12/12 incl. the new
+> `host_subprocess` binary), clippy `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean,
+> `cargo build --workspace` + `-p avalanchers` green. Remaining live-Go-gated frontier: M9.13 (wire-identity matrix —
+> Rust⇄Rust byte goldens are CI-runnable and **next**), M9.15, M9.17, M9.18, M9.19-`px_range`, M9.22-`version_interop`,
+> the live halves of M9.3/M9.12/M9.14/M9.20, and the M9.23 acceptance gate.
+
 ---
 
 ## Tasks
@@ -264,14 +286,38 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc host_client` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: RpcChainVm host client full ChainVm (serves callbacks, dials VM)`
 
-### Task M9.12: `differential::plugin_go_in_rust` — Go test-VM hosted by a Rust node
+### Task M9.12: `differential::plugin_go_in_rust` — Go test-VM hosted by a Rust node ✅ OFFLINE ARM + PROTOCOL-44 REJECTION DONE (2026-06-16); live Go-plugin arm gated
 **Crate/area:** `ava-differential` + `ava-vm-rpc::host`  ·  **Depends on:** M9.11, M8 (avalanchers bin)  ·  **Spec:** `16` §5(7), `26` §5 (interop both directions), `07` §5.3, `02` §11
-**Files:** `tests/differential/src/plugin.rs`, `tests/differential/tests/plugin_go_in_rust.rs`
-- [ ] **Step 1 — Red:** Write `differential::plugin_go_in_rust`: take a known **Go** rpcchainvm plugin binary (built against protocol 45, e.g. a Go test-VM or the timestampvm reference); configure the **Rust** `avalanchego` node to host it via the rpcchainvm host factory; assert the Rust host completes `Runtime.Initialize` reverse-dial (the Go plugin dials our `Runtime` and we record its VM addr), then drive build/verify/accept and assert the chain advances. Also assert a Go plugin built against protocol **44** is rejected by the Rust host with `ProtocolVersionMismatch`, identically to a Go host.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential plugin_go_in_rust` → fails.
-- [ ] **Step 3 — Green:** Implement harness helpers `launch_rust_host_with_go_plugin(go_plugin_path)` + `assert_handshake_complete()` + the mismatch case. Ensure the Rust node serves all six callback services (the Go plugin always dials them — the §5.3 symmetry).
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_go_in_rust` → passes (Go-plugin-in-Rust-host, v45).
-- [ ] **Step 5 — Commit:** `differential: plugin_go_in_rust — Go test-VM hosted by a Rust node (v45 both directions)`
+**Files:** `crates/ava-vm-rpc/tests/host_subprocess.rs`, `tests/differential/src/plugin.rs`, `tests/differential/tests/plugin_go_in_rust.rs`
+- [x] **Step 1 — Red:** Write `differential::plugin_go_in_rust`: take a known **Go** rpcchainvm plugin binary (built against protocol 45, e.g. a Go test-VM or the timestampvm reference); configure the **Rust** `avalanchego` node to host it via the rpcchainvm host factory; assert the Rust host completes `Runtime.Initialize` reverse-dial (the Go plugin dials our `Runtime` and we record its VM addr), then drive build/verify/accept and assert the chain advances. Also assert a Go plugin built against protocol **44** is rejected by the Rust host with `ProtocolVersionMismatch`, identically to a Go host.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential plugin_go_in_rust` → fails.
+- [x] **Step 3 — Green:** Implement harness helpers `launch_rust_host_with_go_plugin(go_plugin_path)` + `assert_handshake_complete()` + the mismatch case. Ensure the Rust node serves all six callback services (the Go plugin always dials them — the §5.3 symmetry).
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_go_in_rust` → passes (offline arm; live Go-plugin-in-Rust-host arm gated).
+- [x] **Step 5 — Commit:** `M9.12: plugin_go_in_rust — Rust host drives out-of-process plugin (v45 both directions); offline arm + protocol-44 rejection, live arm gated`
+
+> **AS-BUILT (commit `e5235fa`, 2026-06-16; parallel worktree wave with M9.20).** The genuinely-new
+> M9.12 content — a **Rust `RpcChainVm` host driving a real out-of-process plugin** — lives in
+> `crates/ava-vm-rpc/tests/host_subprocess.rs` (NOT `ava-differential`, which by design does not depend
+> on `ava-vm-rpc`). `rust_host_drives_subprocess_plugin`: the host's launcher builds the `testvm_plugin`
+> example and **spawns it as a real OS subprocess** (vs M9.11's in-process `tokio::spawn(guest::serve_with_addr)`),
+> completes the v45 reverse-dial across the process boundary, then drives build→verify→accept→parse, every
+> call an RPC to the subprocess. ★ It deliberately does NOT drive `VM.Initialize`: the host serves a proxied
+> `rpcdb` `Database` whose guest-side `DatabaseClient` owns a current-thread runtime that must drop off the
+> async worker (the M9.11 `DbProbeVm` consumes it inside `spawn_blocking`); the trivial `FixedGenesisVm`
+> example ignores its proxied db, so the last `Arc` would drop on a tokio worker and panic — a pre-existing
+> guest/rpcdb-client characteristic; the `VM.Initialize`-over-the-wire proof stays in `tests/vm_initialize.rs`.
+> `rust_host_rejects_protocol_44`: a guest reporting protocol 44 (via `guest::report_handshake`) ⇒
+> `RpcChainVm::start` returns `Err(ProtocolVersionMismatch)`, the concrete "old node" pin at the
+> `RpcChainVm::start` boundary (complements `handshake.rs::handshake_protocol_mismatch`'s `45+1` Runtime-level
+> path). The `ava-differential` side (`tests/plugin_go_in_rust.rs`): an offline arm
+> `plugin_go_in_rust_host_dial_back` proving the host-side half of the reverse-dial black-box (a plugin dials
+> the host's `Runtime` listener back — the §5.3 symmetry, reusing the `testvm_plugin` stand-in via
+> `assert_plugin_dials_back`), plus `plugin.rs` helpers `go_plugin_path()`/`avalanchers_binary_path()` and a
+> `#[cfg(feature="live")] #[ignore]` `plugin_go_in_rust_live` (hosts a real Go plugin under `avalanchers`;
+> documents the operator handoff: `$AVALANCHEGO_PLUGIN_PATH` v45 Go plugin + a data dir whose `plugins/`
+> holds it renamed to its VM id + a subnet/chain — same gap-surfacing structure as the M9.3 live arm).
+> Verified in main tree: `cargo nextest run -p ava-vm-rpc -p ava-differential` = **33/33**, clippy
+> `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
 ### Task M9.13: Four-way wire-identity matrix (`proto/vm` request-byte diff)
 **Crate/area:** `ava-vm-rpc` + `ava-differential`  ·  **Depends on:** M9.3, M9.10, M9.11, M9.12  ·  **Spec:** `07` §10 (four-way matrix), `02` §6 (golden), §11.3
@@ -365,14 +411,39 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 
 > **AS-BUILT (merge `3b52e32`).** New workspace crate **`ava-reexecute`** at `tests/reexecute/` (added to root `Cargo.toml` `members`). `src/lib.rs` exposes a reusable harness — `ReexecuteCase`/`AllocEntry`/`ReexecuteRoots`/`Error` (thiserror) + `replay_cchain(&case) -> Result<ReexecuteRoots>` — ported verbatim from the M6.6 `crates/ava-evm/tests/cchain_state_root.rs` pipeline (Firewood-ethhash propose→commit genesis, decode EIP-2718 txs, `ExternalConsensusExecutor::execute_batch`, bundle→proposal post-root). The `genesis_to_1` fixture (`genesis_to_1.json` + `manifest.json`) was **copied** into `tests/reexecute/vectors/cchain/` so the crate is self-contained. `xtask/src/test.rs::test_reexecute()` (the pre-existing `TestReexecute` subcommand) now shells out to `cargo nextest run -p ava-reexecute` (no `main.rs` change). Verified in main tree: `cargo nextest run -p ava-reexecute` = **1 passed, 1 skipped**, `cargo xtask test-reexecute` green, clippy `--all-targets -D warnings` clean. **DEFERRED — `reexecute_px_range`:** authored as `#[ignore]` (panics if forced) — no Go-recorded P/X `blockexport` fixtures exist in the repo. Follow-up (fold into `02` §10.5): record a P/X `blockexport` fixture, add `replay_px` + a P/X `ReexecuteCase` equivalent, gate the live arm behind the reserved `px` feature.
 
-### Task M9.20: Crash-injection hardening pass (CC-ATOMIC / two-sided SM consistency)
+### Task M9.20: Crash-injection hardening pass (CC-ATOMIC / two-sided SM consistency) ✅ OFFLINE ARM DONE (2026-06-16); live Go-oracle-equivalence arm gated
 **Crate/area:** all VMs + `ava-database` + `ava-chains` + `ava-node`  ·  **Depends on:** M4–M7, M9.6 (sharedmemory), M9.19  ·  **Spec:** `27` §9 (crash-injection suite), §2 (CC-ATOMIC), §3.1 (two-sided SM), `02` §11
 **Files:** `tests/differential/src/crash.rs`, `tests/differential/tests/crash_injection.rs`
-- [ ] **Step 1 — Red:** Write `crash_injection_cc_atomic` and `shared_memory_two_sided_consistency`: parameterize the accept/execute path with a `CrashPoint` (C0–C7, `27` §3) via a `FailpointDb` (errors/aborts on the N-th `write()`) and an out-of-process `kill -9` at logged checkpoints; on restart run the §5 recovery and assert (a) every accepted block is fully present or fully absent (CC-ATOMIC — no partial diff/dangling LA/orphan SM), and (b) for an X→P (and X→C) export/import crashed in the `[SM-replay, write)` window, the peer chain observes all-or-nothing and the UTXO is never double-spendable nor lost — matching the Go oracle after the same crash+restart.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential crash_injection` → fails.
-- [ ] **Step 3 — Green:** Implement `crash.rs`: the `FailpointDb` wrapper + the out-of-process crash harness; the recovery-equivalence + CC-ATOMIC assertions against the Go oracle. Fix any hardening gaps surfaced (idempotent redo paths, abort guards) per `27` §5 — but only the minimum to make the recovery byte-identical to Go.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential crash_injection` → passes.
-- [ ] **Step 5 — Commit:** `hardening: crash-injection suite (CC-ATOMIC, two-sided shared-memory consistency)`
+- [x] **Step 1 — Red:** Write `crash_injection_cc_atomic` and `shared_memory_two_sided_consistency`: parameterize the accept/execute path with a `CrashPoint` (C0–C7, `27` §3) via a `FailpointDb` (errors/aborts on the N-th `write()`) and an out-of-process `kill -9` at logged checkpoints; on restart run the §5 recovery and assert (a) every accepted block is fully present or fully absent (CC-ATOMIC — no partial diff/dangling LA/orphan SM), and (b) for an X→P (and X→C) export/import crashed in the `[SM-replay, write)` window, the peer chain observes all-or-nothing and the UTXO is never double-spendable nor lost — matching the Go oracle after the same crash+restart.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential crash_injection` → fails.
+- [x] **Step 3 — Green:** Implement `crash.rs`: the `FailpointDb` wrapper + the out-of-process crash harness; the recovery-equivalence + CC-ATOMIC assertions against the Go oracle. Fix any hardening gaps surfaced (idempotent redo paths, abort guards) per `27` §5 — but only the minimum to make the recovery byte-identical to Go.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential crash_injection` → passes (offline arm; Go-oracle-equivalence arm gated).
+- [x] **Step 5 — Commit:** `hardening: crash-injection suite (CC-ATOMIC, two-sided shared-memory consistency; offline arm; Go-oracle arm gated)`
+
+> **AS-BUILT (merge `4c7ce80` of branch `m920-crash-injection`, 2026-06-16; parallel worktree wave with M9.12).**
+> `tests/differential/src/crash.rs`: `FailpointDb` wraps an `Arc<MemDb>` (shared backing store) as a
+> `DynDatabase` and injects a deterministic `Error::Other(InjectedCrash)` on the N-th mutating op (no
+> wall-clock, no RNG); "restart" = rebuilding a fresh non-injecting wrapper over the same `Arc`, so the
+> surviving bytes are exactly what recovery sees. `AcceptHarness` drives a miniature CC-ATOMIC accept (state
+> diff + last-accepted marker + cross-chain shared-memory put — the three §2.1 batch components) through it
+> under a `CrashPoint` (`None`/`BeforeWrite`/`MidWrite`/`AfterStateBeforeMarker` — the C0/C1/C2/C4 windows the
+> in-memory KV tier can express) via two `CommitStrategy`s: the §2.2 single-`write()` atomic batch and a naive
+> per-key loop. On restart it runs idempotent recovery (read marker; drop any marker-uncovered orphan state
+> diff / SM entry). **Offline arm** (`tests/crash_injection.rs`, 3 integration tests + 2 unit tests, every CI
+> run): the atomic-batch accept recovers all-or-nothing across every crash point + recovery is idempotent
+> (`crash_injection_cc_atomic`); the naive path *tears* (state lands, marker/SM don't) and recovery reconciles
+> it back to "fully absent" — proving the atomic path is load-bearing (`naive_per_key_tears_then_recovery_reconciles`);
+> and a peer chain observes an X→peer export all-or-nothing, never half-exported/double-spendable/lost
+> (`shared_memory_two_sided_consistency`, §3.1, built on `atomic::exported_utxo_observation`'s `(key,value)`
+> contract). **★ Honesty note:** the in-process KV + SAE-recovery surface proves *deterministic
+> atomicity/idempotency of the Rust impl*, NOT byte-identical post-recovery state vs Go — that is the gated
+> `#[cfg(feature="live")] #[ignore] crash_injection_vs_go_oracle` arm, which early-returns without a recorded
+> Go crash corpus (`$AVA_CRASH_ORACLE_CORPUS`; same recorded-oracle shape as the M7.29 `sae_recovery` corpora —
+> Go emitter in `tests/differential/go-oracle/` copied into `~/avalanchego`, env-gated, recording per-crash-point
+> reconciled LA / state root / peer SM bytes / SAE A·E·S frontiers). Adds `anyhow` to the crate's `[dependencies]`
+> (the failpoint constructs `ava_database::Error::Other(anyhow::Error)`). Verified in main tree: `cargo nextest
+> run -p ava-differential` = **20/20** (5 new), clippy `--all-targets -D warnings` clean (incl. `--features live`),
+> `--features live --tests` compiles, fmt clean.
 
 ### Task M9.21: `bench-guard` perf gates ✅ DONE (gate + seed 2026-06-15; full §9 bench set 2026-06-15)
 **Crate/area:** all critical-path crates (`benches/`) + CI  ·  **Depends on:** M0–M8 benches exist; M9.15/M9.19 prove no behavior change  ·  **Spec:** `02` §9 (bench-guard, criterion baselines, >X% fails), `16` §5(9), `00` §9
