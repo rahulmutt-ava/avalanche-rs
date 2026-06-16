@@ -1647,14 +1647,24 @@ dependencies = [
 name = "ava-reexecute"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "ava-avm",
+ "ava-crypto",
  "ava-database",
  "ava-evm",
  "ava-evm-reth",
+ "ava-secp256k1fx",
+ "ava-snow",
+ "ava-types",
+ "ava-version",
+ "ava-vm",
  "hex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

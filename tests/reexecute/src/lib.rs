@@ -17,8 +17,16 @@
 //! `BundleState` into a Firewood proposal, and asserts both the genesis and the
 //! post-state roots equal the Go-recorded values.
 //!
-//! The P/X leg has no recorded `blockexport` fixtures in the repo yet — see the
-//! crate's `tests/PORTING.md` for the deferral.
+//! The P/X leg ([`replay_xchain`]) has no Go-recorded `blockexport` fixture in the
+//! repo yet, so — exactly as the C-Chain leg's `genesis_to_1` is a synthetic
+//! fixture run through the real EVM pipeline — it builds a synthetic-but-real
+//! case: a seed-derived chain of X-Chain `BaseTx` issuances driven through the
+//! REAL `ava-avm` VM/block pipeline, capturing the deterministic post-state digest
+//! and chain-tip id. The property proven is determinism / reproducibility (two
+//! replays of the same case yield identical roots), not Go-oracle parity; see
+//! `tests/PORTING.md` for the precise as-built / deferred boundary.
+
+pub mod xchain;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -53,6 +61,9 @@ pub enum Error {
     /// Driving `execute_batch` over the recorded block failed.
     #[error("execute: {0}")]
     Execute(String),
+    /// Driving the X-Chain (`ava-avm`) VM/block reexecute pipeline failed.
+    #[error("xchain: {0}")]
+    Xchain(String),
 }
 
 /// Result alias for the harness.
@@ -257,3 +268,5 @@ pub fn replay_cchain(case: &ReexecuteCase) -> Result<ReexecuteRoots> {
         post: post_root,
     })
 }
+
+pub use xchain::{XchainReexecuteRoots, replay_xchain};

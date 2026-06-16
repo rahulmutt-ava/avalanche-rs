@@ -30,6 +30,23 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 tempfile = "3"
 thiserror = { workspace = true }
+# The X-Chain reexecute leg ([`replay_xchain`]) drives the REAL `ava-avm` VM/block
+# pipeline (seed genesis state → admit txs → build → verify → accept) from a fixed
+# seed and captures the deterministic post-state digest + chain-tip id (the
+# X-Chain has no merkle state, so the "root" is sha256 over the sorted final UTXO
+# set). It mirrors the `ava-differential` `xchain` collector, so it links the same
+# `ava-avm` VM + tx/state/fx types, the engine-facing VM-framework traits, and the
+# sha256 helper. None of these depend on `ava-reexecute` (no dependency cycle).
+ava-avm = { path = "../../crates/ava-avm" }
+ava-vm = { path = "../../crates/ava-vm" }
+ava-secp256k1fx = { path = "../../crates/ava-secp256k1fx" }
+ava-snow = { path = "../../crates/ava-snow" }
+ava-types = { path = "../../crates/ava-types" }
+ava-version = { path = "../../crates/ava-version" }
+ava-crypto = { path = "../../crates/ava-crypto" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+tokio-util = { workspace = true }
 
 [lints]
 workspace = true
