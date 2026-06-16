@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod atomic;
+pub mod crash;
 pub mod driver;
 pub mod network;
 pub mod observation;

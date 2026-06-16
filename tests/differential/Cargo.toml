@@ -27,6 +27,9 @@ interop = [  ]
 live = [  ]
 
 [dependencies]
+# The M9.20 crash-injection harness (`crash.rs`) constructs the `ava-database`
+# `Error::Other(anyhow::Error)` failpoint error, so it needs `anyhow` directly.
+anyhow = { workspace = true }
 arbitrary = { workspace = true }
 # The `xchain` collector (M5.22) drives the REAL X-Chain VM/block pipeline to
 # produce a normalized `Observation`, so the lib links the `ava-avm` VM + its
