@@ -1,0 +1,90 @@
+# Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+# See the file LICENSE for licensing terms.
+#
+# determinism-allowlist.toml — file+symbol suppressions for `cargo xtask
+# lint-determinism` (specs/24 PART A, tier X / X.19).
+#
+# Entries are matched by repo-relative `file` suffix + `symbol` substring (and an
+# optional `hazard` number). Prefer file+symbol granularity over line numbers
+# (line numbers churn across edits). Every entry MUST have a non-empty `reason`.
+#
+# These are all config / bootstrap / display / clock-implementation reads — they
+# never feed consensus block content, so they are determinism-safe.
+#
+# NOTE: `crates/ava-platformvm/src/vm.rs` `build_block`'s `SystemTime::now()` is
+# DELIBERATELY NOT allowlisted — it is the genuine hazard-#5 violation called out
+# in specs/24 (M9.19 as-built gap), fixed by the parallel clock-injection task.
+# (Two further build-block sites — ava-avm and ava-evm — surfaced during this
+# audit and are also left un-allowlisted as genuine findings; see TASK_REPORT_B.)
+
+[[allow]]
+file = "crates/ava-version/src/compatibility.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "RealClock default-clock fallback for the compatibility schedule; startup config read, not block content."
+
+[[allow]]
+file = "crates/ava-wallet/src/options.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "Wallet tx-options default (issuance-time hint); client-side, off the node consensus path."
+
+[[allow]]
+file = "crates/ava-genesis/src/config.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "Genesis build-time default at node startup; not part of any accepted block's content."
+
+[[allow]]
+file = "crates/ava-genesis/src/validate.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "Genesis validation 'now' bound at startup; rejects far-future genesis, off the block path."
+
+[[allow]]
+file = "crates/ava-genesis/src/bootstrappers.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "Bootstrapper-list seed/timestamp at startup; networking bootstrap, not consensus content."
+
+[[allow]]
+file = "crates/ava-saevm/gasprice/src/config.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "system_clock() factory — the wall-clock Clock implementation injected elsewhere (the allowed clock seam)."
+
+[[allow]]
+file = "crates/ava-saevm/cchain/src/vm.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "SystemTime::now passed as the injected clock fn-ptr into CoreVm (wiring of the clock seam, not a direct read)."
+
+[[allow]]
+file = "crates/ava-logging/src/rolling.rs"
+symbol = "Local::now"
+hazard = 5
+reason = "Log-file rotation backup timestamp; display/IO only, never consensus content."
+
+[[allow]]
+file = "crates/ava-logging/src/format.rs"
+symbol = "Utc::now"
+hazard = 5
+reason = "Log-line timestamp formatting; display only, never consensus content."
+
+[[allow]]
+file = "crates/ava-api/src/health/mod.rs"
+symbol = "Utc::now"
+hazard = 5
+reason = "Health-check result timestamp for the health API response; display/reporting, not block content."
+
+[[allow]]
+file = "crates/ava-network/src/peer/ip_signer.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "SystemClock — a Clock trait implementation (the allowed wall-clock seam, like RealClock), not an ambient read."
+
+[[allow]]
+file = "crates/ava-validators/src/manager.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "Coarse OS-entropy seed for poll sampling; explicitly off the consensus-decision path (specs/06 §6.2)."

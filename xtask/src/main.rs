@@ -14,18 +14,27 @@
 
 #![forbid(unsafe_code)]
 
+// These crates are used only by the library target (`lint_determinism`); the
+// binary links the lib but does not reference them directly. Acknowledge them so
+// `unused_crate_dependencies` stays quiet under `-D warnings`.
+use proc_macro2 as _;
+use serde as _;
+use syn as _;
+use toml as _;
+use walkdir as _;
+
 mod acceptance;
 mod bench_guard;
 mod check_sae_lints;
 mod gen_flags;
 mod gen_genesis;
-mod lint_determinism;
 mod porting;
 mod saevm_exit_gate;
 mod test;
 mod vectors;
 
 use clap::{Parser, Subcommand};
+use xtask::lint_determinism;
 
 /// avalanche-rs repo automation (mirrors Taskfile.yml; specs/01 §5).
 #[derive(Parser)]
@@ -70,7 +79,12 @@ enum Command {
     /// Aggregate the per-crate PORTING.md matrices into one report.
     PortingReport,
     /// Determinism-audit AST pass (wall-clock / HashMap-in-codec / RNG bans).
-    LintDeterminism,
+    LintDeterminism {
+        /// Scan this directory (recursively) instead of the workspace `crates/`.
+        /// Useful for hermetic/fixture runs; the TOML allowlist still applies.
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+    },
     /// Structural guard for the SAE stricter-lint bar (forbid-unsafe / pedantic
     /// / arithmetic_side_effects on the ava-saevm crates).
     CheckSaeLints,
@@ -109,7 +123,7 @@ fn main() -> anyhow::Result<()> {
         Command::TestUpgrade => test::test_upgrade(),
         Command::Vectors { action } => vectors::run(action),
         Command::PortingReport => porting::report(),
-        Command::LintDeterminism => lint_determinism::run(),
+        Command::LintDeterminism { path } => lint_determinism::run(path.as_deref()),
         Command::CheckSaeLints => check_sae_lints::run(),
         Command::GenFlags => gen_flags::run(),
         Command::SaevmExitGate => saevm_exit_gate::run(),
