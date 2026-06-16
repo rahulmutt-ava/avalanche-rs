@@ -15,9 +15,13 @@
 //!   `ava-version` owns match Go field-for-field, plus the version-string
 //!   display goldens (`specs/26` §9(1)/(2)).
 //!
-//! The FOURTH M9.22 test, `differential::version_interop`, needs a LIVE mixed
-//! Go+Rust network and is DEFERRED — see the `version_interop_deferred` note at
-//! the bottom of this file and `tests/PORTING.md`.
+//! The FOURTH M9.22 test, `differential::version_interop`, lives in
+//! `tests/differential/tests/version_interop.rs` (it must not live here: a T0
+//! primitive crate like `ava-version` may not depend on
+//! `ava-differential`/`ava-network`/`ava-api`). Its OFFLINE arm — driving this
+//! crate's real `Compatibility` over the mixed-net peer set — now exists; only
+//! the LIVE two-binary drop arm remains gated. See the `version_interop_deferred`
+//! note at the bottom of this file and `tests/PORTING.md`.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -326,24 +330,28 @@ mod golden_reply {
     }
 }
 
-// ─── differential::version_interop — DEFERRED ───────────────────────────────────
+// ─── differential::version_interop — moved out of this crate ────────────────────
 //
-// The fourth M9.22 test, `differential::version_interop` (`specs/26` §9(4)),
-// requires a LIVE mixed Go+Rust network: a Rust node and a Go node on the same
-// local network complete the P2P handshake, the Go node logs the Rust peer's
-// version as `avalanchego/1.14.2`, and a node whose numeric triple is lowered
-// below the other's floor is dropped — in both directions.
+// The fourth M9.22 test, `differential::version_interop` (`specs/26` §9(4)), now
+// lives in `tests/differential/tests/version_interop.rs` — it must NOT live here
+// (a T0 primitive crate like `ava-version` may not depend on
+// `ava-differential`/`ava-network`/`ava-api`).
 //
-// This is DEFERRED until the mixed-network harness lands in M9.14 (the
-// `ava-differential` network harness is currently a ~35-line scaffold). It does
-// NOT belong in `ava-version` (a T0 primitive crate that must not depend on
-// `ava-differential`/`ava-network`/`ava-api`); it will live in
-// `tests/differential/tests/version_interop.rs`. Tracked in `tests/PORTING.md`.
+// Its OFFLINE arm (`version_interop_floor_decisions`) is COMPLETE: it drives this
+// crate's real `Compatibility` over the M9.14 mixed-net `BinaryMix`/`NodeIdentity`
+// peer set with a `MockClock` straddling the fork boundary, asserting the
+// §9(4)/§9(3) connectivity decisions (below-floor drop, at/above-floor accept,
+// the moving floor flipping a borderline peer, and Go-vs-Rust symmetry).
+//
+// The LIVE two-binary drop arm (boot a mixed Go+Rust net, lower a node below the
+// other's floor, assert the drop in both directions) remains gated behind that
+// crate's `live` feature + `#[ignore]`. Tracked in `tests/PORTING.md`.
 
 #[test]
-#[ignore = "DEFERRED to M9.14: needs the live mixed Go+Rust network harness; \
-            lives in tests/differential/tests/version_interop.rs, not ava-version"]
+#[ignore = "MOVED: differential::version_interop offline arm now lives in \
+            tests/differential/tests/version_interop.rs (version_interop_floor_decisions); \
+            the live two-binary drop arm there stays #[cfg(feature=\"live\")] + #[ignore]"]
 fn version_interop_deferred() {
-    // Intentionally empty: documents the deferral as an #[ignore]d stub so it
-    // shows up in `cargo nextest run --ignored` inventory.
+    // Intentionally empty: documents (in `cargo nextest run --ignored` inventory)
+    // that the real test moved to tests/differential, off this T0 crate.
 }
