@@ -117,6 +117,19 @@ grep, and human review:
 > `ava-engine`, `ava-proposervm`, `ava-validators`, the `ava-*vm` crates, or
 > `ava-utils` sampler/clock.
 
+> **Known as-built gap (hazard #5, discovered M9.19 2026-06-16e).** `ava-platformvm`'s
+> block builder reads the wall clock directly (`PlatformVm::build_block` →
+> `SystemTime::now()` at `crates/ava-platformvm/src/vm.rs`) rather than through an
+> injected `Arc<dyn Clock>` — a real violation of hazard #5 not yet caught by the
+> (still-unbuilt) `lint-determinism` xtask. The consequence is concrete: the P-Chain
+> reexecute leg cannot deterministically advance virtual time to a staker's `end_time`,
+> so its height ≥ 1 arm uses the **decision-tx / standard-block** route (a `CreateSubnetTx`
+> at the future-pinned genesis time, which `verify_standard` accepts with no future-time
+> bound) instead of the reward-proposal route. **Follow-up:** thread `Arc<dyn Clock>`
+> into `PlatformVm` (mirroring the Fx, which already takes one) so the builder reads
+> `self.clock.now()`; this unlocks the reward-proposal height path and a `bootstrapped:true`
+> credential-verifying P-Chain replay (`plan/M9` §M9.19 as-built).
+
 ---
 
 ## PART B — Clock / time abstraction
