@@ -80,12 +80,13 @@ fn reexecute_pchain_range() {
         first.last_accepted_id, [0u8; 32],
         "chain-tip block id must be a real (non-zero) 32-byte id"
     );
-    // The honestly-reached floor: the builder declines at genesis, so the chain
-    // tip is the accepted genesis block (height 0). This documents exactly what the
-    // real pipeline reaches today (the height >= 1 arm is the follow-up).
+    // The funded, signed `CreateSubnetTx` admitted through the `mempool_add` seam
+    // packs into a height-1 `BanffStandardBlock`, which verifies + accepts against
+    // the future-pinned genesis time. The chain tip is therefore the accepted
+    // standard block at height 1.
     assert_eq!(
-        first.last_accepted_height, 0,
-        "the builder declines at genesis today, so the chain tip is the genesis block (height 0)"
+        first.last_accepted_height, 1,
+        "the admitted CreateSubnetTx produces + accepts a height-1 standard block"
     );
 
     // A different case (different seed) must (with overwhelming probability) produce

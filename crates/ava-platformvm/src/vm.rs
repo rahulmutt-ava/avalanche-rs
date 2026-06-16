@@ -251,6 +251,27 @@ impl PlatformVm {
         Ok(read(mgr.state()))
     }
 
+    /// **Test helper** — admit `tx` to the (un-shared) decision-tx mempool.
+    ///
+    /// Production admission flows through the gossip handler
+    /// ([`crate::network::TxGossipHandler`]) or the not-yet-wired `issueTx` RPC
+    /// (see [`DeferredIssuer`]); this is the direct seam the reexecute harness
+    /// (M9.19 `replay_pchain`) uses to drive a funded, signed `CreateSubnetTx`
+    /// into a height-1 standard block. The P-Chain mirror of
+    /// [`ava_avm::vm::AvmVm::mempool_add`] — but the mempool is a field on
+    /// [`PlatformVm`] itself (not in [`Shared`]), so this locks `self.mempool`.
+    ///
+    /// # Errors
+    /// Maps a mempool rejection (duplicate / full / conflict) to a descriptive
+    /// [`Error::Service`] — callers in tests treat any error as fatal.
+    #[doc(hidden)]
+    pub fn mempool_add(&self, tx: crate::txs::Tx) -> Result<()> {
+        self.mempool
+            .lock()
+            .add(tx)
+            .map_err(|e| Error::Service(format!("mempool add: {e}")))
+    }
+
     /// Builds the executor [`Backend`] from the chain context (read-only-sync
     /// subset; the full per-network staking/fee config is M8/`ava-genesis`).
     fn backend(ctx: &ChainContext) -> Backend {

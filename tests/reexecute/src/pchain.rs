@@ -11,33 +11,33 @@
 //! [`replay_xchain`](crate::replay_xchain): just as `genesis_to_1` is a synthetic
 //! fixture run through the real EVM pipeline, this builds a seed-derived P-Chain
 //! genesis and runs it through the genuine VM execution path (parse + seed genesis
-//! state → `build → set_preference → verify → accept` until the VM declines).
+//! state → admit a decision tx → `build → set_preference → verify → accept`).
 //!
-//! ## What is reached (and what is NOT) — the honest pipeline floor
+//! ## What is reached — a height-1 accepted standard block (M9.19)
 //!
-//! Unlike the X-Chain leg, the P-Chain mempool is **un-shared** on `PlatformVm`
-//! (`vm.rs` ~line 166: "RPC issuance not yet wired") — there is no public seam to
-//! admit a decision tx, and admitting one without patching the VM was deliberately
-//! avoided. The only height-advancing control flow reachable WITHOUT a decision tx
-//! is the builder's reward-proposal path (`getNextStakerToReward` →
-//! `BanffProposalBlock`/`RewardValidatorTx`), but that path is itself **not yet
-//! reachable through genesis seeding**: `genesis::seed_state` records the genesis
-//! validator as a current *staker* but does NOT store its tx in the tx store, so
-//! the reward executor's `staker_tx_resolver` (`state.GetTx`) returns
-//! `database: ErrNotFound` on verify (a latent gap in the genesis ⇄ staker-reward
-//! wiring — the M4.24 reward-wiring follow-up — NOT something this test should
-//! paper over by patching production genesis behaviour). See `tests/PORTING.md`.
+//! The P-Chain mempool is **un-shared** on `PlatformVm` (a field on the VM, not in
+//! `Shared`), so it is admitted through the dedicated public test seam
+//! [`PlatformVm::mempool_add`](ava_platformvm::vm::PlatformVm::mempool_add) (the
+//! P-Chain mirror of `ava_avm::vm::AvmVm::mempool_add`). This leg `initialize`s the
+//! VM over a seed-derived genesis (parse → `seed_state` → genesis block), admits a
+//! funded, signed [`CreateSubnetTx`] spending the genesis UTXO `U0`, then drives one
+//! `build → set_preference → verify → accept` cycle. The builder packs the admitted
+//! decision tx into a [`BanffStandardBlock`](ava_platformvm::block::banff) at height
+//! 1; with the genesis chain time pinned FAR in the FUTURE (so `now < parent_ts`,
+//! the X-Chain leg's clock-pinning trick), `verify_standard` resolves the block
+//! timestamp to the fixed genesis time (no future-time bound, no staker-change cap),
+//! so the block verifies + accepts cleanly and wall-clock-independently. The chain
+//! tip is therefore the accepted height-1 standard block. Every step is REAL VM code
+//! (no fabricated/hardcoded root).
 //!
-//! So this leg drives the REAL pipeline to the honestly-reachable floor: it
-//! `initialize`s the VM over a seed-derived genesis (parse → `seed_state` → genesis
-//! block), then calls `build_block`. With the genesis chain time + the validator
-//! period pinned FAR in the FUTURE (so `now < parent_ts`, the X-Chain leg's
-//! clock-pinning trick), `next_block_time` resolves to the fixed genesis time with
-//! no staker-change cap, so the builder declines (`ErrNoPendingBlocks`) — the
-//! genuine terminal state, wall-clock-independent. The chain stays at the accepted
-//! genesis block (height 0). Every step is REAL VM code (no fabricated/hardcoded
-//! root); what is NOT yet reached is a height >= 1 accepted block (blocked on the
-//! decision-tx mempool seam AND the genesis ⇄ reward-resolver gap above).
+//! The driver is bounded by the admitted-tx count (one), NOT "until the builder
+//! declines": the accept-side mempool drain is an un-wired P-Chain follow-up (the
+//! tx would otherwise be re-packed into successive blocks). The reward-proposal
+//! height-advancing path (`getNextStakerToReward` → `RewardValidatorTx`) remains a
+//! separate follow-up — `genesis::seed_state` records the genesis validator as a
+//! current staker but does NOT store its tx, so the reward executor's `GetTx`
+//! resolver returns `database: ErrNotFound` (the M4.24 reward-wiring gap). See
+//! `tests/PORTING.md`.
 //!
 //! The seed varies the genesis state (UTXO amounts/owner, initial supply,
 //! validator stake), so the genesis post-state digest is seed-dependent and a
@@ -50,10 +50,13 @@
 //! X-Chain leg — the reexecute "root" is the deterministic POST-STATE DIGEST: a
 //! `sha256` over the canonically-sorted final UTXO set (enumerated by the genesis
 //! owner address via `State::utxo_ids`), the Primary-Network current supply, and
-//! the chain timestamp, alongside the chain-tip block id + height. Two replays of
-//! the same seed produce byte-identical roots — the determinism / reproducibility
-//! property the recorded-oracle path proves WITHOUT a live Go oracle. The Go
-//! recorded-oracle parity arm (and the height >= 1 accepted-block arm) are the
+//! the chain timestamp, alongside the chain-tip block id + height. After the
+//! admitted `CreateSubnetTx` accepts, `U0` is consumed and a change UTXO (back to
+//! the same seed-derived owner) takes its place, so the digest deterministically
+//! reflects the post-spend UTXO set. Two replays of the same seed produce
+//! byte-identical roots — the determinism / reproducibility property the
+//! recorded-oracle path proves WITHOUT a live Go oracle. The Go
+//! recorded-oracle parity arm is the
 //! follow-ups (see `tests/PORTING.md`).
 
 use std::collections::HashSet;
@@ -74,8 +77,12 @@ use ava_platformvm::txs::base_tx::BaseTx;
 use ava_platformvm::txs::components::{
     BaseTx as AvaxBaseTx, Input, Output, Owner, TransferableInput, TransferableOutput,
 };
+use ava_platformvm::txs::fee::complexity::base_tx_complexity;
+use ava_platformvm::txs::fee::dynamic_calculator::DynamicCalculator;
 use ava_platformvm::txs::validator::Validator;
-use ava_platformvm::txs::{AddPermissionlessValidatorTx, GenesisCodec, Tx, UnsignedTx};
+use ava_platformvm::txs::{
+    AddPermissionlessValidatorTx, Codec, CreateSubnetTx, GenesisCodec, Tx, UnsignedTx,
+};
 use ava_platformvm::vm::{DynDb, PlatformVm};
 use ava_secp256k1fx::{OutputOwners, TransferInput, TransferOutput};
 use ava_snow::ChainContext;
@@ -140,8 +147,9 @@ const BLS_SIG: [u8; 96] = [
 /// real run. The X-Chain leg's clock-pinning trick: because `now < GENESIS_TS`,
 /// `next_block_time` resolves to `max(now, parent_ts) = parent_ts = GENESIS_TS`
 /// with no wall-clock leak, and (with the validator period also future-pinned, see
-/// [`build_genesis`]) no staker-change cap fires — so the builder declines
-/// (`ErrNoPendingBlocks`) at the genesis tip, deterministically across runs.
+/// [`build_genesis`]) no staker-change cap fires — so the height-1 standard block
+/// carrying the admitted decision tx stamps the fixed genesis time and verifies +
+/// accepts deterministically across runs (no future-time bound on standard blocks).
 const GENESIS_TS: u64 = 9_000_000_000;
 
 /// A tiny deterministic bit-mixer (splitmix64 finalizer) — pure, no global state.
@@ -170,9 +178,16 @@ fn owners(seed: u64) -> OutputOwners {
 /// and a fixed PAST end time, an initial supply, and the genesis timestamp. Every
 /// field is a pure function of `seed`, so the marshalled bytes (and thus the
 /// genesis id, block id, and seeded state) are byte-identical across runs.
+/// The seed-derived amount of the first genesis UTXO `U0` (the one the harness
+/// spends via the admitted `CreateSubnetTx`). A pure function of `seed`, so the
+/// builder and the tx-construction path agree on the input amount.
+fn genesis_amount0(seed: u64) -> u64 {
+    (mix(seed) % 900_000_000).saturating_add(100_000_000)
+}
+
 fn build_genesis(seed: u64) -> Result<Genesis> {
     let avax = Id::from(AVAX_ASSET_ID);
-    let amount0 = (mix(seed) % 900_000_000).saturating_add(100_000_000);
+    let amount0 = genesis_amount0(seed);
     let amount1 = (mix(seed.wrapping_add(0xABCD)) % 900_000_000).saturating_add(100_000_000);
     let stake = (mix(seed.wrapping_add(0x5555)) % 1_000_000_000).saturating_add(2_000_000_000);
 
@@ -197,9 +212,9 @@ fn build_genesis(seed: u64) -> Result<Genesis> {
 
     // A single Primary-Network permissionless validator. `start`/`end` are pinned
     // in the FUTURE (start = GENESIS_TS, end = GENESIS_TS + 30 days), so the next
-    // staker-change time is `> parent_ts` and never caps the new-block time — the
-    // builder declines at genesis rather than emitting a (currently un-resolvable)
-    // reward block. Wall-clock-independent and deterministic.
+    // staker-change time is `> parent_ts` and never caps the new-block time, so the
+    // builder packs a standard block (the admitted decision tx) rather than emitting
+    // a (currently un-resolvable) reward block. Wall-clock-independent.
     let node_seed = mix(seed.wrapping_add(0x7777));
     let mut node_bytes = [0u8; 20];
     node_bytes[..8].copy_from_slice(&node_seed.to_be_bytes());
@@ -248,6 +263,63 @@ fn build_genesis(seed: u64) -> Result<Genesis> {
         initial_supply: 360_000_000u64.saturating_mul(1_000_000_000),
         message: "reexecute synthetic genesis".to_string(),
     })
+}
+
+/// The post-Etna dynamic fee charged for a decision tx at the genesis tip.
+///
+/// The executor selects the dynamic calculator (mainnet has Etna active at the
+/// future-pinned [`GENESIS_TS`]) and charges `(complexity · weights) · price`
+/// over the fixed [`base_tx_complexity`]. At the genesis tip the gas excess is
+/// `0`, so `price = 1`; this mirrors `StandardTxExecutor::fee` exactly (the diff
+/// the standard block verifies inherits the parent's zero fee state). Computed
+/// rather than hard-coded so a future fee-regime change is caught here.
+fn create_subnet_fee() -> Result<u64> {
+    DynamicCalculator::from_excess(0)
+        .calculate_fee(base_tx_complexity())
+        .map_err(|e| Error::Pchain(format!("compute create-subnet fee: {e}")))
+}
+
+/// Builds a signed, initialized [`CreateSubnetTx`] spending the seed-derived
+/// genesis UTXO `U0` (`tx_id = EMPTY`, `output_index = 0`, holding `amount0`).
+///
+/// It consumes the full `amount0`, produces a single change output of
+/// `amount0 - fee` back to the same seed-derived owner (so the post-state digest,
+/// which enumerates UTXOs by [`owner_addr`], still reflects it deterministically),
+/// and records a new permissioned subnet owned by that same owner. The harness
+/// runs the executor un-bootstrapped (`PlatformVm::backend` sets
+/// `bootstrapped = false`, never flipped — `set_state(NormalOp)` only records the
+/// phase), so — exactly like the X-Chain leg — the input credential is not
+/// signature-checked; an empty credential keeps the tx byte-deterministic.
+fn create_subnet_tx(seed: u64, amount0: u64) -> Result<Tx> {
+    let avax = Id::from(AVAX_ASSET_ID);
+    let fee = create_subnet_fee()?;
+    let change = amount0
+        .checked_sub(fee)
+        .ok_or_else(|| Error::Pchain("genesis UTXO too small to cover create-subnet fee".into()))?;
+
+    let tx = CreateSubnetTx {
+        base: BaseTx::new(AvaxBaseTx {
+            network_id: NETWORK_ID,
+            blockchain_id: Id::EMPTY,
+            outs: vec![TransferableOutput {
+                asset_id: avax,
+                out: Output::Transfer(TransferOutput::new(change, owners(seed))),
+            }],
+            ins: vec![TransferableInput {
+                tx_id: Id::EMPTY,
+                output_index: 0,
+                asset_id: avax,
+                r#in: Input::Transfer(TransferInput::new(amount0, vec![0])),
+            }],
+            memo: vec![],
+        }),
+        owner: Owner::Secp256k1(owners(seed)),
+    };
+
+    let mut tx = Tx::new(UnsignedTx::CreateSubnet(tx));
+    tx.initialize(Codec())
+        .map_err(|e| Error::Pchain(format!("initialize create-subnet tx: {e}")))?;
+    Ok(tx)
 }
 
 // ---------------------------------------------------------------------------
@@ -313,19 +385,20 @@ fn chain_ctx() -> Arc<ChainContext> {
     })
 }
 
-/// The bound on accepted blocks (defensive — the real control flow declines via
-/// `ErrNoPendingBlocks` well before this; the cap only guards against an
-/// unexpected non-terminating build loop).
+/// The defensive upper bound on the per-admitted-tx build loop (the driver builds
+/// exactly one block per admitted decision tx; this only caps the bound so a future
+/// multi-tx case cannot loop unboundedly).
 const MAX_BLOCKS: usize = 16;
 
 /// Replay a synthetic seed-derived P-Chain reexecute case through the REAL
 /// `ava-platformvm` VM/block pipeline and return its deterministic roots.
 ///
-/// Seeds a seed-derived genesis (two UTXOs + one current validator), then drives
-/// `build → set_preference → verify → accept` until the builder declines
-/// (`ErrNoPendingBlocks`). The returned [`PchainReexecuteRoots`] carries the
-/// chain-tip block id + height and the `sha256` post-state digest over the sorted
-/// final UTXO set + supply + chain time.
+/// Seeds a seed-derived genesis (two UTXOs + one current validator), admits a
+/// funded, signed [`CreateSubnetTx`] spending the genesis UTXO `U0`, then drives one
+/// `build → set_preference → verify → accept` cycle that packs the tx into an
+/// accepted height-1 standard block. The returned [`PchainReexecuteRoots`] carries
+/// the chain-tip block id + height and the `sha256` post-state digest over the
+/// sorted final UTXO set + supply + chain time.
 ///
 /// # Errors
 /// Returns an [`Error::Pchain`] if any VM/codec step fails (build genesis,
@@ -359,22 +432,30 @@ async fn replay_pchain_async(seed: u64) -> Result<PchainReexecuteRoots> {
     .await
     .map_err(|e| Error::Pchain(format!("initialize: {e}")))?;
 
-    // Drive build → set_preference → verify → accept until the builder declines
-    // (`ErrNoPendingBlocks`, surfaced as a VM error). With the genesis time +
-    // validator period future-pinned (see the module docs), the builder declines on
-    // the FIRST call — so the chain stays at the accepted genesis tip (height 0).
-    // The loop is written generally (and capped by `MAX_BLOCKS`) so that, once the
-    // decision-tx mempool seam + genesis⇄reward-resolver wiring land, the same
-    // driver advances height with no change here. No decision txs are issued (the
-    // mempool is un-shared; see the module docs).
-    let mut accepted = 0usize;
-    while accepted < MAX_BLOCKS {
-        let blk = match vm.build_block(&token).await {
-            Ok(blk) => blk,
-            // The builder declined (nothing pending + time need not advance) — the
-            // terminal state. Any other error is fatal.
-            Err(_) => break,
-        };
+    // Admit a funded, signed `CreateSubnetTx` spending the genesis UTXO `U0`
+    // through the `mempool_add` seam BEFORE the build loop. The builder drains the
+    // mempool into a `BanffStandardBlock`; with the genesis time future-pinned the
+    // block verifies + accepts at the genesis timestamp (no future-time bound, no
+    // staker-change cap), advancing the chain to a height-1 standard block.
+    let create_subnet = create_subnet_tx(seed, genesis_amount0(seed))?;
+    vm.mempool_add(create_subnet)
+        .map_err(|e| Error::Pchain(format!("mempool add: {e}")))?;
+
+    // Drive `build → set_preference → verify → accept` once per admitted decision
+    // tx (exactly one here), mirroring the X-Chain leg's bounded driver. The single
+    // call packs the admitted `CreateSubnetTx` into a height-1 `BanffStandardBlock`
+    // that verifies + accepts at the future-pinned genesis time. The loop is bounded
+    // by the admitted-tx count (NOT "until the builder declines"): the accept-side
+    // mempool drain is an un-wired P-Chain follow-up (`vm.rs` build_block: "accepted
+    // txs are removed on accept (a follow-up wires the accept-side drain)"), so the
+    // tx would otherwise be re-packed into successive blocks; `MAX_BLOCKS` only caps
+    // the bound defensively.
+    let admitted = 1usize.min(MAX_BLOCKS);
+    for _ in 0..admitted {
+        let blk = vm
+            .build_block(&token)
+            .await
+            .map_err(|e| Error::Pchain(format!("build_block: {e}")))?;
         let blk_id = blk.id();
         vm.set_preference(&token, blk_id)
             .await
@@ -385,7 +466,6 @@ async fn replay_pchain_async(seed: u64) -> Result<PchainReexecuteRoots> {
         blk.accept(&token)
             .await
             .map_err(|e| Error::Pchain(format!("accept: {e}")))?;
-        accepted = accepted.saturating_add(1);
     }
 
     // Capture the chain-tip block id + height.
@@ -469,6 +549,10 @@ mod tests {
         let a = replay_pchain(42).expect("first replay");
         let b = replay_pchain(42).expect("second replay");
         assert_eq!(a, b, "same case must produce identical roots");
+        assert_eq!(
+            a.last_accepted_height, 1,
+            "the admitted CreateSubnetTx produces an accepted height-1 standard block"
+        );
         assert_ne!(a.state_digest, [0u8; 32], "real post-state digest");
     }
 
