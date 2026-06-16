@@ -8396,6 +8396,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "proc-macro2",
+ "serde",
+ "syn 2.0.117",
+ "toml",
+ "walkdir",
 ]
 
 [[package]]
