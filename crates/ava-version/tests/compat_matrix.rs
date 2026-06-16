@@ -187,8 +187,7 @@ mod golden_json {
     fn compatibility_json_byte_parity() {
         // The crate-relative committed file, read independently of the
         // `include_str!`-embedded copy.
-        let committed_path =
-            concat!(env!("CARGO_MANIFEST_DIR"), "/compatibility.json");
+        let committed_path = concat!(env!("CARGO_MANIFEST_DIR"), "/compatibility.json");
         let committed = std::fs::read_to_string(committed_path)
             .expect("read crates/ava-version/compatibility.json");
 
@@ -200,8 +199,8 @@ mod golden_json {
 
         // (2) The committed file parses (byte-faithful) to the table the code
         //     loads via `rpc_chain_vm_protocol_compatibility()`.
-        let from_code = rpc_chain_vm_protocol_compatibility()
-            .expect("embedded compatibility.json parses");
+        let from_code =
+            rpc_chain_vm_protocol_compatibility().expect("embedded compatibility.json parses");
         let from_file: BTreeMap<String, Vec<String>> =
             serde_json::from_str(&committed).expect("committed compatibility.json parses");
         let from_file_rekeyed: BTreeMap<u32, Vec<String>> = from_file

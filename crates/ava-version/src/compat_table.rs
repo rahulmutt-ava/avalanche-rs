@@ -55,9 +55,9 @@ fn parse_table() -> Result<BTreeMap<u32, Vec<String>>> {
         .map_err(|e| Error::CompatibilityTable(e.to_string()))?;
     raw.into_iter()
         .map(|(k, v)| {
-            let key = k
-                .parse::<u32>()
-                .map_err(|e| Error::CompatibilityTable(format!("non-decimal protocol key {k:?}: {e}")))?;
+            let key = k.parse::<u32>().map_err(|e| {
+                Error::CompatibilityTable(format!("non-decimal protocol key {k:?}: {e}"))
+            })?;
             Ok((key, v))
         })
         .collect()
