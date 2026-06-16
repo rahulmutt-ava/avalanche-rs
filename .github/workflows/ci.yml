@@ -27,6 +27,10 @@ jobs:
       - check_deps_tidy
       - bazel
       - differential
+      - vectors_verify
+      - porting_report
+      - fuzz
+      - bazel_vs_cargo
     runs-on: ubuntu-24.04
     steps:
       - name: Fail unless all needed jobs succeeded
@@ -128,3 +132,39 @@ jobs:
       - name: saevm-exit-gate
         shell: nix develop --command bash -x {0}
         run: ./scripts/run_task.sh saevm-exit-gate
+
+  vectors_verify:
+    name: Golden-vector corpus validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh vectors-verify
+
+  porting_report:
+    name: PORTING.md matrix aggregation (no wip rows)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh porting-report
+
+  fuzz:
+    name: Fuzz smoke (cargo-fuzz, nightly shell)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh test-fuzz
+
+  bazel_vs_cargo:
+    name: Bazel vs Cargo build agreement
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh bazel-vs-cargo
