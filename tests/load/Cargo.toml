@@ -18,5 +18,20 @@ publish = false
 # run every CI run with no feature flag.
 live = [  ]
 
+[dependencies]
+# Per-crate error enums for the metrics parser + live-node driver.
+thiserror = { workspace = true }
+# The live arm boots a node child process and scrapes `/ext/metrics` over a
+# hand-rolled HTTP/1.1 GET on a raw TcpStream (no HTTP-client crate — specs/00
+# §4 "no second crate"). `process`/`net`/`time`/`io-util` drive the live path;
+# they compile in the default build but only run under the gated arm.
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "process", "net", "time", "io-util" ] }
+
+[dev-dependencies]
+# Readable diffs in the offline determinism / SLO assertions.
+pretty_assertions = { workspace = true }
+# `#[tokio::test]` for the gated live arm.
+tokio = { workspace = true, features = [ "rt-multi-thread", "macros", "process", "net", "time", "io-util" ] }
+
 [lints]
 workspace = true

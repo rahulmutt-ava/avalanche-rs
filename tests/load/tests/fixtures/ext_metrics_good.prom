@@ -1,0 +1,50 @@
+# Representative /ext/metrics scrape from a Rust avalanchers node mid-sustained-load.
+# Parity metric names mirror Go (specs/00 §7.3; specs/18 §2). This fixture is a
+# "good" run: throughput is high, issuance->acceptance latency is low, errors 0.
+# HELP avalanche_network_peers Number of network peers
+# TYPE avalanche_network_peers gauge
+avalanche_network_peers 5
+# HELP avalanche_network_times_connected Completed handshakes with a peer
+# TYPE avalanche_network_times_connected counter
+avalanche_network_times_connected 5
+# HELP avalanche_network_msgs Messages sent/received per op
+# TYPE avalanche_network_msgs counter
+avalanche_network_msgs{io="sent",op="put",compressed="false"} 120034
+avalanche_network_msgs{io="received",op="put",compressed="false"} 119980
+# HELP avalanche_network_msgs_bytes Bytes on the wire per op
+# TYPE avalanche_network_msgs_bytes counter
+avalanche_network_msgs_bytes{io="sent",op="put",compressed="false"} 81234567
+avalanche_network_msgs_bytes{io="received",op="put",compressed="false"} 81120000
+# HELP avalanche_handler_messages Messages handled, by op
+# TYPE avalanche_handler_messages counter
+avalanche_handler_messages{chain="C",op="put"} 60017
+avalanche_handler_messages{chain="X",op="put"} 15004
+avalanche_handler_messages{chain="P",op="put"} 15003
+# HELP avalanche_handler_count Messages currently in the queue
+# TYPE avalanche_handler_count gauge
+avalanche_handler_count{chain="C"} 2
+# HELP avalanche_snowman_blks_accepted_count Polls from issuance to acceptance
+# TYPE avalanche_snowman_blks_accepted_count counter
+avalanche_snowman_blks_accepted_count{chain="C"} 9000
+# HELP avalanche_snowman_blks_accepted_sum Time issuance->acceptance (ns)
+# TYPE avalanche_snowman_blks_accepted_sum counter
+avalanche_snowman_blks_accepted_sum{chain="C"} 1800000000000
+# HELP avalanche_api_calls API calls served
+# TYPE avalanche_api_calls counter
+avalanche_api_calls 240000
+# HELP avalanche_evm_blocks C-Chain blocks accepted
+# TYPE avalanche_evm_blocks counter
+avalanche_evm_blocks 9000
+# HELP avalanche_avm_txs_accepted X-Chain txs accepted
+# TYPE avalanche_avm_txs_accepted counter
+avalanche_avm_txs_accepted 15004
+# HELP avalanche_platformvm_txs_accepted P-Chain txs accepted
+# TYPE avalanche_platformvm_txs_accepted counter
+avalanche_platformvm_txs_accepted 15003
+# HELP avalanche_network_send_fail_rate Portion of recently-failed sends
+# TYPE avalanche_network_send_fail_rate gauge
+avalanche_network_send_fail_rate 0
+# Useless-bytes / parse-failure error counters: zero on a clean run.
+# HELP avalanche_network_msgs_failed_to_parse Received msgs that failed to parse
+# TYPE avalanche_network_msgs_failed_to_parse counter
+avalanche_network_msgs_failed_to_parse 0

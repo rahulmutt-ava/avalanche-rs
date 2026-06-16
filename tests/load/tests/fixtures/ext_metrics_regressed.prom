@@ -1,0 +1,24 @@
+# Regressed /ext/metrics scrape: parity metric names are all still present (so a
+# *naming* check passes) but the run is bad — far fewer blocks accepted (low
+# throughput), much higher issuance->acceptance time (high latency), and the
+# parse-failure error counter is non-zero. The SLO logic must FAIL on this.
+avalanche_network_peers 5
+avalanche_network_times_connected 5
+avalanche_network_msgs{io="sent",op="put",compressed="false"} 4001
+avalanche_network_msgs{io="received",op="put",compressed="false"} 3990
+avalanche_network_msgs_bytes{io="sent",op="put",compressed="false"} 2600000
+avalanche_network_msgs_bytes{io="received",op="put",compressed="false"} 2590000
+avalanche_handler_messages{chain="C",op="put"} 2000
+avalanche_handler_messages{chain="X",op="put"} 500
+avalanche_handler_messages{chain="P",op="put"} 500
+avalanche_handler_count{chain="C"} 480
+avalanche_snowman_blks_accepted_count{chain="C"} 300
+# 300 blocks but 9_000_000_000_000 ns total => ~30s avg latency: way over SLO.
+avalanche_snowman_blks_accepted_sum{chain="C"} 9000000000000
+avalanche_api_calls 8000
+avalanche_evm_blocks 300
+avalanche_avm_txs_accepted 500
+avalanche_platformvm_txs_accepted 500
+avalanche_network_send_fail_rate 0.4
+# Non-zero parse failures: the run is NOT error-free.
+avalanche_network_msgs_failed_to_parse 17
