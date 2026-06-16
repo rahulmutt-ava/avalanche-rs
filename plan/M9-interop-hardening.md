@@ -280,6 +280,22 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > *execution* of the live two-binary arms against a running Go node, and the `24`-determinism mock-clock seam on
 > `PlatformVm` (would unlock the reward-proposal height path + `bootstrapped:true` credential-verifying P-Chain replay).
 
+> **WAVE 2026-06-16f (determinism hazard #5 close-out + X.19 lint) MERGED.** Four parallel worktree agents across
+> two sub-waves on disjoint crates, each merged `--no-ff` zero-conflict; re-verified in main tree. This closes the
+> `24`-determinism mock-clock seam the 2026-06-16e banner flagged — for ALL three stateful VMs, not just P-Chain.
+> - **Sub-wave 1 (∥):** (a) `ava-platformvm` — `PlatformVm` gains an injected `Arc<dyn Clock>` (`with_clock` seam,
+>   `RealClock` default), `build_block` reads `self.clock.now()`, and the executor `Fx` shares the same clock; the
+>   M9.19 `replay_pchain` reexecute leg is now **clock-driven via an injected `MockClock`** (no longer leaning on
+>   the genesis-future-pinning trick). (b) `xtask` — the real **X.19 `lint-determinism`** `syn` AST pass replaces
+>   the no-op scaffold (hazards #1/#4/#5/#8 + `determinism-allowlist.toml`); see `plan/X` X.19 as-built.
+> - **Discovery → Sub-wave 2 (∥):** the lint's first workspace-wide run found the SAME hazard in two more builders —
+>   `ava-avm` (`AvmVm::build_block` block timestamp) and `ava-evm` (`EvmVm::build_block` header `time`). Both fixed
+>   by the identical pattern (injected `Arc<dyn Clock>` + `with_clock` seam; X-Chain also shares the clock with its
+>   fx dispatch). `cargo xtask lint-determinism` is now **green workspace-wide and wired into `lint-all`/`lint-all-ci`**.
+> Net: hazard #5 is retired across P/X/C-Chain; the reward-proposal P-Chain height path remains gated on the M4.24
+> reward-wiring (NOT the clock). `ava-platformvm` 150 / `ava-reexecute` 9 / `ava-avm` 203 / `ava-evm` 185 / `xtask`
+> 14 tests green; spec `24` hazard-#5 callout marked RESOLVED + a monotonic-vs-wall-clock refinement recorded.
+
 ---
 
 ## Tasks

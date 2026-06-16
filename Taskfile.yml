@@ -121,7 +121,7 @@ tasks:
 
   lint-all:
     desc: Run all lint checks
-    deps: [lint, lint-saevm, lint-shell, lint-action, lint-single-runtime]
+    deps: [lint, lint-saevm, lint-determinism, lint-shell, lint-action, lint-single-runtime]
     cmds:
       - task: check-yaml-fmt
       - task: deps-tidy
@@ -133,6 +133,7 @@ tasks:
     cmds:
       - task: lint
       - task: lint-saevm
+      - task: lint-determinism
       - task: lint-shell
       - task: lint-action
       - task: lint-single-runtime

@@ -253,6 +253,22 @@
 - [ ] **Step 4 — Confirm green:** `cargo xtask lint-determinism` reports zero findings; `cargo nextest run -E 'test(determinism_repeat)'` passes; `lint-all` green.
 - [ ] **Step 5 — Commit:** `ci: determinism-audit gate (lint-determinism + clock + repeat-N proptest) (M0)`
 
+> **AS-BUILT (2026-06-16f) — core lint-determinism pass LANDED.** `xtask/src/lint_determinism.rs`
+> is now a real `syn`-based AST pass (was a no-op scaffold) covering hazards **#1** (HashMap/HashSet/
+> IndexMap/IndexSet fields on `#[derive(AvaCodec)]` types), **#4** (non-vendored RNG on the sampler +
+> consensus crates), **#5** (wall-clock reads — `SystemTime::now`/`Utc::now`/`Local::now`; monotonic
+> `Instant::now` is deliberately NOT flagged, see `24` §A refinement), and **#8** (bare-`Tau` second
+> arithmetic). Allowlisting is via `xtask/determinism-allowlist.toml` (file+symbol granularity, per-
+> site reason) plus pre-existing inline `// determinism-allow: <reason>` comments. Fixture-driven
+> red→green tests in `xtask/tests/lint_determinism.rs`. **First workspace-wide run found 3 genuine
+> hazard-#5 violations** — `PlatformVm`/`AvmVm`/`EvmVm` `build_block` each stamped block time from
+> `SystemTime::now()` — all three fixed the same wave (injected `Arc<dyn Clock>`); the pass is now
+> **green workspace-wide and wired into `lint-all`/`lint-all-ci`**. The `Clock`/`RealClock`/`MockClock`
+> trait (PART B) was already in `ava-utils`. **STILL DEFERRED (not yet done):** the
+> `clippy::float_arithmetic`/`arithmetic_side_effects = deny` tightening on consensus crates (high
+> fan-out), the `determinism_repeat` N≥16 proptest, and the `.github/PULL_REQUEST_TEMPLATE.md`
+> tick-box checklist.
+
 > **Deepens:** every consensus/codec/VM crate added later is in scope; the PR template checklist applies to any diff touching `ava-codec`/`ava-snow`/`ava-engine`/`ava-proposervm`/`ava-validators`/`ava-*vm`/`ava-utils` (24 §A.2).
 
 ---

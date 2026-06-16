@@ -117,18 +117,32 @@ grep, and human review:
 > `ava-engine`, `ava-proposervm`, `ava-validators`, the `ava-*vm` crates, or
 > `ava-utils` sampler/clock.
 
-> **Known as-built gap (hazard #5, discovered M9.19 2026-06-16e).** `ava-platformvm`'s
-> block builder reads the wall clock directly (`PlatformVm::build_block` →
-> `SystemTime::now()` at `crates/ava-platformvm/src/vm.rs`) rather than through an
-> injected `Arc<dyn Clock>` — a real violation of hazard #5 not yet caught by the
-> (still-unbuilt) `lint-determinism` xtask. The consequence is concrete: the P-Chain
-> reexecute leg cannot deterministically advance virtual time to a staker's `end_time`,
-> so its height ≥ 1 arm uses the **decision-tx / standard-block** route (a `CreateSubnetTx`
-> at the future-pinned genesis time, which `verify_standard` accepts with no future-time
-> bound) instead of the reward-proposal route. **Follow-up:** thread `Arc<dyn Clock>`
-> into `PlatformVm` (mirroring the Fx, which already takes one) so the builder reads
-> `self.clock.now()`; this unlocks the reward-proposal height path and a `bootstrapped:true`
-> credential-verifying P-Chain replay (`plan/M9` §M9.19 as-built).
+> **Hazard #5 as-built gap — RESOLVED 2026-06-16f.** The block builders of all three
+> stateful VMs read the wall clock directly in `build_block` — `PlatformVm` (P-Chain),
+> `AvmVm` (X-Chain), and `EvmVm` (C-Chain) each called `SystemTime::now()` to stamp the
+> new block's timestamp (consensus state). The first was recorded as the original
+> M9.19 gap; the other two were surfaced by the newly-built `lint-determinism` xtask
+> (below) when it was first run workspace-wide. All three now thread an injected
+> `Arc<dyn Clock>`: each VM gains a `clock` field (defaulting to `RealClock` in `new`)
+> plus a `with_clock` injection seam, and `build_block` reads `self.clock.now()` /
+> `self.clock.unix()`. For P-Chain and X-Chain the same clock also backs the executor
+> `Fx` (locktime/credential checks), so the whole VM observes one clock. The P-Chain
+> reexecute leg (`replay_pchain`) is now clock-driven via an injected `MockClock` rather
+> than the genesis-future-pinning trick; the reward-proposal height path remains a
+> follow-up gated on the M4.24 reward-wiring, not on the clock. `cargo xtask
+> lint-determinism` is green workspace-wide and wired into `lint-all`/`lint-all-ci`.
+
+> **Refinement (2026-06-16f): monotonic timers are not hazard #5.** Although this
+> section's prose says "never call `SystemTime::now()` / `Instant::now()` directly,"
+> the enforced `lint-determinism` pass distinguishes **wall-clock** sources
+> (`SystemTime::now`, `chrono::Utc::now`, `Local::now`) — whose value can enter
+> consensus state and which are therefore flagged — from **monotonic** readings
+> (`Instant::now`, `tokio::time::Instant::now`) used purely for latency/perf
+> measurement, which are *not* flagged. This mirrors `RealClock` itself, which exposes
+> wall time via `now()` and monotonic time via `monotonic()`. Wall-clock reads that are
+> legitimately startup/config/display (genesis build, version compatibility, wallet
+> option defaults, log timestamps) are recorded in `xtask/determinism-allowlist.toml`
+> with a per-site justification, or suppressed inline with `// determinism-allow: <reason>`.
 
 ---
 
