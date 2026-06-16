@@ -38,6 +38,14 @@ thiserror = { workspace = true }
 # `ava-avm` VM + tx/state/fx types, the engine-facing VM-framework traits, and the
 # sha256 helper. None of these depend on `ava-reexecute` (no dependency cycle).
 ava-avm = { path = "../../crates/ava-avm" }
+# The P-Chain reexecute leg ([`replay_pchain`]) drives the REAL `ava-platformvm`
+# VM/block pipeline (seed-derived genesis → build → verify → accept through the
+# time-advancing / staker-reward control flow) and reads back the post-state via
+# the read-only `with_state` seam. It links the P-Chain VM + genesis/tx/state/fx
+# types (sharing the same `ava-vm`/`ava-snow`/`ava-types`/`ava-secp256k1fx` deps
+# the X-Chain leg already pulls in). `ava-platformvm` does not depend on
+# `ava-reexecute` (no dependency cycle).
+ava-platformvm = { path = "../../crates/ava-platformvm" }
 ava-vm = { path = "../../crates/ava-vm" }
 ava-secp256k1fx = { path = "../../crates/ava-secp256k1fx" }
 ava-snow = { path = "../../crates/ava-snow" }

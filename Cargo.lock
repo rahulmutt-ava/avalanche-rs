@@ -1653,6 +1653,7 @@ dependencies = [
  "ava-database",
  "ava-evm",
  "ava-evm-reth",
+ "ava-platformvm",
  "ava-secp256k1fx",
  "ava-snow",
  "ava-types",
