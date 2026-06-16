@@ -1,0 +1,41 @@
+name: Nightly live interop
+
+# Scheduled (nightly) workflow for the M9 live two-binary arms that the per-PR
+# `ci.yml` deliberately skips (see the "run nightly" comment there). It runs the
+# `#[cfg(feature="live")]` `#[ignore]` live tests — mixed Go+Rust network, plugin
+# interop both directions, test-upgrade, test-load — against a real Go
+# `avalanchego` binary (`$AVALANCHEGO_PATH`, rpcchainvm=45) plus a freshly built
+# Rust `avalanchers`, then runs the M9.23 acceptance gate. Also dispatchable
+# manually. See `Taskfile.yml` task `test-live` and specs/02 §11 (tier-X
+# X.15/X.22).
+
+on:
+  schedule:
+    # 07:13 UTC daily — off the hour to avoid the cron thundering herd.
+    - cron: '13 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-interop:
+    name: Live two-binary arms vs Go node + acceptance gate
+    runs-on: ubuntu-24.04
+    # `$AVALANCHEGO_PATH` must point at a built Go `avalanchego` (rpcchainvm=45)
+    # for the live arms to actually exercise the two-binary path; provide it as a
+    # repo variable. Without it, each live test returns early and the job still
+    # runs the offline-safe portions + the acceptance gate. `$AVALANCHERS_PATH` is
+    # optional (the tests fall back to the default Cargo target path).
+    env:
+      AVALANCHEGO_PATH: ${{ vars.AVALANCHEGO_PATH }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - name: test-live
+        shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh test-live
