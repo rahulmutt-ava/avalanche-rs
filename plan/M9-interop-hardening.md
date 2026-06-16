@@ -207,6 +207,40 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > live-Go-gated frontier: M9.15 (live mixed_network), M9.19-`px_range` (needs recorded P/X `blockexport` fixtures),
 > M9.22-`version_interop`, the live halves of M9.3/M9.12/M9.13/M9.14/M9.17/M9.18/M9.20, and the M9.23 acceptance gate.
 
+> **WAVE 2026-06-16c (offline-frontier mop-up) MERGED.** Three parallel worktree agents on disjoint files,
+> merged `--no-ff` zero-conflict; re-verified in main tree. Each lands the CI-runnable offline arm of a task
+> previously parked as "live-gated" or "deferred pending fixtures".
+> - **M9.19 X-CHAIN LEG COMPLETE** (`ava-reexecute`): new `src/xchain.rs` `replay_xchain(seed)` drives the REAL
+>   `ava-avm` VM/block pipeline (seed genesis → admit txs → build → set_preference → verify → accept, one tx/block)
+>   over a synthetic-but-real case — exactly as the C-Chain leg's `genesis_to_1` runs a synthetic fixture through
+>   the real EVM pipeline. X-Chain has no merkle trie, so the reexecute "root" is a deterministic `sha256` post-state
+>   digest over the sorted final UTXO set + tip id/height. `tests/px_range.rs::reexecute_px_range` (no longer
+>   `#[ignore]`d) replays the same case on two independent VM instances → byte-identical roots (determinism, no
+>   fabricated/hardcoded root), + a different seed → different root. **P-Chain sub-leg + Go-recorded-`blockexport`
+>   parity remain deferred** (no Go P/X fixture exists; reserved `px` feature gates the future live arm).
+> - **M9.22 `version_interop` OFFLINE ARM COMPLETE** (now unblocked by M9.14): new
+>   `tests/differential/tests/version_interop.rs::version_interop_floor_decisions` drives the REAL
+>   `ava_version::Compatibility::with_clock` + `MockClock` over a mixed Go+Rust peer set
+>   (`BinaryMix::from_config`), asserting the §9(3)/§9(4) connectivity decisions: below-floor drop, at/above-floor
+>   accept (inclusive boundary), the §7 moving-floor flip across the fork, newer-major rejection, and Go-vs-Rust
+>   symmetry over an 8-rung version ladder (neither side more permissive). Live floor-drop arm `version_interop`
+>   gated `#[cfg(feature="live")] #[ignore]`. The `ava-version` `version_interop_deferred` stub now points here.
+> - **M9.15 OFFLINE LOCKSTEP-REPLAY ARM COMPLETE** (`ava-differential`): filled in the `LockstepDriver`/`Program`
+>   scaffold — `Program::from_seed(seed)` (deterministic splitmix-shaped action program) + `replay_recorded` walks
+>   the actions and at each `AwaitFinalization` derives a pure sub-seed and drives a fresh `ava-avm` VM through the
+>   REAL block pipeline via `xchain::run_program` (additive — no `xchain.rs` break, `xchain_issue_tx` stays green),
+>   returning the ordered normalized `Observation`s. `tests/mixed_network.rs::mixed_network_replay_is_deterministic`
+>   replays the same program twice → byte-identical observation sequences (specs/00 §6.1), asserts ≥1 finalization
+>   ran (height ≥ 1), and that an injected `set_field` divergence is caught; + a 64-case proptest over seeds. Live
+>   `mixed_network` arm gated `#[cfg(feature="live")] #[ignore]`.
+>
+> Re-verified in main tree: `cargo nextest run -p ava-reexecute -p ava-differential -p ava-version` = **51/51**
+> (1 skipped), clippy `--all-targets -D warnings` clean on all three (incl. `ava-differential --features live`),
+> `--features live --tests` compiles, fmt clean workspace-wide, `cargo build --workspace` + `-p avalanchers` green.
+> Remaining live-Go-gated frontier: **M9.15 live `mixed_network`**, **M9.19-`px_range`** P-Chain sub-leg + Go-fixture
+> parity, the live halves of M9.3/M9.12/M9.13/M9.14/M9.17/M9.18/M9.20/M9.22-`version_interop`, and the **M9.23
+> acceptance gate** (the last remaining task with zero offline content yet — aggregator + zero-`wip` porting check).
+
 ---
 
 ## Tasks
@@ -406,8 +440,9 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `info.peers` once a live net boots. Verified in main tree: `cargo nextest run -p ava-differential` 15/15 (incl. both
 > offline arms), clippy `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
-### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip
+### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip 🟡 OFFLINE LOCKSTEP-REPLAY ARM DONE (2026-06-16c); live two-binary arm gated
 **Crate/area:** `ava-differential`  ·  **Depends on:** M9.14, M4/M5/M6/M7 (P/X/C/SAE)  ·  **Spec:** `16` §5(2), `02` §11.3 (peer/handshake row: "both reach the same height; no fork")
+**AS-BUILT (offline arm, merge 2026-06-16c):** `LockstepDriver::replay_recorded` + `Program::from_seed` now replay a seed-derived program through the REAL in-process `ava-avm` pipeline (`xchain::run_program` per finalization, pure sub-seed derivation), returning ordered normalized `Observation`s; `tests/mixed_network.rs::mixed_network_replay_is_deterministic` asserts twice-replayed byte-identity + non-trivial finalization + injected-divergence detection + a 64-case proptest. The live `mixed_network` arm (boot mixed net, replay across all nodes, no-fork/same-tip per chain) stays `#[cfg(feature="live")] #[ignore]`.
 **Files:** `tests/differential/tests/mixed_network.rs`
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
@@ -444,7 +479,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [x] **Step 4 — Confirm green:** `cargo xtask test-load` → passes (12 offline arms; live `sustained_load` arm gated `#[cfg(feature="live")] #[ignore]`). **Deferral:** tx signing/issuance left to the operator (would need `ava-wallet`; deliberately not a dep so the offline build stays light).
 - [x] **Step 5 — Commit:** `M9.18: test-load sustained-stream generator + Prometheus SLO offline arms; live tmpnet arm gated`
 
-### Task M9.19: `test-reexecute` — replay recorded mainnet ranges → state roots match Go 🟡 C-CHAIN LEG DONE (2026-06-15); P/X deferred pending fixtures
+### Task M9.19: `test-reexecute` — replay recorded mainnet ranges → state roots match Go 🟡 C-CHAIN + X-CHAIN LEGS DONE (C 2026-06-15, X 2026-06-16c); P-Chain sub-leg + Go-`blockexport` parity deferred
 **Crate/area:** `tests/reexecute` + `xtask`  ·  **Depends on:** M6 (C-Chain `differential::cchain_state_root`), M4/M5 (P/X), M9.14  ·  **Spec:** `02` §10.5 (reexecute = differential oracle), `16` §5(3), `00` §11.7 (per-PR)
 **Files:** `tests/reexecute/src/lib.rs`, `tests/reexecute/tests/cchain_range.rs`, `tests/reexecute/tests/px_range.rs`, `xtask/src/commands/test_reexecute.rs`
 - [x] **Step 1 — Red:** Write `reexecute_cchain_range` and `reexecute_px_range`: from a fixed starting state, replay a recorded range of mainnet C-Chain (and P/X) blocks (`blockexport` fixtures) through the Rust VMs; assert resulting state/merkle roots match the Go-recorded expected roots byte-for-byte (a differential oracle on recorded data). Add `cargo xtask test-reexecute`.
@@ -454,6 +489,8 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [x] **Step 5 — Commit:** `tests: test-reexecute recorded mainnet ranges → Go-identical state roots`
 
 > **AS-BUILT (merge `3b52e32`).** New workspace crate **`ava-reexecute`** at `tests/reexecute/` (added to root `Cargo.toml` `members`). `src/lib.rs` exposes a reusable harness — `ReexecuteCase`/`AllocEntry`/`ReexecuteRoots`/`Error` (thiserror) + `replay_cchain(&case) -> Result<ReexecuteRoots>` — ported verbatim from the M6.6 `crates/ava-evm/tests/cchain_state_root.rs` pipeline (Firewood-ethhash propose→commit genesis, decode EIP-2718 txs, `ExternalConsensusExecutor::execute_batch`, bundle→proposal post-root). The `genesis_to_1` fixture (`genesis_to_1.json` + `manifest.json`) was **copied** into `tests/reexecute/vectors/cchain/` so the crate is self-contained. `xtask/src/test.rs::test_reexecute()` (the pre-existing `TestReexecute` subcommand) now shells out to `cargo nextest run -p ava-reexecute` (no `main.rs` change). Verified in main tree: `cargo nextest run -p ava-reexecute` = **1 passed, 1 skipped**, `cargo xtask test-reexecute` green, clippy `--all-targets -D warnings` clean. **DEFERRED — `reexecute_px_range`:** authored as `#[ignore]` (panics if forced) — no Go-recorded P/X `blockexport` fixtures exist in the repo. Follow-up (fold into `02` §10.5): record a P/X `blockexport` fixture, add `replay_px` + a P/X `ReexecuteCase` equivalent, gate the live arm behind the reserved `px` feature.
+
+> **AS-BUILT — X-Chain leg (merge 2026-06-16c).** `reexecute_px_range` is **no longer `#[ignore]`d**: new `src/xchain.rs` `replay_xchain(seed) -> XchainReexecuteRoots` drives the REAL `ava-avm` VM/block pipeline (ported from the `ava-differential` `xchain` collector into lib code that propagates VM/codec errors via the new `Error::Xchain`, no `unwrap`/`expect`) over a seed-derived synthetic chain of `BaseTx` issuances (`initialize` → seed genesis → admit tx → build → set_preference → verify → accept, one tx/block) — exactly mirroring how the C-Chain `genesis_to_1` is a synthetic fixture run through the real EVM pipeline. X-Chain keys UTXOs by id with no merkle trie (`StandardBlock::MerkleRoot()` ≡ zero id), so the reexecute "root" is the deterministic post-state digest: `sha256` over the canonically-sorted `(utxo_id ++ utxo_bytes)` of the final UTXO set + tip block id/height. `tests/px_range.rs::reexecute_px_range` replays the SAME case on two INDEPENDENT VM instances → byte-identical roots (determinism, specs/00 §6.1; **NOT a fabricated/hardcoded root**), asserts non-triviality (height ≥ 1, real non-zero 32-byte sha256), and that a different seed → a different root. Added `ava-avm`/`ava-vm`/`ava-secp256k1fx`/`ava-snow`/`ava-types`/`ava-version`/`ava-crypto`/`async-trait`/`tokio`/`tokio-util` to `tests/reexecute/Cargo.toml` (paths copied from `tests/differential/`). Verified in main tree: `cargo nextest run -p ava-reexecute` = **5 passed, 0 skipped**, clippy `--all-targets -D warnings` clean, fmt clean. **STILL DEFERRED:** the **P-Chain** (`ava-platformvm`) reexecute sub-leg (the same `replay_*` shape extends once a P-Chain seed-driven block-accept driver + post-state digest accessor are factored out) and the Go-recorded-`blockexport` parity arm (no Go P/X fixture exists; reserved `px` feature gates it).
 
 ### Task M9.20: Crash-injection hardening pass (CC-ATOMIC / two-sided SM consistency) ✅ OFFLINE ARM DONE (2026-06-16); live Go-oracle-equivalence arm gated
 **Crate/area:** all VMs + `ava-database` + `ava-chains` + `ava-node`  ·  **Depends on:** M4–M7, M9.6 (sharedmemory), M9.19  ·  **Spec:** `27` §9 (crash-injection suite), §2 (CC-ATOMIC), §3.1 (two-sided SM), `02` §11
@@ -529,7 +566,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > as _;` shim mirroring the existing `use {anyhow as _, thiserror as _};` idiom (a Cargo `[lints] allow` cannot
 > override a source-attribute `#![warn]`).
 
-### Task M9.22: Version-string / compatibility-matrix interop conformance 🟡 GOLDEN LEGS DONE (2026-06-15); live `version_interop` deferred to M9.14
+### Task M9.22: Version-string / compatibility-matrix interop conformance 🟡 GOLDEN LEGS DONE (2026-06-15); `version_interop` OFFLINE ARM DONE (2026-06-16c); live floor-drop arm gated
 **Crate/area:** `ava-version` + `ava-network` + `ava-api`  ·  **Depends on:** M2 (handshake), M8 (`info.getNodeVersion`), M9.14  ·  **Spec:** `26` §9 (test plan), `16` §5(2)
 **Files:** `crates/ava-version/tests/compat_matrix.rs`, `tests/differential/tests/version_interop.rs`, `crates/ava-version/compatibility.json`
 - [x] **Step 1 — Red:** Write `golden::compatibility_matrix`, `golden::compatibility_json_byte_parity`, `golden::node_version_reply`, and `differential::version_interop`: assert `Application{avalanchego,1,14,2}.display() == "avalanchego/1.14.2"`; the `compatible()` table cells from `26` §9(3) (newer-major reject, below-floor reject, fork-boundary cut-over reject, different-name accept, mid-connection transition); `compatibility.json` parses byte-identically to the committed Go file; `info.getNodeVersion` reply matches Go field-for-field (modulo build-specific `gitCommit`/`go`); and in the mixed net a Rust node lowered below the Go floor is dropped by Go, and vice-versa (`26` §9(4)).
@@ -540,6 +577,8 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 
 > **AS-BUILT (merge `bbb87a6`).** The three pure-Rust golden legs are complete and verified in main tree (`cargo nextest run -p ava-version` = **21/21, 1 skipped**; clippy `--all-features` clean). `crates/ava-version/compatibility.json` was copied **byte-identical** (1426 B, `cmp`-verified) from the Go tree's `version/compatibility.json` @ upstream `0b0b57143c`, with a `compatibility.json.md` provenance sidecar; a new `src/compat_table.rs` embeds it via `include_str!` (panic-free `LazyLock<Result<..>>` + fallible `rpc_chain_vm_protocol_compatibility()` accessor) — `serde_json` moved dev-dep → dep. `golden::compatibility_matrix` covers every §9(3) cell with two mock clocks straddling a fork; `golden::compatibility_json_byte_parity` asserts embed==file==reparsed-table and protocol 45 ⇒ `[v1.14.2]`; `golden::node_version_reply` pins version-string display + the `info.getNodeVersion` fields ava-version owns (`version`/`databaseVersion`/`rpcProtocolVersion` incl. the `json.Uint32` string form `"45"`).
 > **DEFERRED — `differential::version_interop` (`26` §9(4)):** the live mixed Go+Rust floor-drop test belongs in `tests/differential/tests/version_interop.rs`, NOT in `ava-version` (a T0 primitive must not depend on `ava-differential`/`ava-network`/`ava-api`). Blocked on the **M9.14** mixed-network harness (the `ava-differential` `network.rs` is still a ~35-line scaffold). Recorded as an `#[ignore]`d `version_interop_deferred` stub + PORTING note. The full `info.getNodeVersion` JSON reply (incl. `gitCommit`/`vmVersions`) is already golden-tested at the `ava-api` layer (`crates/ava-api/src/info/mod.rs`).
+
+> **AS-BUILT — `version_interop` OFFLINE ARM (merge 2026-06-16c, now unblocked by M9.14).** New `tests/differential/tests/version_interop.rs::version_interop_floor_decisions` (runs every CI, no feature) builds the mixed Go+Rust peer set via `BinaryMix::from_config(NetworkConfig::deterministic(0xC0FFEE, 4))` and drives the REAL `ava_version::Compatibility::with_clock` + `MockClock` to assert: §9(4)(a) below-floor drop (1.13.9 < post-fork floor 1.14.0 rejected by both Go-side and Rust-side); §9(4)(b) at/above-floor accept (1.14.0 inclusive boundary + `CURRENT` accepted); §7 moving-floor flip (1.13.5 accepted pre-fork / rejected post-fork as the clock crosses `upgrade_time`); §9(3) clause-1 newer-major (2.0.0) dropped both sides both clocks; Go-vs-Rust **symmetry** over an 8-rung version ladder (both sides reach the identical verdict for every `(clock, peer)` — neither more permissive); and a per-slot tie-back over `mix.slots()`. The live floor-drop arm `version_interop` (`#[cfg(feature="live")] #[ignore]`) mirrors the `mixed_network_smoke.rs` precedent (early-returns without `$AVALANCHEGO_PATH`; documents the operator handoff: lower a Rust slot below the Go floor → assert drop, symmetric, + cross the fork for the moving-floor drop). The `ava-version` `version_interop_deferred` stub's `#[ignore]` reason + module doc now point here. No new deps (`ava-version` + `pretty_assertions` already present). Verified in main tree: `cargo nextest run -p ava-differential version_interop` green, `-p ava-version compat_matrix` 3 golden legs still green, clippy clean (default + `--features live`), `--features live --tests` compiles.
 
 ### Task M9.23: Final acceptance gate (16 §5 definition of done)
 **Crate/area:** all crates + `xtask` + CI  ·  **Depends on:** M9.1–M9.22 (every prior M9 task) + M0–M8 exit gates  ·  **Spec:** `16` §5 (the full checklist), `02` §10.1 (PORTING.md), §13, `00` §11.7
