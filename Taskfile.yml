@@ -44,6 +44,24 @@ tasks:
     desc: Reexecute golden block ranges, compare state roots
     cmd: '{{.NIX_RUN}} cargo xtask test-reexecute'
 
+  test-live:
+    desc: M9 live two-binary arms (mixed-net, plugin interop, upgrade, load) + acceptance gate — NIGHTLY ONLY
+    # Builds the Rust `avalanchers` binary, then runs the `#[cfg(feature="live")]`
+    # `#[ignore]` live arms in `ava-differential`/`ava-load`/`ava-upgrade`. These
+    # boot a real two-binary network and need a Go `avalanchego` at
+    # `$AVALANCHEGO_PATH` (rpcchainvm=45) plus the built Rust binary (the tests
+    # resolve the default Cargo target path, else `$AVALANCHERS_PATH`). Each live
+    # test returns early when `$AVALANCHEGO_PATH` is unset, so this task stays
+    # build-safe without a Go node (it then exercises the offline-safe portions +
+    # acceptance gate). `--run-ignored all` is the cargo-nextest flag that runs
+    # both normal and `#[ignore]` tests. See `.github/workflows/nightly.yml` +
+    # specs/02 §11 (tier-X X.15/X.22); per-PR `ci.yml` deliberately skips these.
+    cmds:
+      - '{{.NIX_RUN}} cargo build -p avalanchers --release'
+      - '{{.NIX_RUN}} cargo nextest run -p ava-differential -p ava-load -p ava-upgrade --features live --run-ignored all'
+      - '{{.NIX_RUN}} cargo xtask acceptance'
+      - '{{.NIX_RUN}} cargo xtask porting-report'
+
   test-fuzz:
     desc: Run cargo-fuzz targets briefly (smoke)
     # Enter the nightly `fuzz` dev shell (flake `devShells.fuzz`); cargo-fuzz
