@@ -17,7 +17,35 @@ publish = false
 # only a scheduled/nightly job or `--features live -- --ignored` turns it on. The
 # pure-Rust offline arms (swap/import orchestration + continuity/no-fork
 # assertions over synthetic Observations) run every CI run with no feature flag.
-live = [  ]
+#
+# The live arm reuses the `ava-differential` two-binary tmpnet driver
+# (`Network::start`), so it turns on that crate's `live` feature too.
+live = [ "ava-differential/live" ]
+
+[dependencies]
+# The swap step drives the REAL Go-dir → RocksDB import facade (M9.16): a per-node
+# `swap()` runs `migrate::import_source_into_rocksdb` over an injected `GoDbSource`
+# then re-opens the imported `v1.4.5/` RocksDB dir and byte-compares the KV set.
+# `migrate` + `rocksdb` features pull the import facade + the on-disk backend (the
+# `rocksdb` build needs clang/libclang, provided by the Nix dev shell).
+ava-database = { path = "../../crates/ava-database", features = [ "migrate", "rocksdb" ] }
+# The no-fork continuity assertions reuse `ava_differential::Observation`
+# (normalize → per-chain LA id/height + root + sorted validator set compare).
+# `ava-differential` does NOT depend on `ava-upgrade` (no dependency cycle).
+ava-differential = { path = "../differential" }
+# The moving min-compatible floor (specs/26 §7) is modelled with the real
+# `ava_version::Compatibility` checker + the pinned version constants.
+ava-version = { path = "../../crates/ava-version" }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The offline import arm drives each `swap()` into a `tempfile::TempDir`
+# destination root; the gated live arm awaits the `ava-differential` `Network`
+# spawner over a tokio runtime.
+tempfile = "3"
+tokio = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

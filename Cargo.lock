@@ -1994,6 +1994,16 @@ dependencies = [
 [[package]]
 name = "ava-upgrade"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ava-database",
+ "ava-differential",
+ "ava-version",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
 
 [[package]]
 name = "ava-utils"
