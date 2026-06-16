@@ -26,10 +26,18 @@ specs/00 §11.7). Because the expected roots come from the Go node, this is a
   VM/block pipeline over a seed-derived synthetic case and returns the
   deterministic [`XchainReexecuteRoots`] (chain-tip block id + height + `sha256`
   post-state digest over the sorted final UTXO set).
+- `src/pchain.rs` — the P-Chain leg. [`replay_pchain`] drives the REAL
+  `ava-platformvm` VM/block pipeline over a seed-derived genesis to its honestly
+  reachable floor (`initialize` → `seed_state` → genesis block → `build_block`
+  declines) and returns the deterministic [`PchainReexecuteRoots`] (chain-tip block
+  id + height + `sha256` post-state digest over the sorted final UTXO set +
+  Primary-Network supply + chain timestamp).
 - `tests/cchain_range.rs::reexecute_cchain_range` — the C-Chain leg. GREEN
   against the committed `genesis_to_1` fixture.
-- `tests/px_range.rs::reexecute_px_range` — the P/X leg. GREEN (X-Chain
-  determinism; see below). No longer `#[ignore]`d.
+- `tests/px_range.rs::reexecute_px_range` — the X-Chain determinism leg. GREEN
+  (see below). No longer `#[ignore]`d.
+- `tests/pchain_range.rs::reexecute_pchain_range` — the P-Chain determinism leg.
+  GREEN (see below).
 - `vectors/cchain/genesis_to_1/` — the committed fixture (`genesis_to_1.json` +
   `manifest.json`), copied from `crates/ava-evm/tests/vectors/cchain/reexecute/`
   (M6.6) so this crate is self-contained.
@@ -46,7 +54,7 @@ Go values. See the adjacent `vectors/.../manifest.json` for the M6.6 SPEC
 FINDINGs (4-field vs 5-field account RLP; base-fee burn vs coinbase credit;
 chainspec Paris activation).
 
-## P/X leg (`reexecute_px_range`) — X-Chain DONE; P-Chain + Go-oracle DEFERRED
+## P/X leg — X-Chain DONE; P-Chain DONE (genesis floor); Go-oracle DEFERRED
 
 ### What's PROVEN (X-Chain — `replay_xchain`, GREEN)
 
@@ -76,14 +84,63 @@ GENUINE VM execution, **NOT a fabricated/hardcoded root** — mirroring how the
 `ava-differential` `xchain` collector proves determinism when no live oracle
 exists.
 
+### What's PROVEN (P-Chain — `replay_pchain`, GREEN)
+
+The P-Chain sub-leg now drives the REAL `ava-platformvm` VM/block pipeline over a
+seed-derived synthetic genesis (two genesis UTXOs + one Primary-Network
+permissionless validator, every field a pure function of the seed): `initialize`
+→ `genesis::parse`/`seed_state` (genesis UTXOs, current staker, supply, timestamp)
+→ genesis block → `build_block`. The genesis time + the validator period are
+pinned FAR in the FUTURE (the X-Chain leg's clock-pinning trick), so
+`builder::next_block_time` resolves to the fixed genesis time with no wall-clock
+leak and no staker-change cap — and the builder honestly **declines**
+(`ErrNoPendingBlocks`). The chain stays at the accepted genesis block (height 0).
+
+The P-Chain keeps **FLAT KV state** (no merkledb — `state/`), so the reexecute
+"root" is the deterministic **post-state digest**: `sha256` over the
+canonically-sorted final UTXO set (enumerated by the seed-derived genesis owner
+address via `State::utxo_ids`) + the Primary-Network current supply + the chain
+timestamp, alongside the chain-tip block id + height
+([`PchainReexecuteRoots`]). The post-state is read back via a minimal additive
+read-only seam on `PlatformVm`, `with_state` (the P-Chain mirror of
+`ava_avm::vm::AvmVm::with_state` — `#[doc(hidden)]`, acquires the block-manager
+lock, runs the closure against the persisted `State`; the only change to
+`ava-platformvm`). `reexecute_pchain_range` asserts byte-identical roots across two
+INDEPENDENT VM instances (determinism, specs/00 §6.1), a non-zero 32-byte digest +
+chain-tip id, `height == 0` (the honestly-reached floor), and that a DIFFERENT seed
+yields a DIFFERENT root. GENUINE VM execution, **NOT a fabricated/hardcoded root**.
+
+#### Why the floor is genesis (height 0), and what advances it
+
+Two independent gaps block a height >= 1 accepted block today, and the leg refuses
+to paper over either:
+
+1. **The decision-tx mempool is un-shared on `PlatformVm`.** There is no public
+   tx-admission seam (the X-Chain `AvmVm::mempool_add` analogue is absent;
+   `vm.rs` ~line 166 documents "RPC issuance not yet wired"), so no decision tx
+   (`CreateChainTx`/`CreateSubnetTx`/…) can be packed into a standard block. The
+   M8 shared-mempool + gossip wiring lifts this.
+2. **The genesis ⇄ staker-reward resolver wiring is incomplete.** The only
+   height-advancing path that needs no decision tx is the reward-proposal block
+   (`getNextStakerToReward` → `BanffProposalBlock`/`RewardValidatorTx`). But
+   `genesis::seed_state` records the genesis validator as a current *staker*
+   (`put_current_validator`) without storing its tx in the tx store, so the reward
+   executor's `staker_tx_resolver` (`state.GetTx`,
+   `block/executor/mod.rs:187`) returns `database: ErrNotFound` on verify.
+   (Confirmed empirically: a past-pinned validator made `build_block` emit a
+   reward block that failed verify with exactly that error.) This is the M4.24
+   reward-wiring follow-up; patching production `seed_state` to store the tx was
+   deliberately avoided (out of this test's scope, would change genesis behaviour).
+
+Once **either** gap closes, the existing `replay_pchain` loop (already written
+generally + `MAX_BLOCKS`-capped) advances height with **no change to the harness** —
+only the future-pinned validator period (or the genesis time) needs revisiting to
+drive the desired control flow.
+
 ### What's DEFERRED (and why)
 
-1. **P-Chain sub-leg.** The P-Chain (`ava-platformvm`) reexecute sub-leg is not
-   wired here. The X-Chain leg is shipped solidly first (one solid real-pipeline
-   leg over two shallow ones, per the M9.19 P/X-leg plan). The same `replay_*`
-   shape extends to P-Chain once a P-Chain seed-driven block-accept driver +
-   post-state digest accessor are factored out (the platformvm state-diff/commit
-   path).
+1. **P-Chain height >= 1 accepted-block arm.** Blocked on the two gaps above
+   (M8 shared mempool / M4.24 reward-resolver wiring), not on this harness.
 2. **Go recorded-oracle parity.** We do NOT fabricate a "Go-recorded" root, so
    the parity arm (compare the computed root against a Go-EXECUTED P/X
    `blockexport` root) waits on a recorded Go P/X fixture — mirroring how
@@ -96,6 +153,11 @@ exists.
 
 - `ava-evm` / `ava-evm-reth` / `ava-database` supply the reth `BlockExecutor` +
   Firewood-ethhash state-root pipeline + the `MemDb` K/V backend Firewood needs.
+- `ava-avm` supplies the X-Chain VM + tx/state/fx types the X-Chain leg drives.
+- `ava-platformvm` supplies the P-Chain VM + genesis/tx/state/fx types the P-Chain
+  leg drives; `ava-vm`/`ava-snow`/`ava-types`/`ava-version`/`ava-secp256k1fx`/
+  `ava-crypto`/`async-trait`/`tokio`/`tokio-util` are the shared VM-framework /
+  runtime deps both VM legs need (the sha256 helper is `ava-crypto`).
 - `serde`/`serde_json`/`hex`/`tempfile`/`thiserror` are lib-only; the integration
   targets opt out of the per-binary `unused_crate_dependencies` false positive
   via `#![allow(unused_crate_dependencies)]` (the established repo idiom — see the

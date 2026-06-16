@@ -233,6 +233,24 @@ impl PlatformVm {
         self.shared.as_ref().ok_or(Error::NotInitialized)
     }
 
+    /// **Test helper** — run `read` against the persisted [`State`] read surface.
+    ///
+    /// The reexecute harness (M9.19 `replay_pchain`) computes a deterministic
+    /// post-state digest over the live state after replaying a synthetic case; the
+    /// [`Chain`] trait exposes per-id/address reads but the [`State`] is held behind
+    /// the private [`Shared`], so the harness reads it back via this read-only seam
+    /// (the P-Chain mirror of `ava_avm::vm::AvmVm::with_state`). Acquires the block
+    /// manager lock for the duration of `read`.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotInitialized`] before [`initialize`](Vm::initialize).
+    #[doc(hidden)]
+    pub fn with_state<R>(&self, read: impl FnOnce(&State<DynDb>) -> R) -> Result<R> {
+        let shared = self.shared()?;
+        let mgr = shared.manager.lock();
+        Ok(read(mgr.state()))
+    }
+
     /// Builds the executor [`Backend`] from the chain context (read-only-sync
     /// subset; the full per-network staking/fee config is M8/`ava-genesis`).
     fn backend(ctx: &ChainContext) -> Backend {
