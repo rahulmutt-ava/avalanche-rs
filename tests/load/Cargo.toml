@@ -1,0 +1,22 @@
+[package]
+name = "ava-load"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Load test harness: sustained tx stream + metric-name SLOs vs a Rust tmpnet (specs/02 §10.3, M9.18)."
+publish = false
+
+[features]
+# Gates the *live* arm (`sustained_load`) which boots a live Rust tmpnet network
+# and issues a sustained tx stream. Needs a built `avalanchers` binary, so it is
+# also `#[ignore]`d and never runs in CI / this sandbox; only a scheduled/nightly
+# job or `--features live -- --ignored` turns it on. The pure-Rust offline arms
+# (generator determinism / rate pacing, Prometheus parse + SLO threshold logic)
+# run every CI run with no feature flag.
+live = [  ]
+
+[lints]
+workspace = true
