@@ -85,7 +85,7 @@ use ava_database::{BatchOps, DynDatabase};
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
-use ava_utils::clock::RealClock;
+use ava_utils::clock::{Clock, RealClock};
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
 use ava_vm::block::{Block as VmBlock, ChainVm};
@@ -224,6 +224,13 @@ pub struct AvmVm {
     /// manager's executor [`Backend`] with the same fees and `bootstrapped=true`
     /// (Go `vm.onBootstrapped`).
     fee_config: Config,
+    /// The injectable clock — the ONLY wall-clock source (specs 24 hazard #5).
+    ///
+    /// Backs both the proposed block time (`build_block`'s `now`) and the fx
+    /// [`Dispatch`] locktime/credential checks, so the whole VM observes one
+    /// clock. [`AvmVm::new`] installs a [`RealClock`]; tests inject a `MockClock`
+    /// via [`AvmVm::with_clock`].
+    clock: Arc<dyn Clock>,
 }
 
 impl Default for AvmVm {
@@ -233,9 +240,22 @@ impl Default for AvmVm {
 }
 
 impl AvmVm {
-    /// Builds an uninitialized `AvmVm`. Call [`Vm::initialize`] before use.
+    /// Builds an uninitialized `AvmVm` reading time through a [`RealClock`].
+    /// Call [`Vm::initialize`] before use.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clock(Arc::new(RealClock))
+    }
+
+    /// Builds an uninitialized `AvmVm` reading time through `clock` — the
+    /// determinism injection seam (specs 24 hazard #5). The clock backs both the
+    /// proposed block time (`build_block`'s `now`) and the fx [`Dispatch`]
+    /// locktime/credential checks, so the whole VM observes one clock. Used by
+    /// tests (mirroring [`with_state`](Self::with_state) /
+    /// [`mempool_add`](Self::mempool_add)) to pin block times via a `MockClock`
+    /// without depending on the wall clock. Call [`Vm::initialize`] before use.
+    #[must_use]
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
             shared: None,
             ctx: None,
@@ -244,6 +264,7 @@ impl AvmVm {
             genesis_id: Id::EMPTY,
             gossip_handler: None,
             fee_config: Config::default(),
+            clock,
         }
     }
 
@@ -342,13 +363,15 @@ fn backend(ctx: &ChainContext, fees: Config, bootstrapped: bool) -> Backend {
 ///
 /// The fx ids match the avm registration (secp at the AVAX/empty id; nft /
 /// property at their conventional sentinel ids — the real registration ids land
-/// with the genesis-asset alloc in M8). All three share the VM `RealClock`.
-fn dispatch() -> Dispatch {
+/// with the genesis-asset alloc in M8). All three share the VM's injected
+/// `clock` (specs 24 hazard #5), so the fx locktime/credential checks and the
+/// proposed block time observe one clock.
+fn dispatch(clock: &Arc<dyn Clock>) -> Dispatch {
     Dispatch::new(
         Id::EMPTY,
         Id::from([1u8; 32]),
         Id::from([2u8; 32]),
-        Arc::new(RealClock),
+        Arc::clone(clock),
     )
 }
 
@@ -650,7 +673,7 @@ impl Vm for AvmVm {
         let shared_memory: Arc<dyn SharedMemory> = Arc::new(NoopSharedMemory);
         let mgr_config = BlockManagerConfig {
             backend: backend(&chain_ctx, fee_config, false),
-            dispatch: dispatch(),
+            dispatch: dispatch(&self.clock),
             shared_memory: Arc::clone(&shared_memory),
         };
         let manager = BlockManager::new(state, mgr_config);
@@ -694,7 +717,7 @@ impl Vm for AvmVm {
                 .as_ref()
                 .ok_or(VmError::from(Error::NotInitialized))?;
             let mut mgr = shared.manager.lock();
-            let mut d = dispatch();
+            let mut d = dispatch(&self.clock);
             d.bootstrapped();
             mgr.set_bootstrapped(backend(ctx, self.fee_config, true), d);
         }
@@ -830,7 +853,9 @@ impl ChainVm for AvmVm {
                 parent_id,
                 parent_height,
                 parent_time,
-                now: SystemTime::now(),
+                // The injected clock — NOT the wall clock directly (specs 24
+                // hazard #5). Clamped by the builder to `max(parent_time, now)`.
+                now: self.clock.now(),
                 parent_state,
                 backend: mgr.backend(),
                 dispatch: mgr.dispatch(),
