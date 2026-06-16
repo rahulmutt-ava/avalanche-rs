@@ -78,7 +78,7 @@ impl BinarySnowflake {
                 self.confidence[i..].fill(0);
                 return;
             }
-            self.confidence[i] += 1;
+            self.confidence[i] = self.confidence[i].saturating_add(1);
             if self.confidence[i] >= self.conditions[i].beta {
                 self.finalized = true;
                 return;

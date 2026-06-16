@@ -51,7 +51,7 @@ impl UnarySnowflake {
                 return;
             }
             // Reached this threshold: increment and check finalization.
-            self.confidence[i] += 1;
+            self.confidence[i] = self.confidence[i].saturating_add(1);
             if self.confidence[i] >= self.conditions[i].beta {
                 self.finalized = true;
                 return;

@@ -9,7 +9,10 @@
 //! base at-large allocation plus a stake-weighted validator bonus). The handler
 //! uses these to prioritize and throttle the async message pool.
 //!
-//! Float math, off the consensus-determinism path (06 §5.6).
+//! Float math, off the consensus-determinism path (06 §5.6): the usage/target
+//! values are throttling/metrics inputs, never hashed into a block/vote/decision
+//! (spec 24 §B.3 / hazard #2), so `float_arithmetic` is allowed module-wide here.
+#![allow(clippy::float_arithmetic)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

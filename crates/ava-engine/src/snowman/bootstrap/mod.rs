@@ -300,6 +300,8 @@ where
         if beacons.is_empty() {
             return;
         }
+        // `beacons` is non-empty (checked above), so the divisor is non-zero.
+        #[allow(clippy::arithmetic_side_effects)]
         let node = beacons[self.fetch_cursor % beacons.len()];
         self.fetch_cursor = self.fetch_cursor.wrapping_add(1);
 

@@ -13,6 +13,12 @@
 //! Timers fire over `tokio::time` so the manager honors `start_paused` +
 //! `tokio::time::advance` in virtual-time tests (specs 24 §B.2). All elapsed-time
 //! reads go through `clock.monotonic()`.
+//!
+//! The float math in this module is the exponentially-decaying latency averager
+//! only; it feeds the per-request timeout (liveness/latency), never a
+//! block/vote/decision (spec 24 §B.3/§B.4 / hazard #2), so `float_arithmetic` is
+//! allowed module-wide here.
+#![allow(clippy::float_arithmetic)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -275,7 +281,9 @@ impl AdaptiveTimeoutManager {
             st.pending.insert(
                 id,
                 PendingTimeout {
-                    deadline: now + duration,
+                    // Saturate rather than overflow the monotonic deadline; a
+                    // saturated deadline simply fires later (liveness-only).
+                    deadline: now.checked_add(duration).unwrap_or(now),
                     duration,
                     measure_latency,
                     handler,
@@ -294,7 +302,7 @@ impl AdaptiveTimeoutManager {
             if let Some(t) = st.pending.remove(&id)
                 && t.measure_latency
             {
-                let registered_at = t.deadline - t.duration;
+                let registered_at = t.deadline.checked_sub(t.duration).unwrap_or(t.deadline);
                 let latency = now.saturating_duration_since(registered_at);
                 st.observe_latency(latency, now);
             }

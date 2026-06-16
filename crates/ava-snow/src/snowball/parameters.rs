@@ -125,6 +125,9 @@ impl Parameters {
     /// The minimum fraction of connected stake required to report healthy
     /// (Go `MinPercentConnectedHealthy`). Health-only; uses floating point off
     /// the consensus decision path.
+    // Non-consensus local metric: a health-check threshold, never hashed into a
+    // block/vote/decision (spec 24 §B.3 / hazard #2).
+    #[allow(clippy::float_arithmetic)]
     #[must_use]
     pub fn min_percent_connected_healthy(&self) -> f64 {
         // alpha_confidence is used (not alpha_preference) so the node can still

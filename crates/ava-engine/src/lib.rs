@@ -22,6 +22,13 @@
 //! layer (specs 05).
 
 #![forbid(unsafe_code)]
+// Determinism hardening (spec 24 §A.2, hazard #2/#3; X.19 follow-up): no
+// floating-point and no unchecked integer arithmetic on consensus paths.
+#![deny(clippy::arithmetic_side_effects)]
+#![deny(clippy::float_arithmetic)]
+// Test code legitimately does bounded loop/counter/index arithmetic; the deny
+// pair above polices library (consensus) code, not the test harness.
+#![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::float_arithmetic))]
 
 pub mod common;
 pub mod error;

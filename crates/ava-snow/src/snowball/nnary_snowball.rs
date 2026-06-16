@@ -67,7 +67,7 @@ impl NnarySnowball {
     pub fn record_poll(&mut self, count: u32, choice: Id) {
         if count >= self.snowflake.alpha_preference() {
             let strength = self.preference_strength.entry(choice).or_insert(0);
-            *strength += 1;
+            *strength = strength.saturating_add(1);
             let strength = *strength;
             if strength > self.max_preference_strength {
                 self.preference = choice;

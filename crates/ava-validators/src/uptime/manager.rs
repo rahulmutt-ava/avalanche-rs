@@ -229,6 +229,9 @@ impl<S: UptimeState> Calculator for UptimeManager<S> {
 
 /// `up / best` as an `f64`, mirroring Go's `float64(up) / float64(best)` over
 /// nanosecond counts.
+// Non-consensus local metric: uptime percentage for rewards/reporting, never
+// hashed into a block/vote/decision (spec 24 §B.3 / hazard #2).
+#[allow(clippy::float_arithmetic)]
 fn div_durations(up: Duration, best: Duration) -> f64 {
     let up_ns = duration_nanos_f64(up);
     let best_ns = duration_nanos_f64(best);
@@ -240,7 +243,9 @@ fn div_durations(up: Duration, best: Duration) -> f64 {
 
 /// A [`Duration`] as nanoseconds in `f64` (saturating the seconds*1e9 term, which
 /// only matters for absurd >292-year spans that never occur in practice).
-#[allow(clippy::cast_precision_loss)]
+// Non-consensus local metric: feeds only the uptime percentage above, never a
+// consensus decision (spec 24 §B.3 / hazard #2).
+#[allow(clippy::cast_precision_loss, clippy::float_arithmetic)]
 fn duration_nanos_f64(d: Duration) -> f64 {
     d.as_secs() as f64 * 1.0e9 + f64::from(d.subsec_nanos())
 }

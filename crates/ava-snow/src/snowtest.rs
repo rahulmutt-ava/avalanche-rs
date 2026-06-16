@@ -61,7 +61,9 @@ impl TestSnowmanBlock {
             id,
             parent,
             height,
-            timestamp: UNIX_EPOCH + Duration::from_secs(height),
+            timestamp: UNIX_EPOCH
+                .checked_add(Duration::from_secs(height))
+                .unwrap_or(UNIX_EPOCH),
             bytes: id.as_bytes().to_vec(),
             status: AtomicU8::new(UNDECIDED),
             accept_err: false,
@@ -190,7 +192,7 @@ impl IdGen {
         Self(1)
     }
     fn next(&mut self) -> Id {
-        self.0 += 1;
+        self.0 = self.0.saturating_add(1);
         Id::EMPTY.prefix(&[self.0])
     }
 }
@@ -202,7 +204,7 @@ fn child(idgen: &mut IdGen, parent: &Arc<TestSnowmanBlock>) -> Arc<TestSnowmanBl
     Arc::new(TestSnowmanBlock::new(
         idgen.next(),
         parent.id(),
-        parent.height() + 1,
+        parent.height().saturating_add(1),
     ))
 }
 

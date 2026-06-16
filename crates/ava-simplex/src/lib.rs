@@ -29,6 +29,10 @@
 //! machine is deferred.
 
 #![forbid(unsafe_code)]
+// Determinism hardening (spec 24 §A.2, hazard #2/#3; X.19 follow-up): no
+// floating-point and no unchecked integer arithmetic on consensus paths.
+#![deny(clippy::arithmetic_side_effects)]
+#![deny(clippy::float_arithmetic)]
 // Dev-dependencies (assert_matches, tokio) are exercised only by the integration
 // test crates under `tests/`, so the unit-test build of the library sees them as
 // unused. Mirror the repo convention (cf. ava-vm test crates).

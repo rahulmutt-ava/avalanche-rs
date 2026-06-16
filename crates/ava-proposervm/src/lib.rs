@@ -26,6 +26,10 @@
 //! `vms/proposervm/proposer` is the contract (R1 confirmation on the windower).
 
 #![forbid(unsafe_code)]
+// Determinism hardening (spec 24 §A.2, hazard #2/#3; X.19 follow-up): no
+// floating-point and no unchecked integer arithmetic on consensus paths.
+#![deny(clippy::arithmetic_side_effects)]
+#![deny(clippy::float_arithmetic)]
 
 pub mod acp181;
 pub mod block;

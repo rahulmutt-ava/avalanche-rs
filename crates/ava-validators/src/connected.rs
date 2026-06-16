@@ -131,6 +131,9 @@ impl ConnectedValidators {
     /// Fraction of subnet stake currently connected, in `[0.0, 1.0]`. Returns
     /// `1.0` when the subnet has no weight (Go treats an empty subnet as fully
     /// connected). Used only for the `min_percent_connected` health check.
+    // Non-consensus local metric: a health-check percentage, never hashed into a
+    // block/vote/decision (spec 24 §B.3 / hazard #2). Mirrors Go's float64 ratio.
+    #[allow(clippy::float_arithmetic)]
     #[must_use]
     pub fn percent_connected(&self) -> f64 {
         if self.total_weight == 0 {
