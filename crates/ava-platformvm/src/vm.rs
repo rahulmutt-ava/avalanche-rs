@@ -45,6 +45,7 @@ use tokio_util::sync::CancellationToken;
 use ava_database::{Database, DynDatabase};
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
+use ava_utils::clock::{Clock, RealClock};
 use ava_validators::state::ValidatorState;
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
@@ -198,6 +199,12 @@ pub struct PlatformVm {
     /// [`crate::network::TxGossipHandler`]; the builder drains it in FIFO order.
     /// Empty during read-only sync (no txs are issued).
     mempool: Mutex<Mempool>,
+    /// The injectable clock — the ONLY wall-clock source (specs 24 hazard #5).
+    /// Threaded into `build_block` (the new block's timestamp) AND the executor
+    /// [`Backend`]'s `Fx` (locktime/credential checks), so both consensus-state
+    /// time reads go through one clock. [`PlatformVm::new`] installs a
+    /// [`RealClock`]; tests inject a `MockClock` via [`PlatformVm::with_clock`].
+    clock: Arc<dyn Clock>,
 }
 
 impl Default for PlatformVm {
@@ -207,9 +214,22 @@ impl Default for PlatformVm {
 }
 
 impl PlatformVm {
-    /// Builds an uninitialized `PlatformVm`. Call [`Vm::initialize`] before use.
+    /// Builds an uninitialized `PlatformVm` reading time through the production
+    /// [`RealClock`]. Call [`Vm::initialize`] before use.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clock(Arc::new(RealClock))
+    }
+
+    /// Builds an uninitialized `PlatformVm` reading time through `clock` — the
+    /// determinism injection seam (specs 24 hazard #5). The clock backs both the
+    /// `build_block` block-time read AND the executor [`Backend`]'s `Fx`
+    /// locktime/credential checks, so the whole VM observes one clock. Used by the
+    /// reexecute harness (M9.19 `replay_pchain`) to drive deterministic, pinned
+    /// block times via a `MockClock` without depending on the wall clock. Call
+    /// [`Vm::initialize`] before use.
+    #[must_use]
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
             shared: None,
             ctx: None,
@@ -217,6 +237,7 @@ impl PlatformVm {
             preferred: Id::EMPTY,
             genesis_id: Id::EMPTY,
             mempool: Mutex::new(Mempool::new()),
+            clock,
         }
     }
 
@@ -274,7 +295,11 @@ impl PlatformVm {
 
     /// Builds the executor [`Backend`] from the chain context (read-only-sync
     /// subset; the full per-network staking/fee config is M8/`ava-genesis`).
-    fn backend(ctx: &ChainContext) -> Backend {
+    ///
+    /// The executor `Fx` reads time through the SAME injected `clock` as
+    /// `build_block` (specs 24 hazard #5), so locktime/credential checks and the
+    /// proposed block time observe one clock.
+    fn backend(ctx: &ChainContext, clock: &Arc<dyn Clock>) -> Backend {
         Backend {
             upgrades: upgrade_schedule(ctx),
             staking: StakingConfig::mainnet(),
@@ -283,7 +308,7 @@ impl PlatformVm {
             chain_id: ctx.chain_id,
             avax_asset_id: ctx.avax_asset_id,
             node_id: ctx.node_id,
-            fx: ava_secp256k1fx::Fx::new(Arc::new(ava_utils::clock::RealClock)),
+            fx: ava_secp256k1fx::Fx::new(Arc::clone(clock)),
             // Set true once the engine transitions us to NormalOp; during
             // bootstrap the heavier semantic checks are skipped (Go `Bootstrapped`).
             bootstrapped: false,
@@ -531,7 +556,7 @@ impl Vm for PlatformVm {
         let codec = codec::codec().map_err(|e| VmError::from(Error::from(e)))?;
         let manager = BlockManager::new(
             state,
-            Self::backend(&chain_ctx),
+            Self::backend(&chain_ctx, &self.clock),
             codec,
             Arc::clone(&validators) as Arc<dyn crate::block::executor::BlockAcceptanceNotifier>,
         );
@@ -648,8 +673,9 @@ impl ChainVm for PlatformVm {
             let height = parent_height.saturating_add(1);
 
             // Resolve the new block time: min(max(now, parent_ts), next staker
-            // change), clamped by SyncBound.
-            let now = SystemTime::now();
+            // change), clamped by SyncBound. `now` reads the injected clock —
+            // NOT the wall clock directly (specs 24 hazard #5).
+            let now = self.clock.now();
             let parent_ts = parent_state.timestamp();
             let next_change = next_staker_change_time(parent_state.as_ref());
             let (timestamp, time_was_capped) =
@@ -1081,6 +1107,158 @@ mod conformance {
         }))
         .await;
         assert_eq!(body["error"]["code"], -32601, "unknown method is -32601");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod clock_injection {
+    //! `clock_injection::build_block_reads_injected_clock` (specs 24 hazard #5):
+    //! a `PlatformVm` constructed via [`PlatformVm::with_clock`] with a
+    //! `MockClock` pinned to a fixed instant builds a height-1 block whose
+    //! timestamp equals the pinned clock time (clamped by `next_block_time`),
+    //! proving `build_block` reads the injected clock — NOT the wall clock and
+    //! NOT the parent timestamp. The clock is pinned strictly past the genesis
+    //! time (5) and well before the staker-change cap, so the resolved time is
+    //! exactly the pinned `now`.
+
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use async_trait::async_trait;
+    use ava_database::{DynDatabase, MemDb};
+    use ava_snow::ChainContext;
+    use ava_types::id::Id;
+    use ava_types::node_id::NodeId;
+    use ava_utils::clock::MockClock;
+    use ava_vm::app_sender::{AppSender, SendConfig};
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::txs::base_tx::BaseTx;
+    use crate::txs::components::{BaseTx as AvaxBaseTx, Owner};
+    use crate::txs::{Codec, CreateSubnetTx, Tx, UnsignedTx};
+
+    /// A no-op [`AppSender`] for the `initialize` call.
+    #[derive(Debug, Default)]
+    struct NoopAppSender;
+
+    #[async_trait]
+    impl AppSender for NoopAppSender {
+        async fn send_app_request(
+            &self,
+            _token: &CancellationToken,
+            _nodes: &HashSet<NodeId>,
+            _request_id: u32,
+            _bytes: Vec<u8>,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_response(
+            &self,
+            _token: &CancellationToken,
+            _node: NodeId,
+            _request_id: u32,
+            _bytes: Vec<u8>,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_error(
+            &self,
+            _token: &CancellationToken,
+            _node: NodeId,
+            _request_id: u32,
+            _code: i32,
+            _message: &str,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+        async fn send_app_gossip(
+            &self,
+            _token: &CancellationToken,
+            _config: SendConfig,
+            _bytes: Vec<u8>,
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn chain_ctx() -> Arc<ChainContext> {
+        Arc::new(ChainContext {
+            network_id: 1,
+            subnet_id: Id::EMPTY,
+            chain_id: Id::EMPTY,
+            node_id: NodeId::default(),
+            public_key: None,
+            network_upgrades: ava_version::upgrade::get_config(1),
+            x_chain_id: Id::EMPTY,
+            c_chain_id: Id::EMPTY,
+            avax_asset_id: Id::EMPTY,
+            chain_data_dir: std::path::PathBuf::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn build_block_reads_injected_clock() {
+        // Pin the clock to unix 1_000: strictly past the genesis/parent time (5)
+        // and far below the genesis staker's end time (≈31.5M, the next-change
+        // cap), so `next_block_time` resolves the block time to exactly `now`.
+        const PINNED: u64 = 1_000;
+        let clock = MockClock::at(UNIX_EPOCH + Duration::from_secs(PINNED));
+
+        let genesis = crate::genesis::test_synthetic_genesis();
+        let genesis_bytes = crate::genesis::marshal(&genesis).expect("marshal genesis");
+
+        let mut vm = PlatformVm::with_clock(Arc::new(clock));
+        let token = CancellationToken::new();
+        let db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+        vm.initialize(
+            &token,
+            chain_ctx(),
+            db,
+            &genesis_bytes,
+            b"",
+            b"",
+            Vec::new(),
+            Arc::new(NoopAppSender),
+        )
+        .await
+        .expect("initialize");
+
+        // Admit a minimal (well-formed) decision tx so the builder packs a
+        // standard block at `now`. The pinned clock (1_000) is below the genesis
+        // staker-change cap (≈31.5M), so `next_block_time` does NOT force-advance
+        // the time; without a tx the builder would decline (`NoPendingBlocks`).
+        // build_block only PACKS the tx (verification is a later step), so an
+        // unfunded CreateSubnetTx is sufficient to drive the build path here.
+        let mut tx = Tx::new(UnsignedTx::CreateSubnet(CreateSubnetTx {
+            base: BaseTx::new(AvaxBaseTx {
+                network_id: 1,
+                blockchain_id: Id::EMPTY,
+                outs: vec![],
+                ins: vec![],
+                memo: vec![],
+            }),
+            owner: Owner::default(),
+        }));
+        tx.initialize(Codec()).expect("initialize create-subnet tx");
+        vm.mempool_add(tx).expect("mempool add");
+
+        // Build over genesis with the admitted tx (a standard block stamping the
+        // chain time). The built block's timestamp must equal the pinned clock.
+        let built = vm.build_block(&token).await.expect("build block");
+        assert_eq!(built.height(), 1, "build advances to height 1");
+
+        let ts = built
+            .timestamp()
+            .duration_since(UNIX_EPOCH)
+            .expect("post-epoch timestamp")
+            .as_secs();
+        assert_eq!(
+            ts, PINNED,
+            "build_block must stamp the INJECTED clock time, not the wall clock or parent ts (5)"
+        );
     }
 }
 
