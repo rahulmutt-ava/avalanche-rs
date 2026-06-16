@@ -163,6 +163,50 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > Rust⇄Rust byte goldens are CI-runnable and **next**), M9.15, M9.17, M9.18, M9.19-`px_range`, M9.22-`version_interop`,
 > the live halves of M9.3/M9.12/M9.14/M9.20, and the M9.23 acceptance gate.
 
+> **WAVE 2026-06-16b (wire matrix + load + upgrade offline arms) MERGED.** Three parallel worktree agents on
+> disjoint areas, prep-commit `4810d34` (registered `ava-load` + `ava-upgrade` skeleton crates as workspace members
+> + wired `cargo xtask test-load`/`test-upgrade`); merged `--no-ff` into `main`, re-verified in main tree.
+> - **M9.13 OFFLINE ARM COMPLETE** (`crates/ava-vm-rpc/tests/wire_identity.rs` + `crates/ava-vm-rpc/tests/vectors/rpcchainvm/*.bin`
+>   + `tests/differential/tests/plugin_wire_matrix.rs`): `rust_rust_wire_identity_matrix` drives a FIXED
+>   `initialize→set_preference→build→verify→accept→parse` sequence through the in-process Rust host (`RpcChainVm`)
+>   ⇄ Rust guest (`guest::serve_with_addr`) over the v45 reverse-dial, asserts deterministic block bytes/IDs/LA,
+>   then captures the `proto/vm` request wire bytes (direct `prost::Message::encode` of the exact request each host
+>   method sends — tonic 0.12 interceptors only see metadata, not the body) and diffs them against committed
+>   goldens. `InitializeRequest` is deliberately NOT goldened (ephemeral callback addrs); `build_block.bin` +
+>   `set_state_unspecified.bin` are genuinely 0 bytes (all-proto3-default). The differential offline arm
+>   (`plugin_wire_identity_matrix_offline`) reads the goldens by relative path (NO `ava-vm-rpc` dep — the verified
+>   design invariant) and independently recomputes `sha256(block1_bytes) == block1_id` via the already-present
+>   `ava-crypto` dev-dep (a real red/green cross-crate consistency signal). Live arm (`plugin_wire_identity_matrix`,
+>   `#[cfg(feature="live")] #[ignore]`) reuses the M9.3/M9.12 launchers for the three Go legs. Goldens regenerable
+>   via `REGEN_WIRE_GOLDENS=1`.
+> - **M9.18 OFFLINE ARMS COMPLETE** (new `ava-load` crate at `tests/load/`): `generator.rs` (`LoadGenerator`
+>   deterministic splitmix64 seed-derived C/X/P stream, byte-exact `TxDescriptor::encode`; `PacingSchedule` integer
+>   rate math, all `checked_*`/`saturating_*`, no floats) + `metrics.rs` (Prometheus text-format `Exposition` parser
+>   — quoted-label/`+Inf`/`NaN` aware — + pure `slo_holds`/`slo_violations` + `REQUIRED_PARITY_METRICS` from
+>   `00` §7.3 / `18`) + `network.rs` (`LoadNode` live tmpnet driver scraping `/ext/metrics` over a hand-rolled
+>   HTTP/1.1 GET on `tokio::net::TcpStream` — no HTTP-client crate, modeled on `differential/src/network.rs`).
+>   12 offline tests (6 generator + 5 metrics + 1 end-to-end pipeline) + committed `tests/fixtures/ext_metrics_{good,regressed}.prom`.
+>   Live arm `sustained_load` (`#[cfg(feature="live")] #[ignore]`) early-returns without `avalanchers`. **Honest
+>   deferral:** tx signing/issuance is NOT wired (would need `ava-wallet` keyed off the genesis alloc — deliberately
+>   left out so the offline build stays light + `unused_crate_dependencies` honest); the live arm proves the
+>   generator + scrape→parse→SLO pipeline, the operator wires issuance. SLO thresholds are placeholder defaults.
+> - **M9.17 OFFLINE ARMS COMPLETE** (new `ava-upgrade` crate at `tests/upgrade/`): `plan.rs` (`RollingUpgrade`;
+>   `swap(i, dst_root)` drives the REAL M9.16 `ava_database::migrate::import::import_source_into_rocksdb` facade over
+>   an injected `GoDbSource`, re-opens the imported `v1.4.5/` RocksDB dir, byte-verifies the migrated KV set — the
+>   on-disk RocksDB write path ran for real, NOT gated) + `continuity.rs` (`assert_no_fork` over the real
+>   `ava_differential::Observation`; `MovingFloor` over the real `ava_version::Compatibility` + a `MockClock` for
+>   the `26` §7 moving min-compatible floor). 4 offline tests. Live arm `go_to_rust`
+>   (`#[cfg(feature="live")] #[ignore]`, `live = ["ava-differential/live"]`) documents the operator handoff inline
+>   (previous-Go tmpnet → pre-activation → per-node swap+import → activation barrier → no-fork+moving-floor over
+>   live `Observation`s), early-returns without `$AVALANCHEGO_PATH`.
+>
+> All follow the offline-arm-every-CI / live-arm-`#[cfg(feature="live")] #[ignore]` precedent. Re-verified in main
+> tree: `cargo nextest run -p ava-vm-rpc -p ava-differential -p ava-load -p ava-upgrade` = **51/51**, clippy
+> `--all-targets -D warnings` clean (incl. `--features live`), `--features live --tests` compiles, fmt clean,
+> `cargo build --workspace` + `-p avalanchers` green, `cargo xtask test-load`/`test-upgrade` green. Remaining
+> live-Go-gated frontier: M9.15 (live mixed_network), M9.19-`px_range` (needs recorded P/X `blockexport` fixtures),
+> M9.22-`version_interop`, the live halves of M9.3/M9.12/M9.13/M9.14/M9.17/M9.18/M9.20, and the M9.23 acceptance gate.
+
 ---
 
 ## Tasks
@@ -319,14 +363,14 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > Verified in main tree: `cargo nextest run -p ava-vm-rpc -p ava-differential` = **33/33**, clippy
 > `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
-### Task M9.13: Four-way wire-identity matrix (`proto/vm` request-byte diff)
+### Task M9.13: Four-way wire-identity matrix (`proto/vm` request-byte diff) ✅ OFFLINE ARM DONE (2026-06-16; Rust⇄Rust proto/vm byte goldens); Go-leg live arm gated
 **Crate/area:** `ava-vm-rpc` + `ava-differential`  ·  **Depends on:** M9.3, M9.10, M9.11, M9.12  ·  **Spec:** `07` §10 (four-way matrix), `02` §6 (golden), §11.3
-**Files:** `tests/differential/tests/plugin_wire_matrix.rs`, `tests/vectors/rpcchainvm/`
-- [ ] **Step 1 — Red:** Write `plugin_wire_identity_matrix`: drive an identical block-build/verify/accept sequence through all four host⇄guest pairings (Rust⇄Rust, Rust-host⇄Go-guest, Go-host⇄Rust-guest, Go⇄Go); capture the `proto/vm` request bytes on the wire (interceptor / recorded transcript); assert identical block bytes, IDs, last-accepted, **and** `proto/vm` request bytes across all pairings (diff against committed `tests/vectors/rpcchainvm/` goldens). Also round-trip the proxied `rpcdb`/`appsender`/`sharedmemory` against the Go server.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential plugin_wire_identity_matrix` → fails (vectors absent / interceptor unwired).
-- [ ] **Step 3 — Green:** Add a tonic interceptor to capture request bytes; extract the Go-side `proto/vm` request goldens via `tools/extract-vectors/` (`02` §6.2) into `tests/vectors/rpcchainvm/` with provenance. Implement the matrix driver reusing M9.3/M9.12 launchers.
-- [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential plugin_wire_identity_matrix` → passes.
-- [ ] **Step 5 — Commit:** `differential: rpcchainvm four-way wire-identity matrix (proto/vm byte goldens)`
+**Files:** `crates/ava-vm-rpc/tests/wire_identity.rs`, `crates/ava-vm-rpc/tests/vectors/rpcchainvm/`, `tests/differential/tests/plugin_wire_matrix.rs`
+- [x] **Step 1 — Red:** Write `plugin_wire_identity_matrix`: drive an identical block-build/verify/accept sequence through all four host⇄guest pairings (Rust⇄Rust, Rust-host⇄Go-guest, Go-host⇄Rust-guest, Go⇄Go); capture the `proto/vm` request bytes on the wire (interceptor / recorded transcript); assert identical block bytes, IDs, last-accepted, **and** `proto/vm` request bytes across all pairings (diff against committed goldens). Also round-trip the proxied `rpcdb`/`appsender`/`sharedmemory` against the Go server.
+- [x] **Step 2 — Confirm red:** `cargo nextest run -p ava-vm-rpc wire_identity` → fails (goldens absent).
+- [x] **Step 3 — Green:** Rust⇄Rust offline arm captures `proto/vm` request bytes via direct `prost::Message::encode` (tonic 0.12 interceptors see metadata only) → committed goldens under `crates/ava-vm-rpc/tests/vectors/rpcchainvm/`. The differential offline arm reads them by relative path (NO `ava-vm-rpc` dep) + recomputes `sha256(block1_bytes) == block1_id` via `ava-crypto`. Go legs in the gated live arm reuse the M9.3/M9.12 launchers. Goldens regenerable via `REGEN_WIRE_GOLDENS=1`.
+- [x] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc wire_identity && cargo nextest run -p ava-differential plugin_wire_matrix` → passes (offline arm; Go-leg live arm gated `#[cfg(feature="live")] #[ignore]`).
+- [x] **Step 5 — Commit:** `M9.13: rpcchainvm four-way wire-identity matrix — Rust⇄Rust proto/vm byte goldens (offline arm); Go legs gated`
 
 ### Task M9.14: `ava-differential` mixed Go+Rust network bring-up + Observation ✅ HARNESS + OFFLINE ARM DONE (2026-06-15); live bring-up arm gated
 **Crate/area:** `ava-differential`  ·  **Depends on:** M8 (avalanchers bin, all chains), M2 (handshake interop)  ·  **Spec:** `02` §11.1 (two-binary live), §11.3 (Observation), §11.4 (normalization), `26` §9(4)
@@ -382,23 +426,23 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 
 > **AS-BUILT (merge `59fa2e6`).** The import facade lives at `crates/ava-database/src/migrate/import.rs` (under the existing `migrate` module, not a top-level `import.rs`) — it wraps the already-present `migrate()` verbatim-copy driver. Public API (re-exported from `lib.rs` under the `migrate` feature): `GoBackend{Goleveldb,Pebble}` + `detect_backend(path)` (folder-name detection, **feature-free** so `ava-node` reuses it without pulling RocksDB), `ImportError`, `ImportOptions`/`ImportReport`, `current_db_dir_name()`, and the rocksdb-gated `import_go_dir(...)` / `import_source_into_rocksdb(&dyn GoDbSource, ...)`. Node-side refusal is `crates/ava-node/src/init/db_init.rs::precheck_data_dir(...)` (called by `init/database.rs` *before* the open; never touches the `ungracefulShutdown` marker — that stays owned by `init/database.rs`), surfacing the new typed `Error::ForeignDataDir{path,backend,current}`. **Test-fixture note:** no real captured Go Pebble/LevelDB dir was synthesized (the Pebble sidecar spawn is a documented M12 stub; RocksDB writes RocksDB-format not classic LevelDB), so `imports_go_pebble_dir_to_rocksdb` drives the facade through the **real on-disk RocksDB write path** with an injected `GoDbSource` (`VecSource` mirroring the `04` §10 layout) and re-opens the resulting `v1.4.5/` dir to assert byte-for-byte KV equality + cursor. Verified in main tree: `cargo nextest run -p ava-database --features migrate,rocksdb` = **50/50**, `-p ava-node` = **19/19**, clippy `--all-features` clean. The goleveldb fast-path (`RocksDbCompatSource`) and merkleized `RootVerifier` wiring remain for the M12 CLI.
 
-### Task M9.17: `test-upgrade` — Go→Rust across an activation height (incl. Go-dir import)
+### Task M9.17: `test-upgrade` — Go→Rust across an activation height (incl. Go-dir import) ✅ OFFLINE ARMS DONE (2026-06-16; swap/import orchestration + no-fork continuity); live Go→Rust arm gated
 **Crate/area:** `tests/upgrade` + `xtask`  ·  **Depends on:** M9.16, M9.14 (mixed-net driver), M8  ·  **Spec:** `02` §10.4, `16` §5(8), `26` §7 (rolling-upgrade moving floor), `00` §4.4
-**Files:** `tests/upgrade/src/lib.rs`, `tests/upgrade/tests/go_to_rust.rs`, `xtask/src/commands/test_upgrade.rs`
-- [ ] **Step 1 — Red:** Write `test_upgrade` (`go_to_rust`): start a tmpnet network on the previous released **Go** binary; advance to just before an activation height; replace nodes one-by-one with the **Rust** binary across the activation height, importing each node's Go data dir → RocksDB (M9.16) on swap; assert chain continuity and **no fork** (every node's LA/state root agrees across the cut-over) and that the moving min-compatible floor (`26` §7) keeps Go and Rust peers connected during the roll. Add `cargo xtask test-upgrade` alias.
-- [ ] **Step 2 — Confirm red:** `cargo xtask test-upgrade` (or `cargo nextest run -p ava-upgrade go_to_rust`) → fails.
-- [ ] **Step 3 — Green:** Implement the upgrade harness: previous-Go-binary start, per-node Go→Rust swap with data-dir import, activation-height barrier, continuity/no-fork assertions reusing `Observation` (M9.14). Wire the `xtask` alias.
-- [ ] **Step 4 — Confirm green:** `cargo xtask test-upgrade` → passes (nightly/pre-release budget).
-- [ ] **Step 5 — Commit:** `tests: test-upgrade Go→Rust across activation height (incl. Go-dir→RocksDB import, R2)`
+**Files:** `tests/upgrade/src/{lib,plan,continuity}.rs`, `tests/upgrade/tests/go_to_rust.rs`, `xtask` `test-upgrade` subcommand
+- [x] **Step 1 — Red:** Write `go_to_rust`: start a tmpnet network on the previous released **Go** binary; advance to just before an activation height; replace nodes one-by-one with the **Rust** binary across the activation height, importing each node's Go data dir → RocksDB (M9.16) on swap; assert chain continuity and **no fork** (every node's LA/state root agrees across the cut-over) and that the moving min-compatible floor (`26` §7) keeps Go and Rust peers connected during the roll. Add `cargo xtask test-upgrade` alias.
+- [x] **Step 2 — Confirm red:** `cargo xtask test-upgrade` (or `cargo nextest run -p ava-upgrade go_to_rust`) → fails.
+- [x] **Step 3 — Green:** `plan.rs` `RollingUpgrade::swap` drives the REAL M9.16 `import_source_into_rocksdb` facade (on-disk RocksDB write path ran for real) + byte-verifies the migrated KV set; `continuity.rs` `assert_no_fork` over the real `ava_differential::Observation` + `MovingFloor` over the real `ava_version::Compatibility`. Wire the `xtask` alias (done by prep commit).
+- [x] **Step 4 — Confirm green:** `cargo xtask test-upgrade` → passes (offline arms; live Go→Rust arm gated `#[cfg(feature="live")] #[ignore]`, `live = ["ava-differential/live"]`).
+- [x] **Step 5 — Commit:** `M9.17: test-upgrade swap/import orchestration + no-fork continuity offline arms; live Go→Rust arm gated`
 
-### Task M9.18: `test-load` — sustained tx stream, metrics SLOs, zero errors
+### Task M9.18: `test-load` — sustained tx stream, metrics SLOs, zero errors ✅ OFFLINE ARMS DONE (2026-06-16; generator determinism + Prometheus SLO logic); live tmpnet arm gated
 **Crate/area:** `tests/load` + `xtask`  ·  **Depends on:** M9.14 (network bring-up), M5/M6 (X/C tx issue), M8 (API/wallet/metrics)  ·  **Spec:** `02` §10.3, `16` §5 (perf), `00` §7.3 (metric-name parity)
-**Files:** `tests/load/src/generator.rs`, `tests/load/tests/sustained_load.rs`, `xtask/src/commands/test_load.rs`
-- [ ] **Step 1 — Red:** Write `sustained_load`: against a tmpnet Rust network, the load generator issues a sustained C-Chain transfer + X/P tx stream for `--load-timeout`; scrape Prometheus (parity metric names, `00` §7.3); assert throughput/latency SLOs hold and **zero** errors. Add `cargo xtask test-load -- --load-timeout=30s`.
-- [ ] **Step 2 — Confirm red:** `cargo xtask test-load -- --load-timeout=5s` → fails.
-- [ ] **Step 3 — Green:** Implement `generator.rs` (uses `ava-wallet` + API client to build/issue txs at a target rate), the Prometheus scraper asserting parity metric names + SLO thresholds, and the `xtask` alias mirroring the Go `tests/load` task surface.
-- [ ] **Step 4 — Confirm green:** `cargo xtask test-load -- --load-timeout=30s` → passes.
-- [ ] **Step 5 — Commit:** `tests: test-load sustained tx stream + metric-name SLOs (zero errors)`
+**Files:** `tests/load/src/{generator,metrics,network}.rs`, `tests/load/tests/{generator_offline,metrics_offline,sustained_load}.rs`, `xtask` `test-load` subcommand
+- [x] **Step 1 — Red:** Write `sustained_load`: against a tmpnet Rust network, the load generator issues a sustained C-Chain transfer + X/P tx stream for `--load-timeout`; scrape Prometheus (parity metric names, `00` §7.3); assert throughput/latency SLOs hold and **zero** errors. Add `cargo xtask test-load`.
+- [x] **Step 2 — Confirm red:** `cargo xtask test-load` → fails.
+- [x] **Step 3 — Green:** `generator.rs` (deterministic splitmix64 seed-derived C/X/P stream + integer `PacingSchedule` rate math, no floats) + `metrics.rs` (Prometheus `Exposition` parser + pure `slo_holds` + `REQUIRED_PARITY_METRICS` from `00` §7.3 / `18`) + `network.rs` (live `LoadNode` scraping `/ext/metrics` over hand-rolled HTTP/1.1, no HTTP-client crate). 12 offline tests + committed fixtures. `xtask` alias done by prep commit.
+- [x] **Step 4 — Confirm green:** `cargo xtask test-load` → passes (12 offline arms; live `sustained_load` arm gated `#[cfg(feature="live")] #[ignore]`). **Deferral:** tx signing/issuance left to the operator (would need `ava-wallet`; deliberately not a dep so the offline build stays light).
+- [x] **Step 5 — Commit:** `M9.18: test-load sustained-stream generator + Prometheus SLO offline arms; live tmpnet arm gated`
 
 ### Task M9.19: `test-reexecute` — replay recorded mainnet ranges → state roots match Go 🟡 C-CHAIN LEG DONE (2026-06-15); P/X deferred pending fixtures
 **Crate/area:** `tests/reexecute` + `xtask`  ·  **Depends on:** M6 (C-Chain `differential::cchain_state_root`), M4/M5 (P/X), M9.14  ·  **Spec:** `02` §10.5 (reexecute = differential oracle), `16` §5(3), `00` §11.7 (per-PR)
