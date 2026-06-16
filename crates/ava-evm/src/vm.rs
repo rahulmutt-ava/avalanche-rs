@@ -67,6 +67,7 @@ use ava_evm_reth::B256;
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_utils::clock::{Clock, RealClock};
 use ava_vm::app::{AppError, AppHandler};
 use ava_vm::app_sender::AppSender;
 use ava_vm::block::{Block as VmBlock, ChainVm};
@@ -276,6 +277,11 @@ pub struct EvmVm {
     ctx: Option<Arc<ChainContext>>,
     /// The current engine phase (Go `vm.bootstrapped`).
     engine_state: EngineState,
+    /// Injectable wall clock — the ONLY source of build-time wall-clock reads
+    /// (specs/24 hazard #5). `build_block` stamps the next-block header time from
+    /// `self.clock.unix()`; defaults to [`RealClock`], overridable in tests via
+    /// [`EvmVm::with_clock`].
+    clock: Arc<dyn Clock>,
 }
 
 impl EvmVm {
@@ -324,7 +330,17 @@ impl EvmVm {
             accepted_atomic_txs: Arc::new(AcceptedAtomicTxIndex::new()),
             ctx: None,
             engine_state: EngineState::Initializing,
+            clock: Arc::new(RealClock),
         }
+    }
+
+    /// Overrides the injectable wall clock (specs/24 hazard #5). Builder-style
+    /// test seam mirroring `ava-platformvm`'s `with_clock`; production keeps the
+    /// [`RealClock`] seeded by [`EvmVm::new`].
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// The accepted-atomic-tx index shared with the `avax.*` handlers (the
@@ -344,6 +360,15 @@ impl EvmVm {
     #[must_use]
     pub fn preferred(&self) -> Id {
         *self.preferred.load_full()
+    }
+
+    /// The atomic X<->C mempool handle (test/inspection helper). Exposed so tests
+    /// can seed an atomic batch and exercise the `build_block` path end-to-end
+    /// (there is no public submission seam yet — `app_gossip` is an M8 stub).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn mempool_handle(&self) -> Arc<parking_lot::Mutex<AtomicMempool>> {
+        Arc::clone(&self.txpool)
     }
 
     /// Wraps an [`EvmBlock`] as the engine-facing [`ava_snow::Block`], cloning the
@@ -586,16 +611,14 @@ impl ChainVm for EvmVm {
         let parent_state_root = parent.precommit_root;
         drop(parent);
 
-        // The next-block build/fee context (§17.3). The wall-clock timestamp is
-        // the build time; the fee state defaults to the genesis/first-AP3 window
-        // (the parent-extra fee-state extraction is M6.7's follow-up — see the
-        // build report). The atomic gas budget is the post-AP5 limit the mempool
-        // packs against.
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
-            .max(parent_header.time.saturating_add(1));
+        // The next-block build/fee context (§17.3). The build-time timestamp comes
+        // from the injectable clock (specs/24 hazard #5: never read the wall clock
+        // directly — this header time is consensus state), clamped to >
+        // parent.time so the header is strictly monotonic. The fee state defaults
+        // to the genesis/first-AP3 window (the parent-extra fee-state extraction is
+        // M6.7's follow-up — see the build report). The atomic gas budget is the
+        // post-AP5 limit the mempool packs against.
+        let now_secs = self.clock.unix().max(parent_header.time.saturating_add(1));
         let ctx = AvaNextBlockCtx {
             timestamp: now_secs,
             ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
