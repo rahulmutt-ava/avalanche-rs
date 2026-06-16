@@ -345,11 +345,36 @@
 ### Task X.23: `AGENTS.md` / `CLAUDE.md` + `bazel-vs-cargo` smoke + final `tests-required` consolidation
 **Workstream:** 6 (CI) / docs  ·  **First lands:** M0 (docs); smoke M0  ·  **Depends on:** all prior X tasks  ·  **Spec:** 01 §12, §4.5
 **Files:** `AGENTS.md`, `CLAUDE.md`, `.github/workflows/ci.yml` (`bazel_vs_cargo` job; final `tests-required.needs` list)
-- [ ] **Step 1 — Red/first check:** Add a `bazel_vs_cargo` job that builds `avalanchers` both ways and asserts both succeed (01 §4.5). Before wired it fails; also assert `tests-required.needs` lists every gate added across X.1–X.22.
-- [ ] **Step 2 — Confirm red:** Push → `bazel_vs_cargo` missing / `tests-required` doesn't reference all jobs.
-- [ ] **Step 3 — Green:** Copy `AGENTS.md` + `CLAUDE.md` verbatim from 01 §12.1/§12.2. Add the `bazel_vs_cargo` smoke job (01 §4.5: `cargo build -p avalanchers --release` and `bazel build //crates/ava-node:avalanchers` both green — proves Cargo/Bazel agree on `Cargo.lock`). Consolidate `tests-required.needs` to include: `Unit`, `Lint`, `taulint`, `check_generated_protobuf`, `check_mocks`, `check_deps_tidy`, `coverage`, `bazel`, `bazel_vs_cargo`, `vectors_verify`, `vectors_drift`, `differential`, `fuzz`, `porting_report`.
-- [ ] **Step 4 — Confirm green:** `tests-required` green with the full needs list; `bazel_vs_cargo` green.
-- [ ] **Step 5 — Commit:** `ci: AGENTS/CLAUDE docs + bazel-vs-cargo smoke + consolidate tests-required (M0)`
+- [x] **Step 1 — Red/first check:** Add a `bazel_vs_cargo` job that builds `avalanchers` both ways and asserts both succeed (01 §4.5). Before wired it fails; also assert `tests-required.needs` lists every gate added across X.1–X.22.
+- [x] **Step 2 — Confirm red:** Push → `bazel_vs_cargo` missing / `tests-required` doesn't reference all jobs.
+- [x] **Step 3 — Green:** Copy `AGENTS.md` + `CLAUDE.md` verbatim from 01 §12.1/§12.2. Add the `bazel_vs_cargo` smoke job (01 §4.5: `cargo build -p avalanchers --release` and `bazel build //crates/ava-node:avalanchers` both green — proves Cargo/Bazel agree on `Cargo.lock`). Consolidate `tests-required.needs` to include: `Unit`, `Lint`, `taulint`, `check_generated_protobuf`, `check_mocks`, `check_deps_tidy`, `coverage`, `bazel`, `bazel_vs_cargo`, `vectors_verify`, `vectors_drift`, `differential`, `fuzz`, `porting_report`.
+- [x] **Step 4 — Confirm green:** `tests-required` green with the full needs list; `bazel_vs_cargo` green.
+- [x] **Step 5 — Commit:** `ci: AGENTS/CLAUDE docs + bazel-vs-cargo smoke + consolidate tests-required (M0)`
+
+> **AS-BUILT (2026-06-16, merge of `x23-ci-consolidation`).** X.23 is complete with two
+> deliberate, documented scope refinements vs the original step text:
+> - **`AGENTS.md` + `CLAUDE.md`** were already committed (2026-06-15); no change needed this wave.
+> - **`bazel_vs_cargo` smoke job + Taskfile `bazel-vs-cargo` task** landed (commit `c25f119`). The
+>   real Bazel target is **`//crates/avalanchers:avalanchers`** (not the `//crates/ava-node:...`
+>   placeholder in the step-3 prose — the binary crate is `crates/avalanchers`). The task runs
+>   `cargo build -p avalanchers --release` + `bazelisk build //crates/avalanchers:avalanchers`.
+> - **`tests-required.needs` consolidation:** the four gates with *real working backing* were
+>   wired and added — **`vectors_verify`** (`vectors-verify`), **`porting_report`**
+>   (`porting-report`, non-zero on any `wip` row), **`fuzz`** (`test-fuzz` smoke; the task enters
+>   the nightly `fuzz` dev shell via its own `NIX_DEV_SHELL=fuzz`), and **`bazel_vs_cargo`**. The
+>   full `needs:` list is now: `Unit`, `Lint`, `taulint`, `check_generated_protobuf`,
+>   `check_mocks`, `check_deps_tidy`, `bazel`, `differential`, `vectors_verify`, `porting_report`,
+>   `fuzz`, `bazel_vs_cargo`.
+> - **`coverage` (X.8) and `vectors_drift` (X.12) were deliberately NOT added** to `needs:`:
+>   `scripts/check_coverage_floor.sh` still has an **empty floor table** (scaffold, exits 0) and
+>   `scripts/vectors_drift.sh` is a **documented scaffold** (the Go vector-extraction harness was
+>   superseded by the recorded-oracle pattern). Wiring them now would gate on no-ops. They remain
+>   deepen-later follow-ups: populate the per-crate coverage floor table (X.8), and decide whether
+>   to revive the Go-side `vectors_drift` extraction or formally retire it in favour of the
+>   recorded-oracle path (X.12). `single_runtime_lint` is also a real, passing gate not yet in
+>   `needs:` — a one-line follow-up if a future pass wants it as a hard merge gate.
+> Verified by the implementer: `actionlint` + `yamlfmt -lint` clean on `ci.yml`; `vectors-verify`
+> and `porting-report` exit 0 on the merged tree; `task --list` shows `bazel-vs-cargo`.
 
 ---
 
