@@ -184,6 +184,12 @@ tasks:
     desc: Build avalanchers with Bazel
     cmd: '{{.NIX_RUN}} bazelisk build //crates/avalanchers:avalanchers'
 
+  bazel-vs-cargo:
+    desc: Build avalanchers with both Cargo and Bazel, asserting both succeed (proves Cargo.lock agreement; specs/01 §4.5)
+    cmds:
+      - '{{.NIX_RUN}} cargo build -p avalanchers --release'
+      - '{{.NIX_RUN}} bazelisk build //crates/avalanchers:avalanchers'
+
   bazel-build-opt:
     desc: Build avalanchers with Bazel (optimized)
     cmd: '{{.NIX_RUN}} bazelisk build --config=opt //crates/avalanchers:avalanchers'
