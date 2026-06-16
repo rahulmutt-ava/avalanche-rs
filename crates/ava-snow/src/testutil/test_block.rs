@@ -34,7 +34,9 @@ impl TestBlock {
             id,
             parent,
             height,
-            timestamp: UNIX_EPOCH + Duration::from_secs(height),
+            timestamp: UNIX_EPOCH
+                .checked_add(Duration::from_secs(height))
+                .unwrap_or(UNIX_EPOCH),
             bytes: id.as_bytes().to_vec(),
         }
     }

@@ -33,7 +33,7 @@ impl UnarySnowball {
     /// Records a poll where `count` nodes preferred the choice.
     pub fn record_poll(&mut self, count: u32) {
         if count >= self.snowflake.alpha_preference {
-            self.preference_strength += 1;
+            self.preference_strength = self.preference_strength.saturating_add(1);
         }
         self.snowflake.record_poll(count);
     }

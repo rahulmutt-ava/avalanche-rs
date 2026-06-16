@@ -109,7 +109,8 @@ impl Benchlist {
         }
         p.consecutive_failures = p.consecutive_failures.saturating_add(1);
         if p.consecutive_failures >= threshold {
-            p.benched_until = Some(now + cooldown);
+            // Saturate rather than overflow the bench deadline (liveness-only).
+            p.benched_until = Some(now.checked_add(cooldown).unwrap_or(now));
             return true;
         }
         false
@@ -143,9 +144,12 @@ impl Benchlist {
         if max <= min {
             return self.config.min_bench_duration;
         }
-        let span = max - min;
+        // `max > min` was just checked, so `span >= 1` (non-zero divisor below).
+        let span = max.saturating_sub(min);
         // span fits in u128; reduce the 64-bit draw into the span.
         let draw = u128::from(rng.uint64());
+        // Divisor is provably non-zero (span >= 1); modulo cannot panic.
+        #[allow(clippy::arithmetic_side_effects)]
         let offset = draw % span;
         let nanos = min.saturating_add(offset);
         // Durations are bounded by config (≤ a few minutes) → fits in u64 nanos.

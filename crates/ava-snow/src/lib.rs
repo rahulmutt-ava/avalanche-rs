@@ -19,6 +19,10 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+// Determinism hardening (spec 24 §A.2, hazard #2/#3; X.19 follow-up): no
+// floating-point and no unchecked integer arithmetic on consensus paths.
+#![deny(clippy::arithmetic_side_effects)]
+#![deny(clippy::float_arithmetic)]
 
 pub mod acceptor;
 pub mod choices;

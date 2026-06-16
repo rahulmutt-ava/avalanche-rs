@@ -274,7 +274,7 @@ impl<F: Factory + Clone> Topological<F> {
 
                 let previously_seen = kahn_nodes.contains_key(&parent_id);
                 let kahn = kahn_nodes.entry(parent_id).or_default();
-                kahn.in_degree += 1;
+                kahn.in_degree = kahn.in_degree.saturating_add(1);
 
                 if previously_seen {
                     // Don't re-increment ancestors through this block.
@@ -322,7 +322,7 @@ impl<F: Factory + Clone> Topological<F> {
             let parent_id = blk.parent();
 
             let parent_kahn = kahn_nodes.entry(parent_id).or_default();
-            parent_kahn.in_degree -= 1;
+            parent_kahn.in_degree = parent_kahn.in_degree.saturating_sub(1);
             parent_kahn.votes.add_count(leaf_id, kahn_votes_len);
             if parent_kahn.in_degree == 0 {
                 leaves.insert(parent_id);
@@ -540,7 +540,7 @@ impl<F: Factory + Clone> SnowmanConsensus for Topological<F> {
     }
 
     fn record_poll(&mut self, vote_bag: &Bag<Id>) -> Result<()> {
-        self.poll_number += 1;
+        self.poll_number = self.poll_number.saturating_add(1);
 
         let mut vote_stack = Vec::new();
         if vote_bag.len() >= self.params.alpha_preference as usize {

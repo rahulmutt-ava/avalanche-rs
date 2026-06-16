@@ -261,49 +261,49 @@ impl<F: Factory> UnaryNode<F> {
             children: [None, None],
         });
         b.preferences[bit as usize] = self.preference;
-        b.preferences[1 - bit as usize] = new_choice;
+        b.preferences[(bit as usize) ^ 1] = new_choice;
 
         let new_child_snow = factory.new_unary(*params);
         let new_child = Node::Unary(Box::new(UnaryNode {
             preference: new_choice,
-            decided_prefix: index + 1, // This branch is decided in its favor.
-            common_prefix: NUM_BITS,   // No conflicts under this branch.
+            decided_prefix: index.saturating_add(1), // This branch is decided in its favor.
+            common_prefix: NUM_BITS,                 // No conflicts under this branch.
             snow: new_child_snow,
             should_reset: false,
             child: None,
         }));
 
-        if self.decided_prefix == self.common_prefix - 1 {
+        if self.decided_prefix == self.common_prefix.saturating_sub(1) {
             // Case 2: only voting over one bit.
             let had_child = self.child.is_some();
             b.children[bit as usize] = self.child.take();
             if had_child {
-                b.children[1 - bit as usize] = Some(new_child);
+                b.children[(bit as usize) ^ 1] = Some(new_child);
             }
             Node::Binary(b)
         } else if index == self.decided_prefix {
             // Case 3: split on the first bit.
-            self.decided_prefix += 1;
-            b.children[1 - bit as usize] = Some(new_child);
+            self.decided_prefix = self.decided_prefix.saturating_add(1);
+            b.children[(bit as usize) ^ 1] = Some(new_child);
             b.children[bit as usize] = Some(Node::Unary(self));
             Node::Binary(b)
-        } else if index == self.common_prefix - 1 {
+        } else if index == self.common_prefix.saturating_sub(1) {
             // Case 4: split on the last bit.
-            self.common_prefix -= 1;
+            self.common_prefix = self.common_prefix.saturating_sub(1);
             let had_child = self.child.is_some();
             b.children[bit as usize] = self.child.take();
             if had_child {
-                b.children[1 - bit as usize] = Some(new_child);
+                b.children[(bit as usize) ^ 1] = Some(new_child);
             }
             self.child = Some(Node::Binary(b));
             Node::Unary(self)
         } else {
             // Case 5: split on an interior bit.
             let original_decided_prefix = self.decided_prefix;
-            self.decided_prefix = index + 1;
+            self.decided_prefix = index.saturating_add(1);
             let cloned_snow = self.snow.clone_instance();
             let preference = self.preference;
-            b.children[1 - bit as usize] = Some(new_child);
+            b.children[(bit as usize) ^ 1] = Some(new_child);
             b.children[bit as usize] = Some(Node::Unary(self));
             Node::Unary(Box::new(UnaryNode {
                 preference,
@@ -407,7 +407,7 @@ impl<F: Factory> BinaryNode<F> {
             self.should_reset[bit] = true;
             // 1-bit is set below regardless.
         }
-        self.should_reset[1 - bit] = true; // They didn't reach the threshold.
+        self.should_reset[bit ^ 1] = true; // They didn't reach the threshold.
 
         let pruned_votes = if bit == 1 { split1 } else { split0 };
         let num_votes = pruned_votes.len() as u32;

@@ -36,7 +36,11 @@ pub fn floor_to_secs(t: SystemTime) -> SystemTime {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    UNIX_EPOCH + Duration::from_secs(secs)
+    // `secs` is derived from a since-epoch duration, so re-adding it cannot
+    // overflow in practice; fall back to the original instant if it ever did.
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(secs))
+        .unwrap_or(t)
 }
 
 /// The persistence surface used by the uptime manager (Go `uptime.State`).
@@ -264,7 +268,11 @@ impl UptimeState for DbUptimeState {
         let [up, last, _start] = self.read(node_id)?;
         Ok((
             Duration::from_secs(up),
-            UNIX_EPOCH + Duration::from_secs(last),
+            // Persisted second-count from a prior since-epoch duration; cannot
+            // overflow in practice, clamp to the epoch if it ever did.
+            UNIX_EPOCH
+                .checked_add(Duration::from_secs(last))
+                .unwrap_or(UNIX_EPOCH),
         ))
     }
 
@@ -286,7 +294,11 @@ impl UptimeState for DbUptimeState {
 
     fn get_start_time(&self, node_id: NodeId) -> DbResult<SystemTime> {
         let [_up, _last, start] = self.read(node_id)?;
-        Ok(UNIX_EPOCH + Duration::from_secs(start))
+        // Persisted second-count from a prior since-epoch duration; cannot
+        // overflow in practice, clamp to the epoch if it ever did.
+        Ok(UNIX_EPOCH
+            .checked_add(Duration::from_secs(start))
+            .unwrap_or(UNIX_EPOCH))
     }
 }
 

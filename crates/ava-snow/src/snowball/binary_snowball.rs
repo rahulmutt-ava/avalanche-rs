@@ -64,8 +64,9 @@ impl BinarySnowball {
     pub fn record_poll(&mut self, count: u32, choice: u8) {
         if count >= self.snowflake.alpha_preference() {
             let idx = choice as usize;
-            self.preference_strength[idx] += 1;
-            if self.preference_strength[idx] > self.preference_strength[1 - idx] {
+            self.preference_strength[idx] = self.preference_strength[idx].saturating_add(1);
+            // `idx` is 0 or 1 (binary), so `idx ^ 1` is the opposite index.
+            if self.preference_strength[idx] > self.preference_strength[idx ^ 1] {
                 self.preference = choice;
             }
         }
