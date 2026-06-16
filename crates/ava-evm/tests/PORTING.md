@@ -5,13 +5,17 @@ Tracks coverage of Go `plugin/evm`, `plugin/evm/atomic`, and
 the `*_test.go` files in the coreth reference tree at
 `../avalanchego/graft/coreth/plugin/evm{,/atomic{,/state,/txpool,/vm,/sync},/customheader}`
 (the tree is read-only; it is never modified here). Shipped-scope M6 items are
-fully mapped; unshipped items (warp precompile M6.22, full P/X VM gossip
-integration, bootstrapper) are listed as `n/a` or `wip` with reasons.
+fully mapped; the warp precompile (M6.22 + M6.31) is shipped (the predicate pass
++ stateful precompile live in `src/precompile/{warp,allowlist,feemanager}.rs`),
+so its rows are `✅` (functional parity) or `n/a` (Go-specific header-`Extra`
+helpers that do not apply to the Rust EIP-2930 access-list architecture — see
+spec 20 §7.2). Remaining unshipped items (full P/X VM gossip integration,
+bootstrapper) are listed as `n/a` with reasons.
 
 Legend: ⬜ not ported · 🟡 partial · ✅ ported · n/a not applicable
 
-**Summary (shipped scope):** 55 ported ✅ / 8 partial 🟡 / 0 not-ported ⬜ /
-30 n/a · plus 8 wip rows for unshipped M6 scope.
+**Summary (shipped scope):** 86 ported ✅ / 9 partial 🟡 / 0 not-ported ⬜ /
+37 n/a · 0 wip rows.
 
 Shipped scope covers: block wire codec / chainspec / fee rules / lifecycle
 (verify/accept/reject) / atomic tx codec / atomic mempool / atomic trie /
@@ -80,7 +84,7 @@ the built-in no-op test-VM factory, which is what
 | `TestBuildBlockLargeTxStarvation` | n/a | Mempool scheduling / large-tx starvation is an reth mempool property; not a semantic test of the ava-evm codec/lifecycle |
 | `TestWaitForEvent` | n/a | Go channel / goroutine notification test; async Rust uses tokio channels (future M6 follow-up with the event loop) |
 | `TestCreateHandlers` | n/a | Go HTTP handler registration; Rust RPC is exposed directly via `rpc::eth::EthRpc` + `rpc::avax::AvaxRpc` (M6.23/M6.24); no handler-registration test yet |
-| `TestDelegatePrecompile_BehaviorAcrossUpgrades` | wip | Precompile dispatch across upgrades; `precompile_dispatch::dispatch_falls_through_and_gates_by_height` covers the registry gating, but the full delegate-precompile (stateful allowlist/feemanager) is M6.22 (unshipped) |
+| `TestDelegatePrecompile_BehaviorAcrossUpgrades` | ✅ ported | `precompile_dispatch::dispatch_falls_through_and_gates_by_height` covers registry dispatch + height gating across upgrades; the stateful delegate-precompile bodies (AllowList / FeeManager) are live with full `run()` implementations in `src/precompile/{allowlist,feemanager}.rs` (M6.31) |
 | `TestBlockGasValidation` | ✅ ported | `feerules::ap4_block_gas_cost_matches_spec_vectors` + `fee_schedule::window_params_match_phase` cover AP4 block gas cost validation; `lifecycle::verify_computes_precommit_root_no_commit` covers gas_used check |
 | `TestMinDelayExcessInHeader` | ✅ ported | `build::respects_min_build_delay` — the `MinDelayExcess` (ACP-226/Granite) header field is computed and round-tripped in the block builder test |
 | `TestInspectDatabases` | n/a | Go-specific storage introspection CLI; no Rust equivalent |
@@ -225,9 +229,9 @@ the built-in no-op test-VM factory, which is what
 | `TestExtraPrefix` | ✅ ported | `cchain_block_wire::cchain_block_wire` — the `Extra` field of the coreth header is decoded and round-tripped byte-identically |
 | `TestVerifyExtraPrefix` | ✅ ported | Same — extra-prefix encoding is covered by the block wire round-trip |
 | `TestVerifyExtra` | ✅ ported | Same |
-| `TestPredicateBytesFromExtra` | wip | Predicate bytes (warp message extraction from `Extra`) are part of the warp precompile (M6.22, unshipped) |
-| `TestSetPredicateBytesInExtra` | wip | Same |
-| `TestPredicateBytesExtra` | wip | Same |
+| `TestPredicateBytesFromExtra` | n/a | Tests Go coreth header-`Extra`-field predicate-byte helpers (`predicate.BytesFromExtra`). The Rust warp impl carries predicates in the **EIP-2930 transaction access list** (`precompile/warp.rs::warp_predicates_from_tx`, extracting the chunked message from each access-list tuple addressed to the warp precompile), NOT the block header `Extra` field — so header-Extra extraction is not applicable (spec 20 §7.2). Functional warp-predicate verification is covered by `warp_precompile::predicate_verifies_then_precompile_reads` |
+| `TestSetPredicateBytesInExtra` | n/a | Same — Go header-`Extra` predicate setter; Rust uses the access-list (EIP-2930) predicate encoding (`predicate_to_chunks` / `predicate_from_chunks`), spec 20 §7.2 |
+| `TestPredicateBytesExtra` | n/a | Same — Go header-`Extra` round-trip; not applicable to the Rust access-list architecture (spec 20 §7.2) |
 | `TestVerifyTime` | ✅ ported | `build::respects_min_build_delay` — timestamp monotonicity and minimum delay are enforced by the block builder |
 | `TestGetNextTimestamp` | ✅ ported | `build::respects_min_build_delay` (next timestamp selection) |
 | `TestMinDelayExcess` | ✅ ported | `build::respects_min_build_delay` — `MinDelayExcess` (ACP-226) computation |

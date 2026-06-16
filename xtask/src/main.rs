@@ -14,6 +14,7 @@
 
 #![forbid(unsafe_code)]
 
+mod acceptance;
 mod bench_guard;
 mod check_sae_lints;
 mod gen_flags;
@@ -90,6 +91,10 @@ enum Command {
         #[arg(long)]
         threshold: Option<f64>,
     },
+    /// M9.23 final acceptance gate (specs/16 §5 definition of done): assert every
+    /// `16` §5 DoD item maps to a named exit test that exists (offline + live
+    /// arms) and that every crate's `tests/PORTING.md` has zero `wip` rows.
+    Acceptance,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -110,5 +115,6 @@ fn main() -> anyhow::Result<()> {
         Command::SaevmExitGate => saevm_exit_gate::run(),
         Command::GenGenesis => gen_genesis::run(),
         Command::BenchGuard { threshold } => bench_guard::run(threshold),
+        Command::Acceptance => acceptance::run(),
     }
 }
