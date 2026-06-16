@@ -57,6 +57,10 @@ enum Command {
     },
     /// Reexecute golden block ranges and compare state roots.
     TestReexecute,
+    /// Sustained-load suite: tx stream + metric-name SLOs (specs/02 §10.3, M9.18).
+    TestLoad,
+    /// Rolling-upgrade suite: Go→Rust across an activation height (specs/02 §10.4, M9.17).
+    TestUpgrade,
     /// Manage the golden-vector corpus (verify / diff / regen).
     Vectors {
         #[command(subcommand)]
@@ -96,6 +100,8 @@ fn main() -> anyhow::Result<()> {
         Command::TestFuzz { long } => test::test_fuzz(long),
         Command::TestDifferential { seed, recorded } => test::test_differential(seed, recorded),
         Command::TestReexecute => test::test_reexecute(),
+        Command::TestLoad => test::test_load(),
+        Command::TestUpgrade => test::test_upgrade(),
         Command::Vectors { action } => vectors::run(action),
         Command::PortingReport => porting::report(),
         Command::LintDeterminism => lint_determinism::run(),

@@ -194,3 +194,26 @@ pub fn test_differential(seed: Option<u64>, recorded: bool) -> anyhow::Result<()
 pub fn test_reexecute() -> anyhow::Result<()> {
     cargo(&["nextest", "run", "-p", "ava-reexecute"])
 }
+
+/// `test-load`: sustained tx stream + metric-name SLOs against a Rust tmpnet
+/// (specs/02 §10.3, specs/16 §5 perf, specs/00 §7.3, M9.18).
+///
+/// Runs the `ava-load` crate. The pure-Rust offline arms (generator determinism,
+/// Prometheus parse + SLO threshold logic) run every CI run; the live
+/// `sustained_load` arm is `#[cfg(feature = "live")] #[ignore]`d (needs a built
+/// `avalanchers` tmpnet) — see `tests/load/tests/PORTING.md`.
+pub fn test_load() -> anyhow::Result<()> {
+    cargo(&["nextest", "run", "-p", "ava-load"])
+}
+
+/// `test-upgrade`: Go→Rust rolling upgrade across an activation height incl.
+/// Go-dir→RocksDB import (specs/02 §10.4, specs/16 §5(8), specs/26 §7, M9.17).
+///
+/// Runs the `ava-upgrade` crate. The pure-Rust offline arms (swap/import
+/// orchestration + continuity/no-fork assertions over synthetic Observations)
+/// run every CI run; the live `go_to_rust` arm is `#[cfg(feature = "live")]
+/// #[ignore]`d (needs `$AVALANCHEGO_PATH` + a built `avalanchers`) — see
+/// `tests/upgrade/tests/PORTING.md`.
+pub fn test_upgrade() -> anyhow::Result<()> {
+    cargo(&["nextest", "run", "-p", "ava-upgrade"])
+}

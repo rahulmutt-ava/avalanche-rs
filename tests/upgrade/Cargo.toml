@@ -1,0 +1,23 @@
+[package]
+name = "ava-upgrade"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Upgrade test harness: Go→Rust across an activation height incl. Go-dir→RocksDB import (specs/02 §10.4, M9.17)."
+publish = false
+
+[features]
+# Gates the *live* arm (`go_to_rust`) which boots a live previous-release Go
+# tmpnet and swaps nodes to the Rust binary across an activation height. Needs an
+# external Go `avalanchego` binary at `$AVALANCHEGO_PATH` (+ a built
+# `avalanchers`), so it is also `#[ignore]`d and never runs in CI / this sandbox;
+# only a scheduled/nightly job or `--features live -- --ignored` turns it on. The
+# pure-Rust offline arms (swap/import orchestration + continuity/no-fork
+# assertions over synthetic Observations) run every CI run with no feature flag.
+live = [  ]
+
+[lints]
+workspace = true
