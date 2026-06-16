@@ -146,6 +146,32 @@ pub fn go_binary_path() -> Option<PathBuf> {
     std::env::var("AVALANCHEGO_PATH").ok().map(PathBuf::from)
 }
 
+/// The path to a built **Go** rpcchainvm plugin binary the live M9.12 arm hosts
+/// under a Rust node, from `$AVALANCHEGO_PLUGIN_PATH`. Returns `None` if unset or
+/// missing on disk.
+pub fn go_plugin_path() -> Option<PathBuf> {
+    let p = PathBuf::from(std::env::var("AVALANCHEGO_PLUGIN_PATH").ok()?);
+    p.exists().then_some(p)
+}
+
+/// The path to the built `avalanchers` node binary (`<target>/{debug,release}/
+/// avalanchers`), which the live M9.12 arm uses as the **Rust rpcchainvm host**
+/// hosting a Go plugin. Honors `CARGO_TARGET_DIR` (like [`build_rust_plugin`]).
+/// Returns `None` if no binary is present in either profile dir.
+#[must_use]
+pub fn avalanchers_binary_path() -> Option<PathBuf> {
+    let target = target_dir();
+    for profile in ["debug", "release"] {
+        let mut p = target.clone();
+        p.push(profile);
+        p.push(exe_name("avalanchers"));
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Offline proof that the built plugin speaks the v45 **guest** protocol: spawn
 /// it as a real subprocess with [`ENGINE_ADDRESS_KEY`] pointing at a loopback
 /// listener we own, and assert the plugin dials it back within `timeout` (the
