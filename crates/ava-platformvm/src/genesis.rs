@@ -203,10 +203,15 @@ pub fn seed_state<C: Chain>(state: &mut C, genesis: &Genesis, genesis_bytes: &[u
         state.add_utxo(utxo_id, utxo_bytes);
     }
 
-    // Primary-Network validators (each a current validator).
+    // Primary-Network validators (each a current validator). The tx bytes are
+    // stored in the tx store (Go `state.AddTx`) so the reward-proposal executor's
+    // `staker_tx_resolver` (Go `state.GetTx`) can recover and reward a genesis
+    // validator — without this a genesis validator is never rewardable
+    // (M4.24 / M9.19 Gap 2).
     for vdr_tx in &genesis.validators {
         let staker = staker_from_validator_tx(vdr_tx)?;
         state.put_current_validator(staker)?;
+        state.add_tx(vdr_tx.id(), vdr_tx.bytes().to_vec());
     }
 
     // Genesis chains (recorded under their subnet).
@@ -476,5 +481,41 @@ mod seed {
 
         // The genesis chain is recorded under the Primary Network subnet.
         assert_eq!(state.chains(Id::EMPTY).len(), 1);
+    }
+
+    /// Regression (M4.24 / M9.19 Gap 2): seeding records each genesis validator's
+    /// tx **bytes** in the state tx store, so the reward-proposal executor's
+    /// `staker_tx_resolver` (Go `state.GetTx`) can recover and reward a genesis
+    /// validator. Before this fix `get_tx(vdr.id())` returned `NotFound`, leaving
+    /// genesis validators permanently unrewardable.
+    #[test]
+    fn seed_state_records_genesis_validator_tx() {
+        use crate::txs::{Codec, Tx};
+
+        let g = genesis::test_synthetic_genesis();
+        let bytes = genesis::marshal(&g).expect("marshal");
+        let mut state = State::new(MemDb::new()).expect("state");
+
+        genesis::seed_state(&mut state, &g, &bytes).expect("seed");
+
+        let vdr = g.validators.first().expect("one genesis validator");
+        assert!(
+            !vdr.bytes().is_empty(),
+            "genesis validator tx bytes populated"
+        );
+
+        // The validator tx bytes are stored under its id and match exactly.
+        let stored = state
+            .get_tx(vdr.id())
+            .expect("genesis validator tx in store");
+        assert_eq!(stored, vdr.bytes(), "stored bytes == validator tx bytes");
+
+        // Those stored bytes resolve through the proposal executor's path:
+        // parse with the regular codec, then project to a RewardedStakerTx.
+        let parsed = Tx::parse(Codec(), &stored).expect("parse stored validator tx");
+        assert!(
+            crate::block::executor::verify::rewarded_staker_tx(&parsed).is_some(),
+            "genesis validator resolves to a rewardable staker tx"
+        );
     }
 }
