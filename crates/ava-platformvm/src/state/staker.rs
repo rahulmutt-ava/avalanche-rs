@@ -95,6 +95,42 @@ impl Staker {
         }
     }
 
+    /// `NewStaker` — a raw current-set staker built from explicitly provided
+    /// `start_time`/`end_time`/`weight`/`potential_reward`, rather than deriving
+    /// them from the source tx (Go `state.NewStaker`). It is used to build
+    /// auto-renewed validators (ACP-236, Helicon), whose `start_time` is the
+    /// chain time at execution and whose `end_time = start_time + Period`.
+    ///
+    /// As with [`Staker::new_current`], `next_time == end_time` (a current staker
+    /// is next moved — removed — at its end) and `priority` must be a current-set
+    /// priority.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_staker(
+        tx_id: Id,
+        node_id: NodeId,
+        public_key: Option<bls::PublicKey>,
+        subnet_id: Id,
+        weight: u64,
+        start_time: SystemTime,
+        end_time: SystemTime,
+        potential_reward: u64,
+        priority: Priority,
+    ) -> Self {
+        Self {
+            tx_id,
+            node_id,
+            public_key,
+            subnet_id,
+            weight,
+            start_time,
+            end_time,
+            potential_reward,
+            next_time: end_time,
+            priority,
+        }
+    }
+
     /// `NewPendingStaker` — a staker in the pending validator set, where
     /// `next_time == start_time` and `potential_reward == 0` (the reward is
     /// assigned on promotion). `priority` must be a pending-set priority.

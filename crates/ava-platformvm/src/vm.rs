@@ -341,6 +341,7 @@ fn upgrade_schedule(ctx: &ChainContext) -> UpgradeSchedule {
     UpgradeSchedule {
         durango_time: datetime_to_system(ctx.network_upgrades.durango_time),
         etna_time: datetime_to_system(ctx.network_upgrades.etna_time),
+        helicon_time: datetime_to_system(ctx.network_upgrades.helicon_time),
     }
 }
 

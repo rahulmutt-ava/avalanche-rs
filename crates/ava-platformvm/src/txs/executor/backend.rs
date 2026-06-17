@@ -36,6 +36,10 @@ pub struct UpgradeSchedule {
     pub durango_time: SystemTime,
     /// `EtnaTime` — when the Etna upgrade activates.
     pub etna_time: SystemTime,
+    /// `HeliconTime` — when the Helicon upgrade (ACP-236 auto-renew) activates.
+    /// Unscheduled on every live network (year-9999), so this is the far future
+    /// for all the production-config constructors below.
+    pub helicon_time: SystemTime,
 }
 
 impl UpgradeSchedule {
@@ -45,6 +49,7 @@ impl UpgradeSchedule {
         Self {
             durango_time: SystemTime::UNIX_EPOCH,
             etna_time: SystemTime::UNIX_EPOCH,
+            helicon_time: SystemTime::UNIX_EPOCH,
         }
     }
 
@@ -58,6 +63,7 @@ impl UpgradeSchedule {
         Self {
             durango_time: SystemTime::UNIX_EPOCH,
             etna_time: far,
+            helicon_time: far,
         }
     }
 
@@ -73,6 +79,7 @@ impl UpgradeSchedule {
         Self {
             durango_time: far,
             etna_time: far,
+            helicon_time: far,
         }
     }
 
@@ -86,6 +93,12 @@ impl UpgradeSchedule {
     #[must_use]
     pub fn is_etna_activated(&self, t: SystemTime) -> bool {
         t >= self.etna_time
+    }
+
+    /// `UpgradeConfig.IsHeliconActivated(t)`.
+    #[must_use]
+    pub fn is_helicon_activated(&self, t: SystemTime) -> bool {
+        t >= self.helicon_time
     }
 }
 
@@ -174,5 +187,11 @@ impl Backend {
     #[must_use]
     pub fn is_etna_activated(&self, t: SystemTime) -> bool {
         self.upgrades.is_etna_activated(t)
+    }
+
+    /// `UpgradeConfig.IsHeliconActivated(t)`.
+    #[must_use]
+    pub fn is_helicon_activated(&self, t: SystemTime) -> bool {
+        self.upgrades.is_helicon_activated(t)
     }
 }

@@ -68,6 +68,9 @@ pub struct Diff {
     pending_ops: Vec<StakerOp>,
     /// Point-lookup overlay for current validators by `(subnet, node)`.
     current_validators: BTreeMap<(Id, NodeId), Option<Staker>>,
+    /// Mutable staking-info overlay (ACP-236 auto-renew), keyed by `(subnet,
+    /// node)`. Set entries shadow the parent; flushed in [`apply`](Diff::apply).
+    staking_info: BTreeMap<(Id, NodeId), crate::state::metadata_validator::StakingInfo>,
 
     // ----- L1 validators -----
     l1_validators: BTreeMap<Id, L1Validator>,
@@ -106,6 +109,7 @@ impl Diff {
             current_ops: Vec::new(),
             pending_ops: Vec::new(),
             current_validators: BTreeMap::new(),
+            staking_info: BTreeMap::new(),
             l1_validators: BTreeMap::new(),
             added_subnets: Vec::new(),
             subnet_owners: BTreeMap::new(),
@@ -164,6 +168,13 @@ impl Diff {
                 StakerOp::PutDelegator(s) => base.put_pending_delegator(s.clone()),
                 StakerOp::DeleteDelegator(s) => base.delete_pending_delegator(s),
             }
+        }
+
+        // Staking-info flush must run after the staker ops above, since
+        // `set_staking_info` requires the validator to exist in `base` (Go
+        // applies `modifiedStakingInfo` after the validator diffs).
+        for (&(subnet, node), &info) in &self.staking_info {
+            base.set_staking_info(subnet, node, info)?;
         }
 
         for v in self.l1_validators.values() {
@@ -270,6 +281,12 @@ impl Chain for Diff {
         if !s.priority.is_current() {
             return Err(Error::WrongTxType);
         }
+        // Seed the mutable staking info with the zero value (Go
+        // `State.PutCurrentValidator`), so a `get_staking_info` after the put
+        // observes a default rather than falling through to the parent.
+        self.staking_info
+            .entry((s.subnet_id, s.node_id))
+            .or_default();
         self.current_validators
             .insert((s.subnet_id, s.node_id), Some(s.clone()));
         self.current_ops.push(StakerOp::PutValidator(s));
@@ -277,6 +294,7 @@ impl Chain for Diff {
     }
 
     fn delete_current_validator(&mut self, s: &Staker) {
+        self.staking_info.remove(&(s.subnet_id, s.node_id));
         self.current_validators
             .insert((s.subnet_id, s.node_id), None);
         self.current_ops.push(StakerOp::DeleteValidator(s.clone()));
@@ -295,6 +313,31 @@ impl Chain for Diff {
         // executor (M4.16+) walks the iterator through dedicated helpers. Expose
         // the parent's view as the base; recorded ops are applied on flush.
         self.parent.current_stakers()
+    }
+
+    fn get_staking_info(
+        &self,
+        subnet: Id,
+        node: NodeId,
+    ) -> Result<crate::state::metadata_validator::StakingInfo> {
+        if let Some(&info) = self.staking_info.get(&(subnet, node)) {
+            return Ok(info);
+        }
+        // Fall through to the parent, but only after confirming the validator is
+        // visible through this overlay (a diff-local delete shadows the parent).
+        self.get_current_validator(subnet, node)?;
+        self.parent.get_staking_info(subnet, node)
+    }
+
+    fn set_staking_info(
+        &mut self,
+        subnet: Id,
+        node: NodeId,
+        info: crate::state::metadata_validator::StakingInfo,
+    ) -> Result<()> {
+        self.get_current_validator(subnet, node)?;
+        self.staking_info.insert((subnet, node), info);
+        Ok(())
     }
 
     fn put_pending_validator(&mut self, s: Staker) -> Result<()> {

@@ -21,9 +21,13 @@ use crate::state::chain::Chain;
 use crate::state::staker::Staker;
 use crate::txs::AddPermissionlessDelegatorTx;
 use crate::txs::AddPermissionlessValidatorTx;
+use crate::txs::components::Owner;
+use crate::txs::tx::Tx;
+use crate::txs::{AddAutoRenewedValidatorTx, SetAutoRenewedValidatorConfigTx, UnsignedTx};
 
 use super::backend::Backend;
 use super::state_changes;
+use super::subnet_tx_verification;
 
 /// `SyncBound` — the permitted clock-skew slack when checking a pre-Durango
 /// staker start time (`executor.SyncBound = 10s`).
@@ -265,6 +269,150 @@ pub(crate) fn verify_add_permissionless_delegator(
     let fee = state_changes::fee_calculator(backend, chain)
         .calculate_fee(crate::txs::fee::complexity::base_tx_complexity())?;
     state_changes::verify_spend(chain, &tx.base.base.ins, &outs, fee, backend.avax_asset_id)
+}
+
+/// `verifyAddAutoRenewedValidatorTx` — semantic validation for an
+/// [`AddAutoRenewedValidatorTx`] (ACP-236 auto-renew; Helicon-gated, specs 08
+/// §2.4 upstream delta).
+///
+/// Returns [`Error::DurangoUpgradeNotActive`] **only if** Helicon is inactive —
+/// in Go this is `errHeliconUpgradeNotActive`; the Rust port reuses the
+/// nearest-existing fork-not-active sentinel (see the module-level note on the
+/// missing Helicon-specific sentinel). Post-bootstrap it then checks weight/
+/// delegation-fee/period bounds, the no-duplicate-primary-validator rule, and
+/// the single-asset flow check.
+///
+/// # Errors
+/// Returns the matching [`Error`] variant on any failed check.
+pub(crate) fn verify_add_auto_renewed_validator(
+    backend: &Backend,
+    chain: &dyn Chain,
+    tx: &AddAutoRenewedValidatorTx,
+) -> Result<()> {
+    if !backend.is_helicon_activated(chain.timestamp()) {
+        return Err(Error::HeliconUpgradeNotActive);
+    }
+
+    tx.syntactic_verify(backend.avax_asset_id)?;
+
+    if !backend.bootstrapped {
+        // Not bootstrapped yet — skip the heavier semantic checks.
+        return Ok(());
+    }
+
+    let cfg = &backend.staking;
+    let weight = tx.weight()?;
+    if weight < cfg.min_validator_stake {
+        return Err(Error::WeightTooSmall);
+    }
+    if weight > cfg.max_validator_stake {
+        return Err(Error::WeightTooLarge);
+    }
+    if u64::from(tx.shares()) < u64::from(cfg.min_delegation_fee) {
+        return Err(Error::InsufficientDelegationFee);
+    }
+    let min_secs = cfg.min_stake_duration.as_secs();
+    let max_secs = cfg.max_stake_duration.as_secs();
+    if tx.period < min_secs {
+        return Err(Error::StakeTooShort);
+    }
+    if tx.period > max_secs {
+        return Err(Error::StakeTooLong);
+    }
+
+    // No duplicate primary-network validator.
+    let node = tx.node_id()?;
+    if get_validator(chain, Id::EMPTY, node).is_ok() {
+        return Err(Error::DuplicateValidator);
+    }
+
+    // Flow check: fee charged on AVAX, conserved against ins / (outs + stake).
+    let mut outs = tx.base.base.outs.clone();
+    outs.extend(tx.stake_outs.iter().cloned());
+    let fee = state_changes::fee_calculator(backend, chain)
+        .calculate_fee(crate::txs::fee::complexity::base_tx_complexity())?;
+    state_changes::verify_spend(chain, &tx.base.base.ins, &outs, fee, backend.avax_asset_id)
+}
+
+/// `verifySetAutoRenewedValidatorConfigTx` — semantic validation for a
+/// [`SetAutoRenewedValidatorConfigTx`] (ACP-236 auto-renew; Helicon-gated).
+///
+/// Resolves the referenced [`AddAutoRenewedValidatorTx`] via `tx.tx_id`, requires
+/// `tx.tx_id ==` the validator's latest `tx_id`, validates `period` bounds (a
+/// zero period is allowed — it stops at cycle end), authorizes via the referenced
+/// validator's `validator_authority`, and runs the flow check. Returns the
+/// resolved current [`Staker`] so the executor can mutate its staking info.
+///
+/// # Errors
+/// Returns the matching [`Error`] variant on any failed check.
+pub(crate) fn verify_set_auto_renewed_validator_config(
+    backend: &Backend,
+    chain: &dyn Chain,
+    signed_tx: &Tx,
+    unsigned_bytes: &[u8],
+    tx: &SetAutoRenewedValidatorConfigTx,
+) -> Result<Staker> {
+    if !backend.is_helicon_activated(chain.timestamp()) {
+        return Err(Error::HeliconUpgradeNotActive);
+    }
+
+    tx.syntactic_verify()?;
+
+    // Resolve the referenced staker tx and require it to be an auto-renewed tx.
+    let staker_tx_bytes = chain.get_tx(tx.tx_id)?;
+    let staker_tx = Tx::parse(crate::txs::codec::Codec(), &staker_tx_bytes)?;
+    let UnsignedTx::AddAutoRenewedValidator(auto_renewed) = &staker_tx.unsigned else {
+        return Err(Error::WrongTxType);
+    };
+
+    let node = auto_renewed.node_id()?;
+    let validator = chain
+        .get_current_validator(Id::EMPTY, node)
+        .map_err(|_| Error::NotValidator)?;
+
+    // `tx.tx_id` must be the latest tx of the auto-renewed validator (it may have
+    // restaked under the same node id with a newer tx).
+    if tx.tx_id != validator.tx_id {
+        return Err(Error::WrongTxType);
+    }
+
+    if !backend.bootstrapped {
+        return Ok(validator);
+    }
+
+    let cfg = &backend.staking;
+    let min_secs = cfg.min_stake_duration.as_secs();
+    let max_secs = cfg.max_stake_duration.as_secs();
+    if tx.period > 0 && tx.period < min_secs {
+        return Err(Error::StakeTooShort);
+    }
+    if tx.period > max_secs {
+        return Err(Error::StakeTooLong);
+    }
+
+    // Authorization: the last credential must prove control of the auto-renewed
+    // validator's `validator_authority` owner.
+    let Owner::Secp256k1(owner) = &auto_renewed.validator_authority;
+    subnet_tx_verification::verify_authorization(
+        backend,
+        signed_tx,
+        unsigned_bytes,
+        owner,
+        &tx.auth,
+    )?;
+
+    // Flow check.
+    let fee = state_changes::fee_calculator(backend, chain)
+        .calculate_fee(crate::txs::fee::complexity::base_tx_complexity())?;
+    state_changes::verify_spend(
+        chain,
+        &tx.base.base.ins,
+        &tx.base.base.outs,
+        fee,
+        backend.avax_asset_id,
+    )?;
+
+    Ok(validator)
 }
 
 /// `verifySubnetValidatorPrimaryNetworkRequirements` — a subnet validator's
