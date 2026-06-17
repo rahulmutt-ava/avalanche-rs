@@ -8,7 +8,13 @@
     "ids": "committed — cb58.json, cb58_raw.json",
     "crypto": "committed — addr.json, encodings.json, secp.json, bls.json, nodeid.json, signer.key",
     "upgrade": "committed — activation.json",
-    "codec": "TODO — linear-codec golden bytes; produce alongside the Rust type registry (M0.15/M0.16) so Go structs mirror the Rust types exactly"
+    "codec": "committed — codec.json, typeid_table.json",
+    "archivedb": "committed — key_encoding.json",
+    "merkledb": "committed — keys/key_pack.json, nodes/node_codec_encode.json, proofs/merkledb_proof.json, range-proofs/range_proof.json, roots/merkledb_root.json",
+    "message": "committed — app_request.json, chits.json, get.json, get_peerlist.json, handshake.json, peerlist.json, ping.json, ping_zero.json, pong.json, signed_ip.json",
+    "saevm": "committed — MANIFEST.json, atomic/*.bin, blocks/*.json, recovery/*, recovery_differential/*, settlement/*, streaming_differential/*",
+    "sync": "committed — proof/single_proof_envelope.json",
+    "tls": "committed — staker.json"
   },
   "todo": [
     "codec/*.json (M0.16)",

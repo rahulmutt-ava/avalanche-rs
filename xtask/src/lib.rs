@@ -9,7 +9,9 @@
 
 #![forbid(unsafe_code)]
 
-// `clap` is a workspace dependency used by the binary target, not the library.
+// These are workspace dependencies used by the binary target, not the library.
 use clap as _;
+use serde_json as _;
+use sha2 as _;
 
 pub mod lint_determinism;

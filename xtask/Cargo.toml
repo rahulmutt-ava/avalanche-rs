@@ -22,6 +22,8 @@ syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 toml = "1"
 walkdir = "2"
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [lints]
 workspace = true
