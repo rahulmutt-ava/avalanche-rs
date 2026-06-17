@@ -39,3 +39,19 @@ jobs:
       - name: test-live
         shell: nix develop --command bash -x {0}
         run: ./scripts/run_task.sh test-live
+
+  # Per-crate coverage-floor gate (specs/02 §12, X.8). A full instrumented
+  # `cargo llvm-cov` build is far too expensive for the per-PR `tests-required`
+  # aggregator in `ci.yml`, so floor enforcement runs here in NIGHTLY: build full
+  # coverage to `lcov.info`, then `check_coverage_floor.sh` fails if any crate in
+  # its FLOORS table dips below its committed floor ("a PR may not lower a crate
+  # below its floor"). See `Taskfile.yml` task `coverage-floor`.
+  coverage-floor:
+    name: Per-crate coverage floors (specs/02 §12)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/install-nix
+      - name: coverage-floor
+        shell: nix develop --command bash -x {0}
+        run: ./scripts/run_task.sh coverage-floor
