@@ -435,8 +435,8 @@
 >   superseded by the recorded-oracle pattern). Wiring them now would gate on no-ops. They remain
 >   deepen-later follow-ups: populate the per-crate coverage floor table (X.8), and decide whether
 >   to revive the Go-side `vectors_drift` extraction or formally retire it in favour of the
->   recorded-oracle path (X.12). `single_runtime_lint` is also a real, passing gate not yet in
->   `needs:` — a one-line follow-up if a future pass wants it as a hard merge gate.
+>   recorded-oracle path (X.12). **`single_runtime_lint` is now wired into `needs:`** (2026-06-17;
+>   the gate passes today: `single_runtime_lint: OK — only the avalanchers binary owns a runtime.`).
 > Verified by the implementer: `actionlint` + `yamlfmt -lint` clean on `ci.yml`; `vectors-verify`
 > and `porting-report` exit 0 on the merged tree; `task --list` shows `bazel-vs-cargo`.
 

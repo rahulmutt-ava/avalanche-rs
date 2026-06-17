@@ -22,6 +22,7 @@ jobs:
       - Unit
       - Lint
       - taulint
+      - single_runtime_lint
       - check_generated_protobuf
       - check_mocks
       - check_deps_tidy
