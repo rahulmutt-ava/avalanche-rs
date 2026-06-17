@@ -555,24 +555,52 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 > - **`verify_block`** is `async` (this repo's `ValidatorState` is `#[async_trait]`): resolves validator sets/subnet-ids once up-front (async), then fans pure BLS predicate verify over `rayon::par_iter` (honors "rayon not errgroup"). `errNoBlockContext` in-loop gate reproduced; `BlockResults` = `BTreeMap<B256, BTreeMap<Address, Bits>>` (deterministic, no `HashMap` in consensus path).
 > **Deferred (follow-ups):** VM-`Initialize` wiring (calling `from_receipts` post-execution to feed `Storage`, mounting `Verifier` on the ACP-118 p2p handler, invoking `verify_block` in the inbound verify path) is a separate integration step — the lifecycle package lands here; wiring is non-gating (Helicon unscheduled). `BUILD.bazel` regen left to the orchestrator's `bazel-gazelle-generate` job.
 
-### Task M7.39: `cchain` `ParseBlock` rejects a non-zero block `Version` **[UPSTREAM DELTA — added 2026-06-17]** ⬜ TODO
-**Sub-crate:** ava-saevm-cchain (`vm::Vm::parse_block`)  ·  **Depends on:** M7.37 (the `parse_block` extData-hash override) and the M7.22/M7.21 carrier decision (where the C-Chain `Version` rides)  ·  **Spec:** `11` §8 + `10` §9 upstream-delta (Go `4772ab3c97` #5543)
+### Task M7.39: `cchain` `ParseBlock` rejects a non-zero block `Version` **[UPSTREAM DELTA — added 2026-06-17]** ✅ DONE (this session)
+**Sub-crate:** ava-saevm-cchain (`vm::Vm::parse_block`)  ·  **Depends on:** M7.37 (the `parse_block` extData-hash override)  ·  **Spec:** `11` §8 + `10` §9 upstream-delta (Go `4772ab3c97` #5543)
+> **As-built (this session, single-track on `main`).** The "carrier decision"
+> the prior status flagged as a blocker is in fact *determined* by M7.37's
+> approach (B) + Go's block-RLP field order — no genuine architecture fork. Go's
+> full coreth block RLP is `[Header, Txs, Uncles, Version, ExtData]`
+> (`BlockBodyExtra{Version uint32, ExtData *[]byte}`, `block_ext.go`); M7.37
+> already carries `extData` as a trailing RLP item after the bare SAE eth block,
+> so the **only** faithful place for `Version` is the trailing item *before*
+> `extData`. **Decision: the C-Chain `BlockBodyExtra` rides as the trailing RLP
+> items `[Version: u32, extData: bytes]`** (`Version` first, matching Go's field
+> order). A bare SAE block (no trailing items) decodes to `Version = 0` + empty
+> `extData` — matching Go's `BlockVersion`/`BlockExtData` defaults for a block
+> with no `BlockBodyExtra`. This extends (does not fork) M7.37's one-item carrier;
+> safe because the build-side commit is still dormant (no production block emits
+> `extData`/`Version` yet — only the constructed-block tests, which were updated).
+> - **`vm.rs`:** new `Error::InvalidBlockVersion(u32)` (`"invalid block version:
+>   <n>"`, Go `errInvalidBlockVersion`). `decode_trailing_ext_data` →
+>   `decode_trailing_body_extra(bytes) -> (u32, Vec<u8>)` (decodes `Version` via
+>   `u32::decode` then `extData` via `Bytes::decode`, tolerating an absent
+>   `extData`). `parse_block` decodes the pair once and checks `version != 0`
+>   **unconditionally and first** (matching Go's order — before the
+>   ExtDataHash/pre-AP1-commitment branch), then runs the existing
+>   extData-hash check.
+> - **Tests (`cchain/tests/ext_data_hash.rs`, 5 → 7):** new
+>   `versioned_block_bytes(version, …)` helper (Go `WithBlockVersion`);
+>   `committed_block_bytes` delegates with `version = 0`. Added
+>   `parse_block_rejects_invalid_version` (Go `TestParseBlock`/`invalid_version`)
+>   and `parse_block_rejects_invalid_version_before_ext_data_hash` (proves the
+>   version check precedes the hash check). cchain 24 lib/integration tests green
+>   (ext_data_hash 7/7), `ava-differential` green, `lint_saevm.sh` exit 0,
+>   `cargo doc -D broken/private intra-doc-links` exit 0, `saevm-exit-gate` ALL
+>   PASSED. PORTING.md `TestParseBlock` row extended (still ✅).
+> **Deliberately NOT done (same as M7.37):** the build-side commit (`build_block`
+> emitting the `[Version, extData]` trailing items) — it stays empty/dormant
+> until the M7.21 C-Chain builder + atomic source makes non-empty `extData`. The
+> boundary is correct-but-dormant: bites on constructed committed/versioned
+> blocks, no-op on the empty build path.
+> **Non-gating:** Helicon unscheduled on all networks — same dormancy as M7.37.
 > **Why added:** Go's #5543 adds a sibling syntactic check to the M7.37
 > extData-hash verify: `cchain.VM.ParseBlock` now rejects any block whose
 > `BlockBodyExtra.Version != 0` (the only supported version) with
-> `errInvalidBlockVersion` (`"invalid block version: <n>"`), before
-> accept/persist/execute. The header commits neither the `Version` nor the
-> `extData` bytes (only `ExtDataHash`), so a tampered `Version` keeps the same
-> block ID — `ParseBlock` is the boundary that catches it.
-> **★ Blocker / decision:** the Rust port (approach (B), M7.37) carries `extData`
-> as a trailing RLP item after a stock SAE eth block with **no `BlockBodyExtra`
-> wire struct and no co-located `Version` field**. Porting this check requires
-> first deciding where the C-Chain `Version` lives in the Rust carrier (e.g. a
-> leading field of the trailing item, or a header `extra_data` layout). Add an
-> `Error::InvalidBlockVersion(u32)` variant and the `parse_block` gate once that
-> is settled; mirror Go's `WithBlockVersion` test option in `cchaintest`.
-> **Non-gating:** Helicon unscheduled on all networks — same dormancy as M7.37.
-**Files (anticipated):** `crates/ava-saevm/cchain/src/vm.rs` (`parse_block`, `Error`), `crates/ava-saevm/cchain/src/block_ext.rs` (Version carrier), `crates/ava-saevm/cchain/tests/` (invalid-version case).
+> `errInvalidBlockVersion`, before accept/persist/execute. The header commits
+> neither the `Version` nor the `extData` bytes (only `ExtDataHash`), so a
+> tampered `Version` keeps the same block ID — `ParseBlock` is the boundary.
+**Files:** `crates/ava-saevm/cchain/src/vm.rs` (`parse_block`, `Error::InvalidBlockVersion`, `decode_trailing_body_extra`), `crates/ava-saevm/cchain/tests/ext_data_hash.rs` (`versioned_block_bytes` + 2 version tests).
 
 ### Task M7.40: `ava-saevm-adaptor` — `ConvertStateSync` syncable-VM wrapper **[UPSTREAM DELTA — added 2026-06-17]** ✅ DONE (b1793cc)
 **Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.10/M7.18 (the existing `convert`/`ChainVm` bridge), `ava-vm` `block::StateSyncableVm`/`StateSummary`/`StateSyncMode` traits  ·  **Spec:** `11` §5 upstream-delta (Go `b1393ecb06` #5480)
