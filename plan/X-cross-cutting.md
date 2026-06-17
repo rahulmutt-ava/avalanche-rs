@@ -111,7 +111,7 @@
 
 ---
 
-### Task X.8: `.config/nextest.toml` CI profile + coverage floors (`cargo-llvm-cov`)
+### Task X.8: `.config/nextest.toml` CI profile + coverage floors (`cargo-llvm-cov`) 🟡 COVERAGE-FLOOR GATE LANDED (2026-06-17)
 **Workstream:** 6 (CI) / 1 (differential timeouts)  ·  **First lands:** M0  ·  **Depends on:** X.1; M0 minimal `.config/nextest.toml`  ·  **Spec:** 01 §6, 02 §11.6 timeouts, 02 §12
 **Files:** `.config/nextest.toml` (deepen), root `Cargo.toml` `[profile.dev-checks]`/`[profile.ci]`, `Taskfile.yml` (`test-coverage`), `scripts/check_coverage_floor.sh`, `.github/workflows/ci.yml` (`coverage` job)
 - [ ] **Step 1 — Red/first check:** Add a `coverage` job enforcing per-crate floors (90% protocol-critical / 80% VM / 70% glue, 02 §12). With a crate below floor, `check_coverage_floor.sh` must fail.
@@ -121,6 +121,21 @@
 - [ ] **Step 5 — Commit:** `ci: nextest CI profile + coverage floors (M0)`
 
 > **Deepens:** each milestone's new crates add a floor row; the floor table is the per-crate gate.
+
+> **AS-BUILT (2026-06-17, commit 63faa81 / merge 593b36b).** `.config/nextest.toml` `[profile.ci]`
+> was already in place (overrides for `ava-saevm`/differential at 900s). This wave made
+> `scripts/check_coverage_floor.sh` a **real lcov-parsing per-crate floor gate**: it parses `SF:`/`DA:`
+> records, groups source files by the `crates/<name>/` path segment, computes per-crate line %, and
+> exits non-zero on any crate below its floor (a FLOORS-listed crate absent from the lcov is skipped
+> with a WARN so scoped runs don't spuriously break). Floors are **measured-then-ratcheted**
+> (floor = measured rounded down to nearest 5, never above measured): `ava-types`=75 (meas 79%),
+> `ava-utils`=65 (meas 66%), `ava-version`=80 (meas 82%). Wired via a `coverage-floor` Taskfile task
+> into `nightly.yml` (NOT per-PR `tests-required` — a full instrumented `cargo llvm-cov` over
+> reth/firewood/saevm is too heavy per-PR). Red/green proven on synthetic lcov fixtures
+> (above-floor→exit 0, below-floor→exit 1) + a real scoped `-p ava-types -p ava-utils -p ava-version`
+> run. **Remaining (deepens):** ratchet floors + add rows for VM/glue crates as scoped coverage is
+> measured per milestone; the per-PR `coverage` CI job stays deferred until measured floors exist for
+> the heavy crates.
 
 ---
 
@@ -150,7 +165,7 @@
 
 ---
 
-### Task X.11: `ava-testvectors` generic loader + `golden_*` tests + `cargo xtask vectors verify`
+### Task X.11: `ava-testvectors` generic loader + `golden_*` tests + `cargo xtask vectors verify` 🟡 `vectors verify` REAL (2026-06-17)
 **Workstream:** 2 (Golden-vector extraction)  ·  **First lands:** M0  ·  **Depends on:** X.10  ·  **Spec:** 22 §2.2, §6
 **Files:** `crates/ava-testvectors/{Cargo.toml,src/lib.rs}` (feature `testutil`, `#![forbid(unsafe_code)]`), `xtask/src/vectors.rs` (`verify`/`diff`/`regen`), `crates/ava-codec/tests/golden_codec.rs`, `crates/ava-utils/tests/golden_sampler.rs`, `crates/ava-crypto/tests/golden_crypto.rs`, `crates/ava-genesis/tests/golden_genesis.rs`
 - [ ] **Step 1 — Red/first check:** Write `golden_codec_utxo`, `golden_sampler_mt19937_stream`, BLS/secp, genesis-id tests (22 §6.2) that load via `load_vectors::<I,O>` and assert byte/value equality. They fail until the loader + Rust impls produce matching bytes.
@@ -159,9 +174,21 @@
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -E 'test(golden_)' && cargo xtask vectors verify` pass.
 - [ ] **Step 5 — Commit:** `vectors: ava-testvectors loader + golden_* tests + xtask vectors verify (M0)`
 
+> **AS-BUILT (2026-06-17, commit dec7f5b / merge 571a06a).** `cargo xtask vectors verify`/`diff`/`regen`
+> are now **real** (replaced the no-op scaffold in `xtask/src/vectors.rs`). `verify` runs three checks
+> over `tests/vectors/`: (1) JSON-schema validity of every `*.json`; (2) orphan/coverage — every
+> on-disk surface dir ↔ a `manifest.json.surfaces` key (both directions); (3) **checksum** — recomputes
+> sha256 of all 48 vector files vs a new committed `tests/vectors/checksums.txt`, failing on
+> mismatch/missing/extra/absent-checksums. `regen` (re)writes `checksums.txt`; `diff --against <dir>`
+> does path-set + per-file byte compare (the Rust half of the drift flow). Added 7 missing surface keys
+> to `manifest.json` (`archivedb`, `merkledb`, `message`, `saevm`, `sync`, `tls`; `codec` promoted from
+> TODO). Red/green proven (corrupt vector → exit 1; restore → exit 0). The existing `vectors_verify` CI
+> job is now a meaningful gate. **Still scaffold:** `ava-testvectors::load_vectors` typed loader +
+> `golden_*` red→green pull (separate, owned by the milestone subsystems) remain as-is.
+
 ---
 
-### Task X.12: `vectors-drift` + `vectors-verify` CI jobs (re-extract vs pinned Go commit)
+### Task X.12: `vectors-drift` + `vectors-verify` CI jobs (re-extract vs pinned Go commit) 🟡 verify REAL; drift extraction still Go-gated (2026-06-17)
 **Workstream:** 2 (Golden-vector extraction)  ·  **First lands:** M0  ·  **Depends on:** X.10, X.11  ·  **Spec:** 22 §7, 02 §6.2
 **Files:** `.github/workflows/ci.yml` (`vectors_verify`, `vectors_drift` jobs), `Taskfile.yml` (`test-vectors`), `scripts/vectors_drift.sh`
 - [ ] **Step 1 — Red/first check:** Add `vectors_drift` to `tests-required`. Hand-edit one committed vector byte; the drift job must fail when it re-extracts from the pinned Go commit and diffs.
@@ -169,6 +196,13 @@
 - [ ] **Step 3 — Green:** Implement `vectors_verify` job (22 §7: `cargo xtask vectors verify` + `cargo nextest run -E 'test(golden_)'`, no Go needed) and `vectors_drift` job (22 §7: pin Go to `avalanchego_revision`, re-run `vectorgen`, `cargo xtask vectors diff`). Revert the tampered byte. Document the "deliberate protocol change" flow (bump revision → `vectors regen` → review vector diff, 22 §7).
 - [ ] **Step 4 — Confirm green:** Both jobs green on a clean tree; tampering re-fails them.
 - [ ] **Step 5 — Commit:** `ci: vectors-verify + vectors-drift gates (M0)`
+
+> **AS-BUILT (2026-06-17).** `vectors-verify` is now a real gate (the `vectors_verify` CI job calls
+> `cargo xtask vectors verify`, which enforces the checksum/schema/orphan corpus invariants per X.11
+> AS-BUILT). The `diff --against <dir>` half is implemented. **`vectors-drift` remains gated** on the
+> Go re-extraction step (`scripts/vectors_drift.sh` still documents but does not run
+> `go run ./tools/extract-vectors` — it needs a pinned `avalanchego` checkout); wiring that into a CI
+> job is the remaining work, alongside `tools/extract-vectors` corpus completion (X.10).
 
 ---
 
@@ -233,7 +267,7 @@
 
 ---
 
-### Task X.18: Observability — `ava-logging` span/level model + JSON-line shape golden + OTel exporter
+### Task X.18: Observability — `ava-logging` span/level model + JSON-line shape golden + OTel exporter 🟡 JSON-line shape golden LANDED (2026-06-17); OTel still M8-deferred
 **Workstream:** 5 (Observability)  ·  **First lands:** M0 (log model)  ·  **Depends on:** X.1  ·  **Spec:** 18 §5, §6
 **Files:** `crates/ava-logging/src/{lib.rs,level.rs,format.rs,factory.rs}`, `tests/log_shape.rs` (JSON-line shape), `crates/ava-logging/src/otel.rs` (M8), `tests/differential/...` (span-name checks)
 - [ ] **Step 1 — Red/first check:** Write `json_log_line_shape` asserting a `tracing` JSON event renders exactly `{"level","timestamp","logger","caller","msg",...}` with lowercase level string + integer-nanosecond durations (18 §5.2). Fails until the custom format layer exists.
@@ -241,6 +275,17 @@
 - [ ] **Step 3 — Green:** Implement `AvaLevel` (8 names + Go's Trace-above-Debug ordering, 18 §5.1), the plain/colors/json formats (18 §5.2, exact key order + lowercased level + `[01-02|15:04:05.000]` console layout), per-chain rolling file layer (`<alias>.log`, lumberjack-equivalent rotation, 18 §5.3/§5.4), and `reload` handles for `setLoggerLevel`. Ensure span names mirror Go log messages so greps keep working (00 §7.3). Defer the OTLP exporter (`otel.rs`: `opentelemetry-otlp` + `tracing-opentelemetry`, `Sampler::TraceIdRatioBased`, resource attrs parity) to **M8** wiring (18 §6) — stub it now behind `--tracing-exporter-type=disabled` (no-op).
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -E 'test(json_log_line_shape)'` passes; M8: OTLP exporter emits spans to a local collector.
 - [ ] **Step 5 — Commit:** `obs: ava-logging level/format model + JSON-line golden (M0); OTLP exporter (M8)`
+
+> **AS-BUILT (2026-06-17, commit 6aeaf99 / merge 78014d2).** The `AvaLevel`/format model already
+> existed (`format.rs` plain/colors/json + `level.rs` 8-name taxonomy). This wave added the missing
+> **JSON-line shape golden**: `format::golden::json_line_shape_is_frozen` drives the real
+> `AvaFormat::new(Format::Json)` through a `tracing_subscriber` registry into an in-memory buffer and
+> freezes the byte shape — reserved-key order `level < timestamp < logger < caller < msg`, then
+> structured fields in sorted (BTreeMap) order — against committed golden
+> `crates/ava-logging/tests/vectors/log_json_shape.golden` (timestamp normalized to `<TS>`; raw value
+> asserted ISO8601 `…%H:%M:%S%.3fZ`). Output matches specs/18 §5.2 exactly (no discrepancy). Red proof:
+> wrong key-order golden fails. **Still deferred to M8 (per Step 3):** the OTLP exporter (`otel.rs`,
+> `opentelemetry-otlp` + `tracing-opentelemetry`) — not yet wired (no `opentelemetry-*` dep present).
 
 ---
 
