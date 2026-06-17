@@ -113,7 +113,14 @@ static SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn os_seeded_source() -> Box<dyn Source> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0u64, |d| d.as_nanos() as u64);
+        .map_or(0u64, |d| {
+            // Keeping the low 64 bits of the nanosecond count is intentional: this is
+            // a coarse, off-consensus-path entropy seed, so a lossy narrowing is fine.
+            #[allow(clippy::cast_possible_truncation)]
+            // justification: deliberate seed truncation, off the consensus path
+            let n = d.as_nanos() as u64;
+            n
+        });
     let counter = SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut mt = Mt19937_64::new();
     mt.seed(nanos ^ counter.rotate_left(32));

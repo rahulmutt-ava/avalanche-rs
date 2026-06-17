@@ -316,8 +316,9 @@ fn bits_to_bytes(indices: &[usize]) -> Vec<u8> {
     // Little-endian scratch, byte 0 = bits 0..7.
     let mut le = vec![0u8; num_bytes];
     for &i in indices {
-        let (byte_idx, bit) = (i.checked_div(8).unwrap_or(0), (i % 8) as u32);
+        let (byte_idx, bit) = (i.checked_div(8).unwrap_or(0), i % 8);
         if let Some(slot) = le.get_mut(byte_idx) {
+            // `bit` is in `[0, 8)`, a valid shift amount for `u8`.
             *slot |= 1u8 << bit;
         }
     }
@@ -334,7 +335,8 @@ fn bytes_to_bits(bytes: &[u8]) -> Vec<usize> {
     // byte[n-1] holds bits 0..7, byte[n-2] bits 8..15, ... (big-endian).
     for (rev, &byte) in bytes.iter().rev().enumerate() {
         for bit in 0..8usize {
-            if byte & (1u8 << (bit as u32)) != 0 {
+            // `bit` is in `[0, 8)`, a valid shift amount for `u8`.
+            if byte & (1u8 << bit) != 0 {
                 indices.push(rev.saturating_mul(8).saturating_add(bit));
             }
         }

@@ -249,6 +249,10 @@ impl<F: Factory> UnaryNode<F> {
             // If child is None, this is re-adding the same choice: a no-op.
             return Node::Unary(self);
         };
+        // `index` is a bit position in `[0, NUM_BITS) == [0, 256)` (return
+        // contract of `first_difference_subset`), so it always fits in `i32`.
+        #[allow(clippy::cast_possible_truncation)]
+        // justification: index < NUM_BITS (256), provably in i32 range
         let index = index as i32;
 
         // The difference was found: this node must be split.
@@ -332,7 +336,10 @@ impl<F: Factory> UnaryNode<F> {
             self.should_reset = true; // Reset my child too.
         }
 
-        let num_votes = votes.len() as u32;
+        // Vote counts are compared against / fed to `u32` thresholds; saturating
+        // preserves the "<threshold" / "record-poll" semantics for any in-range
+        // count (a count exceeding u32::MAX trivially clears any u32 threshold).
+        let num_votes = u32::try_from(votes.len()).unwrap_or(u32::MAX);
         if num_votes < params.alpha_preference {
             self.snow.record_unsuccessful_poll();
             self.should_reset = true;
@@ -398,7 +405,7 @@ impl<F: Factory> BinaryNode<F> {
 
         let mut bit = 0usize;
         // Only care which bit is set if a successful poll can happen.
-        if split1.len() as u32 >= params.alpha_preference {
+        if u32::try_from(split1.len()).unwrap_or(u32::MAX) >= params.alpha_preference {
             bit = 1;
         }
 
@@ -410,14 +417,17 @@ impl<F: Factory> BinaryNode<F> {
         self.should_reset[bit ^ 1] = true; // They didn't reach the threshold.
 
         let pruned_votes = if bit == 1 { split1 } else { split0 };
-        let num_votes = pruned_votes.len() as u32;
+        let num_votes = u32::try_from(pruned_votes.len()).unwrap_or(u32::MAX);
         if num_votes < params.alpha_preference {
             self.snow.record_unsuccessful_poll();
             self.should_reset[bit] = true;
             return (Node::Binary(self), false);
         }
 
-        self.snow.record_poll(num_votes, bit as u8);
+        // `bit` is exactly 0 or 1 (set above), so the narrowing to `u8` is exact.
+        #[allow(clippy::cast_possible_truncation)] // justification: bit ∈ {0, 1}, exact in u8
+        let choice = bit as u8;
+        self.snow.record_poll(num_votes, choice);
 
         if let Some(child) = self.children[bit].take() {
             let (new_child, _) =

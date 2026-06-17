@@ -26,9 +26,18 @@
 // floating-point and no unchecked integer arithmetic on consensus paths.
 #![deny(clippy::arithmetic_side_effects)]
 #![deny(clippy::float_arithmetic)]
-// Test code legitimately does bounded loop/counter/index arithmetic; the deny
-// pair above polices library (consensus) code, not the test harness.
-#![cfg_attr(test, allow(clippy::arithmetic_side_effects, clippy::float_arithmetic))]
+// X.19 follow-up: surface lossy narrowing casts on consensus paths.
+#![warn(clippy::cast_possible_truncation)]
+// Test code legitimately does bounded loop/counter/index arithmetic and casts;
+// the deny pair above polices library (consensus) code, not the test harness.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::arithmetic_side_effects,
+        clippy::float_arithmetic,
+        clippy::cast_possible_truncation
+    )
+)]
 
 pub mod common;
 pub mod error;

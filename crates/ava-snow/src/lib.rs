@@ -23,6 +23,10 @@
 // floating-point and no unchecked integer arithmetic on consensus paths.
 #![deny(clippy::arithmetic_side_effects)]
 #![deny(clippy::float_arithmetic)]
+// X.19 follow-up: surface lossy narrowing casts on consensus paths. Library
+// sites use checked conversions; test code legitimately casts bounded values.
+#![warn(clippy::cast_possible_truncation)]
+#![cfg_attr(test, allow(clippy::cast_possible_truncation))]
 
 pub mod acceptor;
 pub mod choices;

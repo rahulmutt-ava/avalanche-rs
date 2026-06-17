@@ -121,7 +121,7 @@ impl<'a> Reader<'a> {
     pub fn read_tag(&mut self) -> Result<(u32, u8), DecodeError> {
         let tag = self.read_varint()?;
         let wire_type = (tag & 0x7) as u8;
-        let field_number = (tag >> 3) as u32;
+        let field_number = u32::try_from(tag >> 3).map_err(|_| DecodeError::VarintOverflow)?;
         Ok((field_number, wire_type))
     }
 

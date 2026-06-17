@@ -202,7 +202,13 @@ impl ManagerState {
         } else {
             0.0
         };
-        let mut timeout = Duration::from_nanos(nanos as u64);
+        // `nanos` is finite and >= 0 here; Rust's float→int cast saturates, so an
+        // out-of-range value clamps to u64::MAX (then re-clamped to maximum_timeout
+        // below) rather than wrapping — matching Go's overflow-to-max behavior.
+        #[allow(clippy::cast_possible_truncation)]
+        // justification: saturating float→int cast of a clamped, finite value
+        let nanos = nanos as u64;
+        let mut timeout = Duration::from_nanos(nanos);
         if timeout > self.maximum_timeout {
             timeout = self.maximum_timeout;
         } else if timeout < self.minimum_timeout {

@@ -33,10 +33,16 @@
 // floating-point and no unchecked integer arithmetic on consensus paths.
 #![deny(clippy::arithmetic_side_effects)]
 #![deny(clippy::float_arithmetic)]
+// X.19 follow-up: surface lossy narrowing casts on consensus paths. Library
+// sites use checked conversions; test code legitimately casts bounded values.
+#![warn(clippy::cast_possible_truncation)]
 // Dev-dependencies (assert_matches, tokio) are exercised only by the integration
 // test crates under `tests/`, so the unit-test build of the library sees them as
 // unused. Mirror the repo convention (cf. ava-vm test crates).
-#![cfg_attr(test, allow(unused_crate_dependencies))]
+#![cfg_attr(
+    test,
+    allow(unused_crate_dependencies, clippy::cast_possible_truncation)
+)]
 
 pub mod block;
 pub mod canoto;

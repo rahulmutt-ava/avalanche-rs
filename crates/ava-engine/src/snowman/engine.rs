@@ -621,7 +621,8 @@ where
     /// below `optimal_processing`, build + issue a block.
     async fn build_blocks(&mut self) -> Result<()> {
         while self.pending_build_blocks > 0
-            && (self.consensus.num_processing() as u32) < self.cfg.params.optimal_processing
+            && u32::try_from(self.consensus.num_processing()).unwrap_or(u32::MAX)
+                < self.cfg.params.optimal_processing
         {
             self.pending_build_blocks = self.pending_build_blocks.saturating_sub(1);
             let blk = {
