@@ -22,8 +22,21 @@ ava-saevm-core = { path = "../core" }
 # The SAE block lifecycle type the hook builder seam constructs.
 ava-saevm-blocks = { path = "../blocks" }
 ava-evm-reth = { path = "../../ava-evm-reth" }
+# The reth/revm EVM crate (distinct from `ava-evm-reth`): the M7.38 warp
+# lifecycle reuses its predicate machinery + `SendWarpMessage` event unpacking
+# (`precompile::warp`) rather than re-implementing it.
+ava-evm = { path = "../../ava-evm" }
 ava-types = { path = "../../ava-types" }
 ava-vm = { path = "../../ava-vm" }
+# The generic Warp (ICM) envelope + payloads + bit-set quorum verifier the
+# message store / ACP-118 sign-decision / predicate pass operate over (M7.38).
+ava-warp = { path = "../../ava-warp" }
+# The async `ValidatorState` the predicate pass resolves warp validator sets from.
+ava-validators = { path = "../../ava-validators" }
+# `set.Bits` — the per-precompile predicate-failure bit-set (Go `set.Bits`).
+ava-utils = { path = "../../ava-utils" }
+# The inbound predicate pass fans BLS verification out over rayon (Go errgroup).
+rayon = "1"
 # The byte-exact linear codec for the atomic Import/Export tx (M7.22, ATOMIC-1).
 ava-codec = { path = "../../ava-codec" }
 ava-codec-derive = { path = "../../ava-codec-derive" }
@@ -54,3 +67,7 @@ tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "macros", "syn
 proptest = { workspace = true }
 # The in-memory multi-node gossip network harness (Go `saetest/network.go`).
 ava-saevm-testutil = { path = "../testutil" }
+# The warp `verify_block` tests stub the async `ValidatorState` trait.
+async-trait = { workspace = true }
+# Test assertions (sentinel-error matching) for the M7.38 warp tests.
+assert_matches = { workspace = true }

@@ -711,6 +711,26 @@ pub fn handle_precompile_accept(
     Ok(())
 }
 
+/// `corethwarp.UnpackSendWarpEventDataToMessage(data)` — ABI-decode a
+/// `SendWarpMessage` log's `data` (`abi.encode(bytes message)`) and parse the
+/// inner bytes into an [`UnsignedMessage`] (spec 20 §3.1/§7.1).
+///
+/// This is the reusable unpacking step the SAE C-Chain `warp::from_receipts`
+/// (M7.38) calls to capture outbound messages after a block executes. It mirrors
+/// the decode in [`handle_precompile_accept`] but returns the parsed message
+/// rather than recording it.
+///
+/// # Errors
+/// Returns [`ava_warp::Error::InvalidPayload`] if `data` is not a valid
+/// ABI-encoded `bytes`, or [`ava_warp::Error::Codec`] if the inner bytes do not
+/// parse as an unsigned warp message.
+pub fn unpack_send_warp_event_data_to_message(
+    data: &[u8],
+) -> Result<UnsignedMessage, ava_warp::Error> {
+    let unsigned_bytes = abi_decode_bytes(data).ok_or(ava_warp::Error::InvalidPayload)?;
+    UnsignedMessage::parse(&unsigned_bytes).map_err(ava_warp::Error::Codec)
+}
+
 // ---- Predicate chunk encoding (coreth `vms/evm/predicate`) ----------------
 
 /// The predicate delimiter byte (coreth `predicate.go`).
