@@ -314,3 +314,191 @@ mod tests {
         );
     }
 }
+
+/// Golden byte-shape test for the JSON log line (specs/18 §5.2).
+///
+/// Drives the *real* [`AvaFormat`] (`Format::Json`) formatter through a
+/// `tracing_subscriber` registry whose writer is an in-memory buffer, emits one
+/// event with a fixed logger/caller/message and three structured fields chosen
+/// so the sorted (BTreeMap) field order is observable, then freezes the exact
+/// emitted byte shape against a committed golden. This is the byte-shape
+/// guarantee the unit-level `json_line` test cannot give: it exercises the full
+/// `FormatEvent` path (field capture → sort → encode → `writeln!`).
+#[cfg(test)]
+mod golden {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::{AvaFormat, Format};
+
+    /// The committed golden: the normalized JSON line (timestamp replaced by the
+    /// `<TS>` placeholder). Loaded via `include_str!` so the on-disk golden file
+    /// is the single source of truth.
+    const GOLDEN: &str = include_str!("../tests/vectors/log_json_shape.golden");
+
+    /// A `MakeWriter` backed by a shared in-memory buffer so the test can read
+    /// back exactly the bytes the formatter produced.
+    #[derive(Clone, Default)]
+    struct BufWriter {
+        buf: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl io::Write for BufWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            let mut guard = self.buf.lock().expect("buffer lock");
+            guard.extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for BufWriter {
+        type Writer = BufWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Capture the byte index of `needle` in `haystack`, failing the test if it
+    /// is absent.
+    fn index_of(haystack: &str, needle: &str) -> usize {
+        haystack
+            .find(needle)
+            .unwrap_or_else(|| panic!("expected {needle:?} in {haystack:?}"))
+    }
+
+    /// True iff `s` matches the ISO8601 shape
+    /// `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$` (the `Utc::now()` layout
+    /// `%Y-%m-%dT%H:%M:%S%.3fZ`), checked without a regex dependency.
+    ///
+    /// The pattern string uses `d` for an ASCII digit and any other byte as a
+    /// literal separator; matching iterates in lockstep so no slice indexing or
+    /// fallible arithmetic is needed.
+    fn is_iso8601_millis_z(s: &str) -> bool {
+        // YYYY-MM-DDTHH:MM:SS.mmmZ
+        const PATTERN: &[u8] = b"dddd-dd-ddTdd:dd:dd.dddZ";
+        let bytes = s.as_bytes();
+        if bytes.len() != PATTERN.len() {
+            return false;
+        }
+        bytes.iter().zip(PATTERN.iter()).all(|(&got, &pat)| {
+            if pat == b'd' {
+                got.is_ascii_digit()
+            } else {
+                got == pat
+            }
+        })
+    }
+
+    /// Replace the JSON `"timestamp":"<value>"` value with the `<TS>` placeholder
+    /// and return both the placeholder-normalized line and the raw timestamp
+    /// value, so the test can compare the normalized shape against the golden and
+    /// separately assert the raw timestamp's ISO8601 shape.
+    fn normalize_timestamp(line: &str) -> (String, String) {
+        const KEY: &str = "\"timestamp\":\"";
+        let key_at = index_of(line, KEY);
+        let value_start = key_at
+            .checked_add(KEY.len())
+            .expect("timestamp key offset overflow");
+        let rest = line
+            .get(value_start..)
+            .unwrap_or_else(|| panic!("timestamp value start out of bounds in {line:?}"));
+        let value_len = rest
+            .find('"')
+            .unwrap_or_else(|| panic!("unterminated timestamp value in {line:?}"));
+        let raw_ts = rest
+            .get(..value_len)
+            .unwrap_or_else(|| panic!("timestamp value out of bounds in {line:?}"))
+            .to_owned();
+        let prefix = line
+            .get(..value_start)
+            .unwrap_or_else(|| panic!("timestamp prefix out of bounds in {line:?}"));
+        let suffix = rest
+            .get(value_len..)
+            .unwrap_or_else(|| panic!("timestamp suffix out of bounds in {line:?}"));
+        let mut normalized = String::with_capacity(line.len());
+        normalized.push_str(prefix);
+        normalized.push_str("<TS>");
+        normalized.push_str(suffix);
+        (normalized, raw_ts)
+    }
+
+    #[test]
+    fn json_line_shape_is_frozen() {
+        let writer = BufWriter::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer.clone())
+                .with_ansi(false)
+                .event_format(AvaFormat::new(Format::Json)),
+        );
+
+        // Emit one event through the real formatter. Fields are listed in a
+        // deliberately *unsorted* insertion order (height, flavor, awake) so the
+        // BTreeMap sort in the formatter is observable: the output must reorder
+        // them to awake < flavor < height.
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(
+                logger = "C",
+                caller = "chain/foo.go:42",
+                height = 1234_i64,
+                flavor = "vanilla",
+                awake = true,
+                "accepted block"
+            );
+        });
+
+        let bytes = writer.buf.lock().expect("buffer lock").clone();
+        let raw = String::from_utf8(bytes).expect("utf8 log output");
+        // Exactly one line, newline-terminated.
+        assert!(
+            raw.ends_with('\n'),
+            "line must be newline-terminated: {raw:?}"
+        );
+        let line = raw.trim_end_matches('\n');
+        assert!(
+            !line.contains('\n'),
+            "exactly one event line expected, got {raw:?}"
+        );
+
+        // (1) Frozen reserved-key ORDER on the raw bytes: level < timestamp <
+        // logger < caller < msg.
+        let i_level = index_of(line, "\"level\":");
+        let i_ts = index_of(line, "\"timestamp\":");
+        let i_logger = index_of(line, "\"logger\":");
+        let i_caller = index_of(line, "\"caller\":");
+        let i_msg = index_of(line, "\"msg\":");
+        assert!(
+            i_level < i_ts && i_ts < i_logger && i_logger < i_caller && i_caller < i_msg,
+            "reserved keys out of frozen zap order in {line:?}"
+        );
+
+        // Structured fields follow `msg` in sorted (BTreeMap) order:
+        // awake < flavor < height — all after `msg`.
+        let i_awake = index_of(line, "\"awake\":");
+        let i_flavor = index_of(line, "\"flavor\":");
+        let i_height = index_of(line, "\"height\":");
+        assert!(
+            i_msg < i_awake && i_awake < i_flavor && i_flavor < i_height,
+            "structured fields not in sorted order after msg in {line:?}"
+        );
+
+        // (2) Normalize the non-deterministic timestamp, compare against golden.
+        let (normalized, raw_ts) = normalize_timestamp(line);
+        let golden = GOLDEN.trim_end_matches('\n');
+        assert_eq!(normalized, golden, "normalized JSON line vs golden");
+
+        // The raw (un-normalized) timestamp matches the ISO8601 millis-Z shape.
+        assert!(
+            is_iso8601_millis_z(&raw_ts),
+            "timestamp {raw_ts:?} is not ISO8601 %Y-%m-%dT%H:%M:%S%.3fZ"
+        );
+    }
+}
