@@ -44,6 +44,12 @@ ava-database = { path = "../ava-database" }
 ava-crypto = { path = "../ava-crypto" }
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 
+# Real P-Chain boot (M4.30c): materialize `ava_platformvm::PlatformVm` seeded
+# from real P-Chain genesis (`ava_genesis`) and drive it in-process through the
+# handler→engine-adapter path until it enters `Bootstrapping`.
+ava-platformvm = { path = "../ava-platformvm" }
+ava-genesis = { path = "../ava-genesis" }
+
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 # The binary owns the single multi-thread runtime (17 §1.1) and installs the

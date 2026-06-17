@@ -8,7 +8,11 @@
 
 use std::process::Command;
 
-use avalanchers::wiring::chains::{build_in_process_chain, register_test_vm_factory};
+use ava_genesis::Chain;
+use ava_snow::EngineState;
+use avalanchers::wiring::chains::{
+    Sent, boot_in_process_pchain, build_in_process_chain, register_test_vm_factory,
+};
 
 /// The binary builds a chain manager, registers the no-op test-VM factory,
 /// creates an in-process Snowman chain, and reports its last-accepted height.
@@ -31,6 +35,58 @@ async fn binary_constructs_chain_manager() {
         .await
         .expect("assemble an in-process Snowman chain");
     assert_eq!(height, 0, "genesis is the last accepted block at height 0");
+}
+
+/// M4.30c — the binary materializes and boots the **real `PlatformVm`** seeded
+/// from real P-Chain genesis in-process, driving the handler→engine-adapter
+/// path until it enters `Bootstrapping` and broadcasts `GetAcceptedFrontier`
+/// to its beacon set. The real ava-network-backed `Sender` is the documented
+/// live arm; here a recording sender observes the frontier broadcast.
+#[tokio::test]
+async fn boots_real_pchain_to_bootstrapping() {
+    // Mainnet (network_id 1) embedded P-Chain genesis (the M8-complete source).
+    let network_id = 1u32;
+
+    let handle = boot_in_process_pchain(network_id)
+        .await
+        .expect("boot the real P-Chain in-process");
+
+    // The VM initialized from real genesis: the chain's genesis block id is the
+    // expected `sha256(p_chain_genesis_bytes)` (specs 23 §4).
+    let expected_genesis =
+        ava_genesis::genesis_block_id(network_id, Chain::P).expect("P-Chain genesis block id");
+    assert_eq!(
+        handle.genesis_id, expected_genesis,
+        "VM initialized at the real P-Chain genesis"
+    );
+
+    // Poll the shared ConsensusContext until the handler flips the engine into
+    // `Bootstrapping` (virtual time; bounded yield loop, no wall-clock sleep).
+    let mut entered = false;
+    for _ in 0..10_000 {
+        if matches!(**handle.ctx.state.load(), EngineState::Bootstrapping) {
+            entered = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(entered, "the engine entered Bootstrapping");
+
+    // The bootstrapper broadcast `GetAcceptedFrontier` to its beacon set.
+    let log = handle.sender.drain();
+    let frontier = log.iter().find_map(|s| match s {
+        Sent::GetAcceptedFrontier { nodes, .. } => Some(nodes.clone()),
+        _ => None,
+    });
+    let frontier = frontier.expect("bootstrapper broadcast GetAcceptedFrontier");
+    assert_eq!(
+        frontier, handle.beacons,
+        "GetAcceptedFrontier addressed the beacon node set"
+    );
+
+    // No leaked task: cancel and join cleanly.
+    handle.token.cancel();
+    handle.join.await.expect("handler task joined cleanly");
 }
 
 /// `--version` and `--help` keep working unchanged (the M0 invariant).

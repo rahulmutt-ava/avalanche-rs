@@ -8,6 +8,7 @@
 //! [`Targeter`].
 
 pub mod benchlist;
+pub mod engine_adapter;
 pub mod handler;
 pub mod message_queue;
 pub mod router;
@@ -15,6 +16,7 @@ pub mod timeout;
 pub mod tracker;
 
 pub use benchlist::{Benchlist, BenchlistConfig};
+pub use engine_adapter::{BootstrapperEngineAdapter, SnowmanEngineAdapter, transition_channel};
 pub use handler::{
     ChainEngine, ChainHandler, ChainHandlerSink, EngineManager, HandlerMessage,
     SYNC_PROCESSING_TIME_WARN_LIMIT,

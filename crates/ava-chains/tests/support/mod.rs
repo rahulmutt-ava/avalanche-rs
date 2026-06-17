@@ -151,6 +151,11 @@ pub enum Sent {
         req: u32,
         id: Id,
     },
+    /// `SendGetAcceptedFrontier` — the bootstrapper's frontier-discovery query.
+    GetAcceptedFrontier {
+        nodes: Vec<NodeId>,
+        req: u32,
+    },
     Other,
 }
 
@@ -201,7 +206,12 @@ impl Sender for RecordingSender {
     ) {
     }
     fn send_accepted_state_summary(&self, _node: NodeId, _req: u32, _summary_ids: &[Id]) {}
-    fn send_get_accepted_frontier(&self, _nodes: &HashSet<NodeId>, _req: u32) {}
+    fn send_get_accepted_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
+        self.push(Sent::GetAcceptedFrontier {
+            nodes: sorted(nodes),
+            req,
+        });
+    }
     fn send_accepted_frontier(&self, _node: NodeId, _req: u32, _container_id: Id) {}
     fn send_get_accepted(&self, _nodes: &HashSet<NodeId>, _req: u32, _ids: &[Id]) {}
     fn send_accepted(&self, _node: NodeId, _req: u32, _ids: &[Id]) {}

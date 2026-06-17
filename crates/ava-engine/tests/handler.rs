@@ -12,7 +12,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use ava_engine::networking::{
-    ChainEngine, ChainHandler, ChainMessageSink, EngineManager, InboundOp,
+    ChainEngine, ChainHandler, ChainMessageSink, EngineManager, InboundOp, transition_channel,
 };
 use ava_snow::state::{EngineState, EngineType};
 use ava_types::id::Id;
@@ -54,12 +54,14 @@ async fn handler_dispatches_and_shuts_down_clean() {
     mgr.register(EngineState::NormalOp, Box::new(engine));
 
     let halt = CancellationToken::new();
+    let (_transition_tx, transition_rx) = transition_channel(4);
     let (handler, sink, vm_tx) = ChainHandler::new(
         mgr,
         EngineState::NormalOp,
         16,
         Duration::from_secs(1),
         halt.clone(),
+        transition_rx,
     );
     let tracker = handler.task_tracker();
     let join = handler.start();
@@ -102,12 +104,14 @@ async fn handler_dispatches_and_shuts_down_clean() {
 async fn async_op_runs_on_pool_and_drains() {
     let mgr = EngineManager::new(EngineType::Snowman);
     let halt = CancellationToken::new();
+    let (_transition_tx, transition_rx) = transition_channel(4);
     let (handler, sink, _vm_tx) = ChainHandler::new(
         mgr,
         EngineState::NormalOp,
         16,
         Duration::from_secs(60),
         halt.clone(),
+        transition_rx,
     );
     let tracker = handler.task_tracker();
     let join = handler.start();

@@ -62,7 +62,7 @@ pub struct Config<V, S, M> {
 /// the [`Sender`], the [`ValidatorManager`], and the boxed consensus core.
 pub struct SnowmanEngine<V, S, M> {
     cfg: Config<V, S, M>,
-    consensus: Box<dyn SnowmanConsensus + Send>,
+    consensus: Box<dyn SnowmanConsensus + Send + Sync>,
     getter: Getter<V, S>,
     request_id: u32,
     /// Outstanding polls keyed by request id (early-termination).
@@ -84,7 +84,7 @@ where
     M: ValidatorManager,
 {
     /// Builds a Snowman engine over an already-initialized consensus core.
-    pub fn new(cfg: Config<V, S, M>, consensus: Box<dyn SnowmanConsensus + Send>) -> Self {
+    pub fn new(cfg: Config<V, S, M>, consensus: Box<dyn SnowmanConsensus + Send + Sync>) -> Self {
         let getter = Getter::new(
             Arc::clone(&cfg.vm),
             Arc::clone(&cfg.sender),

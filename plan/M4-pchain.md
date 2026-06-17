@@ -709,8 +709,24 @@ Wave 7 (differential sync-to-tip + gate)
 
 ---
 
-### Task M4.29: `differential::pchain_sync_to_tip` (Fuji, CI-gated + recorded oracle)
+### Task M4.29: `differential::pchain_sync_to_tip` (Fuji, CI-gated + recorded oracle) ✅ DONE (2026-06-17; commit e4ba1a4)
 **Crate:** ava-platformvm  ·  **Depends on:** M4.27, M4.28, M4.21  ·  **Spec:** 02 §11 (two-binary live + recorded-oracle, CI gating); 19 §2; 08 §7
+
+> **AS-BUILT (2026-06-17).** Extended `differential::pchain_sync_to_tip` beyond height 0 to a
+> **Rust-built deterministic multi-block range** (5 empty Banff standard blocks, heights 1..=5)
+> driven through the M3 `Bootstrapper` (frontier → agreement → one `GetAncestors` answered
+> tip-first/genesis-last → execute → handoff to NormalOp, `last_accepted == tip`), plus a
+> **per-height differential arm** on a fresh VM (`parse_block→verify→accept`) asserting
+> `(block_id, timestamp, state_digest, getCurrentValidators sorted)` == a committed
+> recorded-oracle corpus (`tests/vectors/platformvm/fuji_sync_oracle/linear_range.json`,
+> generated behind `GENERATE_PCHAIN_SYNC_ORACLE=1`). The height-0 subset is retained as
+> `pchain_sync_to_tip_height0`. **Design choice:** block-codec byte-exactness vs Go is already
+> proven by `golden::pchain_block_hash` (M4.6), so M4.29 proves the **forward sync pipeline**
+> with a Rust-built corpus; the byte-exact full-range arm vs the Go node is the CI-gated
+> `live-fuji` leg (`pchain_sync_to_tip_live_fuji`, a documented deferred stub —
+> `--features live-fuji` / `AVA_DIFF_LIVE=1`; not run in CI). `state_digest` is the P-Chain
+> flat-KV state-observation surrogate (sha256 over `height‖last_accepted‖ts‖supply‖sorted
+> validators`), NOT a merkle root (`08` §3.2 — P-Chain has no merkle root).
 **Files:** `crates/ava-platformvm/tests/differential_sync.rs`, `tests/differential/` glue (tier X), `crates/ava-platformvm/tests/vectors/platformvm/fuji_sync_oracle/*.json`.
 - [ ] **Step 1 — Red:** Extend `differential::pchain_sync_to_tip` beyond height 0: in **recorded-oracle mode** (default, per-PR), replay a recorded Fuji P-Chain block range and assert at every matching height the last-accepted block ID + state hash + `getCurrentValidators` (sorted) == the recorded Go values. In **live mode** (feature `live-fuji` / env `AVA_DIFF_LIVE`), sync from a real Fuji peer to tip.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-platformvm pchain_sync_to_tip` → fails (recorded range mismatch).
@@ -720,9 +736,40 @@ Wave 7 (differential sync-to-tip + gate)
 
 ---
 
-### Task M4.30: Milestone exit gate
+### Task M4.30: Milestone exit gate ✅ DONE (2026-06-17)
 **Crate:** ava-platformvm  ·  **Depends on:** all M4.* tasks  ·  **Spec:** plan/README §2 (buildable-&-green invariant); 02 §10.1 (PORTING.md)
 **Files:** `crates/ava-platformvm/tests/PORTING.md`, `crates/avalanchers/src/main.rs` (P-Chain wiring), workspace `Cargo.toml`.
+
+> **AS-BUILT (2026-06-17).** Exit gate green: `cargo build --workspace`, `cargo build -p
+> avalanchers`, `cargo nextest run --profile ci` (incl. all M4 named exit tests), and `cargo
+> clippy --workspace --all-targets -- -D warnings` all pass. The named exit tests
+> (`golden::pchain_block_hash`, `golden::pchain_tx_codec`, `prop::pchain_tx_roundtrip`,
+> `differential::pchain_sync_to_tip`, `differential::validatorstate_parity`) are present and
+> green.
+>
+> **Binary boot — built in-process (user-directed, NOT deferred).** The original plan deferred
+> the binary-boot leg; this revision built the live-node consensus path so `avalanchers`
+> materializes and boots the **real `PlatformVm`** in-process. Decomposed into three landed
+> sub-tasks:
+> - **M4.30a** (`ava-engine`, commit f15e025): `ChainEngine` adapters wrapping the
+>   `Bootstrapper` and `SnowmanEngine`, a handler **state-transition mechanism** (transition
+>   channel + `ChainEngine::start` hook; `Initializing→Bootstrapping→NormalOp`), and additive
+>   `InboundOp` consensus variants. Proven end-to-end at the engine level (handler-driven
+>   bootstrap to NormalOp via synthetic responses).
+> - **M4.30b** (`ava-chains`, commit befbe71): `create_snowman_chain` now builds the
+>   `Bootstrapper` over a shared `Arc<Mutex<wrapped VM>>`, wraps both engines in the M4.30a
+>   adapters, owns the transition channel, registers them, and starts the handler in
+>   `Bootstrapping`; `SnowmanChain.engine` → `pub ctx: Arc<ConsensusContext>` (observability).
+> - **M4.30c** (`avalanchers`, commit 3e91681): `boot_in_process_pchain(network_id)` boots the
+>   real `PlatformVm` from real genesis (verified mainnet/id 1) through the handler to
+>   `EngineState::Bootstrapping`, broadcasting `GetAcceptedFrontier` to its beacon set; node
+>   test `boots_real_pchain_to_bootstrapping`.
+>
+> **Remaining live legs (documented, gated — need a live network, not CI-verifiable):** the
+> real ava-network-backed `Sender` (engine→wire + `AdaptiveTimeoutManager` registration) and
+> driving past `Bootstrapping` to `NormalOp` against real peers (the `live-fuji` arm). The
+> in-process boot uses a recording sender; `ChainEngine` errors are currently traced (not
+> halt-propagated) — a follow-up if a fatal engine error must tear the chain down (Go behavior).
 - [ ] **Step 1 — Red:** Ensure the named exit tests exist and are collected: `golden::pchain_block_hash`, `golden::pchain_tx_codec`, `prop::pchain_tx_roundtrip`, `differential::pchain_sync_to_tip`, `differential::validatorstate_parity`. Run the full suite to surface any gap.
 - [ ] **Step 2 — Confirm red (if any):** `cargo nextest run --profile ci -p ava-platformvm` → any red is a real gap to close (loop back to the owning task).
 - [ ] **Step 3 — Green:** Wire `PlatformVm` into the `avalanchers` binary's chain manager so it boots far enough to bootstrap the P-Chain read-only (`--network-id=fuji`). Update `tests/PORTING.md` (no `wip` rows for ported P-Chain tests; record `na` with reasons for Go-plumbing-only tests). Ensure committed `proptest-regressions/` + golden vectors + the cargo-fuzz target are present.
