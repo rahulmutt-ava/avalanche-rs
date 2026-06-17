@@ -137,6 +137,16 @@
 > measured per milestone; the per-PR `coverage` CI job stays deferred until measured floors exist for
 > the heavy crates.
 
+> **AS-BUILT (2026-06-17b — floor-table deepening).** The `FLOORS` table grew from the 3 M0 crates
+> to **18 crates** (parallel-worktree wave), each measured by a scoped `cargo llvm-cov nextest -p <crate>`
+> and floored at measured-rounded-down-to-5: `ava-codec`=85 (88%), `ava-crypto`=80 (80%),
+> `ava-message`=80 (80%), `ava-database`=85 (85%), `ava-blockdb`=85 (86%), `ava-archivedb`=90 (91%),
+> `ava-merkledb`=75 (79%), `ava-validators`=60 (62%), `ava-snow`=80 (84%), `ava-proposervm`=80
+> (85.01% measured — deliberately floored at 80 not 85, the 0.01% margin is too tight to gate on),
+> `ava-network`=80 (84%), `ava-genesis`=90 (93%), `ava-config`=80 (84%), `ava-avm`=85 (86%),
+> `ava-platformvm`=80 (81%). Per-crate measured covered/total recorded in the script's comment block.
+> Still measured-then-ratcheted + nightly-only; the per-PR `coverage` gate stays deferred.
+
 ---
 
 ### Task X.9: Per-crate `thiserror` error taxonomy + `assert_matches!` mirrors of Go `errors.Is`
@@ -344,9 +354,18 @@
 >   (the 7-box "Determinism audit" section keyed to spec 24 PART A) — the 2026-06-16f "deferred" note
 >   was stale; no change needed.
 >
-> **STILL DEFERRED (not yet done):** `clippy::cast_possible_truncation = warn` on consensus crates
-> (would surface broadly under `-D warnings`; left for a dedicated pass), and the optional cross-triple
-> (CI matrix) repeat of `determinism_repeat`.
+> **AS-BUILT (2026-06-17 — `cast_possible_truncation` pass RESOLVED).** `#![warn(clippy::cast_possible_truncation)]`
+> is now a crate-level inner attribute in each `src/lib.rs` of `ava-snow`, `ava-engine`, `ava-proposervm`,
+> `ava-validators`, `ava-simplex` (with `#![cfg_attr(test, allow(clippy::cast_possible_truncation))]`
+> for the test-only casts). 11 library sites fixed: most via non-truncating conversions
+> (`u32::try_from(len).unwrap_or(u32::MAX)` saturating counters in `snowball/tree.rs` + `snowman/engine.rs`;
+> `u32::try_from(tag>>3).map_err(VarintOverflow)?` in `simplex/canoto.rs`; `1u8 << bit` accepting `usize`
+> directly in `simplex/messages.rs`), the rest narrow statement-level `#[allow]` with a one-line
+> justification (provably-in-range bit positions; the deliberately-lossy non-deterministic RNG seed in
+> `validators/manager.rs`; the clamped float→int adaptive-timeout cast in `engine/networking/timeout.rs`).
+> No crate-level allow. Verified: `cargo clippy -p ava-snow -p ava-engine -p ava-proposervm -p ava-validators
+> -p ava-simplex --all-targets --all-features -- -D warnings` clean, 131 consensus-crate tests green.
+> **STILL DEFERRED (not yet done):** the optional cross-triple (CI matrix) repeat of `determinism_repeat`.
 
 > **Deepens:** every consensus/codec/VM crate added later is in scope; the PR template checklist applies to any diff touching `ava-codec`/`ava-snow`/`ava-engine`/`ava-proposervm`/`ava-validators`/`ava-*vm`/`ava-utils` (24 §A.2).
 

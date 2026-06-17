@@ -41,13 +41,43 @@ fi
 #   ./scripts/check_coverage_floor.sh /tmp/cov.info
 #
 # Measured 2026-06-17 (scoped run, this worktree):
-#   ava-types   79% (281/354)  -> floor 75
-#   ava-utils   66% (390/583)  -> floor 65
-#   ava-version 82% (332/401)  -> floor 80
+#   ava-types       79% (281/354)     -> floor 75
+#   ava-utils       66% (390/583)     -> floor 65
+#   ava-version     82% (332/401)     -> floor 80
+#   ava-codec       88% (565/635)     -> floor 85
+#   ava-crypto      80% (387/479)     -> floor 80
+#   ava-message     80% (314/388)     -> floor 80
+#   ava-database    85% (3413/3976)   -> floor 85
+#   ava-blockdb     86% (598/691)     -> floor 85
+#   ava-archivedb   91% (165/181)     -> floor 90
+#   ava-merkledb    79% (2368/2969)   -> floor 75
+#   ava-validators  62% (426/683)     -> floor 60
+#   ava-snow        84% (1506/1782)   -> floor 80
+#   ava-proposervm  85% (1486/1748)   -> floor 80 (85.01% measured is too tight to floor at 85)
+#   ava-network     84% (2229/2653)   -> floor 80
+#   ava-genesis     93% (1068/1137)   -> floor 90
+#   ava-config      84% (2513/2979)   -> floor 80
+#   ava-avm         86% (4072/4702)   -> floor 85
+#   ava-platformvm  81% (8630/10585)  -> floor 80
 declare -A FLOORS=(
   [ava-types]=75
   [ava-utils]=65
   [ava-version]=80
+  [ava-codec]=85
+  [ava-crypto]=80
+  [ava-message]=80
+  [ava-database]=85
+  [ava-blockdb]=85
+  [ava-archivedb]=90
+  [ava-merkledb]=75
+  [ava-validators]=60
+  [ava-snow]=80
+  [ava-proposervm]=80
+  [ava-network]=80
+  [ava-genesis]=90
+  [ava-config]=80
+  [ava-avm]=85
+  [ava-platformvm]=80
 )
 
 if [ ${#FLOORS[@]} -eq 0 ]; then
