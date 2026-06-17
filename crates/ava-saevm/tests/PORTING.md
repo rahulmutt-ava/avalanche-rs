@@ -14,7 +14,7 @@ placeholder row and on a Summary line that disagrees with the row counts.
 
 Legend: 🟡 partial · ✅ ported · n/a not applicable
 
-**Summary:** 169 ported ✅ / 3 partial 🟡 / 35 n/a.
+**Summary:** 170 ported ✅ / 3 partial 🟡 / 35 n/a.
 Of the 172 non-`n/a` rows, **100 %** have a concrete Rust counterpart (✅ or 🟡).
 Reuse-of-reth boundary (specs/11 §8): the eth-namespace JSON-RPC surface, the
 geth tx-signing/filter/subscription APIs, and the libevm state plumbing are
@@ -291,6 +291,7 @@ The 3 🟡 (partial) rows and their deferral targets:
 | `cchain/vm_test.go::TestExport` | ✅ | `cchain/tests/atomic_tx.rs::export_import_shared_memory_all_or_nothing` (export half) + `cchain/tests/hooks.rs::end_of_block_ops_apply_import_export_mint_burn` |
 | `cchain/vm_test.go::TestImport` | ✅ | `cchain/tests/atomic_tx.rs::export_import_shared_memory_all_or_nothing` (import half) |
 | `cchain/vm_test.go::TestBuildBlockOnProcessing` | ✅ | `core/tests/lifecycle.rs::build_block_uses_worstcase_prediction` + `cchain/tests/hooks.rs::build_header_matches_rebuild` |
+| `cchain/vm_test.go::TestParseBlock` (#5447, ExtDataHash verify) | ✅ | `cchain/tests/ext_data_hash.rs::{parse_block_accepts_well_formed_committed_block,parse_block_rejects_tampered_ext_data,parse_block_accepts_bare_block_without_commitment,calc_ext_data_hash_empty_matches_canonical_constant,calc_ext_data_hash_nonempty_is_keccak_of_rlp}` (M7.37 verify boundary + `CalcExtDataHash`; build-side commit is the M7.21-coupled remainder of M7.22) |
 | `cchain/vm_test.go::TestDebugTraceDoesNotApplyAtomicState` | n/a | reth-owned `debug_trace*` semantics (specs/11 §8 reuse); atomic-state apply boundary covered by `cchain/tests/hooks.rs::end_of_block_ops_apply_import_export_mint_burn` |
 | `cchain/vm_test.go::TestMain` | n/a | Go test-harness bootstrap — no Rust analog |
 | `cchain/gossip_test.go::TestPushGossip` | ✅ | `cchain/tests/gossip.rs::issued_tx_reaches_peer_pool_via_push_gossip` |
