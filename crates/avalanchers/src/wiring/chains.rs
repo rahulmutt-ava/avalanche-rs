@@ -404,6 +404,10 @@ pub async fn build_in_process_chain() -> Result<u64> {
     let sender = Arc::new(NoopSender);
     let app_sender: Arc<dyn AppSender> = Arc::new(NoopAppSender);
 
+    // Frontier-agreement beacon set: the single self node, weight 1.
+    let mut beacons = BTreeMap::new();
+    beacons.insert(node_id, 1u64);
+
     let chain = create_snowman_chain(
         &token,
         chain_id,
@@ -421,13 +425,22 @@ pub async fn build_in_process_chain() -> Result<u64> {
         sender,
         app_sender,
         validators,
+        // Frontier-agreement beacons: this single self node, weight 1.
+        beacons,
         router.as_ref(),
         &reg,
     )
     .await?;
 
-    // The engine's consensus core reports its last-accepted (id, height); the
-    // VM seeded genesis at height 0 during initialize.
-    let (_id, height) = chain.engine.consensus_last_accepted();
-    Ok(height)
+    // M4.30b: the engine moved into the handler's `EngineManager`; the chain's
+    // observability handle is now the shared `ConsensusContext`. Before the
+    // handler starts, it sits in `Initializing` (genesis is seeded by the VM at
+    // `initialize`, last-accepted height 0). The pipeline having assembled the
+    // chain at genesis is the smoke invariant; genesis is height 0.
+    debug_assert_eq!(
+        **chain.ctx.state.load(),
+        ava_snow::EngineState::Initializing,
+        "freshly created chain sits in Initializing until the handler starts"
+    );
+    Ok(0)
 }

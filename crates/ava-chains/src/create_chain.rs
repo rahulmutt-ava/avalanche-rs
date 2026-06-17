@@ -19,7 +19,7 @@
 //! `set_preference`, waking the engine's notification forwarder (Go
 //! `block.ChangeNotifier`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,11 +31,15 @@ use ava_database::{Database, DynDatabase, MeterDb, PrefixDb};
 use ava_engine::common::sender::Sender;
 use ava_engine::networking::handler::{ChainHandler, ChainHandlerSink, EngineManager};
 use ava_engine::networking::router::Router;
+use ava_engine::networking::{BootstrapperEngineAdapter, SnowmanEngineAdapter, transition_channel};
+use ava_engine::snowman::Bootstrapper;
+use ava_engine::snowman::bootstrap::Config as BootstrapConfig;
 use ava_engine::snowman::engine::{Config as SnowmanConfig, SnowmanEngine};
 use ava_proposervm::{ProposerVm, StakingIdentity};
+use ava_snow::acceptor::NoOpAcceptor;
 use ava_snow::snowball::{Parameters, SnowballFactory};
 use ava_snow::snowman::Topological;
-use ava_snow::{ChainContext, EngineState, EngineType};
+use ava_snow::{ChainContext, ConsensusContext, EngineState, EngineType};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_utils::clock::Clock;
@@ -533,18 +537,35 @@ pub fn wrap_snowman_vm<V: ChainVm, S: ValidatorState + 'static>(
 // create_snowman_chain
 // ---------------------------------------------------------------------------
 
-/// The handles a created Snowman chain exposes (specs 07 §8.2): the wrapped VM
-/// (behind the engine's mutex), the per-chain handler sink registered with the
-/// router, and the chain's consensus parameters.
+/// The handles a created Snowman chain exposes (specs 07 §8.2): a fully-wired,
+/// startable chain. The `Bootstrapper` and `SnowmanEngine` are both wrapped in
+/// the M4.30a [`ChainEngine`](ava_engine::networking::handler::ChainEngine)
+/// adapters and registered on the handler's `EngineManager`
+/// (`Bootstrapping`→bootstrapper, `NormalOp`→snowman); the handler owns the
+/// engine-transition channel. Starting the [`handler`](Self::handler) activates
+/// the bootstrapper (frontier discovery), and on bootstrap completion the
+/// adapter requests the `NormalOp` transition.
+///
+/// The engines have moved into the handler's `EngineManager`, so the
+/// observability handle is the shared [`ConsensusContext`]: its
+/// `state: ArcSwap<EngineState>` reflects the live engine phase
+/// (`Initializing → Bootstrapping → NormalOp`).
 pub struct SnowmanChain<V: ChainVm, S, M> {
     /// The chain id.
     pub chain_id: Id,
-    /// The Snowman engine, ready to be driven (or spawned in a `ChainHandler`).
-    pub engine: SnowmanEngine<V, S, M>,
+    /// The shared consensus context — the observability handle for the live
+    /// engine phase (`ctx.state`) and the acceptor callbacks. Shared (via `Arc`)
+    /// between the bootstrapper and the snowman engine.
+    pub ctx: Arc<ConsensusContext>,
     /// The handler sink registered with the router (kept alive by the caller).
     pub sink: ChainHandlerSink,
-    /// The handler actor (the caller spawns it via `ChainHandler::start`).
+    /// The handler actor (the caller spawns it via `ChainHandler::start`). Owns
+    /// both engine adapters + the transition channel; starting it activates the
+    /// initial (`Bootstrapping`) engine.
     pub handler: ChainHandler,
+    /// Carries the generic `V`/`S`/`M` parameters (the concrete engines moved
+    /// into the type-erased `EngineManager` inside the handler).
+    _vm: std::marker::PhantomData<(V, S, M)>,
 }
 
 /// The fully-wrapped + engine-mounted chain for the maximal stack, generic over
@@ -581,15 +602,16 @@ pub async fn create_snowman_chain<D, V, S, Snd, M, R>(
     sender: Arc<Snd>,
     app_sender: Arc<dyn AppSender>,
     validators: Arc<M>,
+    beacons: BTreeMap<NodeId, u64>,
     router: &R,
     reg: &Registry,
 ) -> Result<WrappedSnowmanChain<V, S, Snd, M>>
 where
     D: Database + 'static,
-    V: ChainVm,
+    V: ChainVm + 'static,
     S: ValidatorState + 'static,
-    Snd: Sender,
-    M: ValidatorManager,
+    Snd: Sender + 'static,
+    M: ValidatorManager + 'static,
     R: Router,
 {
     // 1. DB stack: base → meterdb → prefixdb(chainID) → {prefix(VM), prefix(bs)}.
@@ -633,28 +655,66 @@ where
     let consensus = Topological::new_default(SnowballFactory, params, last_accepted, 0)
         .map_err(|e| crate::error::Error::Other(format!("topological: {e}")))?;
 
-    // 6. Build the Snowman engine over the wrapped VM, sender, validators.
+    // 6. Share ONE wrapped-VM mutex between the Snowman engine and the
+    //    bootstrapper. Only one engine is active at a time, so the shared mutex
+    //    is correct: the bootstrapper accepts blocks forward, then consensus
+    //    continues from the same last-accepted.
+    let vm = Arc::new(AsyncMutex::new(vm));
+
+    // 6a. Build the shared ConsensusContext — the observability handle whose
+    //     `state: ArcSwap<EngineState>` the bootstrapper flips
+    //     (Initializing → Bootstrapping → NormalOp). Read-only sync uses NoOp
+    //     acceptors; registrant/indexer acceptors are a later concern (M4.x).
+    let ctx = Arc::new(ConsensusContext::new(
+        Arc::clone(&chain_ctx),
+        primary_alias.to_string(),
+        Arc::new(NoOpAcceptor),
+        Arc::new(NoOpAcceptor),
+    ));
+
+    // 6b. Build the Snowman engine over the shared VM, sender, validators.
     let engine_cfg = SnowmanConfig {
         subnet_id,
         params,
-        vm: Arc::new(AsyncMutex::new(vm)),
-        sender,
+        vm: Arc::clone(&vm),
+        sender: Arc::clone(&sender),
         validators,
         token: token.clone(),
     };
     let engine = SnowmanEngine::new(engine_cfg, Box::new(consensus));
 
-    // 7. Per-chain ChainHandler actor + register its sink with the router (which
-    //    owns the AdaptiveTimeoutManager).
-    let engines = EngineManager::new(EngineType::Snowman);
-    // M4.30a: the handler now takes the receiver end of an engine-transition
-    // channel. This chain wires no handler-driven engines yet (the engine is
-    // returned separately and driven directly), so the `tx` is dropped; M4.30b
-    // will register the engine adapters and hold the `tx`.
-    let (_transition_tx, transition_rx) = ava_engine::networking::transition_channel(8);
+    // 6c. Build the Bootstrapper over the shared VM, ConsensusContext, sender,
+    //     and the beacon set.
+    let boot_cfg = BootstrapConfig {
+        subnet_id,
+        ctx: Arc::clone(&ctx),
+        vm: Arc::clone(&vm),
+        sender: Arc::clone(&sender),
+        beacons,
+        token: token.clone(),
+    };
+    let bootstrapper = Bootstrapper::new(boot_cfg);
+
+    // 7. Wrap both engines in the M4.30a ChainEngine adapters and register them
+    //    on the EngineManager (Bootstrapping → bootstrapper, NormalOp → snowman).
+    //    The handler owns the receiver end of the transition channel; the
+    //    bootstrapper adapter holds the sender and requests `NormalOp` once the
+    //    bootstrapper hands off.
+    let (transition_tx, transition_rx) = transition_channel(8);
+    let boot_adapter = BootstrapperEngineAdapter::new(bootstrapper, transition_tx, 0);
+    let snowman_adapter = SnowmanEngineAdapter::new(engine);
+
+    let mut engines = EngineManager::new(EngineType::Snowman);
+    engines.register(EngineState::Bootstrapping, Box::new(boot_adapter));
+    engines.register(EngineState::NormalOp, Box::new(snowman_adapter));
+
+    // 7a. Per-chain ChainHandler actor, starting in Bootstrapping so that
+    //     handler.start() immediately activates the bootstrapper
+    //     (→ SendGetAcceptedFrontier to the beacons). Register its sink with the
+    //     router (which owns the AdaptiveTimeoutManager).
     let (handler, sink, _vm_tx) = ChainHandler::new(
         engines,
-        EngineState::Initializing,
+        EngineState::Bootstrapping,
         1024,
         Duration::from_secs(1),
         token.clone(),
@@ -664,8 +724,9 @@ where
 
     Ok(SnowmanChain {
         chain_id,
-        engine,
+        ctx,
         sink,
         handler,
+        _vm: std::marker::PhantomData,
     })
 }

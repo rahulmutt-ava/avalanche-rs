@@ -45,7 +45,7 @@ use ava_vm::{AppSender, ChainVm, Vm};
 use prometheus::Registry;
 
 mod support;
-use support::{FixedState, RecordingSender, staking_identity};
+use support::{FixedState, RecordingSender, Sent, staking_identity};
 
 /// A router that records which chains were registered (the manager registers
 /// each chain's handler sink with the router + timeout manager).
@@ -170,6 +170,14 @@ async fn pipeline_wrapping_order() {
     let router = RecordingRouter::default();
     let sender = RecordingSender::new();
     let (validators, _ids) = build_validators(node_id);
+
+    // The frontier-agreement beacon set (synthetic: this single node, weight 1).
+    let beacons: BTreeMap<NodeId, u64> = {
+        let mut m = BTreeMap::new();
+        m.insert(node_id, 1u64);
+        m
+    };
+
     let chain = create_snowman_chain(
         &token,
         chain_id,
@@ -184,9 +192,10 @@ async fn pipeline_wrapping_order() {
         TestVm::new(),
         Vec::new(),
         b"genesis",
-        sender,
+        Arc::clone(&sender),
         Arc::new(NoopAppSender),
         validators,
+        beacons,
         &router,
         &chain_reg,
     )
@@ -200,17 +209,62 @@ async fn pipeline_wrapping_order() {
         "the chain's handler sink is registered with the router"
     );
 
-    // The engine's consensus is rooted at the VM's genesis last-accepted.
+    // The chain starts in `Bootstrapping`: its observability handle (the
+    // ConsensusContext.state) is set when the handler activates the bootstrapper.
+    use ava_snow::EngineState;
     assert_eq!(
-        chain.engine.consensus_last_accepted().0,
-        genesis,
-        "engine consensus rooted at genesis"
+        **chain.ctx.state.load(),
+        EngineState::Initializing,
+        "consensus context starts in Initializing before the handler starts"
     );
 
-    // The handler can be started and halts on token cancel (no leaked task).
+    // Start the handler: it activates the initial (Bootstrapping) engine, which
+    // begins frontier discovery (`SendGetAcceptedFrontier` to the beacons) and
+    // flips the ConsensusContext state to `Bootstrapping`.
     let join = chain.handler.start();
+
+    // Wait until the bootstrapper has run `start` (state flipped) — virtual time;
+    // we poll the observability handle rather than sleep on a wall clock.
+    let observed_bootstrapping =
+        wait_for(|| matches!(**chain.ctx.state.load(), EngineState::Bootstrapping)).await;
+    assert!(
+        observed_bootstrapping,
+        "handler.start activates the bootstrapper (ConsensusContext.state -> Bootstrapping)"
+    );
+
+    // The bootstrapper emitted a `SendGetAcceptedFrontier` to the beacon set.
+    let saw_frontier = sender
+        .log
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|s| {
+            matches!(
+                s,
+                Sent::GetAcceptedFrontier { nodes, .. } if nodes == &vec![node_id]
+            )
+        });
+    assert!(
+        saw_frontier,
+        "bootstrapper emitted SendGetAcceptedFrontier to the beacons"
+    );
+
+    // Halt + join cleanly (no leaked task).
     token.cancel();
     join.await.expect("handler joins after halt");
+}
+
+/// Polls `cond` on each tokio scheduler turn (no wall-clock sleep — virtual,
+/// deterministic), giving the spawned handler task room to run, up to a bounded
+/// number of yields. Returns whether `cond` became true.
+async fn wait_for<F: Fn() -> bool>(cond: F) -> bool {
+    for _ in 0..1024 {
+        if cond() {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    cond()
 }
 
 /// Builds a `DefaultManager` with one validator (this node) on the empty subnet.
