@@ -522,7 +522,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [x] **Step 4 — Confirm green:** `nextest -p ava-saevm-cchain` 46/46 + `-p ava-differential` 28/28; `lint_saevm.sh` exit 0; fmt clean; `saevm-exit-gate` ALL CHECKS PASSED (170 ✅).
 - [x] **Step 5 — Commit:** `sae(cchain): verify SAE block extData hash in ParseBlock [Go 5896c92fee]`
 
-### Task M7.38: `ava-saevm-cchain::warp` — SAE C-Chain Warp/ICM lifecycle package **[UPSTREAM DELTA — added 2026-06-17]** ⬜ TODO
+### Task M7.38: `ava-saevm-cchain::warp` — SAE C-Chain Warp/ICM lifecycle package **[UPSTREAM DELTA — added 2026-06-17]** ✅ COMPLETE (merge `e675de7`)
 **Sub-crate:** ava-saevm-cchain (new `warp` module)  ·  **Depends on:** M7.23 (VM `Initialize` harness + `/avax` API), the M6 synchronous-C-Chain predicate pass (`precompile/warp.rs`), ACP-118 p2p verifier seam (M2/`network/p2p/acp118`)  ·  **Spec:** `11` §8 + `10` §8.2 upstream-delta (Go `9b48abd852` #5523)
 > **Why added:** Go's #5523 lands a dedicated `vms/saevm/cchain/warp` package
 > consolidating the Avalanche Warp (ICM) message lifecycle for the SAE C-Chain —
@@ -548,6 +548,12 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 > interop is not yet exercised — correct-but-dormant parity, like M7.37. Safe to
 > schedule alongside the still-deferred M7.21 C-Chain builder rather than rushed.
 **Files (anticipated):** `crates/ava-saevm/cchain/src/warp/{mod,storage,verifier}.rs`, `crates/ava-saevm/cchain/tests/warp_*.rs`, reuse of `ava-evm` `precompile/warp.rs` for the predicate verify.
+**As-built (2026-06-17, merge `e675de7`):** All four seams landed in `crates/ava-saevm/cchain/src/warp/{mod,storage,verifier}.rs`; **22 new tests** (`warp_{storage,verifier,from_receipts,verify_block}.rs`), crate at **68** tests green (253 across cchain+ava-evm), SAE-strict clippy + fmt + license headers clean. Notes / decisions:
+> - **`from_receipts`** reuses `ava-evm`'s ABI decoder via a new *additive* public fn `precompile::warp::unpack_send_warp_event_data_to_message` (no re-implementation of event unpacking). Takes a reduced `&[Vec<ReceiptLog>]` `{address,data}` log view (dep-light, testable); the SAE driver maps executed-block reth receipt logs onto it at the call site. Receipt-then-log ordering matches Go.
+> - **`Storage<D>`** = flat `PrefixDb::new_arc("warp")` (NOT nested — coreth byte-compat), cache + in-memory `overrides` map; `new` takes `Arc<D>` for shared ownership (re-creating a store over the same backing DB is test-exercised). Go's "bytes never read back, only the ID" TODO carried as a code comment.
+> - **`Verifier`** + `Backend` trait (`is_accepted`) + `AppError`/`AppErrorCode` with the four codes asserted **exactly 1/2/3/4**.
+> - **`verify_block`** is `async` (this repo's `ValidatorState` is `#[async_trait]`): resolves validator sets/subnet-ids once up-front (async), then fans pure BLS predicate verify over `rayon::par_iter` (honors "rayon not errgroup"). `errNoBlockContext` in-loop gate reproduced; `BlockResults` = `BTreeMap<B256, BTreeMap<Address, Bits>>` (deterministic, no `HashMap` in consensus path).
+> **Deferred (follow-ups):** VM-`Initialize` wiring (calling `from_receipts` post-execution to feed `Storage`, mounting `Verifier` on the ACP-118 p2p handler, invoking `verify_block` in the inbound verify path) is a separate integration step — the lifecycle package lands here; wiring is non-gating (Helicon unscheduled). `BUILD.bazel` regen left to the orchestrator's `bazel-gazelle-generate` job.
 
 ---
 

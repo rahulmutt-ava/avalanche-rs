@@ -872,6 +872,13 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > `plan/M7` **M7.38**. **Non-gating:** like M7.37 this is correct-but-dormant
 > parity — Helicon is unscheduled on all networks and SAE C-Chain Warp interop is
 > not yet exercised.
+>
+> **As-built (2026-06-17, merge `e675de7`).** M7.38 landed the `warp` lifecycle
+> *package* in `ava-saevm-cchain::warp` (`from_receipts` / `Storage` flat-`"warp"`-prefix
+> / ACP-118 `Verifier` with the four `iota+1` codes / async-then-`rayon` `verify_block`),
+> 22 tests. The *VM-`Initialize` wiring* (feeding `Storage` post-execution, mounting the
+> `Verifier` on the p2p handler, calling `verify_block` inbound) is a deferred integration
+> step — still "no warp lifecycle wired into the VM" until then. See `plan/M7` M7.38 as-built.
 
 ### Reuse decision (binding cross-ref to `10`)
 
