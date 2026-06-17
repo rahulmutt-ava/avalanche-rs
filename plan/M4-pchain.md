@@ -364,6 +364,19 @@ Wave 7 (differential sync-to-tip + gate)
 > (M4.18/19), TransformSubnet, full Apricot/Banff/Etna AddSubnetValidator + over-delegation (need legacy executors
 > + VM env). 63 tests green, clippy clean.
 
+> **UPSTREAM DELTA (Go `55a1512be1`, ACP-236 (4), #5203 — folded 2026-06-17).** Go has now
+> **implemented** the previously-`errUnimplemented` auto-renew standard-execution cases plus
+> their state persistence (spec 08 §2.4 upstream-delta): `AddAutoRenewedValidatorTx`
+> (verify → reward-calc → supply bump → `PutCurrentValidator` via new `state.NewStaker`) and
+> `SetAutoRenewedValidatorConfigTx` (verify → mutate `StakingInfo.{AutoCompoundRewardShares,
+> NextPeriod}` → consume/produce UTXOs), with a shared `verifySpend` helper (= the M4.16
+> `state_changes::verify_spend`) and `State.write` now persisting auto-renew `StakingInfo` via
+> **codec v2** (M4.11 already has the metadata). **All Helicon-gated → dormant, non-gating** (no
+> scheduled network activates Helicon). When implementing: extend `StandardTxExecutor` +
+> `staker_tx_verification` with the two cases + add `state::new_staker`. `RewardAutoRenewedValidatorTx`
+> (type 42) stays unimplemented upstream (later ACP-236 part). No new task — folds into the existing
+> Helicon-auto-renew surface (the M4.17 restake path, §M4.17 step 3, is the natural sibling).
+
 ---
 
 ### Task M4.17: `ProposalTx` executor (advance_time + reward) — the oracle

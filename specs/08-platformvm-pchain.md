@@ -287,6 +287,38 @@ pub trait Visitor {
 - **`AtomicTx`** (`atomic_tx_executor.go`): wraps Import/Export for the Apricot atomic-block path
   (pre-Banff). Post-Banff these are ordinary standard txs inside a `BanffStandardBlock`.
 
+> **Upstream delta (avalanchego `55a1512be1`, ACP-236 (4), #5203 — folded 2026-06-17).**
+> The `StandardTx` executor's auto-renew cases — previously `errUnimplemented`
+> (the codec/complexity scaffolding only, per the `c84b906db6` delta below) —
+> are now **fully implemented**, plus the matching state persistence. **All
+> Helicon-gated** (`IsHeliconActivated`), so dormant on every scheduled network
+> (Helicon = year-9999); this is staged Rust work, not a milestone blocker.
+> What landed:
+> - **`AddAutoRenewedValidatorTx`** execution: `verifyAddAutoRenewedValidatorTx`
+>   (Helicon-active, syntactic + memo-length, stake/duration/fee bounds via
+>   `getValidatorRules`, duplicate-primary-validator check, `verifySpend`), then
+>   compute `potentialReward` from the reward calculator over `Period`, bump
+>   primary-network current supply, and `PutCurrentValidator` built via the new
+>   `state.NewStaker` (raw `startTime`/`endTime`/`weight`/`potentialReward`
+>   builder, vs `NewCurrentStaker` which derives them from the tx).
+> - **`SetAutoRenewedValidatorConfigTx`** execution: `verifySetAutoRenewedValidatorConfigTx`
+>   (resolves the referenced `AddAutoRenewedValidatorTx`, requires `tx.TxID ==`
+>   the validator's latest `TxID`, validates `Period` bounds + auth via
+>   `verifyAuthorization`), then mutate the validator's `StakingInfo`
+>   (`AutoCompoundRewardShares`, `NextPeriod`) and consume/produce UTXOs.
+> - **State persistence**: `State.write` now uses **codec v2** to persist the
+>   auto-renew `StakingInfo` (the `// TODO: use codecVersion2` is gone — see
+>   §3.4); on load, the staker weight folds in `AccruedValidationRewards` +
+>   `AccruedDelegateeRewards`.
+> - **`verifySpend`** (new shared helper) factors the get-IO → fee → flow-check
+>   path used by both txs (the Rust analog is the M4.16 `state_changes::verify_spend`).
+>
+> `RewardAutoRenewedValidatorTx` (type 42) **stays `errUnimplemented`** — the
+> reward/restake payout is a later ACP-236 part. Rust seam: extend the M4.16
+> `StandardTxExecutor` + `staker_tx_verification` with these cases (plan/M4.16
+> upstream-delta) and `state.NewStaker`; the codec-v2 metadata already exists
+> (M4.11).
+
 Shared helpers (`staker_tx_verification.go`, `subnet_tx_verification.go`, `state_changes.go`,
 `warp_verifier.go`) port to free functions over `&state::Diff`:
 - `verify_add_permissionless_validator` / `_delegator`: stake bounds, duration bounds

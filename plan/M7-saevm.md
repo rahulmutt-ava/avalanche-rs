@@ -528,7 +528,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `27` §3.1 | Shared-memory two-sided consistency (ATOMIC-1) | M7.22 |
 | `27` §5.4 | SAE recovery procedure | M7.24, M7.29 |
 | `11` §8 upstream-delta | cross-chain tx gossip + `/avax`-via-gossip + saetest network harness (Go `ab442aa244`) | **M7.33** |
-| `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`) | **M7.33** (Step 3) |
+| `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`); set extended 2026-06-17 with `in_memory_blocks` (Go `72adc639e6`) + saexec execution-pressure metrics `execution_queue_{duration_seconds,blocks,gas_limit}` / `execute_block_duration_seconds` / `{accepted,executed}_gas_limit_total` / `executed_gas_charged_total` (Go `553742045d`,`a1e5e4beb4`) | **M7.33** backing stores; prometheus registration → **M8** |
 | `21` §6.x upstream-delta | `cchain/dynamic` ACP-176/226/283 exponent integrators (Go `2750cc9e42`; unconsumed upstream) | **M7.34** (optional) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |

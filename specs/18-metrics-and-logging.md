@@ -355,6 +355,30 @@ under `avalanche_evm_*` with `[chain]` and are diffed by the same golden test.
 > | `sae` | `last_executed_height` | G | height of the latest block that completed async execution (`saexec` registers on the same `sae` registry; set per `sendPostExecutionEvents` + at `Executor` construction) |
 > | `cchain` | `gossip_bloom_*`, `gossip_*` | — | the standard `network/p2p/gossip` + `utils/bloom` metric families for cross-chain (atomic) tx gossip |
 
+> **Upstream delta (avalanchego `553742045d` #5500 → `72adc639e6` #5535, folded 2026-06-17).**
+> Three further SAE metrics commits extend the `sae`/`saexec` registries above with
+> execution-pressure and in-memory-block observability. All are pure metric-name
+> parity additions on the same `"sae"`-namespaced registry; the Rust analog is the
+> M7.33-deferred prometheus registration handed to **M8** (no SAE crate holds a
+> registry yet — the values are already tracked as `AtomicU64` backing stores on
+> `Frontier`/`Executor`). The full added set:
+>
+> | Namespace | Name | Type | Meaning |
+> |---|---|---|---|
+> | `sae` | `in_memory_blocks` | G (GaugeFunc) | SAE blocks still live in memory (created but not yet GC'd); sampled at scrape time via `blocks.InMemoryBlockCount()` rather than a setter, since the count changes through GC finalizers with no event to hook (`sae/metrics.go`) — the Rust counter is the M7.11/M7.17 `IN_MEMORY_BLOCK_COUNT` static |
+> | `saexec` | `execution_queue_duration_seconds` | H | time from a block's acceptance into the queue until its execution completes (exponential buckets 1ms→~16s); `execute_block_duration_seconds` ⊆ this |
+> | `saexec` | `execute_block_duration_seconds` | H | wall-clock to execute one block incl. state commit + post-execution work (buckets 500µs→~16s) |
+> | `saexec` | `execution_queue_blocks` | G | accepted blocks not yet finished executing (incl. the one executing) |
+> | `saexec` | `execution_queue_gas_limit` | G | Σ gas limits of those queued blocks |
+> | `saexec` | `accepted_gas_limit_total` | C | cumulative gas limit (worst-case gas) of blocks accepted into the execution queue — acceptance-side counterpart of `executed_gas_limit_total` |
+> | `saexec` | `executed_gas_charged_total` | C | cumulative gas *charged* by executed blocks (tx gas used + end-of-block op gas; **not** the eth gas used) |
+> | `saexec` | `executed_gas_limit_total` | C | cumulative gas limit (worst-case gas) of executed blocks |
+>
+> These feed off small Go seams (`Executor` now queues a `queuedBlock{block, enqueuedAt}`
+> to time queue residence; `markEnqueued`/`markExecuted` carry gas limit + charged
+> gas) — the structural knock-on (`ExecutionResults.GasConsumed`, `sendPostExecutionEvents`
+> taking the full results) is folded in `11` §execution.
+
 ### 2.12 API server — `avalanche_api_*` (`api/server/metrics.go`)
 
 | Name | Type | Labels | Meaning |

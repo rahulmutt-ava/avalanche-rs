@@ -789,6 +789,25 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 >    `Executor` construction) — both on the `"sae"`-namespaced registry from
 >    `snowCtx.Metrics`. See `18` §2.11.
 
+> **Upstream delta (avalanchego `553742045d` #5500 → `72adc639e6` #5535, folded 2026-06-17).**
+> SAE execution-pressure metrics. The bulk is metric-name parity (full table in
+> `18` §2.11 upstream-delta: `execution_queue_duration_seconds`,
+> `execute_block_duration_seconds`, `execution_queue_blocks/gas_limit`,
+> `accepted_gas_limit_total`, `executed_gas_{charged,limit}_total`, and the
+> `sae` `in_memory_blocks` GaugeFunc). One **structural knock-on** touches this
+> spec's execution path (`saexec/execution.go::Execute`, the M7.14 `execute_step`
+> analog): `ExecutionResults` gains a **`GasConsumed gas.Gas`** field (= the
+> block's charged gas: tx gas used + end-of-block op gas, distinct from eth gas
+> used), and `afterExecution` now passes the **whole `*ExecutionResults`** to
+> `sendPostExecutionEvents` (previously just `EthBlock()` + `Receipts`) so the
+> charged-gas total can be metered at `markExecuted`. The Rust `StepOutput`/event
+> seam should carry the charged-gas total alongside the receipts when the
+> prometheus registration lands (M7.33 → M8); the value is the per-block
+> `block_gas_consumed` the M7.14 driver already computes, so this is an
+> additive field, not a behavior change. The queue-timing wrapper (`queuedBlock`
+> pairs each enqueued block with `enqueuedAt`) is a Go-side instrumentation
+> detail with no consensus surface.
+
 > **Upstream delta (avalanchego `5896c92fee`, #5447 — folded 2026-06-15).**
 > `cchain.VM` now **overrides `ParseBlock`** to verify the block's `extData`
 > hashes to the `ExtDataHash` committed in its header, rejecting tampered blocks
