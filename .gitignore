@@ -29,4 +29,7 @@ target
 
 # Parallel-agent worktrees (superpowers)
 .worktrees/
-.claude/
+# Ignore .claude/ contents (scheduled-task locks, agent worktrees, etc.)...
+.claude/*
+# ...but keep project-local skills tracked in-repo
+!.claude/skills/
