@@ -36,10 +36,23 @@
 //! (`Result<T, ava_snow::Error>`). These are distinct error hierarchies with no
 //! built-in conversion; the adaptor maps `ava_vm::Error` →
 //! `ava_snow::Error::ParametersInvalid(e.to_string())` at the block boundary.
+//!
+//! # State-sync bridge
+//!
+//! A second, parallel bridge ships alongside this one: [`convert_state_sync`]
+//! turns a SAE-friendly [`SyncableVm<SP>`] into the consensus
+//! [`ava_vm::StateSyncableVm`], applying the same summary → VM forwarding
+//! inversion (see Go `adaptor/sync.go`).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
+
+mod sync;
+
+pub use sync::{
+    AdaptorSummary, ConvertStateSync, SummaryProperties, SyncableVm, convert_state_sync,
+};
 
 use std::sync::Arc;
 use std::time::SystemTime;

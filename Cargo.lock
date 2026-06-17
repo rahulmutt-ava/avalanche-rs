@@ -1673,6 +1673,7 @@ dependencies = [
 name = "ava-saevm-adaptor"
 version = "0.1.0"
 dependencies = [
+ "assert_matches",
  "async-trait",
  "ava-database",
  "ava-snow",
