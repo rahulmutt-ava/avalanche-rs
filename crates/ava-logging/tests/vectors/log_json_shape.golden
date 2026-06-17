@@ -1,0 +1,1 @@
+{"level":"info","timestamp":"<TS>","logger":"C","caller":"chain/foo.go:42","msg":"accepted block","awake":true,"flavor":"vanilla","height":1234}
