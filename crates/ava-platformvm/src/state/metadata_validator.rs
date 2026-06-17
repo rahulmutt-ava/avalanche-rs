@@ -62,6 +62,26 @@ pub struct ValidatorMetadata {
     pub tx_id: Id,
 }
 
+/// `state.StakingInfo` — the mutable validator data the auto-renew txs update
+/// (`state/metadata_validator.go`, specs 08 §3.4). A small projection of
+/// [`ValidatorMetadata`]'s mutable fields, get/set as a unit via the
+/// [`Chain`](crate::state::chain::Chain) `staking_info` accessors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StakingInfo {
+    /// `DelegateeReward` — the delegatee reward accrued during the current cycle.
+    pub delegatee_reward: u64,
+    /// `AccruedValidationRewards` — sum of validation rewards restaked from
+    /// previous cycles.
+    pub accrued_validation_rewards: u64,
+    /// `AccruedDelegateeRewards` — sum of delegatee rewards restaked from previous
+    /// cycles.
+    pub accrued_delegatee_rewards: u64,
+    /// `AutoCompoundRewardShares` — percentage of rewards to restake at cycle end.
+    pub auto_compound_reward_shares: u32,
+    /// `NextPeriod` — the next validation cycle duration, in seconds.
+    pub next_period: u64,
+}
+
 impl ValidatorMetadata {
     /// The auto-renewed effective weight: `tx_weight + accrued_validation_rewards
     /// + accrued_delegatee_rewards` (specs 08 §3.4).

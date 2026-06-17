@@ -113,6 +113,30 @@ pub trait Chain: Send + Sync {
     /// order.
     fn current_stakers(&self) -> Vec<Staker>;
 
+    /// `GetStakingInfo` — the mutable [`StakingInfo`] of the validator `(subnet,
+    /// node)` (ACP-236 auto-renew, specs 08 §3.4).
+    ///
+    /// # Errors
+    /// Returns [`Error::Database`](crate::error::Error) wrapping
+    /// `database.ErrNotFound` when no such current validator exists.
+    fn get_staking_info(
+        &self,
+        subnet: Id,
+        node: NodeId,
+    ) -> Result<crate::state::metadata_validator::StakingInfo>;
+    /// `SetStakingInfo` — replace the mutable [`StakingInfo`] of the validator
+    /// `(subnet, node)`.
+    ///
+    /// # Errors
+    /// Returns [`Error::Database`](crate::error::Error) wrapping
+    /// `database.ErrNotFound` when no such current validator exists.
+    fn set_staking_info(
+        &mut self,
+        subnet: Id,
+        node: NodeId,
+        info: crate::state::metadata_validator::StakingInfo,
+    ) -> Result<()>;
+
     // ----- pending stakers -----
 
     /// `PutPendingValidator` — add a pending validator.

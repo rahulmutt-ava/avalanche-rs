@@ -27,12 +27,13 @@ use ava_types::id::Id;
 use crate::error::{Error, Result};
 use crate::state::chain::Chain;
 use crate::state::diff::Diff;
+use crate::state::metadata_validator::StakingInfo;
 use crate::state::staker::Staker;
 use crate::txs::components::TransferableOutput;
 use crate::txs::{
-    AddPermissionlessDelegatorTx, AddPermissionlessValidatorTx, BaseTx, CreateChainTx,
-    CreateSubnetTx, ExportTx, ImportTx, Priority, RemoveSubnetValidatorTx,
-    TransferSubnetOwnershipTx, Visitor,
+    AddAutoRenewedValidatorTx, AddPermissionlessDelegatorTx, AddPermissionlessValidatorTx, BaseTx,
+    CreateChainTx, CreateSubnetTx, ExportTx, ImportTx, Priority, RemoveSubnetValidatorTx,
+    SetAutoRenewedValidatorConfigTx, TransferSubnetOwnershipTx, Visitor,
 };
 use crate::utxo::{self, Utxo};
 
@@ -385,6 +386,81 @@ impl Visitor for StandardTxExecutor<'_> {
         self.consume_produce(&ins, &outs)
     }
 
+    fn add_auto_renewed_validator(&mut self, tx: &AddAutoRenewedValidatorTx) -> Result<()> {
+        staker::verify_add_auto_renewed_validator(self.backend, self.state, tx)?;
+
+        let weight = tx.weight()?;
+        let subnet = tx.subnet_id();
+        let node = tx.node_id()?;
+
+        // Compute the potential reward over `period`, then bump primary-network
+        // supply (Helicon: auto-renewed validators mint at execution time, like
+        // permissionless validators).
+        let current_supply = self.state.current_supply(subnet)?;
+        let duration = std::time::Duration::from_secs(tx.period);
+        let duration_ns = u64::try_from(duration.as_nanos()).map_err(|_| Error::Overflow)?;
+        let calc = crate::reward::Calculator::new(self.backend.staking.reward_config);
+        let potential_reward = calc.calculate(duration_ns, weight, current_supply);
+        let new_supply = current_supply
+            .checked_add(potential_reward)
+            .ok_or(Error::Overflow)?;
+        self.state.set_current_supply(subnet, new_supply);
+
+        // The staker's window is [chain_time, chain_time + period].
+        let start_time = self.state.timestamp();
+        let end_time = start_time.checked_add(duration).unwrap_or(start_time);
+        let public_key = tx.public_key()?;
+
+        let staker = Staker::new_staker(
+            self.tx_id,
+            node,
+            public_key,
+            subnet,
+            weight,
+            start_time,
+            end_time,
+            potential_reward,
+            tx.current_priority(),
+        );
+        self.state.put_current_validator(staker)?;
+
+        // Persist the auto-renew config (`AutoCompoundRewardShares`, `NextPeriod`).
+        let info = StakingInfo {
+            auto_compound_reward_shares: tx.auto_compound_reward_shares,
+            next_period: tx.period,
+            ..StakingInfo::default()
+        };
+        self.state.set_staking_info(subnet, node, info)?;
+
+        let (ins, outs) = (tx.base.base.ins.clone(), tx.base.base.outs.clone());
+        self.consume_produce(&ins, &outs)
+    }
+
+    fn set_auto_renewed_validator_config(
+        &mut self,
+        tx: &SetAutoRenewedValidatorConfigTx,
+    ) -> Result<()> {
+        let validator = staker::verify_set_auto_renewed_validator_config(
+            self.backend,
+            self.state,
+            self.tx,
+            &self.unsigned_bytes,
+            tx,
+        )?;
+
+        // Mutate the validator's staking info in place.
+        let mut info = self
+            .state
+            .get_staking_info(validator.subnet_id, validator.node_id)?;
+        info.auto_compound_reward_shares = tx.auto_compound_reward_shares;
+        info.next_period = tx.period;
+        self.state
+            .set_staking_info(validator.subnet_id, validator.node_id, info)?;
+
+        let (ins, outs) = (tx.base.base.ins.clone(), tx.base.base.outs.clone());
+        self.consume_produce(&ins, &outs)
+    }
+
     fn import(&mut self, tx: &ImportTx) -> Result<()> {
         let current_timestamp = self.state.timestamp();
         let _ = self.backend.is_durango_activated(current_timestamp);
@@ -509,7 +585,10 @@ mod standard_executor {
     };
     use crate::txs::executor::backend::{StakingConfig, UpgradeSchedule};
     use crate::txs::validator::Validator;
-    use crate::txs::{AddPermissionlessValidatorTx, AdvanceTimeTx, Tx, UnsignedTx};
+    use crate::txs::{
+        AddAutoRenewedValidatorTx, AddPermissionlessValidatorTx, AdvanceTimeTx,
+        SetAutoRenewedValidatorConfigTx, Tx, UnsignedTx,
+    };
     use crate::txs::{AddValidatorTx, CreateChainTx, CreateSubnetTx};
 
     const AVAX_ASSET: [u8; 32] = [0x42; 32];
@@ -846,6 +925,216 @@ mod standard_executor {
             delegation_shares: 1_000_000,
             verified: std::cell::OnceCell::new(),
         }
+    }
+
+    // ----- M4.16 ACP-236(4) auto-renew cases (Helicon-gated) -----
+
+    /// An [`UpgradeSchedule`] forcing Helicon active at the epoch (the dormant
+    /// fork the conformance tests force on), with Durango active and Etna kept
+    /// inactive so the fee stays the flat static `TX_FEE` (predictable
+    /// conservation; the Helicon gate is independent of the Etna fee regime).
+    fn helicon_active() -> UpgradeSchedule {
+        let mut s = UpgradeSchedule::durango_only();
+        s.helicon_time = SystemTime::UNIX_EPOCH;
+        s
+    }
+
+    /// Builds an `AddAutoRenewedValidatorTx` funded by `(fund, 0)`, staking
+    /// `weight` over `period` seconds, for the node `[7; 20]`.
+    fn auto_renewed_validator(fund: Id, weight: u64, period: u64) -> AddAutoRenewedValidatorTx {
+        let pop = ProofOfPossession::new(BLS_PUBKEY, BLS_SIG);
+        AddAutoRenewedValidatorTx {
+            base: crate::txs::BaseTx::new(AvaxBaseTx {
+                network_id: 1,
+                blockchain_id: Id::EMPTY,
+                outs: vec![avax_output(10 * AVAX - TX_FEE)],
+                ins: vec![avax_input(fund, 0, weight + 10 * AVAX)],
+                memo: vec![],
+            }),
+            validator_node_id: vec![7u8; 20],
+            signer: Signer::ProofOfPossession(pop),
+            stake_outs: vec![TransferableOutput {
+                asset_id: Id::from(AVAX_ASSET),
+                out: Output::Transfer(TransferOutput::new(weight, owners(1))),
+            }],
+            validator_rewards_owner: Owner::Secp256k1(owners(1)),
+            delegator_rewards_owner: Owner::Secp256k1(owners(1)),
+            // A 0-of-0 authority (an empty credential proves control).
+            validator_authority: Owner::Secp256k1(OutputOwners::new(0, 0, vec![])),
+            delegation_shares: 1_000_000,
+            auto_compound_reward_shares: 300_000,
+            period,
+        }
+    }
+
+    /// Pre-Helicon, `AddAutoRenewedValidatorTx` is rejected (Helicon dormant).
+    #[test]
+    fn standard_executor_add_auto_renew_pre_helicon_rejected() {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let fund = Id::from([0x40; 32]);
+        let weight = 2_000 * AVAX;
+        let mut diff = diff_with_utxos(ts, &[(fund, 0, weight + 10 * AVAX)]);
+        // Durango+Etna active, Helicon NOT (the production posture).
+        let b = backend(UpgradeSchedule::durango_only(), true);
+
+        let period = 30 * 24 * 60 * 60; // 30 days
+        let tx = auto_renewed_validator(fund, weight, period);
+        let err = run_err(&b, &mut diff, UnsignedTx::AddAutoRenewedValidator(tx));
+        assert!(matches!(err, Error::HeliconUpgradeNotActive), "got {err:?}");
+    }
+
+    /// Post-Helicon, a valid `AddAutoRenewedValidatorTx` verifies, is added to
+    /// the current set, grows supply, and persists its staking info.
+    #[test]
+    fn standard_executor_add_auto_renew_valid() {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let fund = Id::from([0x41; 32]);
+        let weight = 2_000 * AVAX; // == MinValidatorStake
+        let mut diff = diff_with_utxos(ts, &[(fund, 0, weight + 10 * AVAX)]);
+        let b = backend(helicon_active(), true);
+
+        let supply_before = diff.current_supply(Id::EMPTY).unwrap();
+        let period = 30 * 24 * 60 * 60; // 30 days, within [2 weeks, 365 days]
+        let tx = auto_renewed_validator(fund, weight, period);
+        let node = NodeId::from([7; 20]);
+        run(&b, &mut diff, UnsignedTx::AddAutoRenewedValidator(tx)).expect("valid auto-renew");
+
+        // The validator is now current, supply grew, and the staking info holds
+        // the auto-compound config.
+        assert!(diff.get_current_validator(Id::EMPTY, node).is_ok());
+        assert!(diff.current_supply(Id::EMPTY).unwrap() >= supply_before);
+        let info = diff
+            .get_staking_info(Id::EMPTY, node)
+            .expect("staking info present");
+        assert_eq!(info.auto_compound_reward_shares, 300_000);
+        assert_eq!(info.next_period, period);
+        // The funding UTXO was consumed.
+        assert!(diff.get_utxo(avax_input(fund, 0, 0).input_id()).is_err());
+    }
+
+    /// Post-Helicon, an `AddAutoRenewedValidatorTx` staking below
+    /// `MinValidatorStake` is rejected with `WeightTooSmall`.
+    #[test]
+    fn standard_executor_add_auto_renew_weight_too_small() {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let fund = Id::from([0x42; 32]);
+        let weight = AVAX; // 1 AVAX < MinValidatorStake (2000 AVAX)
+        let mut diff = diff_with_utxos(ts, &[(fund, 0, weight + 10 * AVAX)]);
+        let b = backend(helicon_active(), true);
+
+        let period = 30 * 24 * 60 * 60;
+        let tx = auto_renewed_validator(fund, weight, period);
+        let err = run_err(&b, &mut diff, UnsignedTx::AddAutoRenewedValidator(tx));
+        assert!(matches!(err, Error::WeightTooSmall), "got {err:?}");
+    }
+
+    /// Post-Helicon, a period shorter than `MinStakeDuration` is rejected with
+    /// `StakeTooShort`.
+    #[test]
+    fn standard_executor_add_auto_renew_period_too_short() {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let fund = Id::from([0x43; 32]);
+        let weight = 2_000 * AVAX;
+        let mut diff = diff_with_utxos(ts, &[(fund, 0, weight + 10 * AVAX)]);
+        let b = backend(helicon_active(), true);
+
+        let period = 60; // 1 minute < MinStakeDuration (2 weeks)
+        let tx = auto_renewed_validator(fund, weight, period);
+        let err = run_err(&b, &mut diff, UnsignedTx::AddAutoRenewedValidator(tx));
+        assert!(matches!(err, Error::StakeTooShort), "got {err:?}");
+    }
+
+    /// Adds an auto-renewed validator to `diff`, returning its tx id (the bytes
+    /// are stored via `add_tx` so the config tx can resolve it).
+    fn add_auto_renewed(b: &Backend, diff: &mut Diff, fund: Id, weight: u64, period: u64) -> Id {
+        let tx = auto_renewed_validator(fund, weight, period);
+        let mut signed = Tx::new(UnsignedTx::AddAutoRenewedValidator(tx));
+        signed.initialize(crate::txs::codec::Codec()).expect("init");
+        let tx_id = signed.id();
+        let unsigned_bytes = crate::txs::codec::Codec()
+            .marshal(crate::CODEC_VERSION, &signed.unsigned)
+            .expect("marshal unsigned");
+        {
+            let mut exec = StandardTxExecutor::new(b, diff, &signed, unsigned_bytes);
+            signed.unsigned.visit(&mut exec).expect("add auto-renew");
+        }
+        // Store the signed bytes so SetAutoRenewedValidatorConfigTx can resolve it.
+        diff.add_tx(tx_id, signed.bytes().to_vec());
+        tx_id
+    }
+
+    /// Post-Helicon, `SetAutoRenewedValidatorConfigTx` mutates the validator's
+    /// `auto_compound_reward_shares` / `next_period`.
+    #[test]
+    fn standard_executor_set_auto_renew_config_valid() {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let fund = Id::from([0x44; 32]);
+        let cfg_fund = Id::from([0x45; 32]);
+        let weight = 2_000 * AVAX;
+        let period = 30 * 24 * 60 * 60;
+        let mut diff = diff_with_utxos(
+            ts,
+            &[(fund, 0, weight + 10 * AVAX), (cfg_fund, 0, 10 * AVAX)],
+        );
+        let b = backend(helicon_active(), true);
+
+        let staker_tx_id = add_auto_renewed(&b, &mut diff, fund, weight, period);
+        let node = NodeId::from([7; 20]);
+
+        let new_period = 60 * 24 * 60 * 60; // 60 days
+        let tx = SetAutoRenewedValidatorConfigTx {
+            base: crate::txs::BaseTx::new(AvaxBaseTx {
+                network_id: 1,
+                blockchain_id: Id::EMPTY,
+                outs: vec![avax_output(10 * AVAX - TX_FEE)],
+                ins: vec![avax_input(cfg_fund, 0, 10 * AVAX)],
+                memo: vec![],
+            }),
+            tx_id: staker_tx_id,
+            // A 0-of-0 authority requires no signatures.
+            auth: Auth::Secp256k1(ava_secp256k1fx::Input::new(vec![])),
+            auto_compound_reward_shares: 500_000,
+            period: new_period,
+        };
+        // One empty credential serves as the (0-of-0) validator authority.
+        let creds = vec![crate::txs::tx::Credential { sigs: vec![] }];
+        run_creds(
+            &b,
+            &mut diff,
+            UnsignedTx::SetAutoRenewedValidatorConfig(tx),
+            creds,
+        )
+        .expect("set auto-renew config");
+
+        let info = diff
+            .get_staking_info(Id::EMPTY, node)
+            .expect("staking info present");
+        assert_eq!(info.auto_compound_reward_shares, 500_000);
+        assert_eq!(info.next_period, new_period);
+    }
+
+    /// Pre-Helicon, `SetAutoRenewedValidatorConfigTx` is rejected.
+    #[test]
+    fn standard_executor_set_auto_renew_config_pre_helicon_rejected() {
+        let ts = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut diff = diff_with_utxos(ts, &[]);
+        let b = backend(UpgradeSchedule::durango_only(), true);
+
+        let tx = SetAutoRenewedValidatorConfigTx {
+            base: crate::txs::BaseTx::new(AvaxBaseTx {
+                network_id: 1,
+                blockchain_id: Id::EMPTY,
+                outs: vec![],
+                ins: vec![],
+                memo: vec![],
+            }),
+            tx_id: Id::from([0x99; 32]),
+            auth: Auth::Secp256k1(ava_secp256k1fx::Input::new(vec![])),
+            auto_compound_reward_shares: 0,
+            period: 0,
+        };
+        let err = run_err(&b, &mut diff, UnsignedTx::SetAutoRenewedValidatorConfig(tx));
+        assert!(matches!(err, Error::HeliconUpgradeNotActive), "got {err:?}");
     }
 
     /// The known-good BLS PoP from the Go vectors (`localsigner.FromBytes`).

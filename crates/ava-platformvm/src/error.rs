@@ -223,6 +223,11 @@ pub enum Error {
     #[error("attempting to use an Etna-upgrade feature prior to activation")]
     EtnaUpgradeNotActive,
 
+    /// `errHeliconUpgradeNotActive` — a Helicon-gated (ACP-236 auto-renew) tx was
+    /// issued before the Helicon upgrade activated.
+    #[error("attempting to use a Helicon-upgrade feature prior to activation")]
+    HeliconUpgradeNotActive,
+
     /// `ErrAddValidatorTxPostDurango` — `AddValidatorTx` is not permitted post
     /// Durango.
     #[error("AddValidatorTx is not permitted post-Durango")]

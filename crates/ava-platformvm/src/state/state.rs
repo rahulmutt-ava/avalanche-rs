@@ -166,6 +166,14 @@ pub struct State<D: Database> {
     pending: Stakers,
     l1_validators: BTreeMap<Id, L1Validator>,
 
+    // ----- in-memory mutable validator staking-info (ACP-236 auto-renew) -----
+    // Keyed by `(subnet, node)`. The on-disk codec-v2 persistence of these
+    // fields lives in `ValidatorMetadata` (M4.11); the block acceptor's
+    // metadata write path (M4.14 / M4.20) flushes them. Here they are tracked
+    // in-memory alongside the `current` stakers so the auto-renew executor can
+    // mutate them.
+    staking_info: BTreeMap<(Id, NodeId), crate::state::metadata_validator::StakingInfo>,
+
     // ----- in-memory reward-utxo accumulator (keyed by staker tx id) -----
     reward_utxo_index: BTreeMap<Id, Vec<UtxoBytes>>,
     subnet_ids: Vec<Id>,
@@ -219,6 +227,8 @@ impl<D: Database> State<D> {
             current: Stakers::new(),
             pending: Stakers::new(),
             l1_validators: BTreeMap::new(),
+
+            staking_info: BTreeMap::new(),
 
             reward_utxo_index: BTreeMap::new(),
             subnet_ids: Vec::new(),
@@ -443,6 +453,8 @@ impl<D: Database> State<D> {
             pending: self.pending.clone(),
             l1_validators: self.l1_validators.clone(),
 
+            staking_info: self.staking_info.clone(),
+
             reward_utxo_index: self.reward_utxo_index.clone(),
             subnet_ids: self.subnet_ids.clone(),
             chain_index: self.chain_index.clone(),
@@ -604,11 +616,18 @@ impl<D: Database> Chain for State<D> {
         if !s.priority.is_current() {
             return Err(Error::WrongTxType);
         }
+        // Seed the mutable staking info with the zero value so that reads through
+        // `get_staking_info` before a flush observe a default (Go
+        // `State.PutCurrentValidator` seeds `modifiedStakingInfo`).
+        self.staking_info
+            .entry((s.subnet_id, s.node_id))
+            .or_default();
         self.current.put_validator(s);
         Ok(())
     }
 
     fn delete_current_validator(&mut self, s: &Staker) {
+        self.staking_info.remove(&(s.subnet_id, s.node_id));
         self.current.delete_validator(s);
     }
 
@@ -622,6 +641,32 @@ impl<D: Database> Chain for State<D> {
 
     fn current_stakers(&self) -> Vec<Staker> {
         self.current.to_vec()
+    }
+
+    fn get_staking_info(
+        &self,
+        subnet: Id,
+        node: NodeId,
+    ) -> Result<crate::state::metadata_validator::StakingInfo> {
+        // The validator must exist (Go `State.GetStakingInfo` first reads the
+        // current validator and surfaces its error).
+        self.get_current_validator(subnet, node)?;
+        Ok(self
+            .staking_info
+            .get(&(subnet, node))
+            .copied()
+            .unwrap_or_default())
+    }
+
+    fn set_staking_info(
+        &mut self,
+        subnet: Id,
+        node: NodeId,
+        info: crate::state::metadata_validator::StakingInfo,
+    ) -> Result<()> {
+        self.get_current_validator(subnet, node)?;
+        self.staking_info.insert((subnet, node), info);
+        Ok(())
     }
 
     fn put_pending_validator(&mut self, s: Staker) -> Result<()> {
