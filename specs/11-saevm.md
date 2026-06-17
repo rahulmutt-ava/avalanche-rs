@@ -863,10 +863,17 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > (replacing the old `NewBlockWithExtData`, which Go marks for deletion) and added
 > a `WithBlockVersion` option. **In the Rust port there is no `BlockBodyExtra`
 > wire struct**: approach (B) (M7.37) carries `extData` as a trailing RLP item
-> after a stock SAE eth block, with no co-located `Version` field — so porting
-> this check requires first deciding where the C-Chain `Version` rides in the
-> Rust carrier. Tracked as `plan/M7` M7.39 (extends the M7.37 `parse_block`
-> override). Non-gating (Helicon unscheduled; same dormancy as M7.37).
+> after a stock SAE eth block. **Resolved (M7.39, as-built):** Go's full block
+> RLP is `[Header, Txs, Uncles, Version, ExtData]`, so the faithful place for the
+> C-Chain `Version` is the trailing RLP item *before* `extData` — the carrier
+> becomes the pair `[Version: u32, extData: bytes]` after the bare eth block. A
+> bare block (no trailing items) decodes to `Version = 0` + empty `extData`,
+> matching Go's `BlockVersion`/`BlockExtData` defaults. `parse_block` checks
+> `version != 0` unconditionally and first (Go's order), rejecting with
+> `Error::InvalidBlockVersion(u32)`, then runs the existing extData-hash check.
+> This extends (does not fork) M7.37's one-item carrier and stays dormant on the
+> empty build path. Done in `plan/M7` M7.39. Non-gating (Helicon unscheduled;
+> same dormancy as M7.37).
 
 > **Upstream delta (avalanchego `9b48abd852`, #5523 — folded 2026-06-17).**
 > SAE C-Chain gains a dedicated **`cchain/warp` package** consolidating the

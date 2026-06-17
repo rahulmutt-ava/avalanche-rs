@@ -94,7 +94,15 @@ pub enum Error {
     /// Parsing the block via the embedded SAE VM failed (Go `vm.VM.ParseBlock`).
     #[error("parsing block: {0}")]
     Parse(String),
-    /// Decoding the C-Chain block's trailing `extData` RLP item failed.
+    /// The block's `BlockBodyExtra` carries a `Version` other than `0`, the only
+    /// supported version (Go `vm.go::errInvalidBlockVersion`, #5543). The header
+    /// commits neither the `Version` nor the `extData` bytes (only the
+    /// `ExtDataHash`), so a block with a tampered `Version` keeps the same ID —
+    /// `parse_block` is the boundary that rejects it (specs/11 §8, M7.39).
+    #[error("invalid block version: {0}")]
+    InvalidBlockVersion(u32),
+    /// Decoding the C-Chain block's trailing `BlockBodyExtra` (`Version` +
+    /// `extData`) RLP items failed.
     #[error("decoding extData: {0}")]
     ExtDataRlp(String),
     /// The block's `extData` body does not hash to the `ExtDataHash` committed
@@ -437,28 +445,36 @@ impl Vm {
         self.core.last_accepted_id()
     }
 
-    /// `VM.ParseBlock` (Go `cchain/vm.go::ParseBlock`, #5447): parse `bytes` via
-    /// the embedded SAE VM, then verify that the block's `extData` hashes to the
+    /// `VM.ParseBlock` (Go `cchain/vm.go::ParseBlock`, #5447 + #5543): parse
+    /// `bytes` via the embedded SAE VM, then perform the C-Chain syntactic checks
+    /// the SAE VM is unaware of — that the `BlockBodyExtra` `Version` is `0` (the
+    /// only supported version) and that the block's `extData` hashes to the
     /// `ExtDataHash` committed in its header.
     ///
-    /// The block ID is the header hash, which commits `ExtDataHash`, so a block
-    /// whose `extData` was tampered (leaving the header — and ID — unchanged)
-    /// would pass the base SAE `ParseBlock` (which is unaware of the C-Chain
-    /// `extData` concept). This override recomputes
+    /// The block ID is the header hash. The header commits neither the `Version`
+    /// nor the `extData` bytes (only `ExtDataHash`), so a block whose `Version`
+    /// or `extData` was tampered (leaving the header — and ID — unchanged) would
+    /// pass the base SAE `ParseBlock` (which is unaware of the C-Chain `extData`
+    /// concept). This override rejects a non-zero `Version`
+    /// ([`Error::InvalidBlockVersion`]) and recomputes
     /// [`calc_ext_data_hash`](crate::block_ext::calc_ext_data_hash) over the
-    /// block's `extData` and rejects a mismatch.
+    /// block's `extData`, rejecting a mismatch.
     ///
-    /// The `extData` rides as a trailing RLP byte-string item appended after the
-    /// bare SAE eth block (approach (B), M7.37 — the SAE core stays a stock
-    /// alloy block; the C-Chain layer owns the carrier). A block carrying no
-    /// commitment (empty header `extra_data`) is accepted unchecked — Go's
-    /// pre-AP1 `TODO` analog, and the dormant state until the build path commits
+    /// The `BlockBodyExtra` rides as the trailing RLP items `[Version, extData]`
+    /// appended after the bare SAE eth block (approach (B), M7.37/M7.39 — the SAE
+    /// core stays a stock alloy block; the C-Chain layer owns the carrier, with
+    /// `Version` before `extData` matching Go's `[Header, Txs, Uncles, Version,
+    /// ExtData]` block-RLP field order). A bare block (no trailing items) decodes
+    /// to `Version = 0` and empty `extData`. A block carrying no `ExtDataHash`
+    /// commitment (empty header `extra_data`) skips the hash check — Go's pre-AP1
+    /// `TODO` analog, and the dormant state until the build path commits
     /// `ExtDataHash` (the remainder of M7.22, coupled to the M7.21 C-Chain
     /// builder + atomic source).
     ///
     /// # Errors
     /// [`Error::Parse`] if the embedded SAE VM rejects the bytes;
-    /// [`Error::ExtDataRlp`] if the trailing `extData` item is malformed;
+    /// [`Error::InvalidBlockVersion`] if the `BlockBodyExtra` `Version` is not `0`;
+    /// [`Error::ExtDataRlp`] if the trailing `BlockBodyExtra` items are malformed;
     /// [`Error::ExtDataHashMismatch`] if the committed hash and the recomputed
     /// `extData` hash differ.
     pub fn parse_block(&self, bytes: &[u8]) -> Result<SaeBlock, Error> {
@@ -466,6 +482,17 @@ impl Vm {
             .core
             .parse(bytes)
             .map_err(|e| Error::Parse(e.to_string()))?;
+
+        // The C-Chain syntactic checks the SAE VM is unaware of (Go
+        // `vm.go::ParseBlock`): the `BlockBodyExtra` `Version` must be 0, and the
+        // `extData` must hash to the header's committed `ExtDataHash`. Decode the
+        // trailing `[Version, extData]` items once and check `Version` first —
+        // unconditionally, matching Go: the header commits neither, so a tampered
+        // `Version` keeps the same block ID.
+        let (version, ext_data) = decode_trailing_body_extra(bytes)?;
+        if version != 0 {
+            return Err(Error::InvalidBlockVersion(version));
+        }
 
         // The committed ExtDataHash lives in the header's `extra_data`. An empty
         // commitment marks a block that does not commit an ExtDataHash (Go's
@@ -475,7 +502,6 @@ impl Vm {
             return Ok(handle);
         }
 
-        let ext_data = decode_trailing_ext_data(bytes)?;
         let actual = crate::block_ext::calc_ext_data_hash(&ext_data);
         if claimed.as_ref() != actual.as_slice() {
             return Err(Error::ExtDataHashMismatch {
@@ -512,23 +538,36 @@ impl Vm {
     }
 }
 
-/// Decodes the trailing `extData` RLP byte-string item that the C-Chain appends
-/// after the bare SAE eth block in the wire bytes (Go's `extData` block field,
-/// carried out-of-band here — approach (B), M7.37). Returns an empty vector when
-/// the block carries no trailing item (a bare SAE block).
+/// Decodes the trailing `BlockBodyExtra` RLP items — `[Version: u32, extData:
+/// bytes]` — that the C-Chain appends after the bare SAE eth block in the wire
+/// bytes (Go's `Version`/`ExtData` block fields, carried out-of-band here —
+/// approach (B), M7.37/M7.39). Returns `(0, empty)` when the block carries no
+/// trailing items (a bare SAE block, matching Go's `BlockVersion`/`BlockExtData`
+/// defaults of `0`/`nil` for a block with no `BlockBodyExtra`). `Version`
+/// precedes `extData`, mirroring Go's `[Header, Txs, Uncles, Version, ExtData]`
+/// block-RLP field order.
 ///
 /// `RethBlock::decode` consumes exactly the eth block and leaves the slice
 /// pointing at any trailing bytes, so the SAE core's own `parse_block` (which
-/// ignores the trailing item) and this decoder agree on the boundary.
-fn decode_trailing_ext_data(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+/// ignores the trailing items) and this decoder agree on the boundary.
+fn decode_trailing_body_extra(bytes: &[u8]) -> Result<(u32, Vec<u8>), Error> {
     let mut slice = bytes;
     // Advance past the eth block; the SAE core already validated it.
     let _eth = RethBlock::decode(&mut slice).map_err(|e| Error::Parse(e.to_string()))?;
     if slice.is_empty() {
-        return Ok(Vec::new());
+        return Ok((0, Vec::new()));
     }
-    let ext = Bytes::decode(&mut slice).map_err(|e| Error::ExtDataRlp(e.to_string()))?;
-    Ok(ext.to_vec())
+    let version = u32::decode(&mut slice).map_err(|e| Error::ExtDataRlp(e.to_string()))?;
+    // `extData` follows `Version`; tolerate its absence (treat as empty) so a
+    // version-only carrier still decodes, matching Go's nilable `ExtData`.
+    let ext_data = if slice.is_empty() {
+        Vec::new()
+    } else {
+        Bytes::decode(&mut slice)
+            .map_err(|e| Error::ExtDataRlp(e.to_string()))?
+            .to_vec()
+    };
+    Ok((version, ext_data))
 }
 
 /// Builds the genesis SAE block: an empty eth block at height 0, marked

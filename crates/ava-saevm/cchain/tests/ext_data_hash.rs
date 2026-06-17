@@ -61,10 +61,14 @@ fn bare_block_bytes(number: u64, timestamp: u64) -> Vec<u8> {
 }
 
 /// A C-Chain block that commits `CalcExtDataHash(ext_data)` in its header's
-/// `extra_data` and carries `ext_data` as the trailing RLP byte-string item
-/// (the approach-(B) carrier). When `committed` differs from the real
-/// `ext_data`, the block is tampered (header commitment unchanged).
-fn committed_block_bytes(
+/// `extra_data` and carries the `BlockBodyExtra` as the trailing RLP items
+/// `[version, ext_data]` (the approach-(B) carrier; `version` precedes
+/// `ext_data`, matching Go's `[Header, Txs, Uncles, Version, ExtData]` field
+/// order). When `committed` differs from the real `ext_data`, the block is
+/// tampered (header commitment unchanged). `version` simulates a
+/// `BlockBodyExtra.Version` (Go `WithBlockVersion`); only `0` is accepted.
+fn versioned_block_bytes(
+    version: u32,
     committed: &[u8],
     ext_data: &[u8],
     number: u64,
@@ -80,8 +84,19 @@ fn committed_block_bytes(
         ..Header::default()
     };
     let mut wire = rlp_encode(RethBlock::uncle(header));
+    wire.extend_from_slice(&rlp_encode(version));
     wire.extend_from_slice(&rlp_encode(ext_data));
     wire
+}
+
+/// A well-formed (version-0) committed block — the common case.
+fn committed_block_bytes(
+    committed: &[u8],
+    ext_data: &[u8],
+    number: u64,
+    timestamp: u64,
+) -> Vec<u8> {
+    versioned_block_bytes(0, committed, ext_data, number, timestamp)
 }
 
 #[test]
@@ -138,6 +153,36 @@ async fn parse_block_rejects_tampered_ext_data() {
         Err(Error::ExtDataHashMismatch { .. }) => {}
         Err(other) => panic!("expected ExtDataHashMismatch, got {other:?}"),
         Ok(_) => panic!("tampered extData was not rejected"),
+    }
+}
+
+#[tokio::test]
+async fn parse_block_rejects_invalid_version() {
+    // Mirrors Go `TestParseBlock`/`invalid_version`: a block whose
+    // `BlockBodyExtra.Version` is non-zero is rejected before the extData-hash
+    // check. The header commits neither the Version nor the extData, so the
+    // block ID is unchanged — `parse_block` is the boundary that catches it.
+    let vm = new_vm();
+    let ext_data = b"atomic-import-export-bytes";
+    let bytes = versioned_block_bytes(1, ext_data, ext_data, 1, 1);
+    match vm.parse_block(&bytes) {
+        Err(Error::InvalidBlockVersion(1)) => {}
+        Err(other) => panic!("expected InvalidBlockVersion(1), got {other:?}"),
+        Ok(_) => panic!("non-zero block version was not rejected"),
+    }
+}
+
+#[tokio::test]
+async fn parse_block_rejects_invalid_version_before_ext_data_hash() {
+    // The version check is unconditional and precedes the extData-hash check
+    // (Go ordering): a block with both a non-zero version AND a tampered extData
+    // is rejected for the version, not the hash mismatch.
+    let vm = new_vm();
+    let bytes = versioned_block_bytes(2, b"atomic-A", b"atomic-B-tampered", 1, 1);
+    match vm.parse_block(&bytes) {
+        Err(Error::InvalidBlockVersion(2)) => {}
+        Err(other) => panic!("expected InvalidBlockVersion(2) to take precedence, got {other:?}"),
+        Ok(_) => panic!("non-zero block version was not rejected"),
     }
 }
 
