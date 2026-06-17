@@ -347,6 +347,34 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > tree: `cargo nextest run -p ava-differential` 15/15, `-p ava-vm-rpc` 10/10, clippy `--all-targets -D warnings` clean,
 > `--features live --tests` compiles. **M9.12 (plugin_go_in_rust) will reuse `plugin.rs`** for the reverse direction.
 
+> **★ LIVE-ARM HARNESS BUILT + RUN AGAINST THE REAL GO ORACLE (2026-06-18).** The nightly-operator
+> handoff above ("synthesize the subnet/blockchain that triggers the Go host to spawn the plugin") is now
+> a self-wiring harness: `tests/differential/go-oracle/rust_plugin_handshake/main.go` (source-of-truth copy;
+> dropped into `~/avalanchego/tests/rustplugin/` to compile against the `tests/fixture/tmpnet` fixture).
+> It boots a real single-node Go `avalanchego` tmpnet, creates a subnet + blockchain on the Rust
+> `testvm_plugin` VM id, and asserts (by counting successful-vs-errored `creating chain` log lines for that
+> VM id) that the Go chain manager spawns the plugin and completes the rpcchainvm v45 reverse-dial + first
+> VM RPC. Run after `./scripts/check_oracle_binary.sh` prints OK (oracle rebuilt to `b1393ecb06`, rpcchainvm=45):
+> `HOME=$(mktemp -d) AVALANCHEGO_PATH=… RUST_PLUGIN_PATH=…/target/debug/examples/testvm_plugin go run ./tests/rustplugin`.
+> **Three load-bearing gotchas** (folded into the go-oracle README): (1) plugin-dir must be set via the
+> **`AVAGO_PLUGIN_DIR` env var** — avalanchego's `getPluginDir` only honors a config-file `plugin-dir` when
+> `viper.IsSet` is true, which it is NOT for tmpnet's `--config-file` path, so it silently falls back to
+> `$AVAGO_DATA_DIR/plugins`; `ProcessRuntimeConfig.PluginDir`/`node.Flags["plugin-dir"]` are insufficient.
+> (2) tmpnet writes prometheus SD config under `$HOME/.tmpnet` → run with a writable `HOME`. (3) the
+> pre-restart bootstrap node logs a transient `vmFactory not found` (it doesn't yet track the subnet), so the
+> PASS test counts create-vs-error lines rather than grepping for the VM id / "creating chain" / "rpcchainvm".
+>
+> **★ NEW FINDING — Rust rpcchainvm GUEST fails Go-hosted `Initialize` (M9.3 live FOLLOW-UP, not yet green).**
+> With the plugin-dir fixed, the Go host **finds, spawns, and gRPC-connects to** the Rust `testvm_plugin` (the
+> error moved from `"vmFactory ... was not found"` → `"error while creating new snowman vm rpc error: code =
+> Canceled desc = stream terminated by RST_STREAM with error code: CANCEL"`). So the v45 reverse-dial +
+> go-plugin handshake succeed, but the **first VM RPC over the dialed channel fails** (stream reset; the plugin
+> wrote nothing to its `vm-factory.log`). The offline arms only black-box the subprocess dial-back and never
+> drive a real Go-side `Initialize`/snowman-vm creation, so this gap was invisible until this run. **Next
+> iteration:** reproduce the Go→Rust `Initialize` call in an in-process `ava-vm-rpc` `host` test (or add plugin
+> stderr logging) to localize whether the `guest::serve` VM service, grpc-health `SERVING`, or the
+> `proto/vm` `Initialize` handler aborts the stream; this is the true blocker for the M9.3 live arm passing.
+
 ### Task M9.4: Proxied `rpcdb` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::rpcdb_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::rpcdb`  ·  **Depends on:** M9.2, M1 (ava-database `DynDatabase`)  ·  **Spec:** `07` §5.2/§5.3/§5.4 (rpcdb row: server-side iterator handles, batched `IteratorNext`, `ErrEnumToError`)
 **Files:** `crates/ava-vm-rpc/src/proxy/rpcdb.rs`, `crates/ava-vm-rpc/tests/proxy_rpcdb.rs`
