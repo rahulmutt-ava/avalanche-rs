@@ -88,8 +88,8 @@ fn collect_vector_files(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("reading directory {}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("reading directory {}", dir.display()))?;
     for entry in entries {
         let entry = entry.with_context(|| format!("reading entry in {}", dir.display()))?;
         let path = entry.path();
@@ -372,8 +372,8 @@ fn diff(root: &Path, against: &Path) -> anyhow::Result<()> {
     }
     for path in committed_set.intersection(&fresh_set) {
         let rel = Path::new(path);
-        let a = std::fs::read(root.join(rel))
-            .with_context(|| format!("reading committed {path}"))?;
+        let a =
+            std::fs::read(root.join(rel)).with_context(|| format!("reading committed {path}"))?;
         let b = std::fs::read(against.join(rel))
             .with_context(|| format!("reading extracted {path}"))?;
         if a != b {
@@ -405,7 +405,10 @@ mod tests {
 
     #[test]
     fn checksum_line_uses_two_spaces_and_slashes() {
-        let line = checksum_line("abc123", Path::new("saevm").join("blocks").join("b.json").as_path());
+        let line = checksum_line(
+            "abc123",
+            Path::new("saevm").join("blocks").join("b.json").as_path(),
+        );
         assert_eq!(line, "abc123  saevm/blocks/b.json");
     }
 
