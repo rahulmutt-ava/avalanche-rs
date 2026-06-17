@@ -376,6 +376,29 @@ Wave 7 (differential sync-to-tip + gate)
 > `staker_tx_verification` with the two cases + add `state::new_staker`. `RewardAutoRenewedValidatorTx`
 > (type 42) stays unimplemented upstream (later ACP-236 part). No new task — folds into the existing
 > Helicon-auto-renew surface (the M4.17 restake path, §M4.17 step 3, is the natural sibling).
+>
+> **AS-BUILT (folded 2026-06-17, ralph iteration; merge `516d55f`).** The two auto-renew
+> standard-execution cases are now **implemented in the Rust port**, Helicon-gated and dormant
+> on every scheduled network (Helicon = year-9999). What landed in `ava-platformvm`:
+> - `standard_tx_executor.rs`: `add_auto_renewed_validator` (verify → reward calc over `Period`
+>   → primary-supply bump → `Staker::new_staker` + `put_current_validator` → `StakingInfo`
+>   persist → consume/produce) and `set_auto_renewed_validator_config` (resolve referenced
+>   `AddAutoRenewedValidatorTx`, require `tx_id ==` latest staker tx, validate `Period`/auth →
+>   mutate `StakingInfo.{auto_compound_reward_shares,next_period}` → consume/produce). Both
+>   return the new `Error::HeliconUpgradeNotActive` (Go `errHeliconUpgradeNotActive`) pre-Helicon.
+> - `staker_tx_verification.rs`: `verify_add_auto_renewed_validator` / `verify_set_auto_renewed_validator_config`
+>   (Helicon gate, syntactic + bounds + duplicate-primary check, auth via `verify_authorization`,
+>   flow via `state_changes::verify_spend` = Go's shared `verifySpend`).
+> - `state/staker.rs`: `Staker::new_staker` (Go `state.NewStaker` raw builder; `next_time == end_time`).
+> - `state/metadata_validator.rs` + `state/{chain,state,diff}.rs`: `StakingInfo` struct + `Chain::
+>   {get,set}_staking_info` seam, in-memory map + diff overlay/flush (codec-v2 `StakingInfo` fields
+>   already existed from M4.11; **on-disk codec-v2 `State.write` persist** rides with the M4.14/M4.20
+>   acceptor work — Rust state is in-memory at the M4.13 posture).
+> - `backend.rs`: `UpgradeSchedule.helicon_time` + `is_helicon_activated`; `vm.rs` threads it from
+>   `ChainContext.network_upgrades`.
+> - 6 new `auto_renew` tests (pre-Helicon reject ×2, valid add+set ×2, period/weight bound ×2);
+>   `ava-platformvm` 159/159 green, clippy `-D warnings` clean. `RewardAutoRenewedValidatorTx`
+>   (type 42) deliberately still unimplemented, matching Go.
 
 ---
 
