@@ -23,7 +23,7 @@
 //! of node assembly grows from in later milestones.
 
 use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -74,6 +74,9 @@ pub enum Error {
     /// A staking identity could not be generated.
     #[error("staking identity: {0}")]
     Identity(String),
+    /// The network genesis could not be built / parsed.
+    #[error("genesis: {0}")]
+    Genesis(#[from] ava_genesis::GenesisError),
 }
 
 /// Result alias for the wiring module.
@@ -443,4 +446,288 @@ pub async fn build_in_process_chain() -> Result<u64> {
         "freshly created chain sits in Initializing until the handler starts"
     );
     Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// Real P-Chain in-process boot (M4.30c)
+// ---------------------------------------------------------------------------
+
+/// An outbound message observed by the [`RecordingSender`]. Only the
+/// frontier-discovery broadcast is decoded; everything else is `Other`.
+#[derive(Clone, Debug)]
+pub enum Sent {
+    /// `SendGetAcceptedFrontier` — the bootstrapper's frontier-discovery query
+    /// to the beacon set.
+    GetAcceptedFrontier {
+        /// The (sorted) beacon node set the broadcast addressed.
+        nodes: Vec<NodeId>,
+        /// The request id.
+        req: u32,
+    },
+    /// Any other outbound op (dropped in-process; recorded only as a marker).
+    Other,
+}
+
+/// An in-process [`ava_engine::common::sender::Sender`] that **records**
+/// outbound messages so a node-level test can observe the bootstrapper's
+/// frontier broadcast. An in-process node has no peers, so nothing is actually
+/// transmitted — this is the recording stand-in for the live ava-network-backed
+/// `Sender` (the documented live arm).
+#[derive(Default)]
+pub struct RecordingSender {
+    log: Mutex<Vec<Sent>>,
+}
+
+impl RecordingSender {
+    fn push(&self, s: Sent) {
+        self.log.lock().unwrap_or_else(|e| e.into_inner()).push(s);
+    }
+
+    /// Drains and returns the recorded outbound messages.
+    #[must_use]
+    pub fn drain(&self) -> Vec<Sent> {
+        std::mem::take(&mut self.log.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+fn sorted_nodes(nodes: &HashSet<NodeId>) -> Vec<NodeId> {
+    let mut v: Vec<NodeId> = nodes.iter().copied().collect();
+    v.sort();
+    v
+}
+
+#[async_trait]
+impl ava_engine::common::sender::Sender for RecordingSender {
+    fn send_get_state_summary_frontier(&self, _nodes: &HashSet<NodeId>, _req: u32) {}
+    fn send_state_summary_frontier(&self, _node: NodeId, _req: u32, _summary: Vec<u8>) {}
+    fn send_get_accepted_state_summary(
+        &self,
+        _nodes: &HashSet<NodeId>,
+        _req: u32,
+        _heights: &[u64],
+    ) {
+    }
+    fn send_accepted_state_summary(&self, _node: NodeId, _req: u32, _summary_ids: &[Id]) {}
+    fn send_get_accepted_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
+        self.push(Sent::GetAcceptedFrontier {
+            nodes: sorted_nodes(nodes),
+            req,
+        });
+    }
+    fn send_accepted_frontier(&self, _node: NodeId, _req: u32, _container_id: Id) {}
+    fn send_get_accepted(&self, _nodes: &HashSet<NodeId>, _req: u32, _ids: &[Id]) {}
+    fn send_accepted(&self, _node: NodeId, _req: u32, _ids: &[Id]) {}
+    fn send_get(&self, _node: NodeId, _req: u32, _container_id: Id) {
+        self.push(Sent::Other);
+    }
+    fn send_get_ancestors(&self, _node: NodeId, _req: u32, _container_id: Id) {
+        self.push(Sent::Other);
+    }
+    fn send_put(&self, _node: NodeId, _req: u32, _container: Vec<u8>) {}
+    fn send_ancestors(&self, _node: NodeId, _req: u32, _containers: Vec<Vec<u8>>) {}
+    fn send_push_query(
+        &self,
+        _nodes: &HashSet<NodeId>,
+        _req: u32,
+        _container: Vec<u8>,
+        _requested_height: u64,
+    ) {
+        self.push(Sent::Other);
+    }
+    fn send_pull_query(
+        &self,
+        _nodes: &HashSet<NodeId>,
+        _req: u32,
+        _container_id: Id,
+        _requested_height: u64,
+    ) {
+        self.push(Sent::Other);
+    }
+    fn send_chits(
+        &self,
+        _node: NodeId,
+        _req: u32,
+        _preferred: Id,
+        _preferred_at_height: Id,
+        _accepted: Id,
+        _accepted_height: u64,
+    ) {
+    }
+
+    async fn send_app_request(
+        &self,
+        _nodes: &HashSet<NodeId>,
+        _req: u32,
+        _bytes: Vec<u8>,
+    ) -> ava_engine::error::Result<()> {
+        Ok(())
+    }
+    async fn send_app_response(
+        &self,
+        _node: NodeId,
+        _req: u32,
+        _bytes: Vec<u8>,
+    ) -> ava_engine::error::Result<()> {
+        Ok(())
+    }
+    async fn send_app_error(
+        &self,
+        _node: NodeId,
+        _req: u32,
+        _code: i32,
+        _msg: &str,
+    ) -> ava_engine::error::Result<()> {
+        Ok(())
+    }
+    async fn send_app_gossip(
+        &self,
+        _cfg: ava_engine::common::sender::SendConfig,
+        _bytes: Vec<u8>,
+    ) -> ava_engine::error::Result<()> {
+        Ok(())
+    }
+}
+
+/// The handle returned by [`boot_in_process_pchain`]: everything a node-level
+/// test needs to observe and tear down the booted P-Chain.
+pub struct PChainBootHandle {
+    /// The shared consensus context — the observability handle for the engine
+    /// phase (`ctx.state`: `Initializing → Bootstrapping → NormalOp`).
+    pub ctx: Arc<ava_snow::ConsensusContext>,
+    /// The recording sender; `drain()` reveals the frontier broadcast.
+    pub sender: Arc<RecordingSender>,
+    /// The handler task; cancel [`Self::token`] then `await` it for a clean
+    /// (leak-free) shutdown.
+    pub join: tokio::task::JoinHandle<()>,
+    /// The handler's cancellation token (cancel to stop the handler task).
+    pub token: CancellationToken,
+    /// The P-Chain genesis block id (`sha256(p_chain_genesis_bytes)`).
+    pub genesis_id: Id,
+    /// The bootstrap beacon node set (sorted), as addressed by the frontier
+    /// broadcast.
+    pub beacons: Vec<NodeId>,
+    /// The handler sink, kept alive for the handler's lifetime (dropping it
+    /// would unregister the chain from the router).
+    pub _sink: ava_engine::networking::handler::ChainHandlerSink,
+}
+
+/// Materializes the **real `ava_platformvm::PlatformVm`** (seeded from the
+/// `network_id` P-Chain genesis), drives it through the full
+/// [`create_snowman_chain`] pipeline, starts the handler, and returns a
+/// [`PChainBootHandle`]. Once the handler task runs, the bootstrapper flips the
+/// shared context to `EngineState::Bootstrapping` and broadcasts
+/// `GetAcceptedFrontier` to the beacon set.
+///
+/// All network-facing dependencies are in-process loopback impls except the
+/// [`RecordingSender`], which records the outbound frontier broadcast. The
+/// real ava-network-backed `Sender` (engine→wire + real peers) is the
+/// documented **live arm** and is out of scope here.
+///
+/// # Errors
+/// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
+/// timeout-manager failures.
+pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle> {
+    let token = CancellationToken::new();
+    let reg = Registry::new();
+
+    // Real P-Chain genesis for the network (the M8-complete embedded source).
+    let (genesis_bytes, avax_asset_id) = ava_genesis::genesis_bytes(network_id, None)?;
+    let genesis_id = ava_platformvm::genesis::genesis_id(&genesis_bytes);
+
+    // Self validator: one equally-weighted staker with a fresh staking identity.
+    let (identity, node_id) = staking_identity()?;
+    let validators = Arc::new(DefaultManager::new());
+    validators.add_staker(
+        ava_types::constants::PRIMARY_NETWORK_ID,
+        node_id,
+        None,
+        Id::EMPTY,
+        1,
+    )?;
+
+    let mut set = BTreeMap::new();
+    set.insert(
+        node_id,
+        GetValidatorOutput {
+            node_id,
+            public_key: None,
+            weight: 1,
+        },
+    );
+    let validator_state = FixedState { set };
+
+    // The real router over a real adaptive-timeout manager (clock-injected;
+    // virtual time — no wall clock).
+    let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
+    let timeouts = Arc::new(AdaptiveTimeoutManager::new(
+        &timeout_config(),
+        Arc::clone(&clock),
+    )?);
+    let router = ChainRouter::new(timeouts);
+
+    // The platform chain id / primary-network subnet (Go `constants`).
+    let chain_id = ava_node::init::chain_manager::PLATFORM_CHAIN_ID;
+    let subnet_id = ava_types::constants::PRIMARY_NETWORK_ID;
+
+    // A per-network ChainContext (network id + fork schedule from the chosen
+    // network), so the VM initializes with the production identity surface.
+    let chain_ctx = Arc::new(ava_snow::ChainContext {
+        network_id,
+        subnet_id,
+        chain_id,
+        node_id,
+        public_key: None,
+        network_upgrades: ava_version::upgrade::get_config(network_id),
+        x_chain_id: Id::EMPTY,
+        c_chain_id: Id::EMPTY,
+        avax_asset_id,
+        chain_data_dir: std::path::PathBuf::new(),
+    });
+
+    let sender = Arc::new(RecordingSender::default());
+    let app_sender: Arc<dyn AppSender> = Arc::new(NoopAppSender);
+
+    // Frontier-agreement beacon set: the single self node, weight 1.
+    let mut beacons = BTreeMap::new();
+    beacons.insert(node_id, 1u64);
+
+    let chain = create_snowman_chain(
+        &token,
+        chain_id,
+        subnet_id,
+        single_node_params(),
+        MemDb::new(),
+        "P",
+        chain_ctx,
+        clock,
+        validator_state,
+        Some(identity),
+        ava_platformvm::vm::PlatformVm::new(),
+        Vec::new(),
+        &genesis_bytes,
+        Arc::clone(&sender),
+        app_sender,
+        validators,
+        beacons.clone(),
+        router.as_ref(),
+        &reg,
+    )
+    .await?;
+
+    let ctx = Arc::clone(&chain.ctx);
+    let beacon_nodes: Vec<NodeId> = beacons.keys().copied().collect();
+
+    // Start the handler task: it activates the initial (`Bootstrapping`) engine,
+    // which flips `ctx.state` and broadcasts `GetAcceptedFrontier`.
+    let join = chain.handler.start();
+
+    Ok(PChainBootHandle {
+        ctx,
+        sender,
+        join,
+        token,
+        genesis_id,
+        beacons: beacon_nodes,
+        _sink: chain.sink,
+    })
 }
