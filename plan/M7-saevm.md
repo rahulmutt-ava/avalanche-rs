@@ -461,7 +461,37 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [ ] **Step 4 — Confirm green:** gastime + blocks + core + differential green; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
 - [ ] **Step 5 — Commit:** `sae(gastime): accept base fee (starting price) in new() [Go 3a5cba4a61]`
 
-### Task M7.37: `cchain` `ParseBlock` verifies extData hash **[UPSTREAM DELTA — added 2026-06-15]** ⬜ TODO — BLOCKED on M7.22 (LARGE; needs a wire-representation decision)
+### Task M7.37: `cchain` `ParseBlock` verifies extData hash **[UPSTREAM DELTA — added 2026-06-15]** ✅ DONE 2026-06-17 (verify boundary + `CalcExtDataHash`; build-side commit is the M7.21-coupled remainder of M7.22)
+
+> **AS-BUILT (M7.37 — wire-representation decision RESOLVED via approach (B)).** The feasibility
+> finding flagged that the SAE block is a **bare alloy block** (no `ext_data_hash` header field),
+> so the carrier had to be decided. **Chosen: approach (B), "trailing-RLP-item + commitment in
+> `header.extra_data`"** — the SAE core (`blocks` crate, `sae::Vm`) stays completely unforked.
+> - `extData` rides as a **trailing RLP byte-string item appended after the bare SAE eth block**.
+>   `blocks::parse_block`'s `RethBlock::decode(&mut slice)` consumes exactly the eth block and
+>   *tolerates trailing bytes*, so the SAE core (which ignores the trailing item) and the C-Chain
+>   decoder agree on the boundary with **zero SAE-core change**.
+> - The committed `ExtDataHash` lives in the alloy header's **`extra_data`** (Go commits it as the
+>   coreth header's 16th field; committing in `extra_data` avoids forking alloy). Block ID =
+>   `keccak256(header RLP)` still covers the commitment, so a tampered `extData` keeps the same ID —
+>   exactly the property the override needs.
+> - `cchain::block_ext::calc_ext_data_hash` = verbatim Go `CalcExtDataHash`: empty → `EMPTY_EXT_DATA_HASH`
+>   (`= keccak256(RLP(nil)) = keccak256(0x80)`, the well-known `0x56e8…b421`), else `keccak256(rlp(extData))`.
+>   Verified faithful vs the live Go `customtypes` (`graft/coreth/.../block_ext.go`, `hashes_ext.go`).
+> - `Vm::parse_block` (Go `cchain/vm.go::ParseBlock` #5447): `core.parse` → decode trailing `extData`
+>   → if `header.extra_data` is empty, **accept unchecked** (Go's pre-AP1 `TODO` analog — the dormant
+>   state, since every block the C-Chain currently builds has empty `extra_data`/no atomic source) →
+>   else compare `calc_ext_data_hash(extData)` vs the committed hash, `Error::ExtDataHashMismatch` on diff.
+>
+> **★ Deliberately NOT done (the M7.21-coupled remainder of M7.22):** the **build-side commit** — making
+> `build_block`/genesis set `extra_data = calc_ext_data_hash(extData)` and append the trailing item —
+> was left out because it churns every cchain block hash (genesis + the differential SAE vectors compare
+> computed block hashes/settle-walk against the Go oracle) and is only meaningful once a real atomic
+> source produces non-empty `extData` (the still-deferred M7.21 C-Chain builder). So the verification
+> boundary is **correct-but-dormant**: it bites on any committed-extData block (proven by the
+> constructed-block tests) and is a no-op on the current empty-extData build path. When M7.21's builder +
+> atomic source land, the build path commits and the boundary goes live — no change to this code needed.
+> **Non-gating:** Helicon is unscheduled on all networks and SAE C-Chain interop is not yet exercised.
 **Sub-crate:** ava-saevm-cchain  ·  **Depends on:** M7.22 extData marshaling/commit (the `TODO(M7.22)` at `cchain/src/hooks.rs:377`/`:441` — must land first; no `parse_block` override exists yet)  ·  **Spec:** `11` §8 + `10` §9 upstream-delta (Go `5896c92fee` #5447)
 
 > **FEASIBILITY FINDING (2026-06-15c, read-only scout).** M7.37 cannot land without first building M7.22, and **M7.22 is itself a LARGE task that requires an architectural decision**, because the SAE block has no place to carry `extData`:
@@ -486,11 +516,11 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 > `TODO(M7.22)`, so this rides on first landing extData marshal/commit. (Go's `TODO`
 > re. pre-AP1/pre-Helicon blocks that left `ExtDataHash` unset applies to the Rust
 > port too once pre-SAE history matters.)
-- [ ] **Step 1 — Red:** test that a cchain block whose `extData` body is mutated (header `ExtDataHash` unchanged) is rejected by `parse_block` with an `extData hash mismatch` error; a well-formed block parses. Mirror Go `cchain/vm_test.go` (#5447) + the `cchaintest/blocks.go` builders.
-- [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-saevm-cchain -E 'test(ext_data_hash)'` → fails.
-- [ ] **Step 3 — Green:** add a `parse_block` override on the cchain VM: delegate to `sae::Vm::parse_block`, then compare header `ext_data_hash` vs `calc_ext_data_hash(block_ext_data(eth))`; error on mismatch. Requires extData marshaling (M7.22) landed.
-- [ ] **Step 4 — Confirm green:** cchain + differential green; `lint_saevm.sh` exit 0; fmt + rustdoc clean.
-- [ ] **Step 5 — Commit:** `sae(cchain): verify SAE block extData hash in ParseBlock [Go 5896c92fee]`
+- [x] **Step 1 — Red:** `cchain/tests/ext_data_hash.rs` — well-formed committed block parses; tampered `extData` (header commitment unchanged) → `Error::ExtDataHashMismatch`; bare block parses; `calc_ext_data_hash` empty/non-empty vs `keccak256(rlp(..))`. Failed to compile (no `block_ext` module / no `Vm::parse_block` / no `ExtDataHashMismatch` variant).
+- [x] **Step 2 — Confirm red:** compile failure on the three missing symbols (the right reason).
+- [x] **Step 3 — Green:** added `cchain::block_ext::{calc_ext_data_hash, empty_ext_data_hash, EMPTY_EXT_DATA_HASH}` (port of Go `CalcExtDataHash`/`EmptyExtDataHash`) + `Vm::parse_block` override (Go `cchain/vm.go::ParseBlock`): delegate to `core.parse`, decode the trailing `extData` RLP item, compare `calc_ext_data_hash(extData)` vs the header's committed hash; `Error::{Parse,ExtDataRlp,ExtDataHashMismatch}`.
+- [x] **Step 4 — Confirm green:** `nextest -p ava-saevm-cchain` 46/46 + `-p ava-differential` 28/28; `lint_saevm.sh` exit 0; fmt clean; `saevm-exit-gate` ALL CHECKS PASSED (170 ✅).
+- [x] **Step 5 — Commit:** `sae(cchain): verify SAE block extData hash in ParseBlock [Go 5896c92fee]`
 
 ---
 

@@ -11,7 +11,8 @@
 //! [`State`] + [`AtomicTxpool`]. M7.23 ([`vm`]) supplies the VM `Initialize`
 //! harness — composing [`ava_saevm_core::Vm`] (the `sae::Vm` analog) with the
 //! C-Chain hooks + atomic txpool (specs/11 §5) — and the [`api`] `/avax`
-//! JSON-RPC service.
+//! JSON-RPC service. M7.37 ([`block_ext`]) adds the `ParseBlock` extData-hash
+//! verification boundary ([`vm::Vm::parse_block`]).
 //!
 //! [`hook::PointsG`]: ava_saevm_hook::PointsG
 
@@ -20,6 +21,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod api;
+pub mod block_ext;
 pub mod dynamic;
 pub mod gossip;
 pub mod hooks;
@@ -29,6 +31,7 @@ pub mod txpool;
 pub mod vm;
 
 pub use api::{AVAX_EXTENSION_PATH, AVAX_SERVICE_NAME, AvaxService};
+pub use block_ext::{EMPTY_EXT_DATA_HASH, calc_ext_data_hash, empty_ext_data_hash};
 pub use gossip::{
     BloomSet, GossipMarshaller, GossipTransport, GossipTx, Gossipable, NoGossipTransport,
     PULL_GOSSIP_PERIOD, PUSH_GOSSIP_PERIOD, PullGossiper, PushGossiper,

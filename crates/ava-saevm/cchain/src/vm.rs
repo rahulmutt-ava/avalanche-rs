@@ -43,9 +43,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use ava_database::DynDatabase;
-use ava_evm_reth::{Header, RethBlock, SealedBlock};
+use ava_evm_reth::{B256, Bytes, Header, RethBlock, RlpDecodable, SealedBlock};
 use ava_saevm_blocks::Block;
-use ava_saevm_core::{BlockBuilderSeam, BuildError, ExecutorSeam, Vm as CoreVm};
+use ava_saevm_core::{BlockBuilderSeam, BuildError, ExecutorSeam, SaeBlock, Vm as CoreVm};
 use ava_saevm_hook::{BlockBuilder, PointsG, Settled};
 use ava_types::id::Id;
 use ava_vm::components::avax::shared_memory::SharedMemory;
@@ -91,6 +91,23 @@ pub enum Error {
     /// The C-Chain state store could not be opened.
     #[error("opening cchain state: {0}")]
     State(#[from] crate::state::Error),
+    /// Parsing the block via the embedded SAE VM failed (Go `vm.VM.ParseBlock`).
+    #[error("parsing block: {0}")]
+    Parse(String),
+    /// Decoding the C-Chain block's trailing `extData` RLP item failed.
+    #[error("decoding extData: {0}")]
+    ExtDataRlp(String),
+    /// The block's `extData` body does not hash to the `ExtDataHash` committed
+    /// in its header (Go `vm.go::errExtDataHashMismatch`). The block ID commits
+    /// the hash, so a tampered `extData` body keeps the same ID — this is the
+    /// boundary that rejects it (specs/11 §8, M7.37).
+    #[error("extData hash mismatch: header committed {claimed}, extData hashes to {actual:#x}")]
+    ExtDataHashMismatch {
+        /// The hash committed in the header's `extra_data` (hex, `0x`-prefixed).
+        claimed: String,
+        /// The hash recomputed from the block's `extData` body.
+        actual: B256,
+    },
 }
 
 /// The lock semantics returned in the `/avax` handler descriptor; the avax
@@ -420,6 +437,55 @@ impl Vm {
         self.core.last_accepted_id()
     }
 
+    /// `VM.ParseBlock` (Go `cchain/vm.go::ParseBlock`, #5447): parse `bytes` via
+    /// the embedded SAE VM, then verify that the block's `extData` hashes to the
+    /// `ExtDataHash` committed in its header.
+    ///
+    /// The block ID is the header hash, which commits `ExtDataHash`, so a block
+    /// whose `extData` was tampered (leaving the header — and ID — unchanged)
+    /// would pass the base SAE `ParseBlock` (which is unaware of the C-Chain
+    /// `extData` concept). This override recomputes
+    /// [`calc_ext_data_hash`](crate::block_ext::calc_ext_data_hash) over the
+    /// block's `extData` and rejects a mismatch.
+    ///
+    /// The `extData` rides as a trailing RLP byte-string item appended after the
+    /// bare SAE eth block (approach (B), M7.37 — the SAE core stays a stock
+    /// alloy block; the C-Chain layer owns the carrier). A block carrying no
+    /// commitment (empty header `extra_data`) is accepted unchecked — Go's
+    /// pre-AP1 `TODO` analog, and the dormant state until the build path commits
+    /// `ExtDataHash` (the remainder of M7.22, coupled to the M7.21 C-Chain
+    /// builder + atomic source).
+    ///
+    /// # Errors
+    /// [`Error::Parse`] if the embedded SAE VM rejects the bytes;
+    /// [`Error::ExtDataRlp`] if the trailing `extData` item is malformed;
+    /// [`Error::ExtDataHashMismatch`] if the committed hash and the recomputed
+    /// `extData` hash differ.
+    pub fn parse_block(&self, bytes: &[u8]) -> Result<SaeBlock, Error> {
+        let handle = self
+            .core
+            .parse(bytes)
+            .map_err(|e| Error::Parse(e.to_string()))?;
+
+        // The committed ExtDataHash lives in the header's `extra_data`. An empty
+        // commitment marks a block that does not commit an ExtDataHash (Go's
+        // pre-AP1 TODO); accept it unchecked.
+        let claimed = &handle.block().eth_block().header().extra_data;
+        if claimed.is_empty() {
+            return Ok(handle);
+        }
+
+        let ext_data = decode_trailing_ext_data(bytes)?;
+        let actual = crate::block_ext::calc_ext_data_hash(&ext_data);
+        if claimed.as_ref() != actual.as_slice() {
+            return Err(Error::ExtDataHashMismatch {
+                claimed: claimed.to_string(),
+                actual,
+            });
+        }
+        Ok(handle)
+    }
+
     /// `VM.CreateHandlers` (Go `vm.go::CreateHandlers`): the SAE EVM RPC handlers
     /// augmented with the `avax` service at the [`AVAX_EXTENSION_PATH`]. The SAE
     /// EVM RPC surface (M7.19) mounts under `/rpc`/`/ws`; here we expose the
@@ -444,6 +510,25 @@ impl Vm {
         );
         m
     }
+}
+
+/// Decodes the trailing `extData` RLP byte-string item that the C-Chain appends
+/// after the bare SAE eth block in the wire bytes (Go's `extData` block field,
+/// carried out-of-band here — approach (B), M7.37). Returns an empty vector when
+/// the block carries no trailing item (a bare SAE block).
+///
+/// `RethBlock::decode` consumes exactly the eth block and leaves the slice
+/// pointing at any trailing bytes, so the SAE core's own `parse_block` (which
+/// ignores the trailing item) and this decoder agree on the boundary.
+fn decode_trailing_ext_data(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut slice = bytes;
+    // Advance past the eth block; the SAE core already validated it.
+    let _eth = RethBlock::decode(&mut slice).map_err(|e| Error::Parse(e.to_string()))?;
+    if slice.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ext = Bytes::decode(&mut slice).map_err(|e| Error::ExtDataRlp(e.to_string()))?;
+    Ok(ext.to_vec())
 }
 
 /// Builds the genesis SAE block: an empty eth block at height 0, marked
