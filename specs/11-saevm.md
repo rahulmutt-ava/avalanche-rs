@@ -807,6 +807,15 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > additive field, not a behavior change. The queue-timing wrapper (`queuedBlock`
 > pairs each enqueued block with `enqueuedAt`) is a Go-side instrumentation
 > detail with no consensus surface.
+>
+> **As-built (2026-06-17).** The M7-side is folded: the executor already computes the charged
+> total (Go `blockGasConsumed` = floored per-tx charge + end-of-block op gas) and feeds it to
+> `GasTime::after_block`; `StepOutput` now carries it as **`gas_consumed`** (renamed from the
+> misleading `gas_used` — the eth quantity it is explicitly *distinct from*). It is **not**
+> persisted (Go's `GasConsumed` is metered only, never written to disk), so the `ExecutionResults`
+> blob is unchanged. The sole remainder is the **M8** prometheus `executed_gas_charged` counter
+> that meters `StepOutput::gas_consumed` at `markExecuted` — gated on the SAE metrics-registry
+> seam (`snowCtx.Metrics`), which M7 deferred to node-assembly (see `18` §2.11).
 
 > **Upstream delta (avalanchego `5896c92fee`, #5447 — folded 2026-06-15).**
 > `cchain.VM` now **overrides `ParseBlock`** to verify the block's `extData`

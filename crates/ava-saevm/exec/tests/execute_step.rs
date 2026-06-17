@@ -297,7 +297,7 @@ fn errored_tx_is_fatal_reverted_tx_is_normal() {
             "the reverted tx still produced a receipt"
         );
         assert!(out.receipts[0].reverted, "the receipt records the revert");
-        assert_eq!(out.gas_used, 21_000, "a revert still consumes gas");
+        assert_eq!(out.gas_consumed, 21_000, "a revert still consumes gas");
         assert!(block.executed(), "the block is marked executed");
         assert_eq!(
             last_executed_ptr.load_full().map(|b| b.hash()),
@@ -475,7 +475,7 @@ fn execute_single_block_advances_e_and_commits() {
     assert_eq!(out.base_fee, Price(BLOCK1_BASE_FEE), "realised base fee");
     assert_eq!(out.receipts.len(), 1, "one transfer receipt");
     assert!(!out.receipts[0].reverted, "the transfer succeeds");
-    assert_eq!(out.gas_used, 21_000, "a value transfer costs 21000 gas");
+    assert_eq!(out.gas_consumed, 21_000, "a value transfer costs 21000 gas");
 
     // --- The block advanced E (executed) and committed D→M→I→X. ---
     assert!(block.executed(), "the block is marked executed");

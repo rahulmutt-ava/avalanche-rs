@@ -49,8 +49,14 @@ pub struct StepOutput {
     pub base_fee: Price,
     /// The block's final gas clock after `after_block` (the persisted gas-time).
     pub gas_time: GasTime,
-    /// Total gas consumed by the block (txs + end-of-block ops).
-    pub gas_used: u64,
+    /// The block's **charged** gas — the per-tx charged gas (which under Helicon
+    /// includes the `MinimumGasConsumption` floor, M7.35) plus end-of-block op
+    /// gas. This is the quantity fed to `GasTime::after_block` and is **distinct
+    /// from the eth gas *used*** by the EVM. Mirrors Go's `blockGasConsumed` /
+    /// `ExecutionResults.GasConsumed` (saexec/execution.go); the M8 prometheus
+    /// `executed_gas_charged` gauge meters this value at `markExecuted`
+    /// (specs/11 §2 upstream-delta #5535, §18 metrics).
+    pub gas_consumed: u64,
 }
 
 /// Runs the pure 10-step SAE execute step for `block` (specs/11 §6.1).
@@ -184,6 +190,6 @@ pub fn execute_step<D: EvmDriver, H: ExecHooks>(
         post_state_root,
         base_fee,
         gas_time: gas_clock,
-        gas_used: outcome.gas_used,
+        gas_consumed: outcome.gas_used,
     })
 }
