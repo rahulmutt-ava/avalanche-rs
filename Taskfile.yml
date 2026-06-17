@@ -36,6 +36,17 @@ tasks:
     desc: Run tests with coverage (analogue of -coverprofile/-covermode)
     cmd: '{{.NIX_RUN}} cargo llvm-cov nextest {{.WORKSPACE}} --all-features --lcov --output-path lcov.info'
 
+  coverage-floor:
+    desc: Run full coverage, then enforce per-crate line-coverage floors (specs/02 §12, X.8) — NIGHTLY ONLY
+    # A full instrumented `cargo llvm-cov` build (reth/firewood/saevm) is far too
+    # expensive for the per-PR `tests-required` aggregator, so this lives in
+    # `.github/workflows/nightly.yml`, not `ci.yml`. `check_coverage_floor.sh`
+    # parses the emitted `lcov.info` and fails if any crate in its FLOORS table is
+    # below its committed floor ("a PR may not lower a crate below its floor").
+    cmds:
+      - task: test-coverage
+      - '{{.NIX_RUN}} ./scripts/check_coverage_floor.sh lcov.info'
+
   test-differential:
     desc: Differential harness vs the Go node (recorded-oracle + reexecute)
     cmd: '{{.NIX_RUN}} cargo xtask test-differential --recorded'
