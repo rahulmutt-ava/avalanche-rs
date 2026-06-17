@@ -833,6 +833,46 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > exists yet) — so this verification rides on first landing extData
 > marshaling/commit; tracked as `plan/M7` M7.37.
 
+> **Upstream delta (avalanchego `9b48abd852`, #5523 — folded 2026-06-17).**
+> SAE C-Chain gains a dedicated **`cchain/warp` package** consolidating the
+> Avalanche Warp (ICM) message lifecycle that `10` §8 documents for the
+> *synchronous* C-Chain — now re-homed for the *asynchronous* (ACP-194) C-Chain.
+> Four seams, all in `vms/saevm/cchain/warp/`:
+> - **`FromReceipts(receipts)`** (`warp.go`) — scans block receipts for logs at
+>   the Warp precompile `ContractAddress`, unpacking each into an
+>   `UnsignedMessage` (`corethwarp.UnpackSendWarpEventDataToMessage`). This is the
+>   *outbound* capture step that, under SAE, runs **after** the block executes
+>   (execution follows acceptance) — the data that feeds the message store.
+> - **`Storage`** (`storage.go`) — persist/cache warp messages; the SAE analog of
+>   coreth's `warp/backend.go` message store. Notably it **must keep coreth's
+>   `"warp"` `prefixdb.New` key** (not `NewNested`) so the underlying DB structure
+>   stays byte-compatible during the coreth→SAE VM transition — a parity
+>   constraint the Rust `Storage` port has to honor. Off-chain operator messages
+>   are held in an in-memory `overrides` map. (A `TODO` notes the bytes are never
+>   actually read back, only the ID — a possible space optimization, not a wire
+>   concern.)
+> - **`Verifier`** (`verifier.go`) — the **ACP-118** sign-decision (`acp118.Verifier`):
+>   a node signs a message iff it is in `Storage` (precompile-emitted or off-chain),
+>   *or* its payload is a `payload.Hash` block-attestation whose block the
+>   `Backend.IsAccepted` reports accepted. Refusals carry one of four codes —
+>   `StorageErrCode`/`ParseErrCode`/`UnknownMessageErrCode`/`NotAcceptedErrCode`
+>   (`iota+1`) — which the Rust port must reproduce for p2p `AppError` parity.
+> - **`VerifyBlock(snowCtx, blockCtx, rules, txs)`** (`warp.go`) — the *inbound*
+>   predicate pass (`10` §6.5/§8): for each tx with warp predicates in its access
+>   list it fans `VerifyPredicate` out over an `errgroup` (one goroutine per
+>   predicate, capped at `GOMAXPROCS`), collecting per-precompile failure
+>   `set.Bits` into `predicate.BlockResults`. Requires a non-nil proposervm
+>   `block.Context` (pins the P-Chain height for the validator set) **only when
+>   predicates are present** — `errNoBlockContext` otherwise. The Rust analog is
+>   the M6 synchronous-C-Chain predicate pass (`precompile/warp.rs`, `BlockExecutor`
+>   pre-execution pass), reused under the SAE driver via `rayon` rather than
+>   `errgroup`.
+> The Rust SAE C-Chain (`ava-saevm-cchain`, M7.23) has the `/avax` API and
+> `Initialize` harness but **no warp lifecycle yet**; this is staged as
+> `plan/M7` **M7.38**. **Non-gating:** like M7.37 this is correct-but-dormant
+> parity — Helicon is unscheduled on all networks and SAE C-Chain Warp interop is
+> not yet exercised.
+
 ### Reuse decision (binding cross-ref to `10`)
 
 **Decision: SAE's `cchain` reuses `ava-evm` (reth/revm + Firewood), not an

@@ -522,6 +522,33 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 - [x] **Step 4 — Confirm green:** `nextest -p ava-saevm-cchain` 46/46 + `-p ava-differential` 28/28; `lint_saevm.sh` exit 0; fmt clean; `saevm-exit-gate` ALL CHECKS PASSED (170 ✅).
 - [x] **Step 5 — Commit:** `sae(cchain): verify SAE block extData hash in ParseBlock [Go 5896c92fee]`
 
+### Task M7.38: `ava-saevm-cchain::warp` — SAE C-Chain Warp/ICM lifecycle package **[UPSTREAM DELTA — added 2026-06-17]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (new `warp` module)  ·  **Depends on:** M7.23 (VM `Initialize` harness + `/avax` API), the M6 synchronous-C-Chain predicate pass (`precompile/warp.rs`), ACP-118 p2p verifier seam (M2/`network/p2p/acp118`)  ·  **Spec:** `11` §8 + `10` §8.2 upstream-delta (Go `9b48abd852` #5523)
+> **Why added:** Go's #5523 lands a dedicated `vms/saevm/cchain/warp` package
+> consolidating the Avalanche Warp (ICM) message lifecycle for the SAE C-Chain —
+> the asynchronous-C-Chain mirror of the warp machinery `10` §8 documents for the
+> synchronous C-Chain. Four seams to port:
+> - **`FromReceipts(receipts) -> Vec<UnsignedMessage>`** — unpack outbound warp
+>   messages from logs at the Warp precompile address (Go `corethwarp.UnpackSendWarpEventDataToMessage`);
+>   under SAE this runs *after* the block executes.
+> - **`Storage`** — persist/cache messages + in-memory off-chain `overrides`. **Must
+>   keep coreth's `"warp"` `prefixdb` key** (not nested) for DB-structure
+>   byte-compatibility across the coreth→SAE transition.
+> - **`Verifier`** (ACP-118) — sign iff the message is in `Storage` *or* is a
+>   `payload::Hash` block-attestation whose block `Backend::is_accepted` confirms;
+>   reproduce the four refusal codes (`StorageErrCode`/`ParseErrCode`/`UnknownMessageErrCode`/`NotAcceptedErrCode`,
+>   `iota+1`) for p2p `AppError` parity.
+> - **`VerifyBlock(snow_ctx, block_ctx, rules, txs) -> BlockResults`** — inbound
+>   predicate pass; fan `VerifyPredicate` out per-predicate (Go `errgroup` capped
+>   at `GOMAXPROCS` → Rust `rayon`), require a non-nil proposervm block context
+>   *only when predicates are present* (`errNoBlockContext` otherwise). Reuses the
+>   M6 predicate pass rather than re-implementing BLS verify.
+> Go also adds `warptest/validators.go` test helpers (port into `ava-saevm-testutil`).
+> **Non-gating:** Helicon is unscheduled on all networks and SAE C-Chain Warp
+> interop is not yet exercised — correct-but-dormant parity, like M7.37. Safe to
+> schedule alongside the still-deferred M7.21 C-Chain builder rather than rushed.
+**Files (anticipated):** `crates/ava-saevm/cchain/src/warp/{mod,storage,verifier}.rs`, `crates/ava-saevm/cchain/tests/warp_*.rs`, reuse of `ava-evm` `precompile/warp.rs` for the predicate verify.
+
 ---
 
 ## Spec coverage check
@@ -543,7 +570,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §6 / §6.1 | saexec streaming engine; pure execute step | M7.14, M7.15 |
 | `11` §6.2 | Backpressure, ordering, recovery | M7.26, M7.24 |
 | `11` §7 | saedb: consensus-vs-execution state, Firewood-revision Tracker | M7.12 |
-| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta) |
+| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta), **M7.38** (warp/ICM lifecycle package delta) |
 | `11` §9.1 | Hooks (`Points`/`PointsG`, `Op`, `Settled`, `BlockBuilder`) | M7.9 |
 | `11` §9.2 | txgossip (mempool + push/pull + priority) | M7.20 |
 | `11` §9.3 | worst-case analysis + assertions | M7.13, M7.27 |
@@ -560,6 +587,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 upstream-delta | cross-chain tx gossip + `/avax`-via-gossip + saetest network harness (Go `ab442aa244`) | **M7.33** |
 | `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`); set extended 2026-06-17 with `in_memory_blocks` (Go `72adc639e6`) + saexec execution-pressure metrics `execution_queue_{duration_seconds,blocks,gas_limit}` / `execute_block_duration_seconds` / `{accepted,executed}_gas_limit_total` / `executed_gas_charged_total` (Go `553742045d`,`a1e5e4beb4`) | **M7.33** backing stores; **2026-06-17:** `#5535` `ExecutionResults.GasConsumed` knock-on folded M7-side — `StepOutput::gas_used`→**`gas_consumed`** (= Go `blockGasConsumed`, charged≠eth-used; not persisted, matching Go); prometheus registration of these + `executed_gas_charged` → **M8** |
 | `21` §6.x upstream-delta | `cchain/dynamic` ACP-176/226/283 exponent integrators (Go `2750cc9e42`; unconsumed upstream) | **M7.34** (optional) |
+| `11` §8 + `10` §8.2 upstream-delta | SAE C-Chain `cchain/warp` lifecycle package — `FromReceipts`/`Storage`/`Verifier`(ACP-118)/`VerifyBlock` (Go `9b48abd852` #5523) | **M7.38** (non-gating, Helicon) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |
