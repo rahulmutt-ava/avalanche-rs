@@ -378,6 +378,26 @@ under `avalanche_evm_*` with `[chain]` and are diffed by the same golden test.
 > to time queue residence; `markEnqueued`/`markExecuted` carry gas limit + charged
 > gas) — the structural knock-on (`ExecutionResults.GasConsumed`, `sendPostExecutionEvents`
 > taking the full results) is folded in `11` §execution.
+>
+> > **AS-BUILT (avalanche-rs, SAE metrics seam).** Both metric families are now
+> > implemented in the SAE crates (the prior M7.33→M8 deferral is closed on the
+> > SAE side): `ava-saevm-core::metrics::SaeMetrics` registers the three `sae`
+> > gauges as a single scrape-time `prometheus::Collector` sampling the live
+> > `Frontier` (S/E heights) + `blocks::in_memory_block_count()` (the GaugeFunc
+> > analog — no rust closure-gauge), and `ava-saevm-exec::metrics::SaexecMetrics`
+> > holds the seven `saexec` handles (2 `IntGauge` + 3 `IntCounter` + 2
+> > `Histogram`), updated at the `Executor` queue/execute event sites
+> > (`mark_enqueued` on `Queue::enqueue`, `mark_executed` in `execute_one`,
+> > `mark_dequeued` in the `start_process_queue` drain loop with an enqueue
+> > `Instant` carried on the queue item). "Gas limit" = the eth header gas limit
+> > (`Block::gas_limit`); "charged gas" = `StepOutput::gas_consumed`. Both expose
+> > `register_into(&prometheus::Registry)`; the metrics are late-bound on the
+> > executor via `set_metrics` (an `ArcSwapOption` slot — `Executor::new` stays
+> > infallible since the registry only arrives at node assembly). Metric names are
+> > bare; the `sae`/`saexec` namespace prefix is applied by the node's prefix
+> > gatherer (§1). **Remaining M8 step:** thread the VM-facing registry seam
+> > (`snowCtx.Metrics` / `MakeAndRegister`) through `ChainContext` and call the two
+> > `register_into` at chain init — the only un-wired piece.
 
 ### 2.12 API server — `avalanche_api_*` (`api/server/metrics.go`)
 

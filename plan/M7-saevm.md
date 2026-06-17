@@ -644,6 +644,49 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.41: SAE prometheus metrics seam — `sae` + `saexec` registration **[UPSTREAM DELTA — added 2026-06-17]** ✅ DONE (this session)
+**Sub-crate:** ava-saevm-core + ava-saevm-exec (+ ava-saevm-blocks accessor)  ·  **Depends on:** M7.17 (Frontier S/E backing stores), M7.26 (Executor queue), M7.33 (the AtomicU64 height stores this supersedes)  ·  **Spec:** `18` §2.11 upstream-delta (Go `844535b313` / `553742045d`→`72adc639e6`)
+> **As-built (2026-06-17, orchestrator-direct, TDD).** Closes the SAE side of the
+> M7.33→M8 prometheus deferral. Two metric families implemented against the
+> workspace `prometheus` dep (default-features off):
+> - **`ava-saevm-core::metrics::SaeMetrics`** (the `sae` namespace) registers the
+>   three gauges as **one scrape-time `prometheus::core::Collector`** (the
+>   `GaugeFunc` analog — the rust crate has no closure-gauge): `collect()` samples
+>   the live `Frontier::last_settled_height` + `Frontier::last_executed_height`
+>   (new accessor; new `last_executed_height_gauge: AtomicU64` set in
+>   `advance_executed`) + `blocks::in_memory_block_count()`. `register_into(&Registry)`.
+> - **`ava-saevm-exec::metrics::SaexecMetrics`** (the `saexec` namespace) holds the
+>   seven handles (2 `IntGauge` + 3 `IntCounter` + 2 `Histogram`, buckets 1ms→~16s /
+>   500µs→~16s) and exposes `mark_enqueued`/`mark_executed`/`mark_dequeued`. Wired
+>   into the `Executor`: `mark_enqueued` (queue gauges + `accepted_gas_limit_total`)
+>   on `Queue::enqueue`; `mark_executed` (`executed_gas_{charged,limit}_total` +
+>   `execute_block_duration_seconds`) in `execute_one`; `mark_dequeued` (queue
+>   gauges down + `execution_queue_duration_seconds`) in the `start_process_queue`
+>   drain loop, with the enqueue `Instant` carried on the (private) `QueueItem`.
+> - **Gas limit = `Block::gas_limit()`** (new additive accessor = eth header
+>   `gasLimit`, the worst-case gas — `WorstCaseBounds` has no gas-limit scalar);
+>   **charged gas = `StepOutput::gas_consumed`**.
+> - **Late binding:** the `Executor` holds the metrics behind an `ArcSwapOption`
+>   slot wired by `Executor::set_metrics`, so `Executor::new` stays infallible (the
+>   registry only exists at node assembly). Empty slot ⇒ all event sites no-op.
+> - Metric names are **bare** (no `sae_`/`saexec_` prefix) — the namespace is
+>   applied by the node's prefix gatherer (`MakeAndRegister`, `18` §1).
+> 6 new tests (3 core `tests/metrics.rs` + 3 exec `tests/metrics.rs`): register into
+> a fresh `Registry`, drive frontier/queue/execute, gather + assert family
+> names/values + scrape-time live sampling + queue-depth round-trip-to-zero.
+> `lint_saevm.sh` exit 0, `cargo doc -D *_intra_doc_links` clean, saevm-exit-gate
+> ALL CHECKS PASSED; 173 tests green across the SAE crates + `ava-differential`.
+> **Remaining M8 step (the ONLY un-wired piece):** thread the VM-facing registry
+> seam (`snowCtx.Metrics`) through `ChainContext` and call the two `register_into`
+> at chain init.
+> **Why added:** Go registers `sae`/`saexec` metrics via `MakeAndRegister(snowCtx.
+> Metrics, ns)`; the M7.33 as-built left them as bare `AtomicU64` backing stores
+> "TODO(M8): register on the prometheus namespace". This builds the registration
+> seam inside the SAE crates so only the node-side registry hand-off remains.
+**Files:** `crates/ava-saevm/core/src/metrics.rs` (new), `crates/ava-saevm/core/tests/metrics.rs` (new), `crates/ava-saevm/core/src/frontier.rs`, `crates/ava-saevm/exec/src/metrics.rs` (new), `crates/ava-saevm/exec/tests/metrics.rs` (new), `crates/ava-saevm/exec/src/executor.rs`, `crates/ava-saevm/blocks/src/lifecycle.rs` (`gas_limit` accessor), core/exec `Cargo.toml` (`prometheus` dep), core/exec `lib.rs` (re-exports).
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -678,7 +721,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `27` §3.1 | Shared-memory two-sided consistency (ATOMIC-1) | M7.22 |
 | `27` §5.4 | SAE recovery procedure | M7.24, M7.29 |
 | `11` §8 upstream-delta | cross-chain tx gossip + `/avax`-via-gossip + saetest network harness (Go `ab442aa244`) | **M7.33** |
-| `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`); set extended 2026-06-17 with `in_memory_blocks` (Go `72adc639e6`) + saexec execution-pressure metrics `execution_queue_{duration_seconds,blocks,gas_limit}` / `execute_block_duration_seconds` / `{accepted,executed}_gas_limit_total` / `executed_gas_charged_total` (Go `553742045d`,`a1e5e4beb4`) | **M7.33** backing stores; **2026-06-17:** `#5535` `ExecutionResults.GasConsumed` knock-on folded M7-side — `StepOutput::gas_used`→**`gas_consumed`** (= Go `blockGasConsumed`, charged≠eth-used; not persisted, matching Go); prometheus registration of these + `executed_gas_charged` → **M8** |
+| `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`); set extended 2026-06-17 with `in_memory_blocks` (Go `72adc639e6`) + saexec execution-pressure metrics `execution_queue_{duration_seconds,blocks,gas_limit}` / `execute_block_duration_seconds` / `{accepted,executed}_gas_limit_total` / `executed_gas_charged_total` (Go `553742045d`,`a1e5e4beb4`) | **M7.33** backing stores; **2026-06-17:** `#5535` `ExecutionResults.GasConsumed` knock-on folded M7-side — `StepOutput::gas_used`→**`gas_consumed`** (= Go `blockGasConsumed`, charged≠eth-used; not persisted, matching Go); **prometheus registration DONE in M7.41** (`SaeMetrics`/`SaexecMetrics` `register_into(&Registry)`; all 10 metrics incl. `in_memory_blocks` + `executed_gas_charged_total`); only the node-side `ChainContext` registry hand-off remains → **M8** |
 | `21` §6.x upstream-delta | `cchain/dynamic` ACP-176/226/283 exponent integrators (Go `2750cc9e42`; unconsumed upstream) | **M7.34** (optional) |
 | `11` §8 + `10` §8.2 upstream-delta | SAE C-Chain `cchain/warp` lifecycle package — `FromReceipts`/`Storage`/`Verifier`(ACP-118)/`VerifyBlock` (Go `9b48abd852` #5523) | **M7.38** (non-gating, Helicon) |
 | `11` §8 + `10` §9 upstream-delta | `cchain` `ParseBlock` rejects non-zero block `Version` (Go `4772ab3c97` #5543) | **M7.39** (non-gating, Helicon; extends M7.37) |

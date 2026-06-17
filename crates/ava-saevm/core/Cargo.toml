@@ -25,6 +25,7 @@ ava-version = { path = "../../ava-version" }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 parking_lot = { workspace = true }
+prometheus = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

@@ -28,6 +28,7 @@
 //! the notification/shutdown primitives wired into the synchronous step.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use ava_saevm_blocks::{Block, WorstCaseBounds};
@@ -44,6 +45,16 @@ use crate::error::{Error, Result};
 use crate::events::{ChainHeadEvent, ExecutionWaiters, HeadEvents};
 use crate::eventual::Eventual;
 use crate::execute_step::{StepOutput, execute_step};
+use crate::metrics::SaexecMetrics;
+
+/// A shared, late-bindable slot for the `saexec` execution-pressure metrics.
+///
+/// The [`Executor`] is constructed before any prometheus registry exists (the
+/// registry is handed in at node assembly, M8), so the metrics live behind an
+/// [`ArcSwapOption`]: empty until [`Executor::set_metrics`] wires one, after
+/// which the queue/execute event sites update it. All updates are cheap no-ops
+/// while the slot is empty.
+type MetricsSlot = ArcSwapOption<SaexecMetrics>;
 
 /// A minimal receipt sink: receipts produced by the execute step are appended
 /// here in execution order (specs/11 §6.1 step 6).
@@ -77,10 +88,12 @@ impl ReceiptSink {
 }
 
 /// One item queued for execution: an ordered block, its parent's committed
-/// post-execution state root, and the builder's worst-case prediction (specs/11
-/// §6.2). The FIFO order of these on the bounded channel is the total execution
-/// order — there is no parallel block execution.
-type QueueItem = (Arc<Block>, ava_saevm_types::B256, WorstCaseBounds);
+/// post-execution state root, the builder's worst-case prediction, and the
+/// [`Instant`] the block was enqueued (for the `execution_queue_duration_seconds`
+/// histogram; specs/11 §6.2, specs/18 §2.11). The FIFO order of these on the
+/// bounded channel is the total execution order — there is no parallel block
+/// execution.
+type QueueItem = (Arc<Block>, ava_saevm_types::B256, WorstCaseBounds, Instant);
 
 /// A cloneable handle to the executor's bounded execution queue (specs/11 §6.2).
 ///
@@ -92,6 +105,9 @@ type QueueItem = (Arc<Block>, ava_saevm_types::B256, WorstCaseBounds);
 #[derive(Clone)]
 pub struct Queue {
     tx: mpsc::Sender<QueueItem>,
+    /// Shared handle to the executor's metrics slot, so the acceptance-side
+    /// `mark_enqueued` event is recorded here (Go `markEnqueued`).
+    metrics: Arc<MetricsSlot>,
 }
 
 impl Queue {
@@ -112,8 +128,15 @@ impl Queue {
         parent_root: ava_saevm_types::B256,
         bounds: WorstCaseBounds,
     ) -> Result<()> {
+        // Record the acceptance-side metric event before the block can be drained
+        // (so the queue gauge's `inc` happens-before the drain loop's matching
+        // `dec`); a send failure over-counts only on the rare shutdown path.
+        let gas_limit = block.gas_limit();
+        if let Some(metrics) = self.metrics.load_full() {
+            metrics.mark_enqueued(gas_limit);
+        }
         self.tx
-            .send((block, parent_root, bounds))
+            .send((block, parent_root, bounds, Instant::now()))
             .await
             .map_err(|_| Error::QueueClosed)
     }
@@ -158,11 +181,15 @@ pub struct Executor<D: EvmDriver, H: ExecHooks> {
     /// the latest block that completed async execution (set at construction +
     /// per post-execution event; specs/18 §2.11, Go `844535b313`).
     ///
-    /// AS-BUILT: no prometheus registry reaches the SAE crates yet; this
-    /// `AtomicU64` is the honest gauge backing store, read via
-    /// [`Executor::last_executed_height`]. `// TODO(M8): register on the "sae"
-    /// prometheus namespace.`
+    /// The honest gauge backing store, read via [`Executor::last_executed_height`].
+    /// The `sae`-namespace `last_executed_height` gauge is sourced from the
+    /// core `Frontier` (`ava-saevm-core`'s `SaeMetrics`); this executor-local
+    /// store mirrors it for the synchronous step's own accounting.
     last_executed_height_gauge: std::sync::atomic::AtomicU64,
+    /// The `saexec` execution-pressure metrics (specs/18 §2.11), late-bound via
+    /// [`Executor::set_metrics`]. Empty until the node hands in a registry (M8);
+    /// the queue/execute event sites then update it.
+    metrics: Arc<MetricsSlot>,
 }
 
 impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
@@ -192,7 +219,21 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
             shutdown: CancellationToken::new(),
             tasks: TaskTracker::new(),
             last_executed_height_gauge: std::sync::atomic::AtomicU64::new(seed_height),
+            metrics: Arc::new(MetricsSlot::empty()),
         }
+    }
+
+    /// Wires the `saexec` execution-pressure metrics (specs/18 §2.11). Idempotent
+    /// and interior-mutable: the node calls this once it has the registry-backed
+    /// [`SaexecMetrics`] (M8); until then the event sites are no-ops.
+    pub fn set_metrics(&self, metrics: Arc<SaexecMetrics>) {
+        self.metrics.store(Some(metrics));
+    }
+
+    /// The wired `saexec` metrics, if any.
+    #[must_use]
+    pub fn metrics(&self) -> Option<Arc<SaexecMetrics>> {
+        self.metrics.load_full()
     }
 
     /// The receipt sink (shared handle).
@@ -290,6 +331,10 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
         parent_root: ava_saevm_types::B256,
         bounds: &WorstCaseBounds,
     ) -> Result<StepOutput> {
+        // Wall-clock timer for the `execute_block_duration_seconds` histogram
+        // (specs/18 §2.11). Observational only — never feeds consensus output.
+        let started = Instant::now();
+
         // The parent-hash check needs the current last-executed block. The VM
         // seeds the executor with the genesis/synchronous block at init (M7.18),
         // so `None` here is a programming error, not a recoverable state — fail
@@ -348,6 +393,18 @@ impl<D: EvmDriver, H: ExecHooks> Executor<D, H> {
             hash: block.hash(),
         });
 
+        // Record the execution-side `saexec` metrics (Go `markExecuted` /
+        // `sendPostExecutionEvents`): cumulative charged/limit gas + per-block
+        // duration. Independent of the queue path, so it is correct whether this
+        // block was drained from the queue or executed directly.
+        if let Some(metrics) = self.metrics.load_full() {
+            metrics.mark_executed(
+                block.gas_limit(),
+                output.gas_consumed,
+                started.elapsed().as_secs_f64(),
+            );
+        }
+
         Ok(output)
     }
 }
@@ -384,11 +441,21 @@ impl<D: EvmDriver + Send + Sync + 'static, H: ExecHooks + Send + Sync + 'static>
                     // Cancellation wins: stop draining promptly on shutdown.
                     () = token.cancelled() => break,
                     item = rx.recv() => {
-                        let Some((block, parent_root, bounds)) = item else {
+                        let Some((block, parent_root, bounds, enqueued)) = item else {
                             // Channel closed: every `Queue` sender dropped.
                             break;
                         };
-                        match executor.execute_one(&block, parent_root, &bounds) {
+                        let result = executor.execute_one(&block, parent_root, &bounds);
+                        // The block has now left the queue (whatever the outcome):
+                        // lower the queue gauges and observe its queue residence
+                        // (Go decrements the queue depth once execution completes).
+                        if let Some(metrics) = executor.metrics.load_full() {
+                            metrics.mark_dequeued(
+                                block.gas_limit(),
+                                enqueued.elapsed().as_secs_f64(),
+                            );
+                        }
+                        match result {
                             Ok(_) => {}
                             Err(e) if e.is_fatal() => {
                                 tracing::error!(
@@ -411,6 +478,9 @@ impl<D: EvmDriver + Send + Sync + 'static, H: ExecHooks + Send + Sync + 'static>
             }
         });
 
-        Queue { tx }
+        Queue {
+            tx,
+            metrics: Arc::clone(&self.metrics),
+        }
     }
 }

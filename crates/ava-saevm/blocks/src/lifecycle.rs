@@ -272,6 +272,14 @@ impl Block {
         self.eth.header().number
     }
 
+    /// The block's eth gas limit (the header `gasLimit`). The "worst-case gas"
+    /// source for the `saexec` `*_gas_limit` execution-pressure metrics
+    /// (specs/18 §2.11).
+    #[must_use]
+    pub fn gas_limit(&self) -> u64 {
+        self.eth.header().gas_limit
+    }
+
     /// The block (inclusion) time as a Unix timestamp.
     #[must_use]
     pub fn build_time(&self) -> u64 {

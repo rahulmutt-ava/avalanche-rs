@@ -55,12 +55,18 @@ pub struct Frontier {
     /// Backing store for the `sae` `last_settled_height` gauge: the height of
     /// the latest settled block (set at construction + on every settle advance).
     ///
-    /// AS-BUILT: there is no prometheus registry reaching the SAE crates yet (no
-    /// metrics plumbing in `core`/`exec`); this `AtomicU64` is the honest gauge
-    /// backing store, read via [`Frontier::last_settled_height`].
-    /// `// TODO(M8): register this on the "sae" prometheus namespace
-    /// (specs/18 §2.11).`
+    /// The honest gauge backing store, read via [`Frontier::last_settled_height`]
+    /// and sampled at scrape time by [`crate::metrics::SaeMetrics`] (the `sae`
+    /// prometheus namespace, specs/18 §2.11). The registry is handed in at the
+    /// node-assembly layer (M8); this `AtomicU64` is registry-independent so
+    /// construction stays infallible.
     last_settled_height_gauge: AtomicU64,
+    /// Backing store for the `sae` `last_executed_height` gauge: the height of
+    /// the latest block whose async execution has completed (set at construction
+    /// and on every executed advance). Mirrors Go `844535b313`, where `saexec`
+    /// sets this gauge on the `sae` registry; here the frontier (the owner of the
+    /// E pointer) is the source. Read via [`Frontier::last_executed_height`].
+    last_executed_height_gauge: AtomicU64,
 }
 
 impl Frontier {
@@ -80,6 +86,7 @@ impl Frontier {
             last_accepted: ArcSwapOption::from(Some(genesis)),
             consensus_critical: RwLock::new(map),
             last_settled_height_gauge: AtomicU64::new(genesis_height),
+            last_executed_height_gauge: AtomicU64::new(genesis_height),
         }
     }
 
@@ -146,6 +153,11 @@ impl Frontier {
     pub fn advance_executed(&self, block: &Arc<Block>) {
         if Self::advances(&self.last_executed, block) {
             self.last_executed.store(Some(Arc::clone(block)));
+            // Update the `sae` `last_executed_height` gauge (Go sets it per
+            // `sendPostExecutionEvents`). `Relaxed`: a monitoring gauge has no
+            // ordering relationship with the consensus state.
+            self.last_executed_height_gauge
+                .store(block.height(), Ordering::Relaxed);
         }
     }
 
@@ -195,10 +207,18 @@ impl Frontier {
 
     /// The `sae` `last_settled_height` gauge value: the height of the latest
     /// settled block (set at construction + on every settle advance; specs/18
-    /// §2.11). The backing store for the prometheus gauge once metrics plumbing
-    /// reaches the SAE crates (M8).
+    /// §2.11). Sampled by [`crate::metrics::SaeMetrics`].
     #[must_use]
     pub fn last_settled_height(&self) -> u64 {
         self.last_settled_height_gauge.load(Ordering::Relaxed)
+    }
+
+    /// The `sae` `last_executed_height` gauge value: the height of the latest
+    /// block whose async execution has completed (set at construction + on every
+    /// executed advance; specs/18 §2.11). Sampled by
+    /// [`crate::metrics::SaeMetrics`].
+    #[must_use]
+    pub fn last_executed_height(&self) -> u64 {
+        self.last_executed_height_gauge.load(Ordering::Relaxed)
     }
 }

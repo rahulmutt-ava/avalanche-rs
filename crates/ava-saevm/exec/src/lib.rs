@@ -84,6 +84,7 @@ mod events;
 mod eventual;
 mod execute_step;
 mod executor;
+mod metrics;
 
 pub use crate::driver::{
     AvaEvmDriver, BlockOutcome, EvmDriver, ExecHooks, NoopExecHooks, TxReceipt, rebuild_gas_clock,
@@ -93,3 +94,4 @@ pub use crate::events::{ChainHeadEvent, ExecutionWaiters, HeadEvents};
 pub use crate::eventual::Eventual;
 pub use crate::execute_step::{StepOutput, execute_step};
 pub use crate::executor::{Executor, Queue, ReceiptSink};
+pub use crate::metrics::SaexecMetrics;
