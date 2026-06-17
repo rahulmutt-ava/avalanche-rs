@@ -574,8 +574,31 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 > **Non-gating:** Helicon unscheduled on all networks — same dormancy as M7.37.
 **Files (anticipated):** `crates/ava-saevm/cchain/src/vm.rs` (`parse_block`, `Error`), `crates/ava-saevm/cchain/src/block_ext.rs` (Version carrier), `crates/ava-saevm/cchain/tests/` (invalid-version case).
 
-### Task M7.40: `ava-saevm-adaptor` — `ConvertStateSync` syncable-VM wrapper **[UPSTREAM DELTA — added 2026-06-17]** ⬜ TODO
-**Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.10/M7.18 (the existing `convert`/`ChainVm` bridge), `ava-engine` `block::StateSyncableVM`/`StateSummary` traits  ·  **Spec:** `11` §5 upstream-delta (Go `b1393ecb06` #5480)
+### Task M7.40: `ava-saevm-adaptor` — `ConvertStateSync` syncable-VM wrapper **[UPSTREAM DELTA — added 2026-06-17]** ✅ DONE (b1793cc)
+**Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.10/M7.18 (the existing `convert`/`ChainVm` bridge), `ava-vm` `block::StateSyncableVm`/`StateSummary`/`StateSyncMode` traits  ·  **Spec:** `11` §5 upstream-delta (Go `b1393ecb06` #5480)
+> **As-built (2026-06-17, single isolation:worktree agent, merge b1793cc):** new
+> `adaptor/src/sync.rs` mirrors the existing block bridge exactly. `SummaryProperties`
+> = the plain `{id, bytes, height}` bag (no `accept`); `SyncableVm<SP>` (`#[async_trait]`,
+> `&self`) = the SAE-friendly VM returning plain `SP` from
+> `state_sync_enabled`/`get_{ongoing_sync,last}_state_summary`/`parse_state_summary`/`get_state_summary`
+> + `accept_summary(&SP)->StateSyncMode`. `AdaptorSummary<SP,V>` (holds `sp` +
+> `Arc<Mutex<V>>`) impls the consensus `ava_vm::block::StateSummary` — `id/height/bytes`
+> delegate to `sp`, `accept` locks the VM and forwards to `accept_summary` (summary→VM,
+> never VM→summary). `ConvertStateSync<SP,V>` impls `ava_vm::block::StateSyncableVm`,
+> wrapping each returned `SP` in `Arc<dyn StateSummary>`. `convert_state_sync(vm)`
+> public ctor (`#[must_use]`). **★ The bridge target is `ava_vm::block::StateSyncableVm`,
+> NOT `ava-engine`** (the Rust state-sync trait surface lives in `ava-vm`, like the
+> rest of the M3 VM framework — same crate-map correction as M7.10's
+> `CommonVm`→`Vm`). **★ No error mapping** (unlike the block bridge's
+> `ava_vm::Error`→`ava_snow::Error`): the consensus `StateSummary`/`StateSyncableVm`
+> traits return `ava_vm::Result` directly, the same hierarchy `SyncableVm` uses, so
+> errors forward as-is. 7 new tests in `tests/sync.rs` (local `MockSyncableVm` over an
+> in-mem height→summary map): getter/height/parse round-trips, `accept` forwards the
+> VM's `Static`/`Dynamic` mode, `state_sync_enabled` reflects the flag, `NotFound`
+> propagates across all three getters. Crate now 16 tests (9 block + 7 sync); lint-saevm
+> exit 0. Added `assert_matches` dev-dep (workspace). **Dormant** as expected: no
+> syncable SAE VM exists yet to implement `SyncableVm`, so this is a pure trait-level
+> bridge awaiting the state-sync VM (`11` §10 / `10` §10, C8).
 > **Why added:** Go's #5480 adds a second generic bridge to `adaptor/`
 > (`sync.go`): `ConvertStateSync[SP](vm)` turns a `SyncableVM[SP]` — the
 > SAE-friendly shape returning plain `SP: SummaryProperties` (`{ID, Bytes,
