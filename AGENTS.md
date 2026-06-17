@@ -85,6 +85,19 @@ harness, `specs/02` §9 / §11). Keep it in sync: its HEAD commit is the upstrea
 oracle pin — re-`build.sh` after pulling, and re-verify `rpcchainvm=45` +
 firewood ffi tag before trusting live roots (`specs/04` §4.2 upstream-delta).
 
+> **MANDATORY pre-gate check — the binary must match the checkout.** A `git pull`
+> in `~/avalanchego` advances HEAD but does **not** rebuild the binary, so the
+> binary's *embedded* commit silently drifts from the source — every live/oracle
+> gate then compares Rust against the **wrong** Go source. Before running any
+> live differential / recorded-oracle / `test-live` gate, run:
+> ```sh
+> ./scripts/check_oracle_binary.sh   # FAILs (exit 1) if binary commit != ~/avalanchego HEAD; also checks rpcchainvm=45
+> ```
+> On FAIL, rebuild (`cd ~/avalanchego && ./scripts/build.sh`) and re-run the check
+> until it prints `OK`. (It also WARNs when HEAD differs from the golden-vector
+> corpus pin `tests/vectors/manifest.json:avalanchego_revision` — that only
+> affects `vectors-drift` re-extraction, not live consensus roots.)
+
 ## Lint & format
 
 ```sh

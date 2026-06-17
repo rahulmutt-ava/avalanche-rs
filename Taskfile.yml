@@ -68,6 +68,16 @@ tasks:
     # both normal and `#[ignore]` tests. See `.github/workflows/nightly.yml` +
     # specs/02 §11 (tier-X X.15/X.22); per-PR `ci.yml` deliberately skips these.
     cmds:
+      # Guard: a stale Go binary (HEAD advanced by `git pull` without a rebuild)
+      # silently invalidates every live root. Enforce binary-commit == checkout
+      # HEAD before booting any two-binary net. Skipped on the build-safe offline
+      # path (no Go binary present), where the live arms early-return anyway.
+      - |
+        if [ -x "${AVALANCHEGO_SRC:-$HOME/avalanchego}/build/avalanchego" ]; then
+          {{.NIX_RUN}} ./scripts/check_oracle_binary.sh
+        else
+          echo "SKIP oracle-binary check: no Go binary at ${AVALANCHEGO_SRC:-$HOME/avalanchego}/build (build-safe offline run)"
+        fi
       - '{{.NIX_RUN}} cargo build -p avalanchers --release'
       - '{{.NIX_RUN}} cargo nextest run -p ava-differential -p ava-load -p ava-upgrade --features live --run-ignored all'
       - '{{.NIX_RUN}} cargo xtask acceptance'

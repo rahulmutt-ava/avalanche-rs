@@ -498,7 +498,33 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 ### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip 🟡 OFFLINE LOCKSTEP-REPLAY ARM DONE (2026-06-16c); live two-binary arm gated
 **Crate/area:** `ava-differential`  ·  **Depends on:** M9.14, M4/M5/M6/M7 (P/X/C/SAE)  ·  **Spec:** `16` §5(2), `02` §11.3 (peer/handshake row: "both reach the same height; no fork")
 **AS-BUILT (offline arm, merge 2026-06-16c):** `LockstepDriver::replay_recorded` + `Program::from_seed` now replay a seed-derived program through the REAL in-process `ava-avm` pipeline (`xchain::run_program` per finalization, pure sub-seed derivation), returning ordered normalized `Observation`s; `tests/mixed_network.rs::mixed_network_replay_is_deterministic` asserts twice-replayed byte-identity + non-trivial finalization + injected-divergence detection + a 64-case proptest. The live `mixed_network` arm (boot mixed net, replay across all nodes, no-fork/same-tip per chain) stays `#[cfg(feature="live")] #[ignore]`.
-**Files:** `tests/differential/tests/mixed_network.rs`
+
+> **LIVE-ARM SCOPING (2026-06-17, read-only probe — the M9.15 handoff, made concrete).**
+> The live two-binary arm is **not one step from running** — `tests/differential/src/network.rs`
+> is an admitted scaffold that has never booted a node. Concrete blockers found by probing the
+> built binaries (Go binary verified fresh vs HEAD via the new `scripts/check_oracle_binary.sh`):
+> 1. **`network.rs::spawn_node` passes an invented flag `--staking-tls-cert-seed=<seed>` that
+>    NEITHER `avalanchers` NOR Go `avalanchego` supports** (`--help` grep = 0 hits on both) — so
+>    the spawner fails for both impls as written. The flag was a placeholder for "the live operator
+>    wires `node_seed` into the real cert generator" (per the fn's own doc).
+> 2. **`avalanchers` boot is unproven for a validating local net.** Default `--db-type=leveldb`
+>    fails (`on-disk database "leveldb" requires the rocksdb feature`); `--db-type=memdb` boots
+>    PAST db-init and stays up (no crash) but, given no genesis/certs/peers, makes no visible
+>    progress (empty `logs/main.log`). Reaching NormalOp + cross-handshaking a Go peer is unverified.
+> **What the live arm actually requires (sequential, NOT parallel-worktree-safe):**
+> - (a) Settle the load-bearing unknown FIRST: get `avalanchers --network-id=local --db-type=rocksdb`
+>   (sybil-protection on) to a confirmed **single-node NormalOp boot** with real staking certs +
+>   a 1-validator local genesis. If that needs binary fixes, they precede everything else.
+> - (b) Rewrite `network.rs::spawn_node`: generate per-slot staking TLS cert+key files
+>   deterministically from `NodeIdentity::node_seed` to each node's `data-dir`, pass the real
+>   `--staking-tls-cert-file`/`--staking-tls-key-file` (drop the invented seed flag).
+> - (c) Build a shared `--network-id=local` genesis allocating the seed-derived node IDs as the
+>   initial validators; wire bootstrap IPs/IDs (slot 0 = beacon).
+> - (d) Then the live arms of M9.15/M9.3/M9.12/M9.13/M9.14/M9.17/M9.18/M9.20/M9.22 can run via
+>   `task test-live` (which now runs `check_oracle_binary.sh` first — see AGENTS.md/CLAUDE.md).
+> Estimated effort: multi-session, single-branch; (a) is the cheap next probe that de-risks the rest.
+
+**Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
 - [ ] **Step 3 — Green:** Implement the lockstep driver reuse from `02` §11.6 over the mixed network; deterministic tx/key derivation from the seed feeds identical bytes to all nodes; persist minimal failing `(seed, program)` to `tests/differential/proptest-regressions/`.
