@@ -10,10 +10,10 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `72adc639e6` (2026-06-16) have been reviewed and folded in as **"Upstream
+> `9b48abd852` (2026-06-17) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
 > `18`, `21`, `27`) and plan files (`plan/M4`, `plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `72adc639e6`.
+> against newer avalanchego, start the review from `9b48abd852`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -31,6 +31,13 @@ from these documents.
 > note in `11`, with the prometheus registration tracked as the existing
 > M7.33→M8 handoff. **Irrelevant:** the Claude PR-review prompt/CI tweak
 > (`e074c4d7bc`, #5364) — no spec surface.
+>
+> The `72adc639e6 → 9b48abd852` sync (reviewed 2026-06-17) folded one commit:
+> the **SAE C-Chain Warp/ICM package** (`9b48abd852`, #5523) — a dedicated
+> `vms/saevm/cchain/warp` consolidating the outbound-capture / message-store /
+> ACP-118 sign-decision / inbound-predicate-pass lifecycle for the asynchronous
+> C-Chain → `11` §8 + `10` §8.2 upstream-deltas + `plan/M7` task **M7.38**
+> (non-gating: Helicon unscheduled, SAE C-Chain Warp interop not yet exercised).
 
 ## Read this first
 

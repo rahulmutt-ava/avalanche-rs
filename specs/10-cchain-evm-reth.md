@@ -722,6 +722,15 @@ split between predicate verification and precompile execution). `handlePrecompil
 (§3.1 accept) fires module accept-hooks (e.g. the warp backend records sent
 messages for signature serving, coreth `warp/backend.go`).
 
+> **Upstream delta (avalanchego `9b48abd852`, #5523 — folded 2026-06-17).**
+> The *SAE* C-Chain re-homes this whole warp lifecycle — outbound capture, the
+> message store (the `warp/backend.go` analog referenced above), the ACP-118
+> sign-decision, and this predicate pass — into a single `vms/saevm/cchain/warp`
+> package. It deliberately keeps coreth's `"warp"` `prefixdb` key for DB-structure
+> compatibility across the coreth→SAE transition. This is the SAE-side mirror of
+> the §6.5/§8 machinery described here; full breakdown and the Rust task in `11`
+> §8 upstream-delta (`plan/M7` M7.38). Non-gating (Helicon, unscheduled).
+
 ### 8.3 Configuration
 
 Precompile enablement + params come from **genesis JSON** (`config` block) and
