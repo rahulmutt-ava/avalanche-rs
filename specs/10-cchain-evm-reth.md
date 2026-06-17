@@ -807,6 +807,12 @@ coreth header is not plain-`alloy::Header`-decodable — the extras above are wh
 > formula here (`keccak256(RLP(extData))`) is the exact thing recomputed. See
 > `11` §8 for the override and `plan/M7` M7.37 for the Rust port task.
 
+> **Upstream delta (avalanchego `4772ab3c97`, #5543 — folded 2026-06-17).** The
+> same `ParseBlock` override now also rejects a block whose `BlockBodyExtra`
+> declares a **`Version` other than 0** (the only supported version) — a sibling
+> syntactic check to the extData-hash verify above, since the header commits
+> neither the `Version` nor the `extData` bytes. See `11` §8 and `plan/M7` M7.39.
+
 > **Genesis-header subtlety (M6.8).** The **genesis** header's `ExtDataHash` is the
 > **zero hash** (`0x0000…0000`), **NOT** `EmptyExtDataHash` — coreth's `Genesis.toBlock`
 > leaves the field at its zero value (genesis carries no `ExtData`, so the hash is never

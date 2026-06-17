@@ -10,10 +10,10 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `9b48abd852` (2026-06-17) have been reviewed and folded in as **"Upstream
+> `b1393ecb06` (2026-06-17) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
 > `18`, `21`, `27`) and plan files (`plan/M4`, `plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `9b48abd852`.
+> against newer avalanchego, start the review from `b1393ecb06`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -38,6 +38,17 @@ from these documents.
 > ACP-118 sign-decision / inbound-predicate-pass lifecycle for the asynchronous
 > C-Chain → `11` §8 + `10` §8.2 upstream-deltas + `plan/M7` task **M7.38**
 > (non-gating: Helicon unscheduled, SAE C-Chain Warp interop not yet exercised).
+>
+> The `9b48abd852 → b1393ecb06` sync (reviewed 2026-06-17) folded two SAE
+> commits, both non-gating (Helicon unscheduled). (1) **C-Chain `ParseBlock`
+> rejects a non-zero block `Version`** (`4772ab3c97`, #5543) — a sibling
+> syntactic check to the M7.37 extData-hash verify → `11` §8 + `10` §9
+> upstream-deltas + `plan/M7` task **M7.39** (flagged blocker: the Rust approach-(B)
+> carrier has no `BlockBodyExtra.Version` field yet). (2) **`adaptor` syncable-VM
+> wrapper** `ConvertStateSync` (`b1393ecb06`, #5480) — a second generic bridge
+> turning a `SyncableVM[SP]` into Snowman's `StateSyncableVM` → `11` §5
+> upstream-delta + `plan/M7` task **M7.40** (dormant: SAE state sync itself
+> unported). No irrelevant commits in this range.
 
 ## Read this first
 

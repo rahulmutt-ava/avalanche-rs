@@ -572,6 +572,23 @@ pub trait BlockProperties: Clone {
 pub fn convert<BP, V: ChainVm<BP>>(vm: Arc<V>) -> impl ava_engine::block::ChainVm { /* Adaptor */ }
 ```
 
+> **Upstream delta (avalanchego `b1393ecb06`, #5480 — folded 2026-06-17).** The
+> Go `adaptor/` package gains a **second generic bridge alongside the block-VM
+> one** — a *syncable*-VM wrapper (`adaptor/sync.go`): `ConvertStateSync[SP](vm)`
+> turns a `SyncableVM[SP]` (the SAE-friendly shape — `StateSyncEnabled`,
+> `Get{Last,OngoingSync}StateSummary`, `GetStateSummary`, `ParseStateSummary`,
+> `AcceptSummary`, all returning a *plain* `SP: SummaryProperties` =
+> `{ID, Bytes, Height}`) into Snowman's `block.StateSyncableVM`, wrapping each
+> `SP` in a `Summary[SP]` whose `Accept` forwards back to the VM's
+> `AcceptSummary` — the same "block doesn't know about the VM" inversion this
+> adaptor already applies to `ChainVm`/`Block`, now for state-sync summaries.
+> (The commit also renames `adaptor.go` → `vm.go`, a no-op.) The Rust analog is a
+> `ConvertStateSync` + `SyncableVm`/`SummaryProperties` traits in
+> `ava-saevm-adaptor`, paralleling the existing `convert`/`ChainVm`/`BlockProperties`.
+> **Dormant:** SAE state sync itself (§10 / `10` §10, C8) is unported — this is
+> the bridge those summaries will flow through once a syncable SAE VM exists.
+> Tracked as `plan/M7` M7.40 (non-gating; Helicon unscheduled).
+
 `ava-saevm-blocks::Block` implements `BlockProperties` (Go `blocks/snow.go`).
 `ava-saevm-core::Vm` implements `ChainVm<Block>` — its `verify_block` *rebuilds*
 the block from its parent + the hook builder and compares hashes (cheap, no
@@ -832,6 +849,24 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > `extData` marshaling itself is still a `TODO(M7.22)` (no `parse_block` override
 > exists yet) — so this verification rides on first landing extData
 > marshaling/commit; tracked as `plan/M7` M7.37.
+
+> **Upstream delta (avalanchego `4772ab3c97`, #5543 — folded 2026-06-17).**
+> `cchain.VM.ParseBlock` gains a **second C-Chain syntactic check beside the
+> extData-hash verify above**: the block's `BlockBodyExtra.Version` must be `0`,
+> the only supported version, else it rejects with `errInvalidBlockVersion`
+> (`"invalid block version: <n>"`). Rationale mirrors the extData case — the
+> header (and thus the block ID) commits *neither* the body's `Version` nor its
+> `extData` bytes (only `ExtDataHash`), so a block with a tampered `Version` keeps
+> the same ID; `ParseBlock` is the boundary that rejects it before
+> accept/persist/execute. Go also reworked `cchaintest.NewTestBlock` to build the
+> body via `types.NewBlock` + `SetBlockExtra(&BlockBodyExtra{Version, ExtData})`
+> (replacing the old `NewBlockWithExtData`, which Go marks for deletion) and added
+> a `WithBlockVersion` option. **In the Rust port there is no `BlockBodyExtra`
+> wire struct**: approach (B) (M7.37) carries `extData` as a trailing RLP item
+> after a stock SAE eth block, with no co-located `Version` field — so porting
+> this check requires first deciding where the C-Chain `Version` rides in the
+> Rust carrier. Tracked as `plan/M7` M7.39 (extends the M7.37 `parse_block`
+> override). Non-gating (Helicon unscheduled; same dormancy as M7.37).
 
 > **Upstream delta (avalanchego `9b48abd852`, #5523 — folded 2026-06-17).**
 > SAE C-Chain gains a dedicated **`cchain/warp` package** consolidating the

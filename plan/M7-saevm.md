@@ -555,6 +555,42 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 > - **`verify_block`** is `async` (this repo's `ValidatorState` is `#[async_trait]`): resolves validator sets/subnet-ids once up-front (async), then fans pure BLS predicate verify over `rayon::par_iter` (honors "rayon not errgroup"). `errNoBlockContext` in-loop gate reproduced; `BlockResults` = `BTreeMap<B256, BTreeMap<Address, Bits>>` (deterministic, no `HashMap` in consensus path).
 > **Deferred (follow-ups):** VM-`Initialize` wiring (calling `from_receipts` post-execution to feed `Storage`, mounting `Verifier` on the ACP-118 p2p handler, invoking `verify_block` in the inbound verify path) is a separate integration step — the lifecycle package lands here; wiring is non-gating (Helicon unscheduled). `BUILD.bazel` regen left to the orchestrator's `bazel-gazelle-generate` job.
 
+### Task M7.39: `cchain` `ParseBlock` rejects a non-zero block `Version` **[UPSTREAM DELTA — added 2026-06-17]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`vm::Vm::parse_block`)  ·  **Depends on:** M7.37 (the `parse_block` extData-hash override) and the M7.22/M7.21 carrier decision (where the C-Chain `Version` rides)  ·  **Spec:** `11` §8 + `10` §9 upstream-delta (Go `4772ab3c97` #5543)
+> **Why added:** Go's #5543 adds a sibling syntactic check to the M7.37
+> extData-hash verify: `cchain.VM.ParseBlock` now rejects any block whose
+> `BlockBodyExtra.Version != 0` (the only supported version) with
+> `errInvalidBlockVersion` (`"invalid block version: <n>"`), before
+> accept/persist/execute. The header commits neither the `Version` nor the
+> `extData` bytes (only `ExtDataHash`), so a tampered `Version` keeps the same
+> block ID — `ParseBlock` is the boundary that catches it.
+> **★ Blocker / decision:** the Rust port (approach (B), M7.37) carries `extData`
+> as a trailing RLP item after a stock SAE eth block with **no `BlockBodyExtra`
+> wire struct and no co-located `Version` field**. Porting this check requires
+> first deciding where the C-Chain `Version` lives in the Rust carrier (e.g. a
+> leading field of the trailing item, or a header `extra_data` layout). Add an
+> `Error::InvalidBlockVersion(u32)` variant and the `parse_block` gate once that
+> is settled; mirror Go's `WithBlockVersion` test option in `cchaintest`.
+> **Non-gating:** Helicon unscheduled on all networks — same dormancy as M7.37.
+**Files (anticipated):** `crates/ava-saevm/cchain/src/vm.rs` (`parse_block`, `Error`), `crates/ava-saevm/cchain/src/block_ext.rs` (Version carrier), `crates/ava-saevm/cchain/tests/` (invalid-version case).
+
+### Task M7.40: `ava-saevm-adaptor` — `ConvertStateSync` syncable-VM wrapper **[UPSTREAM DELTA — added 2026-06-17]** ⬜ TODO
+**Sub-crate:** ava-saevm-adaptor  ·  **Depends on:** M7.10/M7.18 (the existing `convert`/`ChainVm` bridge), `ava-engine` `block::StateSyncableVM`/`StateSummary` traits  ·  **Spec:** `11` §5 upstream-delta (Go `b1393ecb06` #5480)
+> **Why added:** Go's #5480 adds a second generic bridge to `adaptor/`
+> (`sync.go`): `ConvertStateSync[SP](vm)` turns a `SyncableVM[SP]` — the
+> SAE-friendly shape returning plain `SP: SummaryProperties` (`{ID, Bytes,
+> Height}`) from `StateSyncEnabled`/`Get{Last,OngoingSync,}StateSummary`/`ParseStateSummary`/`AcceptSummary`
+> — into Snowman's `block.StateSyncableVM`, wrapping each `SP` in a `Summary[SP]`
+> whose `Accept` forwards to the VM's `AcceptSummary`. Same "block/summary doesn't
+> know about the VM" inversion the adaptor already applies to `ChainVm`/`Block`.
+> Port as a parallel `ConvertStateSync` + `SyncableVm`/`SummaryProperties` traits.
+> Go also renames `adaptor.go` → `vm.go` (no-op for Rust).
+> **Dormant:** SAE state sync (`11` §10 / `10` §10, C8) is itself unported — this
+> bridge is what those summaries will flow through once a syncable SAE VM exists.
+> Non-gating (Helicon unscheduled); safe to land ahead of the state-sync VM as a
+> pure trait-level bridge with local mock-VM tests.
+**Files (anticipated):** `crates/ava-saevm/adaptor/src/sync.rs` (new), `crates/ava-saevm/adaptor/src/lib.rs` (re-export), `crates/ava-saevm/adaptor/tests/` (round-trip over a local mock `SyncableVm`).
+
 ---
 
 ## Spec coverage check
@@ -594,6 +630,8 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `18` §2.11 upstream-delta | `last_settled_height` / `last_executed_height` gauges (Go `844535b313`); set extended 2026-06-17 with `in_memory_blocks` (Go `72adc639e6`) + saexec execution-pressure metrics `execution_queue_{duration_seconds,blocks,gas_limit}` / `execute_block_duration_seconds` / `{accepted,executed}_gas_limit_total` / `executed_gas_charged_total` (Go `553742045d`,`a1e5e4beb4`) | **M7.33** backing stores; **2026-06-17:** `#5535` `ExecutionResults.GasConsumed` knock-on folded M7-side — `StepOutput::gas_used`→**`gas_consumed`** (= Go `blockGasConsumed`, charged≠eth-used; not persisted, matching Go); prometheus registration of these + `executed_gas_charged` → **M8** |
 | `21` §6.x upstream-delta | `cchain/dynamic` ACP-176/226/283 exponent integrators (Go `2750cc9e42`; unconsumed upstream) | **M7.34** (optional) |
 | `11` §8 + `10` §8.2 upstream-delta | SAE C-Chain `cchain/warp` lifecycle package — `FromReceipts`/`Storage`/`Verifier`(ACP-118)/`VerifyBlock` (Go `9b48abd852` #5523) | **M7.38** (non-gating, Helicon) |
+| `11` §8 + `10` §9 upstream-delta | `cchain` `ParseBlock` rejects non-zero block `Version` (Go `4772ab3c97` #5543) | **M7.39** (non-gating, Helicon; extends M7.37) |
+| `11` §5 upstream-delta | `ava-saevm-adaptor` `ConvertStateSync` syncable-VM wrapper (Go `b1393ecb06` #5480) | **M7.40** (non-gating, Helicon; state sync dormant) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |
