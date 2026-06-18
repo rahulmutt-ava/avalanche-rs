@@ -14,6 +14,7 @@
 //! version, then dial `V` and build the VM client.
 
 pub mod block;
+mod noop;
 pub mod subprocess;
 
 use std::collections::HashMap;
@@ -47,6 +48,12 @@ use ava_vm::error::{Error, Result};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
 use ava_vm::vm::{HttpHandler, Vm, VmEvent};
+
+use ava_validators::state::ValidatorState;
+use ava_vm::components::avax::shared_memory::SharedMemory;
+
+use crate::proxy::aliasreader::AliaserReader;
+use crate::proxy::warp::Signer;
 
 use self::block::{RpcBlock, timestamp_to_system_time};
 
@@ -152,6 +159,71 @@ fn chain_context_to_request(
     }
 }
 
+/// The concrete callback impls a hosting node serves on the single `server_addr`
+/// the guest dials back at `VM.Initialize` (Go `vm_client.go:newInitServer`).
+///
+/// Each field is `None` until the node assembly injects a concrete handle; an
+/// unsupplied service is served by its [`noop`] default so the guest's dial-back
+/// always succeeds. The `appsender` is supplied separately at `initialize`
+/// (every VM gets one), so it is not part of the bundle.
+#[derive(Clone, Default)]
+pub struct CallbackBundle {
+    /// Cross-chain atomic memory (`proto/sharedmemory`).
+    pub shared_memory: Option<Arc<dyn SharedMemory>>,
+    /// Blockchain/subnet alias resolution (`proto/aliasreader`).
+    pub aliaser: Option<Arc<dyn AliaserReader>>,
+    /// P-Chain validator state (`proto/validatorState`, `06`).
+    pub validator_state: Option<Arc<dyn ValidatorState>>,
+    /// Warp BLS signer (`proto/warp`).
+    pub warp_signer: Option<Arc<dyn Signer>>,
+}
+
+/// Serves the full callback bundle **multiplexed on a single ephemeral
+/// `server_addr`** (Go `vm_client.go:newInitServer`): the `appsender`,
+/// `sharedmemory`, `aliasreader`, `validatorState`, and `warp` services, each
+/// from the supplied impl or its [`noop`] default. Binds the listener, spawns the
+/// server (stopped when `shutdown` fires), and returns the bound address to put in
+/// `InitializeRequest`.
+///
+/// Co-locating all callback services on one address matches the Go wire contract
+/// (a Go guest dials this one `server_addr` for every callback), so this is the
+/// host-side surface a `plugin_go_in_rust` (M9.12) Go guest interoperates with.
+///
+/// # Errors
+/// [`Error::HandshakeFailed`] if the ephemeral listener cannot be bound.
+pub async fn serve_callback_bundle(
+    app_sender: Arc<dyn AppSender>,
+    bundle: CallbackBundle,
+    shutdown: CancellationToken,
+) -> Result<String> {
+    let (addr, incoming) = bind_callback_listener().await?;
+    let shared_memory = bundle
+        .shared_memory
+        .unwrap_or_else(|| Arc::new(noop::NoopSharedMemory));
+    let aliaser = bundle
+        .aliaser
+        .unwrap_or_else(|| Arc::new(noop::NoopAliaser));
+    let validator_state = bundle
+        .validator_state
+        .unwrap_or_else(|| Arc::new(noop::NoopValidatorState));
+    let warp_signer = bundle
+        .warp_signer
+        .unwrap_or_else(|| Arc::new(noop::NoopSigner));
+    tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .add_service(crate::proxy::appsender::serve(app_sender).into_service())
+            .add_service(crate::proxy::sharedmemory::serve(shared_memory).into_service())
+            .add_service(crate::proxy::aliasreader::serve(aliaser).into_service())
+            .add_service(crate::proxy::validatorstate::serve(validator_state).into_service())
+            .add_service(crate::proxy::warp::serve(warp_signer).into_service())
+            .serve_with_incoming_shutdown(incoming, async move {
+                shutdown.cancelled().await;
+            })
+            .await;
+    });
+    Ok(addr)
+}
+
 /// The host-side rpcchainvm client: a [`ChainVm`] backed by a dialed VM channel.
 ///
 /// The last-accepted id is tracked **client-side** (a faithful port of Go, where
@@ -164,10 +236,14 @@ pub struct RpcChainVm {
     last_accepted: Arc<Mutex<Id>>,
     /// Cancels the spawned runtime-server task on drop.
     runtime_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    /// Cancels the callback-bundle servers (rpcdb at `db_server_addr` +
-    /// appsender at `server_addr`) stood up at [`initialize`](Vm::initialize).
+    /// Cancels the callback servers (rpcdb at `db_server_addr` + the multiplexed
+    /// callback bundle at `server_addr`) stood up at [`initialize`](Vm::initialize).
     /// Fired on `shutdown` and on drop so the gRPC servers stop with the VM.
     callback_shutdown: CancellationToken,
+    /// The concrete callback impls served on `server_addr` (sharedmemory /
+    /// aliasreader / validatorState / warp). Empty by default; the node assembly
+    /// injects handles via [`RpcChainVm::with_callback_bundle`].
+    bundle: CallbackBundle,
 }
 
 impl RpcChainVm {
@@ -259,7 +335,17 @@ impl RpcChainVm {
             last_accepted: Arc::new(Mutex::new(last_accepted)),
             runtime_shutdown: Mutex::new(Some(shutdown_tx)),
             callback_shutdown: CancellationToken::new(),
+            bundle: CallbackBundle::default(),
         })
+    }
+
+    /// Sets the concrete callback impls served on `server_addr` at the next
+    /// [`initialize`](Vm::initialize) (the node-assembly seam — a faithful analog
+    /// of Go reading these off `snow.Context`). Must be called before `initialize`.
+    #[must_use]
+    pub fn with_callback_bundle(mut self, bundle: CallbackBundle) -> Self {
+        self.bundle = bundle;
+        self
     }
 
     fn client(&self) -> VmClient<Channel> {
@@ -474,26 +560,18 @@ impl Vm for RpcChainVm {
             });
         }
 
-        // 2. Stand up the callback-bundle server (`server_addr`). The full
-        //    avalanchego bundle serves sharedmemory + aliasreader + appsender +
-        //    validatorstate + warp + grpc.health; the in-process Rust↔Rust path
-        //    exercises the appsender service (the others are stood up by the node
-        //    assembly with concrete impls — see tests/PORTING.md). Sharing one
-        //    ephemeral listener across the bundle matches Go's single
-        //    `server_addr` for all callback services.
-        let (server_addr, cb_incoming) = bind_callback_listener().await?;
-        let app_service = crate::proxy::appsender::serve(app_sender).into_service();
-        {
-            let token = self.callback_shutdown.clone();
-            tokio::spawn(async move {
-                let _ = tonic::transport::Server::builder()
-                    .add_service(app_service)
-                    .serve_with_incoming_shutdown(cb_incoming, async move {
-                        token.cancelled().await;
-                    })
-                    .await;
-            });
-        }
+        // 2. Stand up the full callback bundle multiplexed on a single
+        //    `server_addr` (Go `newInitServer`): appsender + sharedmemory +
+        //    aliasreader + validatorState + warp. Services without a concrete
+        //    impl supplied via `with_callback_bundle` are served by their no-op
+        //    default so the guest's dial-back always succeeds. (grpc.health is
+        //    convention-only in Go and not consumed on the dial path — 07 §5.2.)
+        let server_addr = serve_callback_bundle(
+            app_sender,
+            self.bundle.clone(),
+            self.callback_shutdown.clone(),
+        )
+        .await?;
 
         // 3. Encode the ChainContext identity + the two callback addrs into the
         //    InitializeRequest and send `VM.Initialize` over the dialed channel.

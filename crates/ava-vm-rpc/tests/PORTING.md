@@ -62,13 +62,30 @@ four-way interop matrix). Linux `PR_SET_PDEATHSIG` is set in the audited
    end-to-end `tests/vm_initialize.rs::rust_host_initializes_rust_guest` (a
    distinctive `apricot_phase_4_min_p_chain_height` proves the wire schedule, not a
    `network_id` reconstruction, reached the guest).
-   **STILL DEFERRED to node-assembly:** the callback bundle at `server_addr` serves
-   appsender only — the full Go bundle also serves sharedmemory / aliasreader /
-   validatorstate / warp / `grpc.health`. Threading these into the inner VM needs
-   concrete host impls **and** an `ava_snow::ChainContext` extension carrying
-   `SharedMemory`/`BCLookup`/`ValidatorState`/`WarpSigner` (Go reads them off
-   `snow.Context`); `ava-snow`'s `ChainContext` has no such fields, so this is a
-   broad node-assembly change, not a one-crate `ava-vm-rpc` follow-up.
+   **Host-side callback bundle — ✅ DONE (M9.12 offline foundation, 2026-06-18).**
+   `crate::host::RpcChainVm::initialize` now serves the **full bundle multiplexed on
+   one `server_addr`** via [`crate::host::serve_callback_bundle`] (Go
+   `vm_client.go:newInitServer`): appsender + sharedmemory + aliasreader +
+   validatorState + warp. Concrete impls are injected by the node assembly via
+   [`crate::host::RpcChainVm::with_callback_bundle`] ([`crate::host::CallbackBundle`]);
+   an unsupplied service is served by a [`noop`](crate::host) default so the guest's
+   dial-back always succeeds. `tests/host_bundle.rs` acts as the guest: it dials the
+   one `server_addr` for all five services and round-trips an op against each
+   (proving the Go single-address contract), plus a no-op-defaults arm. (`grpc.health`
+   is registered by convention in Go but **not consumed** on the host dial path — the
+   M9.3 investigation confirmed this — and `tonic-health` is not a workspace dep, so it
+   is intentionally omitted; a Go guest dials its callback clients lazily without
+   health-checking `server_addr`.)
+   **STILL DEFERRED to node-assembly:** *threading* the dialed sharedmemory /
+   aliasreader / validatorstate / warp proxies into the **inner VM** (guest side). Go
+   passes them via `snow.Context`; the Rust port wires such handles **per-VM** (e.g.
+   `ava-avm`'s `with_shared_memory` builder + `NoopSharedMemory` default,
+   `ava-platformvm`'s own validator manager) — there is **no `ChainContext`-carried
+   bundle**, and the generic `VmServer<V: ChainVm>` guest only has
+   `Vm::initialize(db, app_sender)`. So inner-VM consumption is a node-assembly/per-VM
+   concern decided at chain init, not a one-crate `ava-vm-rpc` follow-up; the live
+   `plugin_go_in_rust` (M9.12) arm — where the Rust host serves this bundle to a real
+   Go guest — exercises the host side end-to-end.
 
 2. **`LastAccepted` is client-side state, not an RPC.** `proto/vm` has no
    `LastAccepted` RPC; Go tracks it in the `chain.State` decorator (seeded at

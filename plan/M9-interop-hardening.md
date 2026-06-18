@@ -114,6 +114,21 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > > threading it into the inner VM needs an `ava_snow::ChainContext` extension (Go reads those off
 > > `snow.Context`; `ChainContext` has no such fields), a broad node-assembly change, NOT a one-crate
 > > `ava-vm-rpc` follow-up.
+> >
+> > **UPDATE 2026-06-18b (M9.12 offline foundation — host-side multiplexed callback bundle DONE).** The
+> > ralph user chose "host-side multiplexed bundle". ★ KEY ORIENT FINDING: the `ChainContext`-extension
+> > path the prior note floated **fights the Rust architecture** — Rust wires SharedMemory/ValidatorState
+> > **per-VM** (`ava-avm` `with_shared_memory`+`NoopSharedMemory`; `ava-platformvm` own validator manager),
+> > there is NO `ChainContext`-carried bundle. So the cleanly-doable half is the HOST serving the full
+> > bundle. `host::serve_callback_bundle` (Go `vm_client.go:newInitServer`) now multiplexes appsender +
+> > sharedmemory + aliasreader + validatorState + warp on ONE `server_addr`; `RpcChainVm::initialize` uses
+> > it; impls injected via `RpcChainVm::with_callback_bundle(CallbackBundle{..})`, unsupplied → `host::noop`
+> > defaults. `grpc.health` omitted (Go convention-only, not consumed on dial path per M9.3; no tonic-health
+> > dep). `tests/host_bundle.rs` (acts as guest): dials the one server_addr for all 5 services + round-trips
+> > each (Go single-address contract) + a no-op-defaults arm. ava-vm-rpc 29/29, clippy -D + fmt clean.
+> > **STILL DEFERRED:** threading the dialed proxies into the INNER VM (guest side) — per-VM/chain-init
+> > concern (generic `VmServer<V>` guest only has `Vm::initialize(db, app_sender)`); the live
+> > `plugin_go_in_rust` (M9.12) arm exercises the host side against a real Go guest.
 >
 > Net effect: **Wave 0 (M9.1–M9.3 minus the live-Go entry M9.3) and Wave 1 (M9.4–M9.9) are complete
 > in-process; Wave 2's in-process legs (M9.10/M9.11) are complete.** Remaining M9 frontier — all

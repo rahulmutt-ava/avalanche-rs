@@ -757,12 +757,25 @@ request/response, with `proto/net`/`proto/io` for hijacked conns).
 > message: Go's decoder rejects nil with `errNilNetworkUpgradesPB`. The Rust guest
 > decodes the wire schedule when present (the wire value wins over a `network_id`
 > reconstruction) and falls back to `get_config(network_id)` only for an absent
-> message (a lenient superset of Go, which errors). **Still deferred to
-> node-assembly:** the rest of the `server_addr` callback bundle
-> (sharedmemory/aliasreader/validatorstate/warp) is threaded into the inner VM only
-> once `ChainContext` carries those handles (Go reads them off `snow.Context`;
-> `ava_snow::ChainContext` has no such fields yet — a broad change, not an
-> `ava-vm-rpc` follow-up).
+> message (a lenient superset of Go, which errors).
+>
+> **AS-BUILT (M9.12, host-side callback bundle, 2026-06-18).** The host serves the
+> **full bundle multiplexed on one `server_addr`** (`host::serve_callback_bundle`,
+> Go `vm_client.go:newInitServer`): appsender + sharedmemory + aliasreader +
+> validatorState + warp. Concrete impls are injected via
+> `RpcChainVm::with_callback_bundle(CallbackBundle{..})`; an unsupplied service gets
+> a no-op default so a guest's dial-back always succeeds. `grpc.health` is omitted —
+> Go registers it by convention but does not consume it on the dial path (M9.3
+> finding) and `tonic-health` is not a workspace dep. **Still deferred to
+> node-assembly:** *threading* the dialed sharedmemory/aliasreader/validatorState/warp
+> proxies into the **inner VM** (guest side). Unlike Go (which passes them via
+> `snow.Context`), the Rust port wires such handles **per-VM** (e.g. `ava-avm`'s
+> `with_shared_memory`, `ava-platformvm`'s own validator manager) — there is no
+> `ChainContext`-carried bundle, and the generic `VmServer<V: ChainVm>` guest only
+> sees `Vm::initialize(db, app_sender)`. So inner-VM consumption is a per-VM/chain-init
+> concern, not an `ava-vm-rpc` follow-up; the live `plugin_go_in_rust` (M9.12) arm —
+> Rust host serving the bundle to a real Go guest — exercises the host side
+> end-to-end.
 
 ### 5.3 The guest (VM server) side
 
