@@ -130,6 +130,11 @@ struct DbProbeVm {
     next_payload: AtomicU64,
     /// Set to the value read back from the proxied db at `initialize`.
     db_readback: Arc<Mutex<Option<Vec<u8>>>>,
+    /// When `true`, `initialize` drops the proxied db without using it (mirrors
+    /// the live `testvm_plugin`/`FixedGenesisVm`): the `RpcDatabase` Arc then
+    /// drops on the guest's tonic worker thread, the M9.3 `RST_STREAM CANCEL`
+    /// reproduction.
+    ignore_db: bool,
 }
 
 impl DbProbeVm {
@@ -138,6 +143,18 @@ impl DbProbeVm {
             inner: Arc::new(Mutex::new(Inner::default())),
             next_payload: AtomicU64::new(0),
             db_readback,
+            ignore_db: false,
+        }
+    }
+
+    /// A VM that ignores its proxied db at `initialize` (the live plugin shape),
+    /// so the proxied [`RpcDatabase`] drops on the guest's async worker thread.
+    fn db_ignoring() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner::default())),
+            next_payload: AtomicU64::new(0),
+            db_readback: Arc::new(Mutex::new(None)),
+            ignore_db: true,
         }
     }
 
@@ -230,18 +247,28 @@ impl Vm for DbProbeVm {
         _fxs: Vec<Fx>,
         _app_sender: Arc<dyn AppSender>,
     ) -> VmResult<()> {
-        // Round-trip over the proxied db. The DynDatabase is synchronous (it
-        // `block_on`s its own runtime), so run it on a blocking thread (off the
-        // async runtime context) — exactly as a real VM's storage work runs.
-        let readback = tokio::task::spawn_blocking(move || {
-            db.put(b"probe-key", b"probe-val")
-                .map_err(|_| VmErr::InvalidComponent("db put failed"))?;
-            db.get(b"probe-key")
-                .map_err(|_| VmErr::InvalidComponent("db get failed"))
-        })
-        .await
-        .map_err(|_| VmErr::InvalidComponent("blocking db task join failed"))??;
-        *self.db_readback.lock() = Some(readback);
+        if self.ignore_db {
+            // The live-plugin shape: ignore the proxied db and let its Arc drop
+            // here, on the guest's tonic worker thread (an async context). Before
+            // the `ClientInner` background-shutdown fix this panicked ("Cannot
+            // drop a runtime in a context where blocking is not allowed") and
+            // aborted the Initialize stream — the M9.3 `RST_STREAM CANCEL`.
+            drop(db);
+        } else {
+            // Round-trip over the proxied db. The DynDatabase is synchronous (it
+            // `block_on`s its own runtime), so run it on a blocking thread (off
+            // the async runtime context) — exactly as a real VM's storage work
+            // runs.
+            let readback = tokio::task::spawn_blocking(move || {
+                db.put(b"probe-key", b"probe-val")
+                    .map_err(|_| VmErr::InvalidComponent("db put failed"))?;
+                db.get(b"probe-key")
+                    .map_err(|_| VmErr::InvalidComponent("db get failed"))
+            })
+            .await
+            .map_err(|_| VmErr::InvalidComponent("blocking db task join failed"))??;
+            *self.db_readback.lock() = Some(readback);
+        }
 
         // Seed a genesis block (height 0) as the last accepted block.
         let genesis = self.register(Id::EMPTY, 0, b"genesis");
@@ -453,6 +480,68 @@ async fn rust_host_initializes_rust_guest() {
     // path still works.
     let blk = host.build_block(&token).await.expect("build_block");
     assert_eq!(blk.parent(), genesis, "built on the last accepted block");
+    assert_eq!(blk.height(), 1, "child of genesis is at height 1");
+    blk.verify(&token).await.expect("verify");
+    blk.accept(&token).await.expect("accept");
+    let last = host.last_accepted(&token).await.expect("last_accepted");
+    assert_eq!(
+        last,
+        blk.id(),
+        "accept advances last_accepted over the wire"
+    );
+}
+
+/// M9.3 live-interop regression: a guest VM that **ignores** its proxied db (the
+/// `testvm_plugin`/`FixedGenesisVm` shape a Go host spawns) must still complete
+/// `VM.Initialize` over the wire. The proxied [`RpcDatabase`] drops on the
+/// guest's tonic worker thread; before the `ava-database` `ClientInner`
+/// background-shutdown fix that drop panicked and reset the stream, which the Go
+/// host reported as `RST_STREAM CANCEL`. The host-driven Initialize succeeding
+/// here is the in-process localization of that live blocker (specs 07 §5.2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rust_host_initializes_db_ignoring_guest() {
+    let token = CancellationToken::new();
+
+    // The launcher spins up an in-process Rust guest wrapping a VM that drops its
+    // proxied db at `initialize` (the live plugin shape).
+    let host = RpcChainVm::start(&token, DEFAULT_HANDSHAKE_TIMEOUT, move |engine_addr| {
+        let engine_addr = engine_addr.to_string();
+        let token = CancellationToken::new();
+        tokio::spawn(async move {
+            let vm = DbProbeVm::db_ignoring();
+            guest::serve_with_addr(vm, &engine_addr, &token)
+                .await
+                .expect("guest serve");
+        });
+    })
+    .await
+    .expect("handshake + dial VM");
+
+    let mut host = host;
+
+    let host_db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+    let app_sender: Arc<dyn AppSender> = Arc::new(RecordingAppSender::default());
+    let chain_ctx = ava_vm::testutil::test_chain_context();
+
+    // The Initialize RPC must NOT be reset by a runtime-drop panic in the guest.
+    host.initialize(
+        &token,
+        chain_ctx,
+        Arc::clone(&host_db),
+        b"genesis",
+        b"",
+        b"",
+        Vec::new(),
+        app_sender,
+    )
+    .await
+    .expect("host VM.Initialize over the wire (db-ignoring guest, no RST_STREAM CANCEL)");
+
+    // The post-init path still works: genesis is seeded and a child block
+    // builds/accepts over the wire.
+    let genesis = host.last_accepted(&token).await.expect("last_accepted");
+    assert_ne!(genesis, Id::EMPTY, "genesis seeded by VM.Initialize");
+    let blk = host.build_block(&token).await.expect("build_block");
     assert_eq!(blk.height(), 1, "child of genesis is at height 1");
     blk.verify(&token).await.expect("verify");
     blk.accept(&token).await.expect("accept");

@@ -44,11 +44,43 @@ pub struct DatabaseClient {
 }
 
 struct ClientInner {
-    rt: Runtime,
+    /// The owned runtime that drives every blocking RPC. Held in an `Option`
+    /// only so [`Drop`] can move it out and shut it down in the background;
+    /// it is `Some` for the entire usable lifetime of the client (see
+    /// [`ClientInner::runtime`]).
+    rt: Option<Runtime>,
     client: Mutex<PbDatabaseClient<Channel>>,
     /// Mirrors Go's client-side `closed` atomic: once the client closes the DB,
     /// every iterator short-circuits to `Err(Closed)` (db_client.go `iterator.Next`).
     closed: AtomicBool,
+}
+
+impl ClientInner {
+    /// The owned runtime. `rt` is `Some` from construction until [`Drop`] (which
+    /// is the only place it is taken, after which no method is reachable), so the
+    /// fallback arm is unreachable in practice.
+    fn runtime(&self) -> &Runtime {
+        match self.rt.as_ref() {
+            Some(rt) => rt,
+            None => unreachable!("rpcdb DatabaseClient used after its runtime was dropped"),
+        }
+    }
+}
+
+impl Drop for ClientInner {
+    fn drop(&mut self) {
+        // The proxied client can be dropped from within an async context (the
+        // rpcchainvm guest drops it on a tonic worker thread when the inner VM
+        // does not retain the proxied db). The default blocking [`Runtime`] drop
+        // panics there ("Cannot drop a runtime in a context where blocking is
+        // not allowed"), which aborts the in-flight `VM.Initialize` stream — the
+        // Go host then observes `RST_STREAM CANCEL`. `shutdown_background` tears
+        // the runtime down without blocking, making the drop safe from any
+        // context (specs 07 §5.2, M9.3 live-interop blocker).
+        if let Some(rt) = self.rt.take() {
+            rt.shutdown_background();
+        }
+    }
 }
 
 impl DatabaseClient {
@@ -57,7 +89,7 @@ impl DatabaseClient {
     pub fn new(runtime: Runtime, channel: Channel) -> Self {
         Self {
             inner: Arc::new(ClientInner {
-                rt: runtime,
+                rt: Some(runtime),
                 client: Mutex::new(PbDatabaseClient::new(channel)),
                 closed: AtomicBool::new(false),
             }),
@@ -69,7 +101,7 @@ impl DatabaseClient {
     where
         F: std::future::Future<Output = T>,
     {
-        self.inner.rt.block_on(f)
+        self.inner.runtime().block_on(f)
     }
 }
 

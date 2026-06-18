@@ -36,8 +36,40 @@ use crate::pb::sharedmemory::{
 /// The guest-side `proto/sharedmemory` client: a [`SharedMemory`] over the
 /// channel (blocking; owns a current-thread runtime).
 pub struct RpcSharedMemory {
-    rt: Runtime,
+    /// The owned runtime that drives every blocking RPC. Held in an `Option`
+    /// only so [`Drop`] can move it out and shut it down in the background; it
+    /// is `Some` for the entire usable lifetime of the client (see
+    /// [`RpcSharedMemory::rt`]).
+    rt: Option<Runtime>,
     client: Mutex<SharedMemoryClient<Channel>>,
+}
+
+impl RpcSharedMemory {
+    /// The owned runtime. `rt` is `Some` from construction until [`Drop`] (the
+    /// only place it is taken, after which no method is reachable), so the
+    /// fallback arm is unreachable in practice.
+    fn rt(&self) -> &Runtime {
+        match self.rt.as_ref() {
+            Some(rt) => rt,
+            None => unreachable!("RpcSharedMemory used after its runtime was dropped"),
+        }
+    }
+}
+
+impl Drop for RpcSharedMemory {
+    fn drop(&mut self) {
+        // The proxied client can be dropped from within an async context (the
+        // rpcchainvm guest drops the proxy bundle on a tonic worker thread). The
+        // default blocking [`Runtime`] drop panics there ("Cannot drop a runtime
+        // in a context where blocking is not allowed"), which would abort the
+        // in-flight RPC stream — the Go host then observes `RST_STREAM CANCEL`.
+        // `shutdown_background` tears the runtime down without blocking, making
+        // the drop safe from any context (specs 07 §5.2; matches the rpcdb
+        // `DatabaseClient` fix, the M9.3 live-interop blocker).
+        if let Some(rt) = self.rt.take() {
+            rt.shutdown_background();
+        }
+    }
 }
 
 /// Dials the host-served `SharedMemory` at `addr` and builds the guest-side
@@ -59,7 +91,7 @@ pub fn dial(addr: &str) -> Result<RpcSharedMemory> {
         .block_on(async { SharedMemoryClient::connect(format!("http://{addr}")).await })
         .map_err(|_| Error::HandshakeFailed)?;
     Ok(RpcSharedMemory {
-        rt,
+        rt: Some(rt),
         client: Mutex::new(client),
     })
 }
@@ -71,7 +103,7 @@ impl SharedMemory for RpcSharedMemory {
             .map(|k| bytes::Bytes::copy_from_slice(k))
             .collect();
         let resp = self
-            .rt
+            .rt()
             .block_on(async {
                 let mut client = self.client.lock().clone();
                 client
@@ -99,7 +131,7 @@ impl SharedMemory for RpcSharedMemory {
             .map(|t| bytes::Bytes::copy_from_slice(t))
             .collect();
         let resp = self
-            .rt
+            .rt()
             .block_on(async {
                 let mut client = self.client.lock().clone();
                 client
@@ -141,7 +173,7 @@ impl SharedMemory for RpcSharedMemory {
             })
             .collect();
         let wire_batches = batches.iter().map(batch_ops_to_proto).collect();
-        self.rt
+        self.rt()
             .block_on(async {
                 let mut client = self.client.lock().clone();
                 client

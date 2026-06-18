@@ -201,4 +201,31 @@ mod rpcdb_conformance {
     fn db_oracle_btreemap_rpcdb() {
         run_database_proptests(RpcDb::new);
     }
+
+    /// Regression for the M9.3 live-interop `RST_STREAM CANCEL` blocker: the
+    /// rpcchainvm guest drops the proxied [`DatabaseClient`] on a tonic worker
+    /// thread (an async context) whenever the inner VM does not retain the db
+    /// (e.g. a db-ignoring VM, like the `testvm_plugin`). The client owns a tokio
+    /// runtime; the default blocking [`Runtime`](tokio::runtime::Runtime) drop
+    /// panics with "Cannot drop a runtime in a context where blocking is not
+    /// allowed" when dropped from within an async context — and that panic aborts
+    /// the in-flight `VM.Initialize` stream, which the Go host observes as
+    /// `RST_STREAM CANCEL`. Dropping the client from inside a runtime context must
+    /// therefore NOT panic.
+    #[test]
+    fn client_runtime_drops_safely_in_async_context() {
+        // Construct the client pair on the plain (non-async) test thread — its
+        // own `block_on` connect must run off any ambient runtime.
+        let db = RpcDb::new();
+
+        // Now drop it from *within* an async context, exactly as the guest does.
+        let outer = Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        outer.block_on(async move {
+            drop(db);
+        });
+    }
 }

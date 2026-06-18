@@ -761,6 +761,18 @@ So whichever side is the *plugin* always **dials** the callback services; whiche
 side is the *node* always **serves** them. This symmetry is what makes Rust↔Go
 interop work in both directions.
 
+> **AS-BUILT (M9.3, runtime-drop interop invariant).** The synchronous proxy
+> clients that bridge a sync trait over an async transport (`RpcDatabase`,
+> `RpcSharedMemory`) each **own a current-thread tokio runtime** they `block_on`.
+> The inner VM may drop such a client from within an async context — e.g. a
+> db-ignoring VM drops the proxied db on the tonic worker thread at the end of
+> `Initialize`. The default blocking `Runtime` drop **panics** in an async context
+> (`"Cannot drop a runtime in a context where blocking is not allowed"`), which
+> unwinds through the gRPC handler and resets the stream; a Go host observes this
+> as `RST_STREAM ... CANCEL` on the very first `VM.Initialize`. **Invariant:** any
+> runtime-owning proxy client MUST shut its runtime down in the background on drop
+> (`Runtime::shutdown_background`), so it is safe to drop from any thread/context.
+
 ### 5.4 Proto → tonic service map
 
 | proto package | Direction | tonic service | Rust trait it bridges |

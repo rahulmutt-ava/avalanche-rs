@@ -308,3 +308,37 @@ async fn sharedmemory_proxy_get_indexed_apply() {
 
     shutdown.cancel();
 }
+
+/// M9.3-class regression: the guest-side [`RpcSharedMemory`] owns a tokio runtime
+/// and may be dropped on a tonic worker thread (an async context) when the
+/// rpcchainvm guest tears down the proxy bundle. The default blocking
+/// [`Runtime`](tokio::runtime::Runtime) drop panics there ("Cannot drop a runtime
+/// in a context where blocking is not allowed"), which would reset the in-flight
+/// RPC stream (Go host: `RST_STREAM CANCEL`). Dropping the client from inside a
+/// runtime context must therefore NOT panic — mirrors the rpcdb `DatabaseClient`
+/// fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sharedmemory_client_drops_safely_in_async_context() {
+    let mem: Arc<dyn SharedMemory> = Arc::new(MockSharedMemory::default());
+    let (addr, incoming) = bind().await;
+    let server = proxy::sharedmemory::serve(mem).into_service();
+    let shutdown = CancellationToken::new();
+    let s2 = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .add_service(server)
+            .serve_with_incoming_shutdown(incoming, async move { s2.cancelled().await })
+            .await;
+    });
+
+    // Dial off the runtime (the client's own `block_on` connect requires it),
+    // then move the client back to the async worker and drop it there.
+    let client = tokio::task::spawn_blocking(move || {
+        proxy::sharedmemory::dial(&addr).expect("dial sharedmemory")
+    })
+    .await
+    .expect("blocking dial task");
+    drop(client);
+
+    shutdown.cancel();
+}

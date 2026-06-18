@@ -396,6 +396,28 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   (`guest/mod.rs` dials `db_server_addr` then `server_addr` before touching the inner VM) or an HTTP/2
 >   transport mismatch; reproducing it needs a Go-side `Initialize` driver (in-process Go host test against the
 >   Rust guest, or guest stderr logging in the live arm). That remains the true M9.3 live blocker.
+>
+> **★ CANCEL ROOT CAUSE FOUND + FIXED (2026-06-18c).** The reset was **not** dial-back ordering or an HTTP/2
+> mismatch — it was a **runtime-drop panic inside the guest `Initialize` handler**. The guest dials
+> `db_server_addr` and builds a proxied `RpcDatabase` (= `ava_database::rpcdb::DatabaseClient`), which **owns a
+> current-thread tokio runtime** (it `block_on`s every sync `Database` call). It hands that `Arc<dyn DynDatabase>`
+> to the inner VM's `initialize`. The live `testvm_plugin`/`FixedGenesisVm` (like many VMs) **ignores** the db, so
+> the last `Arc` drops at the end of `initialize` **on the tonic worker thread** — an async context. The default
+> blocking `Runtime` drop panics there (`"Cannot drop a runtime in a context where blocking is not allowed"`); the
+> panic unwinds through the tonic handler future, h2 resets the stream with `CANCEL`, and the Go host reports
+> `RST_STREAM ... CANCEL`. This was invisible offline because the in-process `vm_initialize.rs` guest (`DbProbeVm`)
+> consumes the db **inside `spawn_blocking`** (dropping the runtime off-worker), and `host_subprocess.rs` had a NOTE
+> *deliberately avoiding* driving Initialize against the db-ignoring `testvm_plugin` for exactly this panic — the
+> dots were just never connected to the live CANCEL. **Fix:** make the owned runtime drop-safe from any context.
+> `ava-database` `ClientInner` and `ava-vm-rpc` `proxy::sharedmemory::RpcSharedMemory` (the two runtime-owning sync
+> proxy clients) now hold `rt: Option<Runtime>` and `impl Drop` calls `Runtime::shutdown_background()` (the
+> documented escape — tears the runtime down without blocking). Regression tests added at all three levels: the
+> root-cause unit test (`ava-database conformance_rpcdb::client_runtime_drops_safely_in_async_context`), the
+> end-to-end in-process M9.3 reproduction (`ava-vm-rpc vm_initialize::rust_host_initializes_db_ignoring_guest` —
+> a full host→guest `VM.Initialize` against a db-ignoring guest, confirmed RED before the fix), and the parallel
+> sharedmemory guard (`ava-vm-rpc proxy_sharedmemory::sharedmemory_client_drops_safely_in_async_context`). The
+> in-process Go→Rust CANCEL is now closed; the remaining M9.3 live-arm step is re-running the Go tmpnet harness
+> (`rust_plugin_handshake`) against the rebuilt oracle to confirm the live `creating chain` count now passes.
 
 ### Task M9.4: Proxied `rpcdb` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::rpcdb_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::rpcdb`  ·  **Depends on:** M9.2, M1 (ava-database `DynDatabase`)  ·  **Spec:** `07` §5.2/§5.3/§5.4 (rpcdb row: server-side iterator handles, batched `IteratorNext`, `ErrEnumToError`)
