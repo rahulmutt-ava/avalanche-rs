@@ -52,6 +52,9 @@ ava-genesis = { path = "../ava-genesis" }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+# Chain-creator diagnostics (e.g. logging queued chains whose VM dispatch is
+# deferred), matching the `ava-node` logging convention.
+tracing = { workspace = true }
 # The binary owns the single multi-thread runtime (17 §1.1) and installs the
 # SIGINT/SIGTERM/SIGABRT handlers (17 §2.5).
 tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macros", "time", "signal" ] }

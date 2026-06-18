@@ -716,6 +716,39 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > dispatching the concrete VM by `vm_id` (PlatformVm for P), and reflecting the engine's `ConsensusContext` state
 > into `AssemblyChainManager::is_bootstrapped` so `info.isBootstrapped` flips for the live node.
 
+> **STEP (a) — PRODUCTION CHAIN-CREATOR FOUNDATION LANDED (2026-06-18, ralph iteration, TDD; P-Chain slice).**
+> The "NEXT (production wiring)" bullet above is now realized for the **platform chain** (X/C/SAE dispatch +
+> the real `Sender` remain deferred). The chain creator that drives step-26's *queued* chains exists and is
+> proven to flip `is_bootstrapped`:
+> - **The reflection seam — `ava-node` (`init/chain_manager.rs`):** `AssemblyChainManager::is_bootstrapped` now
+>   consults a per-chain **live reporter** (`set_bootstrapped_reporter(chain_id, Box<dyn Fn() -> bool + Send +
+>   Sync>)`) before the static set, mirroring Go `Manager.IsBootstrapped` = a live read of `chain.Context.State.
+>   Get() == snow.NormalOp`. ★ KEY DEP DECISION: the reporter is kept **opaque** (a boxed closure) precisely
+>   because `ava-node` does NOT (and should not) depend on `ava-snow`/`ava-platformvm` — the chain-creator wiring
+>   in the binary crate (which owns those deps) captures the `Arc<ConsensusContext>` and returns `state ==
+>   NormalOp`. A `mark_bootstrapped` static-set setter is retained as the no-reporter fallback. 2 unit tests
+>   (default-false→static-mark, live-reporter-wins-over-static).
+> - **The chain creator — `avalanchers` (`wiring/chains.rs`):** new `run_queued_pchain(&Arc<AssemblyChainManager>,
+>   network_id)` reads `manager.queued_chains()`, and for each `vm_id == platform_vm_id()` entry: registers the
+>   chain with the manager (so `running_chains()` counts it and `shutdown()` drains it) under a token derived from
+>   the node root subnet token, boots the REAL `PlatformVm` solo (empty beacons ⇒ `Bootstrapping → NormalOp` via
+>   the proven `boot_in_process_pchain_to_normalop` template — `boot_pchain` was refactored to accept the
+>   manager-registered token so the handler runs under it), then installs the live reporter. Non-P `vm_id`s are
+>   logged + skipped (the deferred half). `tests/in_process_chain.rs::chain_creator_drives_queued_pchain_to_
+>   bootstrapped` queues the P-Chain via the real `init_chains`, runs the creator, and asserts `is_bootstrapped(P)`
+>   flips `false → true` once the solo engine reaches NormalOp (+ `running_chains()==1` + clean `manager.shutdown()`
+>   join). 5/5 in_process_chain + 21 ava-node lib tests green, clippy `-D warnings` + fmt clean, full workspace
+>   build green. (`tracing` added to `avalanchers` deps for the deferred-VM skip log — workspace dep, matches the
+>   `ava-node` logging convention.)
+> - **★ STILL DEFERRED (unchanged from above):** (1) **calling `run_queued_pchain` from the live `dispatch` path**
+>   — the binary's `Node` holds `Arc<dyn DynDatabase>`+`Arc<dyn ValidatorManager>` while `run_queued_pchain` builds
+>   its OWN in-process DB/validators/router/loopback `Sender` (the `boot_pchain` template), so threading the Node's
+>   *real* assembled dependencies through `create_snowman_chain` (the generic↔trait-object impedance) is the next
+>   step before `info.isBootstrapped` flips on an actual `avalanchers --network-id=local` process; (2) **X/C/SAE
+>   `vm_id` dispatch**; (3) the **real ava-network `Sender`** for multi-node (items (b)/(c) below). So the *creator
+>   logic + reflection seam* are proven in-process; the live-binary `dispatch` wiring + multi-VM + real Sender are
+>   the remaining chains-milestone work.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

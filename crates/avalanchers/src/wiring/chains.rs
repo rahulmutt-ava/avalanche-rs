@@ -627,7 +627,7 @@ pub struct PChainBootHandle {
 /// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
 /// timeout-manager failures.
 pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle> {
-    boot_pchain(network_id, true).await
+    boot_pchain(network_id, true, CancellationToken::new()).await
 }
 
 /// Like [`boot_in_process_pchain`], but boots as a **solo node with an empty
@@ -644,7 +644,7 @@ pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle>
 /// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
 /// timeout-manager failures.
 pub async fn boot_in_process_pchain_to_normalop(network_id: u32) -> Result<PChainBootHandle> {
-    boot_pchain(network_id, false).await
+    boot_pchain(network_id, false, CancellationToken::new()).await
 }
 
 /// Shared body for the two P-Chain boot entrypoints. When `include_self_beacon`
@@ -652,8 +652,11 @@ pub async fn boot_in_process_pchain_to_normalop(network_id: u32) -> Result<PChai
 /// beacon (stalls at `Bootstrapping`, awaiting frontier replies the in-process
 /// `RecordingSender` never delivers); when `false` the beacon set is empty and
 /// the bootstrapper runs straight through to `NormalOp`.
-async fn boot_pchain(network_id: u32, include_self_beacon: bool) -> Result<PChainBootHandle> {
-    let token = CancellationToken::new();
+async fn boot_pchain(
+    network_id: u32,
+    include_self_beacon: bool,
+    token: CancellationToken,
+) -> Result<PChainBootHandle> {
     let reg = Registry::new();
 
     // Real P-Chain genesis for the network (the M8-complete embedded source).
@@ -760,4 +763,77 @@ async fn boot_pchain(network_id: u32, include_self_beacon: bool) -> Result<PChai
         beacons: beacon_nodes,
         _sink: chain.sink,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Production chain creator (M9.15 step (a) — drive the queued chains)
+// ---------------------------------------------------------------------------
+
+/// The production chain creator: construct and drive every chain that step-26
+/// `init_chains` *queued* on the [`AssemblyChainManager`], reflecting each
+/// running chain's consensus context into the manager's `is_bootstrapped`
+/// (the value `info.isBootstrapped` serves).
+///
+/// **Scope (M9.15 step (a)):** this slice dispatches the **platform chain**
+/// only (the `vm_id == platform_vm_id()` entry), booting it as a solo node so
+/// the bootstrapper short-circuits `Bootstrapping → NormalOp` via the
+/// empty-beacon path — exactly the proven [`boot_in_process_pchain_to_normalop`]
+/// template. Each booted chain is registered with the manager (so
+/// `running_chains()` counts it and `shutdown()` drains it) under a token
+/// derived from the node's root subnet token, and a live reporter is installed
+/// so `is_bootstrapped(chain_id)` reflects the engine reaching `NormalOp`.
+///
+/// **Documented deferrals (the larger chains milestone):** X/C/SAE VM dispatch
+/// by `vm_id` (queued entries for other VMs are logged and skipped here) and the
+/// real ava-network-backed `Sender` for multi-node frontier exchange — both
+/// tracked in plan/M9.15.
+///
+/// # Errors
+/// Propagates a P-Chain boot failure (genesis / DB / VM-init / consensus /
+/// identity / timeout-manager).
+pub async fn run_queued_pchain(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+) -> Result<Vec<PChainBootHandle>> {
+    use ava_node::init::chain_manager::platform_vm_id;
+    use ava_snow::EngineState;
+
+    // The node's root subnet token (the cancellation root the manager derives
+    // per-subnet / per-chain tokens from; 17 §4.1).
+    let root_subnet_token = CancellationToken::new();
+    let mut handles = Vec::new();
+
+    for params in manager.queued_chains() {
+        if params.vm_id != platform_vm_id() {
+            // X/C/SAE VM dispatch is the deferred half of the chains milestone.
+            tracing::warn!(
+                chain_id = %params.id,
+                vm_id = %params.vm_id,
+                "skipping queued chain: only the platform VM is dispatched in this slice (X/C/SAE deferred)"
+            );
+            continue;
+        }
+
+        // Register the chain first so its handler runs under the
+        // manager-derived token (subnet shutdown then reaches it). The task
+        // tracker is unused in-process (the handler joins via its JoinHandle).
+        let (chain_token, _tasks) =
+            manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+
+        // Boot the real PlatformVm through the full create_snowman_chain
+        // pipeline as a solo node (empty beacons ⇒ Bootstrapping → NormalOp).
+        let handle = boot_pchain(network_id, false, chain_token).await?;
+
+        // Reflect the running engine's consensus context into the manager:
+        // is_bootstrapped(P) becomes a live read of `ctx.state == NormalOp`.
+        let ctx = Arc::clone(&handle.ctx);
+        manager.set_bootstrapped_reporter(
+            params.id,
+            Box::new(move || matches!(**ctx.state.load(), EngineState::NormalOp)),
+        );
+
+        handles.push(handle);
+    }
+
+    Ok(handles)
 }

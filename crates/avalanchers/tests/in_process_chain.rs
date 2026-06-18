@@ -144,6 +144,80 @@ async fn boots_real_pchain_to_normalop() {
     handle.join.await.expect("handler task joined cleanly");
 }
 
+/// M9.15 step (a), production wiring — the **chain creator** drives the
+/// platform chain that step-26 `init_chains` *queued* on the
+/// [`AssemblyChainManager`] all the way to `NormalOp`, and the manager's
+/// `is_bootstrapped(P)` (the value `info.isBootstrapped` serves) flips from
+/// `false` to `true` once the engine reaches `NormalOp`. Scoped to the P-Chain
+/// (solo, empty-beacon short-circuit; the real ava-network `Sender` and X/C/SAE
+/// dispatch are the documented deferrals).
+#[tokio::test]
+async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
+    use std::sync::Arc;
+
+    use ava_node::init::chain_manager::{AssemblyChainManager, PLATFORM_CHAIN_ID, init_chains};
+    use ava_validators::{DefaultManager, ValidatorManager};
+    use avalanchers::wiring::chains::run_queued_pchain;
+
+    let network_id = 1u32; // mainnet embedded P-Chain genesis (M8-complete source).
+    let (genesis_bytes, _avax_asset_id) =
+        ava_genesis::genesis_bytes(network_id, None).expect("build P-Chain genesis bytes");
+
+    // Assemble the chain manager exactly as `init_chain_manager` does (critical
+    // set = {P}, beacons = empty primary-network manager for a solo node).
+    let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+    let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
+    let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
+
+    // Step 26: queue the platform chain. Nothing runs yet, nothing is
+    // bootstrapped — this is the documented pre-wiring state (wave-18h).
+    init_chains(&manager, &genesis_bytes).expect("queue the platform chain");
+    assert!(
+        !manager.is_bootstrapped(PLATFORM_CHAIN_ID),
+        "no chain runs before the chain creator drives the queue"
+    );
+    assert_eq!(
+        manager.running_chains(),
+        0,
+        "no chain is registered before the chain creator runs"
+    );
+
+    // The chain creator constructs + drives the queued P-Chain through the full
+    // create_snowman_chain pipeline and reflects its ConsensusContext into the
+    // manager's is_bootstrapped.
+    let handles = run_queued_pchain(&manager, network_id)
+        .await
+        .expect("the chain creator boots the queued P-Chain");
+    assert_eq!(handles.len(), 1, "exactly one P-Chain booted");
+    assert_eq!(
+        manager.running_chains(),
+        1,
+        "the booted P-Chain is registered as a running chain"
+    );
+
+    // Poll the manager until is_bootstrapped(P) flips (virtual time; bounded
+    // yield loop). A solo node short-circuits Bootstrapping → NormalOp.
+    let mut flipped = false;
+    for _ in 0..200_000 {
+        if manager.is_bootstrapped(PLATFORM_CHAIN_ID) {
+            flipped = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        flipped,
+        "info.isBootstrapped(P) flips true once the solo engine reaches NormalOp"
+    );
+
+    // Clean shutdown: the chain's handler runs under the manager-registered
+    // token, so the manager's shutdown cancels it; then the handler joins.
+    manager.shutdown(std::time::Duration::from_secs(5)).await;
+    for handle in handles {
+        handle.join.await.expect("handler task joined cleanly");
+    }
+}
+
 /// `--version` and `--help` keep working unchanged (the M0 invariant).
 #[test]
 fn version_and_help_still_work() {

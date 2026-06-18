@@ -13,7 +13,7 @@
 //! `Node::new` and the mounted APIs need today: the chain aliaser, the
 //! bootstrapped set, the registrant list, and the queued [`ChainParameters`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -35,6 +35,15 @@ use ava_validators::ValidatorManager;
 use crate::error::{Error, Result};
 use crate::init::metrics::NodeMetrics;
 use crate::init::networking::RouterBridge;
+
+/// A live `is_bootstrapped` reporter for one chain. The chain creator that
+/// constructs the running chain registers a closure that reads the engine's
+/// shared consensus context (Go `Manager.IsBootstrapped` = a live read of
+/// `chain.Context.State.Get() == snow.NormalOp`). The closure is kept opaque so
+/// `ava-node` need not depend on `ava-snow` / a concrete VM crate — the
+/// chain-creator wiring (in the binary crate, which owns those deps) captures the
+/// `Arc<ConsensusContext>` and returns whether it has reached `NormalOp`.
+type BootstrappedReporter = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// The platform chain's well-known ID (Go `constants.PlatformChainID`).
 pub const PLATFORM_CHAIN_ID: Id = Id::EMPTY;
@@ -81,8 +90,13 @@ pub struct AssemblyChainManager {
     aliaser: Aliaser,
     /// Chains the node would shut down for if they failed (P, X, C).
     critical_chains: HashSet<Id>,
-    /// Chains that finished bootstrapping (none yet at assembly stage).
+    /// Chains explicitly marked bootstrapped (the static fallback for chains
+    /// with no live reporter registered).
     bootstrapped: RwLock<HashSet<Id>>,
+    /// Per-chain live `is_bootstrapped` reporters installed by the chain creator
+    /// (each reads its chain's running engine state). When present for a chain,
+    /// the reporter wins over the static `bootstrapped` set.
+    bootstrapped_reporters: Mutex<HashMap<Id, BootstrappedReporter>>,
     /// Indexer-style registrants notified when a chain is created (Go
     /// `AddRegistrant`).
     registrants: Mutex<Vec<Arc<dyn Indexer>>>,
@@ -110,6 +124,7 @@ impl AssemblyChainManager {
             aliaser: Aliaser::new(),
             critical_chains,
             bootstrapped: RwLock::new(HashSet::new()),
+            bootstrapped_reporters: Mutex::new(HashMap::new()),
             registrants: Mutex::new(Vec::new()),
             queued: Mutex::new(Vec::new()),
             bootstrappers,
@@ -232,10 +247,33 @@ impl AssemblyChainManager {
     }
 
     /// Whether `chain_id` exists and finished bootstrapping (Go
-    /// `Manager.IsBootstrapped`).
+    /// `Manager.IsBootstrapped`). When the chain creator has installed a live
+    /// reporter for the chain (via [`Self::set_bootstrapped_reporter`]), the
+    /// reporter — reading the running engine's consensus context — is
+    /// authoritative; otherwise this falls back to the static set populated by
+    /// [`Self::mark_bootstrapped`].
     #[must_use]
     pub fn is_bootstrapped(&self, chain_id: Id) -> bool {
+        if let Some(reporter) = self.bootstrapped_reporters.lock().get(&chain_id) {
+            return reporter();
+        }
         self.bootstrapped.read().contains(&chain_id)
+    }
+
+    /// Install a live `is_bootstrapped` reporter for `chain_id` (the chain
+    /// creator passes a closure reading the running engine's consensus context).
+    /// Once installed, [`Self::is_bootstrapped`] reflects the live engine state
+    /// rather than the static set.
+    pub fn set_bootstrapped_reporter(&self, chain_id: Id, reporter: BootstrappedReporter) {
+        self.bootstrapped_reporters
+            .lock()
+            .insert(chain_id, reporter);
+    }
+
+    /// Mark `chain_id` bootstrapped in the static set (Go's engine→manager
+    /// `IsBootstrapped` callback for chains driven without a live reporter).
+    pub fn mark_bootstrapped(&self, chain_id: Id) {
+        self.bootstrapped.write().insert(chain_id);
     }
 
     /// Whether `chain_id` is one of the node-critical chains.
@@ -395,4 +433,56 @@ fn seed_from_node_id(node_id: ava_types::node_id::NodeId) -> u64 {
         *dst = *src;
     }
     u64::from_be_bytes(seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use ava_validators::DefaultManager;
+
+    use super::*;
+
+    fn manager() -> AssemblyChainManager {
+        let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+        AssemblyChainManager::new(std::iter::once(PLATFORM_CHAIN_ID).collect(), bootstrappers)
+    }
+
+    #[test]
+    fn is_bootstrapped_defaults_false_then_static_mark_flips_it() {
+        let mgr = manager();
+        assert!(
+            !mgr.is_bootstrapped(PLATFORM_CHAIN_ID),
+            "is_bootstrapped(P) defaults false before any chain runs"
+        );
+        mgr.mark_bootstrapped(PLATFORM_CHAIN_ID);
+        assert!(
+            mgr.is_bootstrapped(PLATFORM_CHAIN_ID),
+            "mark_bootstrapped flips the static set"
+        );
+    }
+
+    #[test]
+    fn live_reporter_is_authoritative_over_static_set() {
+        let mgr = manager();
+        // Even with the static set marked, an installed live reporter wins:
+        // it reflects the running engine's consensus context.
+        mgr.mark_bootstrapped(PLATFORM_CHAIN_ID);
+        let live = Arc::new(AtomicBool::new(false));
+        let probe = Arc::clone(&live);
+        mgr.set_bootstrapped_reporter(
+            PLATFORM_CHAIN_ID,
+            Box::new(move || probe.load(Ordering::SeqCst)),
+        );
+        assert!(
+            !mgr.is_bootstrapped(PLATFORM_CHAIN_ID),
+            "the live reporter (NormalOp not yet reached) overrides the static mark"
+        );
+        live.store(true, Ordering::SeqCst); // engine reaches NormalOp
+        assert!(
+            mgr.is_bootstrapped(PLATFORM_CHAIN_ID),
+            "is_bootstrapped reflects the live reporter once it reports NormalOp"
+        );
+    }
 }
