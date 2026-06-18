@@ -11,7 +11,8 @@ use std::process::Command;
 use ava_genesis::Chain;
 use ava_snow::EngineState;
 use avalanchers::wiring::chains::{
-    Sent, boot_in_process_pchain, build_in_process_chain, register_test_vm_factory,
+    Sent, boot_in_process_pchain, boot_in_process_pchain_to_normalop, build_in_process_chain,
+    register_test_vm_factory,
 };
 
 /// The binary builds a chain manager, registers the no-op test-VM factory,
@@ -82,6 +83,60 @@ async fn boots_real_pchain_to_bootstrapping() {
     assert_eq!(
         frontier, handle.beacons,
         "GetAcceptedFrontier addressed the beacon node set"
+    );
+
+    // No leaked task: cancel and join cleanly.
+    handle.token.cancel();
+    handle.join.await.expect("handler task joined cleanly");
+}
+
+/// M9.15 step (a) — the real `PlatformVm` reaches **`NormalOp`** through the
+/// full `create_snowman_chain` pipeline + handler when booted as a SOLO node
+/// (empty beacon set). This is the load-bearing proof that a single Rust node
+/// can finish bootstrap WITHOUT the live ava-network `Sender`: the bootstrapper
+/// short-circuits `Bootstrapping → NormalOp` when there is nothing to fetch
+/// (`ava_engine::snowman::bootstrap` empty-beacon path), exactly as a Go
+/// `--network-id=local` node with no default beacons does. The production
+/// node-assembly chain-creator (driving the live binary's queued chains) will
+/// replicate this template (see plan/M9.15 LIVE-ARM SCOPING).
+#[tokio::test]
+async fn boots_real_pchain_to_normalop() {
+    // Mainnet (network_id 1) embedded P-Chain genesis (the M8-complete source).
+    let network_id = 1u32;
+
+    let handle = boot_in_process_pchain_to_normalop(network_id)
+        .await
+        .expect("boot the real P-Chain in-process (solo, empty beacons)");
+
+    // The VM initialized at the real P-Chain genesis.
+    let expected_genesis =
+        ava_genesis::genesis_block_id(network_id, Chain::P).expect("P-Chain genesis block id");
+    assert_eq!(
+        handle.genesis_id, expected_genesis,
+        "VM initialized at the real P-Chain genesis"
+    );
+
+    // A solo node has no beacons to fetch from, so the bootstrapper finishes
+    // immediately and hands off to NormalOp. Poll the shared ConsensusContext
+    // until it reaches `NormalOp` (virtual time; bounded yield loop).
+    let mut reached = false;
+    for _ in 0..100_000 {
+        if matches!(**handle.ctx.state.load(), EngineState::NormalOp) {
+            reached = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        reached,
+        "the solo engine reached NormalOp (last state: {:?})",
+        **handle.ctx.state.load()
+    );
+
+    // A solo boot addresses no beacons (the short-circuit path).
+    assert!(
+        handle.beacons.is_empty(),
+        "a solo node boots with an empty beacon set"
     );
 
     // No leaked task: cancel and join cleanly.

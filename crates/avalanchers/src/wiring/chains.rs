@@ -627,6 +627,32 @@ pub struct PChainBootHandle {
 /// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
 /// timeout-manager failures.
 pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle> {
+    boot_pchain(network_id, true).await
+}
+
+/// Like [`boot_in_process_pchain`], but boots as a **solo node with an empty
+/// beacon set** so the chain runs all the way to `EngineState::NormalOp`.
+///
+/// With nothing to bootstrap *from*, the bootstrapper short-circuits
+/// `Bootstrapping → NormalOp` (`ava_engine::snowman::bootstrap` empty-beacon
+/// path) — exactly as a Go `--network-id=local` node with no default beacons
+/// does — so NormalOp is reached without the live ava-network-backed `Sender`.
+/// This is the template the production node-assembly chain-creator replicates
+/// to drive a single `avalanchers` node to NormalOp (M9.15 step (a)).
+///
+/// # Errors
+/// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
+/// timeout-manager failures.
+pub async fn boot_in_process_pchain_to_normalop(network_id: u32) -> Result<PChainBootHandle> {
+    boot_pchain(network_id, false).await
+}
+
+/// Shared body for the two P-Chain boot entrypoints. When `include_self_beacon`
+/// is `true` the chain boots with the single self node as its frontier-agreement
+/// beacon (stalls at `Bootstrapping`, awaiting frontier replies the in-process
+/// `RecordingSender` never delivers); when `false` the beacon set is empty and
+/// the bootstrapper runs straight through to `NormalOp`.
+async fn boot_pchain(network_id: u32, include_self_beacon: bool) -> Result<PChainBootHandle> {
     let token = CancellationToken::new();
     let reg = Registry::new();
 
@@ -687,9 +713,13 @@ pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle>
     let sender = Arc::new(RecordingSender::default());
     let app_sender: Arc<dyn AppSender> = Arc::new(NoopAppSender);
 
-    // Frontier-agreement beacon set: the single self node, weight 1.
+    // Frontier-agreement beacon set: the single self node (weight 1) when
+    // bootstrapping from a peer, or empty for a solo node that short-circuits
+    // straight to NormalOp.
     let mut beacons = BTreeMap::new();
-    beacons.insert(node_id, 1u64);
+    if include_self_beacon {
+        beacons.insert(node_id, 1u64);
+    }
 
     let chain = create_snowman_chain(
         &token,

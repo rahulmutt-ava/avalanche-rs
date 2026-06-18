@@ -695,6 +695,26 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   self = own beacon); the **real `Sender`** is required before (b)/(c) (multi-node Go⇄Rust). Only after a
 >   single Rust node confirms NormalOp do items (b)/(c)/(d) become reachable. ⇒ **M9.15 live is blocked on
 >   this node-assembly chain-creator build, not on TLS/genesis plumbing.**
+>
+> **STEP (a) — NORMALOP DE-RISK LANDED (2026-06-18, ralph iteration, TDD).** The single biggest unknown in the
+> revised step (a) — *can a solo Rust node finish bootstrap and reach NormalOp WITHOUT the live ava-network
+> `Sender`?* — is now **proven YES**. `ava_engine::snowman::bootstrap::Bootstrapper::start` short-circuits
+> `Bootstrapping → finish() → EngineState::NormalOp` when `cfg.beacons.is_empty()` (`bootstrap/mod.rs:209`),
+> exactly as a Go `--network-id=local` node with no default beacons does. New `avalanchers::wiring::chains::
+> boot_in_process_pchain_to_normalop(network_id)` (refactor: existing `boot_in_process_pchain` + the new fn now
+> share a beacon-parametrized `boot_pchain` core) boots the REAL `PlatformVm` through the full
+> `create_snowman_chain` pipeline + handler with an EMPTY beacon set; `tests/in_process_chain.rs::
+> boots_real_pchain_to_normalop` asserts the shared `ConsensusContext` reaches `EngineState::NormalOp` (vs the
+> existing `…_to_bootstrapping` test which keeps the self-beacon set and stalls at `Bootstrapping` awaiting the
+> frontier replies the in-process `RecordingSender` never delivers). 4/4 in_process_chain tests green, clippy
+> `-D warnings` + fmt clean. ⇒ the `RecordingSender`/`NoopAppSender` loopback is SUFFICIENT for a solo node to
+> reach NormalOp; the real `Sender` is only needed for items (b)/(c) (multi-node Go⇄Rust frontier exchange).
+> **NEXT (production wiring, the bulk of the build):** drive the live binary's QUEUED chains through this same
+> template inside `AssemblyChainManager` — the hard part is the generic↔trait-object impedance
+> (`create_snowman_chain` is generic over concrete `D: Database`/`V: ChainVm`/`S: ValidatorState`/`Snd: Sender`/
+> `M: ValidatorManager`, but the assembled `Node` holds `Arc<dyn DynDatabase>` + `Arc<dyn ValidatorManager>`),
+> dispatching the concrete VM by `vm_id` (PlatformVm for P), and reflecting the engine's `ConsensusContext` state
+> into `AssemblyChainManager::is_bootstrapped` so `info.isBootstrapped` flips for the live node.
 
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
