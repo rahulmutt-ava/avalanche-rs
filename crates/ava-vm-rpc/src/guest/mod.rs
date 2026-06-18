@@ -621,10 +621,11 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
 /// [`Arc<ChainContext>`](ava_snow::ChainContext) (07 §5.2).
 ///
 /// Identity fields map verbatim. Empty id/node-id byte fields decode to the
-/// zero id (Go's `ids.Empty`). The BLS `public_key` is the 96-byte uncompressed
-/// form (`bls.PublicKeyToUncompressedBytes`); an empty field means no key. The
-/// fork schedule is reconstructed from `network_id` (the host sends
-/// `network_upgrades = None` for the in-process path — see `tests/PORTING.md`).
+/// zero id (Go's `ids.Empty`). The BLS `public_key` is the 48-byte **compressed**
+/// form (`bls.PublicKeyFromCompressedBytes`, vms/rpcchainvm/vm_server.go); an
+/// empty field means no key. The fork schedule is reconstructed from `network_id`
+/// (the host sends `network_upgrades = None` for the in-process path — see
+/// `tests/PORTING.md`).
 fn request_to_chain_context(
     req: &vm::InitializeRequest,
 ) -> std::result::Result<Arc<ava_snow::ChainContext>, String> {
@@ -644,7 +645,7 @@ fn request_to_chain_context(
         None
     } else {
         Some(
-            ava_crypto::bls::PublicKey::from_uncompressed(&req.public_key)
+            ava_crypto::bls::PublicKey::from_compressed(&req.public_key)
                 .map_err(|e| e.to_string())?,
         )
     };
@@ -759,4 +760,48 @@ pub async fn serve_with_addr<V: ChainVm + 'static>(
 pub async fn serve<V: ChainVm + 'static>(vm: V, token: &CancellationToken) -> Result<(), VmError> {
     let engine_addr = std::env::var(ENGINE_ADDRESS_KEY).map_err(|_| VmError::ProcessNotFound)?;
     serve_with_addr(vm, &engine_addr, token).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ava_crypto::bls::SecretKey;
+
+    // The guest decodes the BLS public key from the 48-byte COMPRESSED wire
+    // form a Go host sends (`bls.PublicKeyToCompressedBytes`,
+    // vms/rpcchainvm/vm_server.go decodes with `PublicKeyFromCompressedBytes`).
+    // Note: `blst`'s `key_validate` auto-sniffs compression, so the old
+    // `from_uncompressed` entry point already accepted Go's 48-byte input — the
+    // switch to `from_compressed` is for contract clarity, not a behavior fix
+    // (the substantive wire bug was on the HOST send side; see `host::tests`).
+    #[test]
+    fn request_to_chain_context_decodes_compressed_bls_key() {
+        let sk = SecretKey::new(&[9u8; 32]).expect("bls secret key");
+        let pk = sk.public_key();
+        let req = vm::InitializeRequest {
+            network_id: 1,
+            public_key: bytes::Bytes::copy_from_slice(&pk.compress()),
+            ..Default::default()
+        };
+        let ctx = request_to_chain_context(&req).expect("decode compressed pubkey");
+        let decoded = ctx.public_key.as_ref().expect("public key present");
+        assert_eq!(
+            decoded.compress(),
+            pk.compress(),
+            "compressed wire bytes round-trip into the ChainContext key"
+        );
+    }
+
+    #[test]
+    fn request_to_chain_context_empty_key_is_none() {
+        let req = vm::InitializeRequest {
+            network_id: 1,
+            ..Default::default()
+        };
+        let ctx = request_to_chain_context(&req).expect("decode empty pubkey");
+        assert!(
+            ctx.public_key.is_none(),
+            "empty wire field maps to no BLS key"
+        );
+    }
 }

@@ -374,6 +374,28 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > iteration:** reproduce the Go→Rust `Initialize` call in an in-process `ava-vm-rpc` `host` test (or add plugin
 > stderr logging) to localize whether the `guest::serve` VM service, grpc-health `SERVING`, or the
 > `proto/vm` `Initialize` handler aborts the stream; this is the true blocker for the M9.3 live arm passing.
+>
+> **★ INVESTIGATION 2026-06-18 (in-process Go→Rust `Initialize` localization).** Traced the Go host's
+> `Initialize` packing/decode path against the oracle (`vms/rpcchainvm/{vm_client,vm_server,factory}.go` +
+> `runtime/subprocess`). Findings:
+> - The first Go→Rust RPC is genuinely `VM.Initialize`; there is **no health-gate** in the host dial path
+>   (`factory.New` dials and immediately builds the `VMClient`; `grpcutils.Dial` sets `WaitForReady` +
+>   keepalive but **no** `healthCheckConfig`). So the missing `grpc.health.v1.Health SERVING` service on the
+>   Rust guest is **not** the CANCEL cause — avalanchego's rpcchainvm host never consumes it (Go registers it
+>   only by convention in `newVMServer`). Left it unimplemented and documented as a non-issue.
+> - **Fixed a real wire bug found en route (M9.12 direction, NOT the M9.3 CANCEL):** the Rust **host**
+>   (`chain_context_to_request`) was sending the BLS public key in the 96-byte **uncompressed** form
+>   (`PublicKey::serialize()`), but Go's wire contract is 48-byte **compressed**
+>   (`bls.PublicKeyToCompressedBytes`; the Go guest decodes with `PublicKeyFromCompressedBytes`, which
+>   strictly rejects 96 bytes). Switched the host to `pk.compress()` and the guest decode to `from_compressed`
+>   (contract clarity — `blst::key_validate` auto-sniffs both encodings, so the guest already tolerated Go's
+>   48-byte input, which is why Rust↔Rust passed and the gap stayed invisible). 4 new unit tests pin the
+>   48-byte encoding host-side + the round-trip guest-side (`ava-vm-rpc::{host,guest}::tests`). 17/17 green,
+>   clippy/fmt clean.
+> - **CANCEL root cause still open.** Most likely in the guest `Initialize` handler's dial-BACK ordering
+>   (`guest/mod.rs` dials `db_server_addr` then `server_addr` before touching the inner VM) or an HTTP/2
+>   transport mismatch; reproducing it needs a Go-side `Initialize` driver (in-process Go host test against the
+>   Rust guest, or guest stderr logging in the live arm). That remains the true M9.3 live blocker.
 
 ### Task M9.4: Proxied `rpcdb` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::rpcdb_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::rpcdb`  ·  **Depends on:** M9.2, M1 (ava-database `DynDatabase`)  ·  **Spec:** `07` §5.2/§5.3/§5.4 (rpcdb row: server-side iterator handles, batched `IteratorNext`, `ErrEnumToError`)

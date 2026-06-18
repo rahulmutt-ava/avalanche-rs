@@ -117,10 +117,17 @@ fn chain_context_to_request(
     db_server_addr: String,
     server_addr: String,
 ) -> InitializeRequest {
+    // The wire encoding is the 48-byte COMPRESSED form, matching Go's
+    // `bls.PublicKeyToCompressedBytes` (vms/rpcchainvm/vm_client.go) — NOT the
+    // 96-byte uncompressed `serialize()`. This was a real bug for the
+    // Rust-host→Go-guest direction (M9.12): Go's `PublicKeyFromCompressedBytes`
+    // strictly expects 48 bytes and rejects the uncompressed form. It went
+    // unnoticed Rust↔Rust only because `blst`'s `key_validate` auto-sniffs both
+    // encodings on decode (see the guest's `request_to_chain_context`).
     let public_key = chain_ctx
         .public_key
         .as_ref()
-        .map(|pk| bytes::Bytes::copy_from_slice(&pk.serialize()))
+        .map(|pk| bytes::Bytes::copy_from_slice(&pk.compress()))
         .unwrap_or_default();
     InitializeRequest {
         network_id: chain_ctx.network_id,
@@ -661,5 +668,61 @@ impl ChainVm for RpcChainVm {
             .into_inner();
         err_enum_to_result(resp.err)?;
         Ok(id_from_bytes(&resp.blk_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ava_crypto::bls::{PUBLIC_KEY_LEN, PublicKey, SecretKey};
+
+    fn ctx_with_key(public_key: Option<PublicKey>) -> ChainContext {
+        ChainContext {
+            network_id: 1,
+            subnet_id: Id::EMPTY,
+            chain_id: Id::EMPTY,
+            node_id: NodeId::default(),
+            public_key,
+            network_upgrades: ava_version::upgrade::get_config(1),
+            x_chain_id: Id::EMPTY,
+            c_chain_id: Id::EMPTY,
+            avax_asset_id: Id::EMPTY,
+            chain_data_dir: std::path::PathBuf::new(),
+        }
+    }
+
+    // Regression for the M9.3 live-arm finding: the host must put the BLS
+    // public key on the wire in the 48-byte COMPRESSED form (Go
+    // `bls.PublicKeyToCompressedBytes`, vms/rpcchainvm/vm_client.go), not the
+    // 96-byte uncompressed `serialize()`. A Go guest decodes with
+    // `PublicKeyFromCompressedBytes`, so an uncompressed field is unreadable.
+    #[test]
+    fn chain_context_to_request_encodes_compressed_bls_key() {
+        let sk = SecretKey::new(&[7u8; 32]).expect("bls secret key");
+        let pk = sk.public_key();
+        let ctx = ctx_with_key(Some(pk.clone()));
+        let req = chain_context_to_request(&ctx, b"g", b"u", b"c", String::new(), String::new());
+        assert_eq!(
+            req.public_key.len(),
+            PUBLIC_KEY_LEN,
+            "BLS pubkey on the wire is 48-byte compressed"
+        );
+        let decoded =
+            PublicKey::from_compressed(&req.public_key).expect("wire bytes decode as compressed");
+        assert_eq!(
+            decoded.compress(),
+            pk.compress(),
+            "compressed wire bytes round-trip the host BLS key"
+        );
+    }
+
+    #[test]
+    fn chain_context_to_request_empty_key_when_none() {
+        let ctx = ctx_with_key(None);
+        let req = chain_context_to_request(&ctx, b"", b"", b"", String::new(), String::new());
+        assert!(
+            req.public_key.is_empty(),
+            "absent BLS key maps to an empty wire field"
+        );
     }
 }
