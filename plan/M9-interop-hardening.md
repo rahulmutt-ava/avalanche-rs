@@ -749,6 +749,35 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   logic + reflection seam* are proven in-process; the live-binary `dispatch` wiring + multi-VM + real Sender are
 >   the remaining chains-milestone work.
 
+> **STEP (a) — LIVE-DISPATCH WIRING LANDED + VALIDATED ON A REAL PROCESS (2026-06-18, ralph iteration, TDD).**
+> Deferral (1) above is now **CLOSED for the platform chain**: the binary's `dispatch` path drives the queued
+> P-Chain, and a real `avalanchers --network-id=local` process now reports `info.isBootstrapped(P) == true`
+> (wave-18h's empirical probe found it stuck at `false` forever — that is the regression this closes).
+> - **The dispatch-path entrypoint — `avalanchers` (`wiring/chains.rs`):** new
+>   `drive_startup_chains(&Arc<AssemblyChainManager>, network_id, beaconless)` is the seam the binary's run loop
+>   calls. `beaconless` gates the solo short-circuit: a node with **no** configured bootstrap beacons boots its
+>   critical chains straight to `NormalOp` (the empty-beacon path, via `run_queued_pchain`); a node **with**
+>   beacons must instead reach `NormalOp` by connecting + bootstrapping over the real ava-network `Sender` (the
+>   live arm), so it is **skipped** and `info.isBootstrapped` stays honestly `false` rather than falsely
+>   short-circuiting an un-bootstrapped node.
+> - **The call site — `avalanchers` (`main.rs::run`):** after `Node::new` + signal-handler install, the run loop
+>   computes `beaconless = config.bootstrap_config.bootstrappers.is_empty()` and calls `drive_startup_chains(&node.
+>   chain_manager, node.config.network_id, beaconless)`, binding the returned handles to a name that outlives
+>   `node.dispatch().await` (node shutdown step 5 already cancels + drains the manager-registered chains).
+> - **Tests + live validation:** `tests/in_process_chain.rs::drive_startup_chains_gates_on_beacons` (both arms:
+>   beaconed → `running_chains()==0` + `isBootstrapped` false; beaconless → one chain booted + `isBootstrapped(P)`
+>   flips true + clean shutdown). 6/6 in_process_chain + `-p avalanchers -p ava-node` 32/32 green, clippy
+>   `--all-targets -D warnings` + workspace fmt clean. **LIVE PROOF:** built the release binary and ran the
+>   `avalanchers --network-id=local --db-type=memdb --staking-ephemeral-{cert,signer}-enabled=true
+>   --sybil-protection-enabled=false` solo node; `info.isBootstrapped {chain:"P"}` returned `true`, while `X`/`C`
+>   returned `false` (honest — those VMs are not yet dispatched).
+> - **★ STILL DEFERRED (the rest, unchanged):** the booted P-Chain still uses `run_queued_pchain`'s own in-process
+>   `MemDb`/router/loopback `Sender` (threading the assembled `Node`'s real `Arc<dyn DynDatabase>`/router through
+>   the generic `create_snowman_chain` is the generic↔trait-object impedance, still open); **X/C/SAE `vm_id`
+>   dispatch**; and the **real ava-network `Sender`** for multi-node bootstrap (items (b)/(c) below — the gating
+>   skip is exactly where a beaconed node hands off to that path). So a SOLO live node now flips `isBootstrapped`;
+>   the real-DB threading + multi-VM + real Sender remain the chains-milestone work.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

@@ -837,3 +837,48 @@ pub async fn run_queued_pchain(
 
     Ok(handles)
 }
+
+/// The node-startup chain-creator entrypoint the `avalanchers` binary's
+/// `dispatch` path calls (M9.15 live-dispatch wiring): drive the chains that
+/// step-26 `init_chains` *queued* on `manager` so a **live** `avalanchers`
+/// process reflects each running engine through `info.isBootstrapped` (via the
+/// per-chain reporter [`run_queued_pchain`] installs on `manager`).
+///
+/// `beaconless` gates the solo short-circuit. A node with **no** configured
+/// bootstrap beacons boots its critical chains straight to `NormalOp` — the
+/// empty-beacon `Bootstrapping → NormalOp` path, exactly what a Go
+/// `--network-id=local` node with no default beacons does — so a solo node's
+/// `info.isBootstrapped(P)` flips `true` at startup. A node **with** configured
+/// beacons must instead reach `NormalOp` by actually connecting to and
+/// bootstrapping from peers over the real ava-network-backed `Sender` (the
+/// documented **live arm**); this therefore **skips** it and leaves
+/// `info.isBootstrapped` honestly `false` until that path lands, rather than
+/// falsely short-circuiting a node that has not bootstrapped.
+///
+/// Returns the live [`PChainBootHandle`]s — the caller must keep them alive for
+/// the node's lifetime (each booted chain is also registered with `manager`, so
+/// node shutdown step 5 cancels and drains it).
+///
+/// **Documented deferrals (unchanged):** the booted P-Chain still uses
+/// [`run_queued_pchain`]'s own in-process `MemDb`/router/loopback `Sender`
+/// (the assembled `Node`'s real `Arc<dyn DynDatabase>`/router are not yet
+/// threaded through the generic `create_snowman_chain`), and X/C/SAE VM
+/// dispatch + the real multi-node `Sender` remain the larger chains-milestone
+/// work (plan/M9.15).
+///
+/// # Errors
+/// Propagates a P-Chain boot failure from [`run_queued_pchain`].
+pub async fn drive_startup_chains(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    beaconless: bool,
+) -> Result<Vec<PChainBootHandle>> {
+    if !beaconless {
+        tracing::info!(
+            network_id,
+            "node has configured bootstrap beacons; deferring chain creation to the live-Sender bootstrap path (M9.15 live arm)"
+        );
+        return Ok(Vec::new());
+    }
+    run_queued_pchain(manager, network_id).await
+}

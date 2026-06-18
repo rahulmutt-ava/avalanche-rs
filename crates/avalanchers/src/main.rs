@@ -157,6 +157,22 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
             .await
             .context("failed to initialize node")?;
         app::install_signal_handlers(Arc::clone(&node));
+
+        // M9.15: drive the chains step-26 `init_chains` queued on the chain
+        // manager. A solo (beaconless) node short-circuits its P-Chain to
+        // `NormalOp` so `info.isBootstrapped(P)` reflects it on a live process;
+        // a beaconed node defers to the (still-deferred) live-`Sender`
+        // bootstrap path. The handles must outlive `dispatch` — node shutdown
+        // (step 5) cancels and drains the registered chains.
+        let beaconless = node.config.bootstrap_config.bootstrappers.is_empty();
+        let _chain_handles = avalanchers::wiring::chains::drive_startup_chains(
+            &node.chain_manager,
+            node.config.network_id,
+            beaconless,
+        )
+        .await
+        .context("failed to drive the startup chains")?;
+
         // `dispatch` blocks until the P2P stack stops, then returns the exit
         // code recorded by the first fatal `shutdown(code)` (17 §5).
         let code = Arc::clone(&node).dispatch().await;

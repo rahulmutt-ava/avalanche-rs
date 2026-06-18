@@ -218,6 +218,91 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
     }
 }
 
+/// M9.15 live-dispatch wiring — `drive_startup_chains` is the node-startup
+/// entrypoint the `avalanchers` binary's `dispatch` path calls. It drives the
+/// queued P-Chain to `NormalOp` for a **beaconless** (solo) node — so a live
+/// `avalanchers --network-id=local` process reflects the running engine through
+/// `info.isBootstrapped` — and **skips entirely** for a node with configured
+/// bootstrap beacons (whose real bootstrap is the deferred live-`Sender` path),
+/// leaving `info.isBootstrapped` honestly `false` rather than falsely
+/// short-circuiting.
+#[tokio::test]
+async fn drive_startup_chains_gates_on_beacons() {
+    use std::sync::Arc;
+
+    use ava_node::init::chain_manager::{AssemblyChainManager, PLATFORM_CHAIN_ID, init_chains};
+    use ava_validators::{DefaultManager, ValidatorManager};
+    use avalanchers::wiring::chains::drive_startup_chains;
+
+    let network_id = 1u32; // mainnet embedded P-Chain genesis (M8-complete source).
+    let (genesis_bytes, _avax_asset_id) =
+        ava_genesis::genesis_bytes(network_id, None).expect("build P-Chain genesis bytes");
+
+    // A node WITH configured beacons: the creator defers (the live-Sender
+    // bootstrap path is the documented live arm) — nothing runs, nothing
+    // bootstraps, so `info.isBootstrapped` stays honestly false.
+    {
+        let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+        let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
+        let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
+        init_chains(&manager, &genesis_bytes).expect("queue the platform chain");
+
+        let handles = drive_startup_chains(&manager, network_id, /* beaconless = */ false)
+            .await
+            .expect("the gating skip is infallible");
+        assert!(
+            handles.is_empty(),
+            "a beaconed node defers chain creation to the live-Sender bootstrap path"
+        );
+        assert_eq!(
+            manager.running_chains(),
+            0,
+            "no chain runs for a beaconed node"
+        );
+        assert!(
+            !manager.is_bootstrapped(PLATFORM_CHAIN_ID),
+            "info.isBootstrapped(P) stays false (honest) for a beaconed node"
+        );
+    }
+
+    // A beaconless (solo) node: the creator drives the queued P-Chain to
+    // NormalOp and `info.isBootstrapped(P)` flips true.
+    {
+        let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+        let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
+        let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
+        init_chains(&manager, &genesis_bytes).expect("queue the platform chain");
+
+        let handles = drive_startup_chains(&manager, network_id, /* beaconless = */ true)
+            .await
+            .expect("the creator drives the solo P-Chain");
+        assert_eq!(handles.len(), 1, "exactly one solo P-Chain booted");
+        assert_eq!(
+            manager.running_chains(),
+            1,
+            "the booted P-Chain is registered as a running chain"
+        );
+
+        let mut flipped = false;
+        for _ in 0..200_000 {
+            if manager.is_bootstrapped(PLATFORM_CHAIN_ID) {
+                flipped = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            flipped,
+            "info.isBootstrapped(P) flips true once the solo engine reaches NormalOp"
+        );
+
+        manager.shutdown(std::time::Duration::from_secs(5)).await;
+        for handle in handles {
+            handle.join.await.expect("handler task joined cleanly");
+        }
+    }
+}
+
 /// `--version` and `--help` keep working unchanged (the M0 invariant).
 #[test]
 fn version_and_help_still_work() {
