@@ -663,6 +663,39 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `task test-live` (which now runs `check_oracle_binary.sh` first — see AGENTS.md/CLAUDE.md).
 > Estimated effort: multi-session, single-branch; (a) is the cheap next probe that de-risks the rest.
 
+> **LIVE-ARM SCOPING UPDATE — STEP (a) RESOLVED (2026-06-18, ralph iteration, empirical single-node boot probe).**
+> Step (a)'s load-bearing unknown is now **settled with a definitive answer: a single `avalanchers`
+> node CANNOT reach NormalOp today**, and the blocker is deeper than cert/genesis wiring.
+> - **What was probed:** booted `./target/release/avalanchers --network-id=local --db-type=memdb
+>   --staking-ephemeral-cert-enabled=true --staking-ephemeral-signer-enabled=true
+>   --sybil-protection-enabled=false --http-port=9750 --staking-port=9651 --api-info-enabled=true
+>   --api-health-enabled=true` (ephemeral certs are real flags → no cert files needed; `--db-type=memdb`
+>   avoids the rocksdb-feature gate). **Result: the node boots and runs as a live process** — it serves
+>   `info.*` + `/ext/health` (health = `healthy:true`, BLS-key + database + diskspace + router + network
+>   checks all green, `connectedPeers:0` as expected for a solo node). **But `info.isBootstrapped` is
+>   `false` for ALL of P/X/C and never flips** (`local` has zero default beacons, so a solo
+>   sybil-disabled node should bootstrap instantly — it doesn't). `logs/main.log` stays 0 bytes.
+> - **ROOT CAUSE (definitive):** `ava_node::init::chain_manager::AssemblyChainManager::start_chain_creator`
+>   is a **documented stub** — it only `self.queued.lock().push(params)` and logs *"queueing chain creation
+>   (chain construction lands with the chains milestone)"*. The full `Node`/`dispatch` assembly therefore
+>   **never instantiates or drives any chain**: chains are queued, never constructed, so no engine ever runs,
+>   nothing bootstraps, no node reaches NormalOp. (The empty `main.log` is a secondary issue — the
+>   process-logging sink isn't writing under this config; orthogonal to the boot gap.)
+> - **The pieces to fix it ALREADY EXIST and work in-process:** `avalanchers::wiring::chains::boot_in_process_pchain`
+>   builds the **real `ava_platformvm::PlatformVm`**, drives the full `ava_chains::create_snowman_chain`
+>   pipeline, starts the handler, and a solo self-validator (weight-1 beacon set) flips the shared
+>   `ConsensusContext` through `Initializing → Bootstrapping → NormalOp`. The ONLY in-process shortcut is a
+>   `RecordingSender`/`NoopAppSender` standing in for the real ava-network engine `Sender` (engine→wire +
+>   real peers) — the M4.30-noted remaining live leg.
+> - **REVISED step (a) work (sequential, single-subsystem, NOT parallel-worktree-safe — this is the deferred
+>   "chains milestone"):** wire `AssemblyChainManager` to RUN queued chains through `create_snowman_chain`
+>   (thread the node's real DB / `ChainContext` / clock / staking identity / validators+beacons / router /
+>   AppSender / **real ava-network `Sender`**, start each handler, register the running chain) instead of
+>   only queuing. For a SOLO node this can reach NormalOp with a recording/loopback sender (no peers needed,
+>   self = own beacon); the **real `Sender`** is required before (b)/(c) (multi-node Go⇄Rust). Only after a
+>   single Rust node confirms NormalOp do items (b)/(c)/(d) become reachable. ⇒ **M9.15 live is blocked on
+>   this node-assembly chain-creator build, not on TLS/genesis plumbing.**
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
