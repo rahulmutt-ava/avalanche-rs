@@ -623,9 +623,14 @@ impl<V: ChainVm + 'static> VmService for VmServer<V> {
 /// Identity fields map verbatim. Empty id/node-id byte fields decode to the
 /// zero id (Go's `ids.Empty`). The BLS `public_key` is the 48-byte **compressed**
 /// form (`bls.PublicKeyFromCompressedBytes`, vms/rpcchainvm/vm_server.go); an
-/// empty field means no key. The fork schedule is reconstructed from `network_id`
-/// (the host sends `network_upgrades = None` for the in-process path — see
-/// `tests/PORTING.md`).
+/// empty field means no key.
+///
+/// The fork schedule comes from the proto [`NetworkUpgrades`](vm::NetworkUpgrades)
+/// message when present (`vm_server.go:convertNetworkUpgrades`; see
+/// [`crate::upgrades`]) — the wire value wins. A `None` message (a legacy/minimal
+/// `InitializeRequest`) falls back to reconstructing the schedule from
+/// `network_id`; Go instead errors on nil, but the lenient fallback keeps a
+/// minimal request usable without weakening the present-message path.
 fn request_to_chain_context(
     req: &vm::InitializeRequest,
 ) -> std::result::Result<Arc<ava_snow::ChainContext>, String> {
@@ -649,13 +654,17 @@ fn request_to_chain_context(
                 .map_err(|e| e.to_string())?,
         )
     };
+    let network_upgrades = match req.network_upgrades.as_ref() {
+        Some(pb) => crate::upgrades::upgrades_from_proto(pb)?,
+        None => ava_version::upgrade::get_config(req.network_id),
+    };
     Ok(Arc::new(ava_snow::ChainContext {
         network_id: req.network_id,
         subnet_id: id_or_empty(&req.subnet_id)?,
         chain_id: id_or_empty(&req.chain_id)?,
         node_id,
         public_key,
-        network_upgrades: ava_version::upgrade::get_config(req.network_id),
+        network_upgrades,
         x_chain_id: id_or_empty(&req.x_chain_id)?,
         c_chain_id: id_or_empty(&req.c_chain_id)?,
         avax_asset_id: id_or_empty(&req.avax_asset_id)?,
@@ -802,6 +811,46 @@ mod tests {
         assert!(
             ctx.public_key.is_none(),
             "empty wire field maps to no BLS key"
+        );
+    }
+
+    // A present `network_upgrades` message is the source of truth — the decoded
+    // schedule is the wire value, not a reconstruction from `network_id`.
+    #[test]
+    fn request_to_chain_context_uses_proto_network_upgrades() {
+        let mut cfg = ava_version::upgrade::get_config(1);
+        cfg.apricot_phase_4_min_p_chain_height = 555_111;
+        let req = vm::InitializeRequest {
+            network_id: 1,
+            network_upgrades: Some(crate::upgrades::upgrades_to_proto(&cfg)),
+            ..Default::default()
+        };
+        let ctx = request_to_chain_context(&req).expect("decode network upgrades");
+        assert_eq!(
+            ctx.network_upgrades, cfg,
+            "the ChainContext schedule is the wire NetworkUpgrades, not get_config(network_id)"
+        );
+        assert_ne!(
+            ctx.network_upgrades,
+            ava_version::upgrade::get_config(1),
+            "the wire schedule overrides the network_id reconstruction"
+        );
+    }
+
+    // A nil `network_upgrades` message (a legacy/minimal request) falls back to
+    // reconstructing the schedule from `network_id`.
+    #[test]
+    fn request_to_chain_context_none_falls_back_to_network_id() {
+        let req = vm::InitializeRequest {
+            network_id: 1,
+            network_upgrades: None,
+            ..Default::default()
+        };
+        let ctx = request_to_chain_context(&req).expect("decode without upgrades");
+        assert_eq!(
+            ctx.network_upgrades,
+            ava_version::upgrade::get_config(1),
+            "a nil message falls back to get_config(network_id)"
         );
     }
 }

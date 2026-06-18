@@ -25,6 +25,11 @@ ava-crypto = { path = "../ava-crypto" }
 ava-types = { path = "../ava-types" }
 # Network-upgrade Config <-> proto NetworkUpgrades (InitializeRequest).
 ava-version = { path = "../ava-version" }
+# DateTime<Utc> <-> proto Timestamp for the NetworkUpgrades wire conversion
+# (mirrors Go grpcutils.TimestampFromTime / TimestampAsTime). ava-version's
+# UpgradeConfig exposes chrono DateTime fields; the conversion needs to build /
+# read them. No new workspace dependency edge (chrono is already a workspace dep).
+chrono = { workspace = true }
 
 thiserror = { workspace = true }
 anyhow = { workspace = true }

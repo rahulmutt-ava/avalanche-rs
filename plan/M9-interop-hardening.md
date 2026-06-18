@@ -97,6 +97,24 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `InitializeRequest.network_upgrades` is sent `None` (guest reconstructs the fork schedule from
 >   `network_id`) pending the proto `NetworkUpgrades` round-trip.
 >
+> > **UPDATE 2026-06-18 (M9.12 offline foundation — `network_upgrades` proto round-trip DONE).** The
+> > ralph user chose "M9.12 offline foundation". New `ava-vm-rpc::upgrades` (byte-faithful port of Go
+> > `vm_client.go:getNetworkUpgrades` ⇄ `vm_server.go:convertNetworkUpgrades`): the host now sends the
+> > structured `NetworkUpgrades` message (`network_upgrades: Some(...)`) and the guest decodes it (wire
+> > value wins), falling back to `get_config(network_id)` only when absent. This closes a real
+> > cross-language gap — Go's decoder rejects a nil message (`errNilNetworkUpgradesPB`), so the prior
+> > `None` would have failed a Go-guest-in-Rust-host `Initialize`. Added `PartialEq, Eq` to
+> > `ava_version::UpgradeConfig` (additive). Tests: `upgrades::tests` (round-trip mainnet/fuji/local +
+> > nil/wrong-length rejection + unscheduled-Helicon), `host::tests::chain_context_to_request_sends_network_upgrades`,
+> > `guest::tests::{request_to_chain_context_uses_proto_network_upgrades,…_none_falls_back_to_network_id}`,
+> > and the extended e2e `vm_initialize::rust_host_initializes_rust_guest` (a distinctive
+> > `apricot_phase_4_min_p_chain_height=314_159` proves the wire schedule, not a `network_id` rebuild,
+> > reached the guest). `nextest -p ava-vm-rpc -p ava-version` 48/48 green, clippy `-D warnings` + fmt
+> > clean. **STILL DEFERRED:** the sharedmemory/aliasreader/validatorstate/warp half of the bundle —
+> > threading it into the inner VM needs an `ava_snow::ChainContext` extension (Go reads those off
+> > `snow.Context`; `ChainContext` has no such fields), a broad node-assembly change, NOT a one-crate
+> > `ava-vm-rpc` follow-up.
+>
 > Net effect: **Wave 0 (M9.1–M9.3 minus the live-Go entry M9.3) and Wave 1 (M9.4–M9.9) are complete
 > in-process; Wave 2's in-process legs (M9.10/M9.11) are complete.** Remaining M9 frontier — all
 > require a live external Go `avalanchego` binary / tmpnet (not runnable in the current sandbox):

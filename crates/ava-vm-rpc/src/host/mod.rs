@@ -105,10 +105,12 @@ fn id_bytes(id: Id) -> bytes::Bytes {
 /// Encodes the [`ChainContext`] identity + the genesis/upgrade/config bytes +
 /// the two callback addresses into an [`InitializeRequest`] (07 §5.2).
 ///
-/// `network_upgrades` is left `None`: the fork schedule is carried in
-/// `chain_ctx.network_upgrades`, but the proto `NetworkUpgrades` mapping is a
-/// node-assembly follow-up (the in-process Rust↔Rust guest reconstructs the
-/// schedule from `network_id`). See `tests/PORTING.md`.
+/// `network_upgrades` carries the full fork-activation schedule as the proto
+/// [`NetworkUpgrades`](vm::NetworkUpgrades) message (Go
+/// `vm_client.go:getNetworkUpgrades`). A Go guest's `convertNetworkUpgrades`
+/// rejects a nil message (`errNilNetworkUpgradesPB`), so this field MUST be sent
+/// — the guest no longer reconstructs the schedule from `network_id`. See
+/// [`crate::upgrades`].
 fn chain_context_to_request(
     chain_ctx: &ChainContext,
     genesis_bytes: &[u8],
@@ -144,7 +146,9 @@ fn chain_context_to_request(
         config_bytes: bytes::Bytes::copy_from_slice(config_bytes),
         db_server_addr,
         server_addr,
-        network_upgrades: None,
+        network_upgrades: Some(crate::upgrades::upgrades_to_proto(
+            &chain_ctx.network_upgrades,
+        )),
     }
 }
 
@@ -723,6 +727,28 @@ mod tests {
         assert!(
             req.public_key.is_empty(),
             "absent BLS key maps to an empty wire field"
+        );
+    }
+
+    // The host must send the fork schedule as a populated `NetworkUpgrades`
+    // message: a Go guest's `convertNetworkUpgrades` rejects a nil message
+    // (`errNilNetworkUpgradesPB`). The wire bytes must decode back to the source
+    // schedule (Go `getNetworkUpgrades`/`convertNetworkUpgrades` round trip).
+    #[test]
+    fn chain_context_to_request_sends_network_upgrades() {
+        let mut ctx = ctx_with_key(None);
+        // A height a real config would never carry, to prove the wire value (not
+        // a reconstruction from network_id) is what travels.
+        ctx.network_upgrades.apricot_phase_4_min_p_chain_height = 987_654;
+        let req = chain_context_to_request(&ctx, b"", b"", b"", String::new(), String::new());
+        let pb = req
+            .network_upgrades
+            .as_ref()
+            .expect("network_upgrades must be sent, never nil");
+        let decoded = crate::upgrades::upgrades_from_proto(pb).expect("wire upgrades decode back");
+        assert_eq!(
+            decoded, ctx.network_upgrades,
+            "the wire NetworkUpgrades round-trips the host schedule"
         );
     }
 }

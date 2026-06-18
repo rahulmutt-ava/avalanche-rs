@@ -2117,6 +2117,7 @@ dependencies = [
  "ava-version",
  "ava-vm",
  "bytes",
+ "chrono",
  "criterion",
  "libc",
  "parking_lot",

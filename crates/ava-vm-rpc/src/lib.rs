@@ -54,6 +54,7 @@ pub mod guest;
 pub mod host;
 pub mod proxy;
 pub mod runtime;
+pub mod upgrades;
 
 /// Generated tonic/prost types for every rpcchainvm proto package (see
 /// `build.rs`). The byte-exact `.proto` sources are the shared wire contract, so

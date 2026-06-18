@@ -130,6 +130,9 @@ struct DbProbeVm {
     next_payload: AtomicU64,
     /// Set to the value read back from the proxied db at `initialize`.
     db_readback: Arc<Mutex<Option<Vec<u8>>>>,
+    /// Set to the `ChainContext` fork schedule the guest received at
+    /// `initialize` — proves the host's `NetworkUpgrades` traveled the wire.
+    captured_upgrades: Arc<Mutex<Option<ava_version::upgrade::UpgradeConfig>>>,
     /// When `true`, `initialize` drops the proxied db without using it (mirrors
     /// the live `testvm_plugin`/`FixedGenesisVm`): the `RpcDatabase` Arc then
     /// drops on the guest's tonic worker thread, the M9.3 `RST_STREAM CANCEL`
@@ -138,11 +141,15 @@ struct DbProbeVm {
 }
 
 impl DbProbeVm {
-    fn new(db_readback: Arc<Mutex<Option<Vec<u8>>>>) -> Self {
+    fn new(
+        db_readback: Arc<Mutex<Option<Vec<u8>>>>,
+        captured_upgrades: Arc<Mutex<Option<ava_version::upgrade::UpgradeConfig>>>,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner::default())),
             next_payload: AtomicU64::new(0),
             db_readback,
+            captured_upgrades,
             ignore_db: false,
         }
     }
@@ -154,6 +161,7 @@ impl DbProbeVm {
             inner: Arc::new(Mutex::new(Inner::default())),
             next_payload: AtomicU64::new(0),
             db_readback: Arc::new(Mutex::new(None)),
+            captured_upgrades: Arc::new(Mutex::new(None)),
             ignore_db: true,
         }
     }
@@ -239,7 +247,7 @@ impl Vm for DbProbeVm {
     async fn initialize(
         &mut self,
         _token: &CancellationToken,
-        _chain_ctx: Arc<ChainContext>,
+        chain_ctx: Arc<ChainContext>,
         db: Arc<dyn DynDatabase>,
         _genesis_bytes: &[u8],
         _upgrade_bytes: &[u8],
@@ -247,6 +255,10 @@ impl Vm for DbProbeVm {
         _fxs: Vec<Fx>,
         _app_sender: Arc<dyn AppSender>,
     ) -> VmResult<()> {
+        // Record the fork schedule the guest received so the test can assert the
+        // host's `NetworkUpgrades` survived the wire round trip.
+        *self.captured_upgrades.lock() = Some(chain_ctx.network_upgrades.clone());
+
         if self.ignore_db {
             // The live-plugin shape: ignore the proxied db and let its Arc drop
             // here, on the guest's tonic worker thread (an async context). Before
@@ -419,14 +431,19 @@ async fn rust_host_initializes_rust_guest() {
     let db_readback = Arc::new(Mutex::new(None));
     let db_readback_guest = Arc::clone(&db_readback);
 
+    // The fork schedule the guest decodes from the wire `NetworkUpgrades`.
+    let captured_upgrades = Arc::new(Mutex::new(None));
+    let captured_upgrades_guest = Arc::clone(&captured_upgrades);
+
     // The launcher spins up an in-process Rust guest wrapping a DbProbeVm that
     // is NOT yet initialized — the host drives VM.Initialize over the wire.
     let host = RpcChainVm::start(&token, DEFAULT_HANDSHAKE_TIMEOUT, move |engine_addr| {
         let engine_addr = engine_addr.to_string();
         let db_readback_guest = Arc::clone(&db_readback_guest);
+        let captured_upgrades_guest = Arc::clone(&captured_upgrades_guest);
         let token = CancellationToken::new();
         tokio::spawn(async move {
-            let vm = DbProbeVm::new(db_readback_guest);
+            let vm = DbProbeVm::new(db_readback_guest, captured_upgrades_guest);
             guest::serve_with_addr(vm, &engine_addr, &token)
                 .await
                 .expect("guest serve");
@@ -440,7 +457,26 @@ async fn rust_host_initializes_rust_guest() {
     // The host-side db + app_sender that the host serves to the guest.
     let host_db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
     let app_sender: Arc<dyn AppSender> = Arc::new(RecordingAppSender::default());
-    let chain_ctx = ava_vm::testutil::test_chain_context();
+
+    // A ChainContext with a fork schedule that carries a distinctive
+    // min-P-chain-height — a value `get_config(network_id)` would never produce,
+    // so observing it guest-side proves the host's `NetworkUpgrades` (not a
+    // network_id reconstruction) traveled the wire.
+    let mut upgrades = ava_version::upgrade::get_config(1);
+    upgrades.apricot_phase_4_min_p_chain_height = 314_159;
+    let host_upgrades = upgrades.clone();
+    let chain_ctx = Arc::new(ChainContext {
+        network_id: 1,
+        subnet_id: Id::EMPTY,
+        chain_id: Id::EMPTY,
+        node_id: NodeId::default(),
+        public_key: None,
+        network_upgrades: upgrades,
+        x_chain_id: Id::EMPTY,
+        c_chain_id: Id::EMPTY,
+        avax_asset_id: Id::EMPTY,
+        chain_data_dir: std::path::PathBuf::new(),
+    });
 
     // Drive VM.Initialize over the wire.
     host.initialize(
@@ -470,6 +506,15 @@ async fn rust_host_initializes_rust_guest() {
         db_readback.lock().clone(),
         Some(b"probe-val".to_vec()),
         "guest read back its own write over the proxied db"
+    );
+
+    // The host's fork schedule traveled the wire as a `NetworkUpgrades` message
+    // and decoded back identically on the guest (NOT reconstructed from
+    // network_id — the distinctive min-P-chain-height proves it).
+    assert_eq!(
+        captured_upgrades.lock().clone(),
+        Some(host_upgrades),
+        "guest's ChainContext schedule is the host's wire NetworkUpgrades"
     );
 
     // After Initialize, last_accepted is the genesis the guest derived.

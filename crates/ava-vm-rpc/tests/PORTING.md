@@ -48,12 +48,27 @@ four-way interop matrix). Linux `PR_SET_PDEATHSIG` is set in the audited
    `tests/vm_initialize.rs::rust_host_initializes_rust_guest` exercises a VM that
    does a real `put`/`get` over the **proxied** db at `initialize`, then
    build→verify→accept over the wire.
-   **DEFERRED to node-assembly:** the callback bundle at `server_addr` currently
-   serves appsender only — the full Go bundle also serves sharedmemory /
-   aliasreader / validatorstate / warp / `grpc.health`, which need concrete host
-   impls supplied by the node-assembly path; and `InitializeRequest.network_upgrades`
-   is sent `None` (the guest reconstructs the fork schedule from `network_id`)
-   pending the proto `NetworkUpgrades` round-trip.
+   **`InitializeRequest.network_upgrades` — ✅ DONE (M9.12 offline foundation,
+   2026-06-18).** The host now sends the full fork-activation schedule as the proto
+   `NetworkUpgrades` message ([`crate::upgrades::upgrades_to_proto`], a byte-faithful
+   port of Go `vm_client.go:getNetworkUpgrades`) and the guest decodes it
+   ([`crate::upgrades::upgrades_from_proto`] = `vm_server.go:convertNetworkUpgrades`),
+   falling back to `get_config(network_id)` only when the message is absent. This
+   closes a real cross-language gap: Go's `convertNetworkUpgrades` rejects a nil
+   message (`errNilNetworkUpgradesPB`), so the prior `None` would have failed a
+   Go-guest-in-Rust-host `Initialize`. Covered by `upgrades::tests` (round-trip every
+   network config + nil/wrong-length rejection), `host::tests` /
+   `guest::tests::request_to_chain_context_uses_proto_network_upgrades`, and the
+   end-to-end `tests/vm_initialize.rs::rust_host_initializes_rust_guest` (a
+   distinctive `apricot_phase_4_min_p_chain_height` proves the wire schedule, not a
+   `network_id` reconstruction, reached the guest).
+   **STILL DEFERRED to node-assembly:** the callback bundle at `server_addr` serves
+   appsender only — the full Go bundle also serves sharedmemory / aliasreader /
+   validatorstate / warp / `grpc.health`. Threading these into the inner VM needs
+   concrete host impls **and** an `ava_snow::ChainContext` extension carrying
+   `SharedMemory`/`BCLookup`/`ValidatorState`/`WarpSigner` (Go reads them off
+   `snow.Context`); `ava-snow`'s `ChainContext` has no such fields, so this is a
+   broad node-assembly change, not a one-crate `ava-vm-rpc` follow-up.
 
 2. **`LastAccepted` is client-side state, not an RPC.** `proto/vm` has no
    `LastAccepted` RPC; Go tracks it in the `chain.State` decorator (seeded at

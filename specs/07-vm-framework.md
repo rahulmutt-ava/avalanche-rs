@@ -740,10 +740,29 @@ servers and passes their addresses in `InitializeRequest`:
 `InitializeRequest` carries the `ChainContext` identity verbatim: `network_id`,
 `subnet_id`, `chain_id`, `node_id`, BLS `public_key`, `x_chain_id`, `c_chain_id`,
 `avax_asset_id`, `chain_data_dir`, `genesis_bytes`, `upgrade_bytes`,
-`config_bytes`, and `network_upgrades` (JSON-encoded `upgrade::Config`, `03`).
+`config_bytes`, and `network_upgrades` (the structured proto `NetworkUpgrades`
+message holding the full fork-activation schedule, `03`).
 `CreateHandlers`/`NewHTTPHandler` return server addresses that the host dials and
 proxies HTTP→gRPC via `proto/http` (`ghttp` — `Handle`/`HandleSimple` streaming
 request/response, with `proto/net`/`proto/io` for hijacked conns).
+
+> **AS-BUILT (M9.12, `network_upgrades` wire conversion, 2026-06-18).** Despite the
+> proto field comment ("json encoded network upgrades"), `network_upgrades` is a
+> **structured** `NetworkUpgrades` message — 15 `google.protobuf.Timestamp` fork
+> times + three side-params (`apricot_phase_4_min_p_chain_height` `uint64`,
+> `cortina_x_chain_stop_vertex_id` 32-byte `bytes`, `granite_epoch_duration`
+> `google.protobuf.Duration`). `ava-vm-rpc::upgrades` ports the Go pair
+> `getNetworkUpgrades` (encode) / `convertNetworkUpgrades` (decode) byte-for-byte
+> (`grpcutils.TimestampFromTime`/`TimestampAsTime`). The host MUST send a populated
+> message: Go's decoder rejects nil with `errNilNetworkUpgradesPB`. The Rust guest
+> decodes the wire schedule when present (the wire value wins over a `network_id`
+> reconstruction) and falls back to `get_config(network_id)` only for an absent
+> message (a lenient superset of Go, which errors). **Still deferred to
+> node-assembly:** the rest of the `server_addr` callback bundle
+> (sharedmemory/aliasreader/validatorstate/warp) is threaded into the inner VM only
+> once `ChainContext` carries those handles (Go reads them off `snow.Context`;
+> `ava_snow::ChainContext` has no such fields yet — a broad change, not an
+> `ava-vm-rpc` follow-up).
 
 ### 5.3 The guest (VM server) side
 
