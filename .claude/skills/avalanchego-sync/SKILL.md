@@ -170,14 +170,36 @@ sentence/paragraph in the trail (see how the `cc3b103b91 → 0b0b57143c` sync is
 recorded). Also update the file list in the provenance block if this sync touched
 spec files not already listed there.
 
-### 6. Report
+### 6. Commit
+
+Commit the fold as a single docs-only commit. Stage only what this sync touched —
+the `specs/` and `plan/` files you edited (and, if you updated it, the auto-memory
+under the Claude memory dir). Don't `git add -A`; name the paths so unrelated
+working-tree changes stay out.
+
+If the current branch is the default branch (`main`), create a sync branch first
+(e.g. `avalanchego-sync-<new-pin-short-sha>`) — don't commit the fold straight to
+`main`. The repo sets `commit.gpgsign=false` locally, so signing won't block.
+
+```sh
+git checkout -b avalanchego-sync-<new-sha>   # only if on main
+git add specs/README.md specs/<touched>.md plan/<touched>.md
+git commit -m "specs: sync avalanchego <old-pin>..<new-pin> — fold <N> upstream commits"
+```
+
+Use a commit body that mirrors the report table: one line per commit with its
+disposition (spec §, plan task, or non-gating/irrelevant reason). Push or open a
+PR only if the user asks — committing locally is the default. Don't run
+lint/tests; this is docs-only (see step 7).
+
+### 7. Report
 
 Summarize for the user: the old→new pin, a one-line-per-commit table of where
 each went (spec §, plan task, or "non-gating: reason" / "irrelevant: reason"),
-and any judgment calls worth a second opinion (especially: is a fork really
-unscheduled? does a "refactor" change wire bytes?). Don't run lint/tests — this
-is a docs-only change; `taulint`/`lint-determinism` etc. don't apply unless you
-also wrote code in a follow-up.
+the commit SHA you just created, and any judgment calls worth a second opinion
+(especially: is a fork really unscheduled? does a "refactor" change wire bytes?).
+Don't run lint/tests — this is a docs-only change; `taulint`/`lint-determinism`
+etc. don't apply unless you also wrote code in a follow-up.
 
 ## Scope — what this skill does NOT do
 
