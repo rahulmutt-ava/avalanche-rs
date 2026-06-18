@@ -130,3 +130,56 @@ cargo nextest run -p ava-differential -E 'test(sae_streaming)'
 
 Without `SAE_EMIT_STREAMING_VECTORS` set, `TestEmitStreamingVectors` is skipped,
 so the emitter never runs during a normal `go test`.
+
+## Rust-plugin-in-Go-host live harness (M9.3 live arm)
+
+`rust_plugin_handshake/main.go` is the **live two-binary arm** of M9.3
+(`differential::plugin_rust_in_go`). Unlike the SAE emitters above (which emit
+recorded corpora), this is a `package main` program that boots a real Go
+`avalanchego` single-node `tmpnet`, creates a subnet + blockchain whose VM is the
+Rust `testvm_plugin` rpcchainvm guest binary, and asserts the Go node spawns the
+Rust plugin and completes the rpcchainvm **v45 reverse-dial handshake** (the
+chain manager only reaches a successful "creating chain" for our VM once the
+factory resolves, the plugin spawns + handshakes, and `Initialize` returns).
+
+It is the source-of-truth copy; drop it into the avalanchego checkout to compile
+against the `tests/fixture/tmpnet` fixture, then run:
+
+```sh
+# 1. build the Rust plugin (from the avalanche-rs repo root)
+cargo build -p ava-vm-rpc --example testvm_plugin
+
+# 2. copy the harness into the checkout and run it
+AVALANCHEGO_DIR=${AVALANCHEGO_DIR:-../avalanchego}
+mkdir -p "$AVALANCHEGO_DIR/tests/rustplugin"
+cp tests/differential/go-oracle/rust_plugin_handshake/main.go \
+   "$AVALANCHEGO_DIR/tests/rustplugin/main.go"
+
+cd "$AVALANCHEGO_DIR"
+# HOME override: tmpnet writes prometheus SD config under $HOME/.tmpnet; point it
+# at a writable dir. The node inherits AVALANCHEGO_PLUGIN_DIR (set by the harness).
+HOME=$(mktemp -d) \
+AVALANCHEGO_PATH="$HOME/avalanchego/build/avalanchego" \
+RUST_PLUGIN_PATH="$OLDPWD/target/debug/examples/testvm_plugin" \
+  go run ./tests/rustplugin
+```
+
+Exit 0 + `PASS` = the Go host spawned the Rust plugin and the v45 handshake was
+observed. This arm is nightly/manual only (it needs the live Go binary + a built
+Rust plugin); the per-PR offline arm (`plugin_rust_in_go_builds_and_serves`)
+black-box-drives the same plugin subprocess without a Go node.
+
+### Gotchas (load-bearing — learned the hard way)
+
+- **plugin-dir is env-only here.** avalanchego's `getPluginDir` only honors a
+  config-file `plugin-dir` when `viper.IsSet("plugin-dir")` is true, which it is
+  NOT for tmpnet's `--config-file` path — the node silently falls back to
+  `$AVALANCHEGO_DATA_DIR/plugins`. The harness therefore sets
+  `AVALANCHEGO_PLUGIN_DIR` (a viper env source that DOES set `IsSet`); the
+  spawned node inherits it. Setting `ProcessRuntimeConfig.PluginDir` or
+  `node.Flags["plugin-dir"]` is NOT sufficient.
+- **PASS criterion counts, not greps.** The pre-restart bootstrap node logs a
+  transient `error creating chain ... vmFactory ... not found` (it doesn't yet
+  track the subnet); a naive grep for the VM id, "creating chain", or "rpcchainvm"
+  false-PASSes. The harness compares successful vs errored "creating chain"
+  counts for the VM id instead.
