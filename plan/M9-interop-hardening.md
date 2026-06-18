@@ -571,7 +571,27 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > Verified in main tree: `cargo nextest run -p ava-vm-rpc -p ava-differential` = **33/33**, clippy
 > `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
-### Task M9.13: Four-way wire-identity matrix (`proto/vm` request-byte diff) ✅ OFFLINE ARM DONE (2026-06-16; Rust⇄Rust proto/vm byte goldens); Go-leg live arm gated
+### Task M9.13: Four-way wire-identity matrix (`proto/vm` request-byte diff) ✅ OFFLINE ARM DONE (2026-06-16; Rust⇄Rust proto/vm byte goldens); ✅ Go-host⇄Rust-guest LIVE LIFECYCLE LEG GREEN (2026-06-18); remaining Go-leg byte-capture matrix gated
+
+> **LIVE LIFECYCLE LEG GREEN (2026-06-18, ralph iteration).** The Go-host⇄Rust-guest leg of the
+> matrix is now validated live: a new env-gated Go harness
+> `tests/differential/go-oracle/rust_plugin_lifecycle/main.go` boots a real Go `avalanchego`
+> single-node tmpnet hosting the Rust `testvm_plugin`, lets the chain reach NormalOp, and confirms the
+> Go host drives a full `BuildBlock → VerifyBlock → AcceptBlock` lifecycle over the live rpcchainvm v45
+> channel — **the build/verify/accept traffic the M9.3 handshake-only arm left undriven**
+> ([[m9-interop-progress]] wave-18d). Run vs the rebuilt oracle (HEAD `84533ec5b1`, rpcchainvm=45):
+> exit 0, **`build=15 verify=15 accept=15`** (chain advanced to height 15, all over the channel). ★ Mechanism:
+> `FixedGenesisVm::wait_for_event` returns `PendingTxs` (now **bounded** to 16 events, then long-polls) →
+> the Go snowman engine's notifier drives `Notify(PendingTxs) → buildBlocks → BuildBlock`; a single-validator
+> subnet accepts each block immediately. The Rust guest emits `TESTVM-EVENT build|verify|accept` stderr
+> markers; the node copies plugin stderr verbatim into the chain log (`utils/logging.(*log).Write` bypasses
+> the level filter), so the harness greps them. ★ Two load-bearing findings (folded into the go-oracle README):
+> (1) the plugin subprocess inherits ONLY `GRPC_*`/`GODEBUG` env (runtime/subprocess filters `os.Environ()`),
+> so a custom env var can't signal the harness — stderr→chain-log is the reliable channel; (2) bound the
+> build loop in the plugin (unbounded `PendingTxs` = tight CPU + huge logs). ★ STILL GATED: the *byte-identity*
+> assertion across all four pairings (`proto/vm` request-byte capture shim on each host's outbound channel) —
+> the deeper nightly infra the `plugin_wire_identity_matrix` live test documents.
+
 **Crate/area:** `ava-vm-rpc` + `ava-differential`  ·  **Depends on:** M9.3, M9.10, M9.11, M9.12  ·  **Spec:** `07` §10 (four-way matrix), `02` §6 (golden), §11.3
 **Files:** `crates/ava-vm-rpc/tests/wire_identity.rs`, `crates/ava-vm-rpc/tests/vectors/rpcchainvm/`, `tests/differential/tests/plugin_wire_matrix.rs`
 - [x] **Step 1 — Red:** Write `plugin_wire_identity_matrix`: drive an identical block-build/verify/accept sequence through all four host⇄guest pairings (Rust⇄Rust, Rust-host⇄Go-guest, Go-host⇄Rust-guest, Go⇄Go); capture the `proto/vm` request bytes on the wire (interceptor / recorded transcript); assert identical block bytes, IDs, last-accepted, **and** `proto/vm` request bytes across all pairings (diff against committed goldens). Also round-trip the proxied `rpcdb`/`appsender`/`sharedmemory` against the Go server.

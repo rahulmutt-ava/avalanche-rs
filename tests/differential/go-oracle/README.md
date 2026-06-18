@@ -183,3 +183,62 @@ black-box-drives the same plugin subprocess without a Go node.
   track the subnet); a naive grep for the VM id, "creating chain", or "rpcchainvm"
   false-PASSes. The harness compares successful vs errored "creating chain"
   counts for the VM id instead.
+
+## Rust-plugin lifecycle live harness (M9.13 Go-host⇄Rust-guest leg)
+
+`rust_plugin_lifecycle/main.go` is the live two-binary arm of the M9.13 four-way
+wire-identity matrix's **Go-host⇄Rust-guest leg**. Where the M9.3 handshake
+harness above proves only the v45 reverse-dial + first `VM.Initialize`, this one
+proves the subsequent **build/verify/accept traffic** over the live channel.
+
+It boots the same single-node Go node hosting the Rust `testvm_plugin`, but then
+lets the chain reach NormalOp and drives a real `BuildBlock → VerifyBlock →
+AcceptBlock` lifecycle: the Rust `FixedGenesisVm` returns `PendingTxs` from
+`WaitForEvent` (bounded to 16 events) so the snowman engine's notifier triggers
+`buildBlocks`, and a single-validator subnet immediately accepts each block. The
+Rust guest emits a `TESTVM-EVENT build|verify|accept` marker to **stderr** on each
+op; the node copies plugin stderr verbatim into the chain log
+(`utils/logging.(*log).Write` bypasses the level filter and zap encoder), so the
+harness greps those markers and PASSes once it has seen ≥1 build, ≥1 verify, and
+≥1 accept.
+
+```sh
+# 1. build the Rust plugin (from the avalanche-rs repo root)
+cargo build -p ava-vm-rpc --example testvm_plugin
+
+# 2. copy the harness into the checkout and run it
+AVALANCHEGO_DIR=${AVALANCHEGO_DIR:-../avalanchego}
+mkdir -p "$AVALANCHEGO_DIR/tests/rustpluginlifecycle"
+cp tests/differential/go-oracle/rust_plugin_lifecycle/main.go \
+   "$AVALANCHEGO_DIR/tests/rustpluginlifecycle/main.go"
+
+cd "$AVALANCHEGO_DIR"
+# HOME override (tmpnet writes prometheus SD under $HOME/.tmpnet); preserve the
+# Go module/build caches across the override so `go run` doesn't re-download or
+# recompile, and pin the matching toolchain (go.mod pins 1.25.10).
+HOME=$(mktemp -d) \
+GOTOOLCHAIN=local \
+PATH="$HOME_REAL/.local/share/mise/installs/go/1.25.10/bin:$PATH" \
+GOPATH="$HOME_REAL/go" GOMODCACHE="$HOME_REAL/go/pkg/mod" \
+GOCACHE="$HOME_REAL/Library/Caches/go-build" \
+AVALANCHEGO_PATH="$HOME_REAL/avalanchego/build/avalanchego" \
+RUST_PLUGIN_PATH="$OLDPWD/target/debug/examples/testvm_plugin" \
+  go run ./tests/rustpluginlifecycle
+```
+
+(`$HOME_REAL` = your real home before the override.) Exit 0 + `PASS` = the Go host
+drove the full build/verify/accept lifecycle against the Rust guest. Verified live
+2026-06-18 (`build=15 verify=15 accept=15`). Nightly/manual only.
+
+### Gotchas (in addition to the handshake harness's)
+
+- **Plugin signals reach the harness via stderr → chain log, NOT an env var.**
+  The plugin subprocess only inherits `GRPC_*`/`GODEBUG` from the node
+  (`vms/rpcchainvm/runtime/subprocess/runtime.go` filters `os.Environ()`), so a
+  custom `TESTVM_*` env var does NOT propagate. The reliable channel is the
+  plugin's stderr, which the factory wires to the chain logger (`config.Stderr =
+  log`), written verbatim.
+- **Bound the build loop in the plugin, not the harness.** `WaitForEvent`
+  returning `PendingTxs` unconditionally produces an unbounded build loop (tight
+  CPU + huge logs). The `testvm_plugin` caps it at 16 events then long-polls
+  (blocks until cancel) — the correct "no pending event" semantics.

@@ -182,6 +182,18 @@ fn assert_request_carries_id(name: &str, id: &[u8]) {
 ///     bytes differ from the Rust⇄Rust goldens is a wire-format divergence and
 ///     must fail the matrix.
 ///
+/// ## Live status (2026-06-18)
+/// The **Go-host⇄Rust-guest lifecycle leg** is now validated live, independently
+/// of the full byte-capture matrix below: the env-gated Go harness
+/// `tests/differential/go-oracle/rust_plugin_lifecycle/main.go` boots a real Go
+/// `avalanchego` node hosting the Rust `testvm_plugin`, lets the chain reach
+/// NormalOp, and confirms the Go host drives a full `BuildBlock → VerifyBlock →
+/// AcceptBlock` sequence over the live rpcchainvm v45 channel (the Rust guest
+/// emits `TESTVM-EVENT build|verify|accept` markers the harness greps from the
+/// chain log). This proves the build/verify/accept **traffic** the M9.3
+/// handshake-only arm left undriven. What remains gated here is the *byte-identity*
+/// assertion across all four pairings, which needs the capture shim below.
+///
 /// Until the operator supplies the above, this arm panics with the unmet
 /// requirement rather than passing vacuously (the M9.3/M9.12 precedent).
 #[cfg(feature = "live")]

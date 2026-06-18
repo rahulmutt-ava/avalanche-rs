@@ -808,6 +808,17 @@ interop work in both directions.
 > real Go `avalanchego` host (rpcchainvm=45) against the Rust `testvm_plugin` guest;
 > with the fix in place the Go chain manager completes `creating chain` for the Rust
 > VM id with zero `error creating chain` / `RST_STREAM ... CANCEL` (the pre-fix signature).
+>
+> **Lifecycle validated live (2026-06-18, M9.13 Go-host⇄Rust-guest leg).** The handshake
+> proves only the first `VM.Initialize`. The follow-up `rust_plugin_lifecycle` tmpnet harness
+> takes the same Go-host/Rust-guest pairing to NormalOp and confirms the Go snowman engine drives
+> a full `BuildBlock → VerifyBlock → AcceptBlock` sequence over the live channel (`build=15
+> verify=15 accept=15`), exercising the guest's complete `proto/vm` `VM` service — not just
+> `Initialize`. ★ The guest signals readiness to build via `WaitForEvent → PendingTxs`
+> (`vm::Message::BuildBlock`); the engine notifier turns each into `buildBlocks`. ★ A plugin's
+> stderr is the only out-of-band signal a host harness can observe: the subprocess runtime passes
+> through ONLY `GRPC_*`/`GODEBUG` env vars, but routes the plugin's stderr verbatim into the chain
+> logger.
 
 ### 5.4 Proto → tonic service map
 

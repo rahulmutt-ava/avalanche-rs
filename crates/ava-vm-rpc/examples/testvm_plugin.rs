@@ -108,9 +108,14 @@ impl Block for FixedBlock {
         &self.bytes
     }
     async fn verify(&self, _token: &CancellationToken) -> SnowResult<()> {
+        // M9.13 live lifecycle marker: a Go host driving VerifyBlock over the
+        // live channel surfaces here. The node copies plugin stderr verbatim
+        // into the chain log, so the harness greps these lines.
+        eprintln!("TESTVM-EVENT verify height={}", self.height);
         Ok(())
     }
     async fn accept(&self, _token: &CancellationToken) -> SnowResult<()> {
+        eprintln!("TESTVM-EVENT accept height={}", self.height);
         let mut inner = self.inner.lock();
         inner.last_accepted = self.id;
         inner.height_index.insert(self.height, self.id);
@@ -127,6 +132,10 @@ impl Block for FixedBlock {
 struct FixedGenesisVm {
     inner: Arc<Mutex<Inner>>,
     next_payload: AtomicU64,
+    /// Number of `wait_for_event` build signals already emitted. Bounded so a
+    /// live host (M9.13 Go-host⇄Rust-guest lifecycle leg) drives a finite
+    /// build/verify/accept chain rather than an unbounded build loop.
+    build_events: AtomicU64,
 }
 
 impl FixedGenesisVm {
@@ -246,7 +255,17 @@ impl Vm for FixedGenesisVm {
     async fn new_http_handler(&mut self, _t: &CancellationToken) -> VmResult<Option<HttpHandler>> {
         Ok(None)
     }
-    async fn wait_for_event(&self, _t: &CancellationToken) -> VmResult<VmEvent> {
+    async fn wait_for_event(&self, t: &CancellationToken) -> VmResult<VmEvent> {
+        // Emit a bounded number of build signals so a live host (M9.13) drives a
+        // real BuildBlock→VerifyBlock→AcceptBlock lifecycle over the channel,
+        // then block until the host cancels — keeping the chain (and its logs)
+        // bounded. A real host long-polls WaitForEvent, so blocking here is the
+        // correct "no pending event" semantics.
+        const MAX_BUILD_EVENTS: u64 = 16;
+        if self.build_events.fetch_add(1, Ordering::SeqCst) < MAX_BUILD_EVENTS {
+            return Ok(VmEvent::PendingTxs);
+        }
+        t.cancelled().await;
         Ok(VmEvent::PendingTxs)
     }
 }
@@ -265,6 +284,7 @@ impl ChainVm for FixedGenesisVm {
             .fetch_add(1, Ordering::SeqCst)
             .to_be_bytes();
         let blk = self.register(parent, height, &payload);
+        eprintln!("TESTVM-EVENT build height={}", blk.height());
         Ok(blk as Arc<dyn Block>)
     }
     async fn get_block(&self, _t: &CancellationToken, id: Id) -> VmResult<Arc<dyn Block>> {
