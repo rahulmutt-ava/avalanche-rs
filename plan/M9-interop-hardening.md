@@ -318,7 +318,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-vm-rpc serve_dials_back_and_serves_vm` → passes.
 - [ ] **Step 5 — Commit:** `ava-vm-rpc: reverse-dial handshake guest side (serve: read env, dial back, serve VM+health)`
 
-### Task M9.3: `differential::plugin_rust_in_go` — minimal Rust test-VM hosted by a Go node (TDD ENTRY POINT) ✅ OFFLINE ARM DONE (2026-06-15); live Go-host arm gated
+### Task M9.3: `differential::plugin_rust_in_go` — minimal Rust test-VM hosted by a Go node (TDD ENTRY POINT) ✅ OFFLINE ARM DONE (2026-06-15); ✅ LIVE Go-host arm GREEN (2026-06-18d)
 **Crate/area:** `ava-differential` + `ava-vm-rpc`  ·  **Depends on:** M9.1, M9.2  ·  **Spec:** `16` §3 (M9 entry), `07` §5.1, `02` §11
 **Files:** `tests/differential/src/plugin.rs`, `tests/differential/tests/plugin_rust_in_go.rs`, `crates/ava-vm-rpc/examples/testvm_plugin.rs`
 - [x] **Step 1 — Red:** Write `differential::plugin_rust_in_go` in `tests/differential/tests/plugin_rust_in_go.rs`: build the minimal Rust test-VM plugin binary (`examples/testvm_plugin.rs` calling `ava_vm_rpc::serve`); launch a **Go** `avalanchego` node (via tmpnet, `AVALANCHEGO_PATH`=Go binary) configured to host this Rust plugin as a custom VM. Assert the Go host completes `Runtime.Initialize` reverse-dial (Go logs the plugin connected at protocol 45) and the chain reaches `Initialize` on the VM side. This is the linchpin: it asserts only the handshake, not yet traffic.
@@ -418,6 +418,20 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > sharedmemory guard (`ava-vm-rpc proxy_sharedmemory::sharedmemory_client_drops_safely_in_async_context`). The
 > in-process Go→Rust CANCEL is now closed; the remaining M9.3 live-arm step is re-running the Go tmpnet harness
 > (`rust_plugin_handshake`) against the rebuilt oracle to confirm the live `creating chain` count now passes.
+>
+> **★ LIVE ARM GREEN — confirmed end-to-end against the real Go oracle (2026-06-18d).** Rebuilt the oracle
+> (`./scripts/check_oracle_binary.sh` → `OK: ... commit 86602f460f, rpcchainvm=45`), built the Rust plugin
+> (`cargo build -p ava-vm-rpc --example testvm_plugin`), and ran the `rust_plugin_handshake` tmpnet harness:
+> `HOME=$(mktemp -d) AVALANCHEGO_PATH=…/avalanchego/build/avalanchego RUST_PLUGIN_PATH=…/target/debug/examples/testvm_plugin go run ./tests/rustplugin`
+> → **exit 0, `PASS: Go node spawned the Rust plugin and the rpcchainvm v45 handshake was observed`**. The Go
+> chain manager logged the Rust VM id (`73DVR1SARF5oTAnaMEvVLmZJpPyPUMK1QjRbjz2f4y26Rjc5a`) under
+> `creating chain` **twice** (pre- and post-restart) with **zero** paired `error creating chain`; the node's own
+> `main.log` shows 8 `creating chain` / 0 `error creating chain` and **no** `RST_STREAM` / `Canceled` /
+> `vmFactory ... not found` / `snowman vm rpc error` — i.e. the exact CANCEL signature that f8b5f8a targeted is
+> gone. This validates the runtime-drop fix in a real two-binary Go-host→Rust-guest run: the Go host now spawns
+> the plugin, completes the v45 reverse-dial, and the first `VM.Initialize` returns cleanly. **What this proves
+> live:** factory-resolve → plugin-spawn → v45 handshake → `Initialize`. It does NOT yet drive subsequent traffic
+> (build/verify/accept) over the live channel — that's the M9.13 four-way wire-matrix live legs and remains gated.
 
 ### Task M9.4: Proxied `rpcdb` callback service round-trip ✅ DONE (M3.25; `tests/proxy.rs::rpcdb_roundtrip`)
 **Crate/area:** `ava-vm-rpc::proxy::rpcdb`  ·  **Depends on:** M9.2, M1 (ava-database `DynDatabase`)  ·  **Spec:** `07` §5.2/§5.3/§5.4 (rpcdb row: server-side iterator handles, batched `IteratorNext`, `ErrEnumToError`)

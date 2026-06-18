@@ -772,6 +772,10 @@ interop work in both directions.
 > as `RST_STREAM ... CANCEL` on the very first `VM.Initialize`. **Invariant:** any
 > runtime-owning proxy client MUST shut its runtime down in the background on drop
 > (`Runtime::shutdown_background`), so it is safe to drop from any thread/context.
+> **Validated live (2026-06-18d):** the `rust_plugin_handshake` tmpnet harness ran a
+> real Go `avalanchego` host (rpcchainvm=45) against the Rust `testvm_plugin` guest;
+> with the fix in place the Go chain manager completes `creating chain` for the Rust
+> VM id with zero `error creating chain` / `RST_STREAM ... CANCEL` (the pre-fix signature).
 
 ### 5.4 Proto → tonic service map
 
