@@ -495,6 +495,22 @@ Key methods (cite `blocks/execution.go`, `settlement.go`):
 - `restore_execution_artefacts(...)` / `restore_settled_block(...)`: rebuild from
   disk (recovery / `GetBlock` of a settled block).
 
+> **Upstream delta (avalanchego `84533ec5b1`, #5547 — folded 2026-06-18).**
+> `VM.GetBlock` (`sae/blocks.go`) previously swallowed any unexpected error from
+> `blocks.FromHash(...)`: it returned `(b, nil)` after only special-casing
+> `ErrNotFound` → `database.ErrNotFound`, so a failed/corrupt height-index read
+> (e.g. an underlying `xdb.Get` I/O error) was silently dropped and the caller
+> got a possibly-incomplete block with no error. The fix returns `(b, err)` —
+> the not-found sentinel is still translated, but every other error now
+> propagates. Companion change: `RestoreSettledBlock` (`blocks/block.go`) switches
+> its two wrap sites from `%v` to `%w` so the underlying error survives in the
+> chain (`errors.Is`/`Unwrap` now see the read failure). Rust analog:
+> `ava_saevm` VM `get_block` / `restore_settled_block` — `?`-propagation plus
+> `thiserror` `#[from]`/`#[source]` make the `%w` chain idiomatic by default, so
+> the substantive parity check is that `get_block` maps **only** the
+> not-found case to the DB-not-found sentinel and otherwise returns the
+> underlying error rather than `Ok(block)`. Tracked as `plan/M7` task **M7.42**.
+
 The Go `runtime.AddCleanup` GC-leak counter (`InMemoryBlockCount`) maps to a
 `Drop` impl decrementing an `AtomicI64` (test observability — §10).
 

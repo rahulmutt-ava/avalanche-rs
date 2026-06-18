@@ -10,10 +10,10 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `b1393ecb06` (2026-06-17) have been reviewed and folded in as **"Upstream
+> `84533ec5b1` (2026-06-18) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
 > `18`, `21`, `27`) and plan files (`plan/M4`, `plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `b1393ecb06`.
+> against newer avalanchego, start the review from `84533ec5b1`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -49,6 +49,17 @@ from these documents.
 > turning a `SyncableVM[SP]` into Snowman's `StateSyncableVM` → `11` §5
 > upstream-delta + `plan/M7` task **M7.40** (dormant: SAE state sync itself
 > unported). No irrelevant commits in this range.
+>
+> The `b1393ecb06 → 84533ec5b1` sync (reviewed 2026-06-18) folded one SAE commit.
+> Spec-relevant: **`VM.GetBlock` drops an unexpected error** (`84533ec5b1`, #5547)
+> — Go was returning `(b, nil)` after only translating `ErrNotFound`, silently
+> swallowing a corrupt/failed height-index read; fixed to `return b, err`, with a
+> companion `RestoreSettledBlock` `%v`→`%w` wrap so the chain survives → `11` §4
+> upstream-delta + `plan/M7` task **M7.42** (a correctness fix, **not** Helicon-gated:
+> the Rust VM code exists and should mirror it). **Irrelevant:** the nix-26.05
+> toolchain bump (`86602f460f`, #5551) — regenerated `*.pb.go` / contract-binding
+> outputs and `flake.{nix,lock}`; no spec surface (avalanche-rs has its own
+> `flake.nix`).
 
 ## Read this first
 

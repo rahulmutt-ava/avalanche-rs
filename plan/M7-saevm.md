@@ -687,6 +687,29 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.42: `VM::get_block` must propagate unexpected lookup errors (not swallow them) **[UPSTREAM DELTA — added 2026-06-18]** ⬜ TODO
+**Sub-crate:** ava-saevm-core (+ ava-saevm-blocks `restore_settled_block`)  ·  **Depends on:** M7.18 (adaptor `GetBlock`), M7.24 (recovery / `restore_settled_block`)  ·  **Spec:** `11` §4 upstream-delta (Go `84533ec5b1` #5547)
+> **Upstream parity (Go `84533ec5b1`, #5547).** `VM.GetBlock` in Go was returning
+> `(b, nil)` after only special-casing `ErrNotFound` → `database.ErrNotFound`, so a
+> failed/corrupt height-index read was silently dropped. Fixed to `return b, err`
+> (the not-found sentinel is still translated; every other error propagates).
+> Companion: `RestoreSettledBlock` switched its two wrap sites `%v`→`%w` so the
+> underlying error survives the chain.
+> **Rust task:** audit `ava_saevm` `get_block` (and the adaptor seam) to confirm it
+> maps **only** the not-found case to the DB-not-found sentinel and otherwise
+> returns the underlying error rather than `Ok(block)`; confirm `restore_settled_block`
+> propagates the source error (`?` + `thiserror #[from]`/`#[source]`, not a string
+> re-wrap that severs `assert_matches!`/`Is`-equivalent matching). Add a regression
+> test mirroring Go's `TestBlockSources` `corrupted` case: a corruptable
+> height-index whose `get` fails for a chosen height makes `get_block` of that block
+> surface the injected read error (while block-*source* lookups, which don't read
+> execution results, still succeed). **Why added:** error-swallowing in `get_block`
+> hides DB corruption from consensus; this is a correctness fix, not Helicon-gated —
+> the Rust VM code exists and should mirror it.
+**Files (anticipated):** `crates/ava-saevm/core/src/blocks.rs` (or wherever `get_block` lives), `crates/ava-saevm/blocks/src/lifecycle.rs` (`restore_settled_block`), `crates/ava-saevm/core/tests/` (new regression test + corruptable height-index test double).
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -726,6 +749,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 + `10` §8.2 upstream-delta | SAE C-Chain `cchain/warp` lifecycle package — `FromReceipts`/`Storage`/`Verifier`(ACP-118)/`VerifyBlock` (Go `9b48abd852` #5523) | **M7.38** (non-gating, Helicon) |
 | `11` §8 + `10` §9 upstream-delta | `cchain` `ParseBlock` rejects non-zero block `Version` (Go `4772ab3c97` #5543) | **M7.39** (non-gating, Helicon; extends M7.37) |
 | `11` §5 upstream-delta | `ava-saevm-adaptor` `ConvertStateSync` syncable-VM wrapper (Go `b1393ecb06` #5480) | **M7.40** (non-gating, Helicon; state sync dormant) |
+| `11` §4 upstream-delta | `VM.GetBlock` propagates unexpected lookup errors (`return b, err`) + `RestoreSettledBlock` `%v`→`%w` (Go `84533ec5b1` #5547) | **M7.42** (correctness fix, not Helicon-gated) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |
