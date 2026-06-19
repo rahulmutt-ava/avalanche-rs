@@ -70,11 +70,6 @@ fn chain_id() -> Id {
     Id::from([0x05; 32])
 }
 
-/// The (arbitrary) stop-vertex id the genesis block parents off (specs 09 §1).
-const STOP_VERTEX: [u8; 32] = [0x07; 32];
-/// The genesis Unix timestamp encoded into the synthetic genesis bytes.
-const GENESIS_TS: u64 = 1_000_000;
-
 fn addr() -> ShortId {
     ShortId::from([0xab; 20])
 }
@@ -220,13 +215,15 @@ fn base_tx(in_tx_id: Id, asset_id: Id, amt: u64) -> Tx {
     tx
 }
 
-/// Builds the minimal synthetic genesis bytes the VM's `initialize` parses:
-/// the 32-byte stop-vertex id followed by the 8-byte big-endian Unix timestamp.
+/// Builds real (empty) Go-format genesis bytes via `Genesis::marshal` (M5.f4:
+/// the VM's `initialize` now decodes the real `Genesis{Txs}` format). The battery
+/// seeds its own asset + UTXOs directly via `seed_genesis_state`, so an empty
+/// genesis suffices; the genesis Snowman block's stop-vertex id + timestamp come
+/// from the upgrade config (`get_config(network_id)`), not the genesis bytes.
 fn genesis_bytes() -> Vec<u8> {
-    let mut out = Vec::with_capacity(40);
-    out.extend_from_slice(&STOP_VERTEX);
-    out.extend_from_slice(&GENESIS_TS.to_be_bytes());
-    out
+    ava_avm::genesis::Genesis::default()
+        .marshal()
+        .expect("marshal empty genesis")
 }
 
 /// Initializes a fully-wired [`AvmVm`] from the synthetic genesis, seeds the

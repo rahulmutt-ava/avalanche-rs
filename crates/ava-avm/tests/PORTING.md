@@ -26,10 +26,10 @@ fixtures, M8 follow-up), and a few Go-specific bootstrap/fast-path combinations
 | Go test | Status | Rust counterpart / note |
 |---|---|---|
 | `TestParseConfig` | ✅ ported | `vm_conformance` module initializes the VM with a JSON config blob (zero-fee `Config`); the config struct serde round-trip is implicitly covered |
-| `TestGenesisBytes` | 🟡 partial | `state_init::seeds_genesis_on_fresh_state` + `state_init::persisted_state_survives_reopen` cover the genesis block seeding, block-id derivation, and byte persistence; the full Go `TestGenesisBytes` allocates a live genesis with assets and AVAX balance via `ava-genesis` data (M8 follow-up) |
-| `TestGenesisAssetCompare` | ✅ ported | `state_init` exercises `InitialState` ordering via `create_asset_tx` builder; `tx_types::unsigned_tx_enum_variants` pins the `CreateAssetTx` variant |
-| `TestNewGenesis` | 🟡 partial | `vm_conformance` + `state_init::seeds_genesis_on_fresh_state` cover programmatic genesis construction; full `NewGenesis` with real Fuji allocation is M8 (`ava-genesis`) |
-| `TestInvalidGenesis` | ✅ ported | `vm_conformance` initialises with a synthetic genesis; invalid genesis detection is tested implicitly through `Error::InvalidGenesis` variant asserted in `error_variants::error_variants_exist_and_match_go_sentinels` |
+| `TestGenesisBytes` | ✅ ported | `genesis_init::initialize_seeds_genesis_assets_and_cortina_stop_vertex` drives the real Go-format genesis through `AvmVm::initialize` (initGenesis + Linearize): asset tx-id derivation, alias→id mapping, produced-UTXO + asset-tx seeding, and the cortina-time genesis block; `state_init::*` covers the block seeding/byte persistence |
+| `TestGenesisAssetCompare` | ✅ ported | `state_init` exercises `InitialState` ordering via `create_asset_tx` builder; `tx_types::unsigned_tx_enum_variants` pins the `CreateAssetTx` variant; `genesis_init` builds real `GenesisAsset`s |
+| `TestNewGenesis` | 🟡 partial | `genesis_init` + `vm_conformance` + `state_init::seeds_genesis_on_fresh_state` cover programmatic genesis construction and the real `initGenesis` seeding; full `NewGenesis` with real Fuji allocation data is M8 (`ava-genesis`) |
+| `TestInvalidGenesis` | ✅ ported | `genesis_init` drives real genesis bytes; `genesis_parse::genesis_parse_rejects_truncated_bytes` covers malformed-genesis rejection (`Genesis::parse` → `Error::Codec`); `Error::GenesisAssetMustHaveState` guards non-empty genesis-asset base outs in `initialize` |
 | `TestInvalidFx` | ✅ ported | `error_variants::error_variants_exist_and_match_go_sentinels` pins `Error::UnknownFx`; `syntactic::create_asset_state_unknown_fx` triggers the path |
 | `TestFxInitializationFailure` | ✅ ported | covered by `error_variants` + `fx_dispatch::resolve_unknown_type_id_is_unknown_fx` |
 | `TestFxInitialize` | ✅ ported | `fx_dispatch::resolve_type_id_routes_each_fx` + `golden_tx_codec::golden::xchain_tx_codec` verify all 21 type-ids are registered on both registries |
