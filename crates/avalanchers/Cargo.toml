@@ -48,6 +48,10 @@ ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 # from real P-Chain genesis (`ava_genesis`) and drive it in-process through the
 # handler→engine-adapter path until it enters `Bootstrapping`.
 ava-platformvm = { path = "../ava-platformvm" }
+# Real X-Chain boot (M9.15 X/C dispatch): materialize `ava_avm::AvmVm` from a
+# synthetic X-Chain genesis and drive it in-process through the same
+# `create_snowman_chain` pipeline as the P-Chain, to `NormalOp`.
+ava-avm = { path = "../ava-avm" }
 ava-genesis = { path = "../ava-genesis" }
 
 async-trait = { workspace = true }

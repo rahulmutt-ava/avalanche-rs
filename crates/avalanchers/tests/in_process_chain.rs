@@ -157,7 +157,7 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
 
     use ava_node::init::chain_manager::{AssemblyChainManager, PLATFORM_CHAIN_ID, init_chains};
     use ava_validators::{DefaultManager, ValidatorManager};
-    use avalanchers::wiring::chains::run_queued_pchain;
+    use avalanchers::wiring::chains::run_queued_chains;
 
     let network_id = 1u32; // mainnet embedded P-Chain genesis (M8-complete source).
     let (genesis_bytes, _avax_asset_id) =
@@ -185,7 +185,7 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
     // The chain creator constructs + drives the queued P-Chain through the full
     // create_snowman_chain pipeline and reflects its ConsensusContext into the
     // manager's is_bootstrapped.
-    let handles = run_queued_pchain(&manager, network_id)
+    let handles = run_queued_chains(&manager, network_id)
         .await
         .expect("the chain creator boots the queued P-Chain");
     assert_eq!(handles.len(), 1, "exactly one P-Chain booted");
@@ -212,6 +212,105 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
 
     // Clean shutdown: the chain's handler runs under the manager-registered
     // token, so the manager's shutdown cancels it; then the handler joins.
+    manager.shutdown(std::time::Duration::from_secs(5)).await;
+    for handle in handles {
+        handle.join.await.expect("handler task joined cleanly");
+    }
+}
+
+/// M9.15 X/C dispatch — the chain creator dispatches by `vm_id`: it boots both
+/// the queued **P-Chain** (`platform_vm_id`) and the queued **X-Chain**
+/// (`avm_id`) to `NormalOp`, flipping `is_bootstrapped(P)` and
+/// `is_bootstrapped(X)` true, while a queued **C-Chain** (`evm_id`) is **skipped**
+/// (its `EvmVm::initialize` genesis wiring is the M6.8 deferral) so
+/// `is_bootstrapped(C)` stays honestly false. Both booted chains register with
+/// the manager (`running_chains() == 2`) and drain cleanly on shutdown.
+#[tokio::test]
+async fn chain_creator_dispatches_xchain_to_bootstrapped() {
+    use std::sync::Arc;
+
+    use ava_chains::manager::ChainParameters;
+    use ava_node::init::chain_manager::{
+        AssemblyChainManager, PLATFORM_CHAIN_ID, avm_id, evm_id, init_chains, platform_vm_id,
+    };
+    use ava_types::constants::PRIMARY_NETWORK_ID;
+    use ava_types::id::Id;
+    use ava_validators::{DefaultManager, ValidatorManager};
+    use avalanchers::wiring::chains::run_queued_chains;
+
+    let network_id = 1u32; // mainnet embedded P-Chain genesis (M8-complete source).
+    let (genesis_bytes, _avax_asset_id) =
+        ava_genesis::genesis_bytes(network_id, None).expect("build P-Chain genesis bytes");
+
+    // Critical set = {P, X, C} (init_chain_manager's set); beacons empty (solo).
+    let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+    let x_chain_id = Id::from([0x11u8; 32]);
+    let c_chain_id = Id::from([0x22u8; 32]);
+    let critical = [PLATFORM_CHAIN_ID, x_chain_id, c_chain_id]
+        .into_iter()
+        .collect();
+    let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
+
+    // Step 26 queues the platform chain (Go: the P-Chain genesis specifies the
+    // others). Here we additionally queue an X-Chain (with a synthetic genesis
+    // `ava_avm` parses: 32-byte stop-vertex id + 8-byte BE Unix timestamp) and a
+    // C-Chain to prove the per-`vm_id` dispatch + the honest C-Chain skip.
+    init_chains(&manager, &genesis_bytes).expect("queue the platform chain");
+    let mut x_genesis = vec![0x42u8; 32]; // arbitrary stop-vertex id.
+    x_genesis.extend_from_slice(&0u64.to_be_bytes()); // genesis timestamp = epoch.
+    manager
+        .start_chain_creator(ChainParameters {
+            id: x_chain_id,
+            subnet_id: PRIMARY_NETWORK_ID,
+            genesis_data: x_genesis,
+            vm_id: avm_id(),
+            fx_ids: Vec::new(),
+            custom_beacons: Vec::new(),
+        })
+        .expect("queue the X-Chain");
+    manager
+        .start_chain_creator(ChainParameters {
+            id: c_chain_id,
+            subnet_id: PRIMARY_NETWORK_ID,
+            genesis_data: Vec::new(),
+            vm_id: evm_id(),
+            fx_ids: Vec::new(),
+            custom_beacons: Vec::new(),
+        })
+        .expect("queue the C-Chain");
+
+    // Sanity: distinct, well-known VM ids.
+    assert_ne!(platform_vm_id(), avm_id(), "P and X VM ids differ");
+    assert_ne!(avm_id(), evm_id(), "X and C VM ids differ");
+
+    let handles = run_queued_chains(&manager, network_id)
+        .await
+        .expect("the chain creator boots the queued P- and X-Chains");
+    assert_eq!(handles.len(), 2, "P and X boot; C is skipped (M6.8)");
+    assert_eq!(
+        manager.running_chains(),
+        2,
+        "exactly the P- and X-Chains are registered as running"
+    );
+
+    // Poll until both P and X flip bootstrapped (solo ⇒ Bootstrapping → NormalOp).
+    let mut p_flipped = false;
+    let mut x_flipped = false;
+    for _ in 0..400_000 {
+        p_flipped |= manager.is_bootstrapped(PLATFORM_CHAIN_ID);
+        x_flipped |= manager.is_bootstrapped(x_chain_id);
+        if p_flipped && x_flipped {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(p_flipped, "info.isBootstrapped(P) flips true at NormalOp");
+    assert!(x_flipped, "info.isBootstrapped(X) flips true at NormalOp");
+    assert!(
+        !manager.is_bootstrapped(c_chain_id),
+        "info.isBootstrapped(C) stays honestly false (C-Chain skipped, M6.8)"
+    );
+
     manager.shutdown(std::time::Duration::from_secs(5)).await;
     for handle in handles {
         handle.join.await.expect("handler task joined cleanly");

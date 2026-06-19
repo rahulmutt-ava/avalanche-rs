@@ -778,6 +778,35 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   skip is exactly where a beaconed node hands off to that path). So a SOLO live node now flips `isBootstrapped`;
 >   the real-DB threading + multi-VM + real Sender remain the chains-milestone work.
 
+> **STEP (a) — X/C `vm_id` DISPATCH (2026-06-19, ralph iteration, TDD; X-Chain dispatched, C-Chain honestly blocked).**
+> The wave-18j deferral "(2) X/C/SAE `vm_id` dispatch" is now **realized for the X-Chain**; the chain creator
+> dispatches per `vm_id` instead of skipping every non-P entry.
+> - **Generalized boot core — `avalanchers` (`wiring/chains.rs`):** `boot_pchain`'s body is refactored into a
+>   generic `boot_chain<V: ava_vm::block::ChainVm>(BootSpec, inner_vm, genesis_bytes, token)` (the network-facing
+>   loopback impls — recording sender / no-op app sender / fixed single-validator state / real router over a
+>   clock-injected adaptive-timeout manager — are VM-agnostic). New `boot_xchain(network_id, chain_id, subnet_id,
+>   genesis_bytes, token)` materializes the **real `ava_avm::AvmVm`** from a *synthetic* X genesis (the 40-byte
+>   stop-vertex-id + Unix-timestamp seed the M5 conformance battery uses; `AvmVm::initialize` self-seeds the
+>   genesis Snowman block from it) and drives it through the same solo-node `create_snowman_chain` pipeline to
+>   `NormalOp`. `run_queued_pchain` → renamed **`run_queued_chains`** and now branches on `vm_id`: P → `boot_pchain`,
+>   X (`avm_id()`) → `boot_xchain`, each registered + reporter-installed.
+> - **★ C-Chain HONESTLY BLOCKED, not faked:** the `evm_id()` branch logs + **skips** because
+>   `ava_evm::EvmVm::initialize` is the **M6.8 stub** (it only records the chain context; `EvmVm::new` — needing a
+>   pre-built `FirewoodStateProvider`/`AvaEvmConfig`/`CanonicalStore` — is the construction seam, so the C-Chain
+>   cannot reconstruct its state from genesis bytes through the generic pipeline yet). Once M6.8 lands, the C branch
+>   boots through `boot_chain` identically. `is_bootstrapped(C)` stays honestly `false`.
+> - **Test — `tests/in_process_chain.rs::chain_creator_dispatches_xchain_to_bootstrapped`:** queues P (real network
+>   genesis) + X (synthetic genesis, `avm_id`) + C (`evm_id`), runs the creator, asserts `handles.len()==2` +
+>   `running_chains()==2`, both `is_bootstrapped(P)` and `is_bootstrapped(X)` flip true at NormalOp, `is_bootstrapped(C)`
+>   stays false, clean shutdown. (Genuine red-without-the-X-branch: old behavior gives `handles.len()==1`.)
+> - **★ STILL DEFERRED:** **live X dispatch** additionally needs `init_chains` to *queue* the X-Chain with a genesis
+>   `ava_avm` can parse — today `init_chains` queues only P (Go: the P-Chain genesis's `CreateChainTx`s spawn X/C),
+>   and the production AVM genesis is not yet parseable by `AvmVm` (the synthetic seed is M5). So the *dispatcher*
+>   handles `avm_id` (proven in-process); a live `avalanchers --network-id=local` still flips only `isBootstrapped(P)`.
+>   **C-Chain dispatch** blocked on M6.8; **SAE** + **real-DB threading** + **multi-node `Sender`** unchanged.
+> - **Verified (main tree):** `-p avalanchers -p ava-node` **33/33**, `cargo build --workspace` + `-p avalanchers
+>   --release` green, clippy `--all-targets -D warnings` + workspace fmt clean. (`ava-avm` added to `avalanchers` deps.)
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

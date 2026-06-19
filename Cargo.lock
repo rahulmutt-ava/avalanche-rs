@@ -2172,6 +2172,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "ava-avm",
  "ava-chains",
  "ava-config",
  "ava-crypto",

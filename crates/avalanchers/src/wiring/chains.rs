@@ -657,11 +657,106 @@ async fn boot_pchain(
     include_self_beacon: bool,
     token: CancellationToken,
 ) -> Result<PChainBootHandle> {
-    let reg = Registry::new();
-
     // Real P-Chain genesis for the network (the M8-complete embedded source).
     let (genesis_bytes, avax_asset_id) = ava_genesis::genesis_bytes(network_id, None)?;
     let genesis_id = ava_platformvm::genesis::genesis_id(&genesis_bytes);
+
+    boot_chain(
+        BootSpec {
+            network_id,
+            chain_id: ava_node::init::chain_manager::PLATFORM_CHAIN_ID,
+            subnet_id: ava_types::constants::PRIMARY_NETWORK_ID,
+            primary_alias: "P",
+            avax_asset_id,
+            genesis_id,
+            include_self_beacon,
+        },
+        ava_platformvm::vm::PlatformVm::new(),
+        &genesis_bytes,
+        token,
+    )
+    .await
+}
+
+/// Materializes the **real `ava_avm::AvmVm`** from a *synthetic* X-Chain genesis
+/// (the 40-byte stop-vertex-id + Unix-timestamp seed the M5 conformance battery
+/// uses — `ava_avm` parses production AVM genesis only once that wiring lands),
+/// drives it through the same [`create_snowman_chain`] pipeline as the P-Chain,
+/// starts the handler, and returns a [`PChainBootHandle`]. Booted as a solo node
+/// (empty beacons ⇒ `Bootstrapping → NormalOp` short-circuit), so a queued
+/// X-Chain reaches `NormalOp` exactly as the P-Chain does (M9.15 X-dispatch).
+///
+/// `genesis_bytes` is the queued chain's genesis data (the dispatcher forwards
+/// `ChainParameters::genesis_data`); the handle's `genesis_id` is the 32-byte
+/// stop-vertex id the genesis block parents off (the leading 32 bytes — a
+/// deterministic synthetic-genesis marker, not the inner block id `AvmVm`
+/// computes during `initialize`).
+///
+/// # Errors
+/// Propagates DB / VM-init (e.g. an unparseable synthetic genesis) /
+/// consensus-construction / identity / timeout-manager failures.
+pub async fn boot_xchain(
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    genesis_bytes: &[u8],
+    token: CancellationToken,
+) -> Result<PChainBootHandle> {
+    // The X-Chain genesis block parents off the stop-vertex id encoded in the
+    // leading 32 bytes of the synthetic genesis (specs 09 §1); use it as the
+    // handle's genesis marker.
+    let mut stop = [0u8; 32];
+    if let Some(slice) = genesis_bytes.get(..32) {
+        stop.copy_from_slice(slice);
+    }
+    boot_chain(
+        BootSpec {
+            network_id,
+            chain_id,
+            subnet_id,
+            primary_alias: "X",
+            // The synthetic X genesis carries no AVAX asset id; the boot path
+            // does not exercise cross-chain transfers (no atomic txs at NormalOp
+            // with zero blocks to process).
+            avax_asset_id: Id::EMPTY,
+            genesis_id: Id::from(stop),
+            include_self_beacon: false,
+        },
+        ava_avm::vm::AvmVm::new(),
+        genesis_bytes,
+        token,
+    )
+    .await
+}
+
+/// The chain-identity + boot-mode inputs the generic [`boot_chain`] core needs;
+/// the VM, genesis bytes, and cancellation token are passed alongside.
+struct BootSpec {
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    primary_alias: &'static str,
+    avax_asset_id: Id,
+    genesis_id: Id,
+    include_self_beacon: bool,
+}
+
+/// Generic in-process chain boot: wires the network-facing loopback impls (the
+/// recording sender, no-op app sender, fixed single-validator state, real
+/// router over a clock-injected adaptive-timeout manager), drives `inner_vm`
+/// through the full [`create_snowman_chain`] pipeline under `spec`, starts the
+/// handler, and returns the [`PChainBootHandle`]. Shared by [`boot_pchain`] and
+/// [`boot_xchain`] (M9.15 X/C dispatch); generic over the inner [`ChainVm`].
+async fn boot_chain<V>(
+    spec: BootSpec,
+    inner_vm: V,
+    genesis_bytes: &[u8],
+    token: CancellationToken,
+) -> Result<PChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    let reg = Registry::new();
 
     // Self validator: one equally-weighted staker with a fresh staking identity.
     let (identity, node_id) = staking_identity()?;
@@ -694,22 +789,18 @@ async fn boot_pchain(
     )?);
     let router = ChainRouter::new(timeouts);
 
-    // The platform chain id / primary-network subnet (Go `constants`).
-    let chain_id = ava_node::init::chain_manager::PLATFORM_CHAIN_ID;
-    let subnet_id = ava_types::constants::PRIMARY_NETWORK_ID;
-
     // A per-network ChainContext (network id + fork schedule from the chosen
     // network), so the VM initializes with the production identity surface.
     let chain_ctx = Arc::new(ava_snow::ChainContext {
-        network_id,
-        subnet_id,
-        chain_id,
+        network_id: spec.network_id,
+        subnet_id: spec.subnet_id,
+        chain_id: spec.chain_id,
         node_id,
         public_key: None,
-        network_upgrades: ava_version::upgrade::get_config(network_id),
+        network_upgrades: ava_version::upgrade::get_config(spec.network_id),
         x_chain_id: Id::EMPTY,
         c_chain_id: Id::EMPTY,
-        avax_asset_id,
+        avax_asset_id: spec.avax_asset_id,
         chain_data_dir: std::path::PathBuf::new(),
     });
 
@@ -720,24 +811,24 @@ async fn boot_pchain(
     // bootstrapping from a peer, or empty for a solo node that short-circuits
     // straight to NormalOp.
     let mut beacons = BTreeMap::new();
-    if include_self_beacon {
+    if spec.include_self_beacon {
         beacons.insert(node_id, 1u64);
     }
 
     let chain = create_snowman_chain(
         &token,
-        chain_id,
-        subnet_id,
+        spec.chain_id,
+        spec.subnet_id,
         single_node_params(),
         MemDb::new(),
-        "P",
+        spec.primary_alias,
         chain_ctx,
         clock,
         validator_state,
         Some(identity),
-        ava_platformvm::vm::PlatformVm::new(),
+        inner_vm,
         Vec::new(),
-        &genesis_bytes,
+        genesis_bytes,
         Arc::clone(&sender),
         app_sender,
         validators,
@@ -759,7 +850,7 @@ async fn boot_pchain(
         sender,
         join,
         token,
-        genesis_id,
+        genesis_id: spec.genesis_id,
         beacons: beacon_nodes,
         _sink: chain.sink,
     })
@@ -774,28 +865,37 @@ async fn boot_pchain(
 /// running chain's consensus context into the manager's `is_bootstrapped`
 /// (the value `info.isBootstrapped` serves).
 ///
-/// **Scope (M9.15 step (a)):** this slice dispatches the **platform chain**
-/// only (the `vm_id == platform_vm_id()` entry), booting it as a solo node so
-/// the bootstrapper short-circuits `Bootstrapping → NormalOp` via the
-/// empty-beacon path — exactly the proven [`boot_in_process_pchain_to_normalop`]
-/// template. Each booted chain is registered with the manager (so
+/// **Scope (M9.15 X/C dispatch):** this slice dispatches the **platform chain**
+/// (`vm_id == platform_vm_id()`) **and the X-Chain** (`vm_id == avm_id()`),
+/// booting each as a solo node so the bootstrapper short-circuits
+/// `Bootstrapping → NormalOp` via the empty-beacon path — the proven
+/// [`boot_in_process_pchain_to_normalop`] template, generalized over the inner
+/// VM ([`boot_chain`]). Each booted chain is registered with the manager (so
 /// `running_chains()` counts it and `shutdown()` drains it) under a token
 /// derived from the node's root subnet token, and a live reporter is installed
 /// so `is_bootstrapped(chain_id)` reflects the engine reaching `NormalOp`.
 ///
-/// **Documented deferrals (the larger chains milestone):** X/C/SAE VM dispatch
-/// by `vm_id` (queued entries for other VMs are logged and skipped here) and the
-/// real ava-network-backed `Sender` for multi-node frontier exchange — both
-/// tracked in plan/M9.15.
+/// **Documented deferrals (the larger chains milestone):**
+/// - The **C-Chain** (`vm_id == evm_id()`) is logged and **skipped**:
+///   `ava_evm::EvmVm::initialize` is the M6.8 stub (`EvmVm::new` is the
+///   construction seam, not `initialize`), so it cannot reconstruct its
+///   provider/config/store from genesis bytes through `create_snowman_chain`
+///   yet. Once M6.8 lands, the C branch boots through [`boot_chain`] identically.
+/// - The live X-Chain dispatch additionally needs `init_chains` to *queue* an
+///   X-Chain whose genesis `ava_avm` can parse (the production AVM genesis vs the
+///   synthetic seed `boot_xchain` accepts) — an `ava-avm`/`ava-genesis`
+///   follow-up; today only the P-Chain is queued live.
+/// - SAE VM dispatch and the real ava-network-backed `Sender` for multi-node
+///   frontier exchange — both tracked in plan/M9.15.
 ///
 /// # Errors
-/// Propagates a P-Chain boot failure (genesis / DB / VM-init / consensus /
+/// Propagates a chain boot failure (genesis / DB / VM-init / consensus /
 /// identity / timeout-manager).
-pub async fn run_queued_pchain(
+pub async fn run_queued_chains(
     manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
     network_id: u32,
 ) -> Result<Vec<PChainBootHandle>> {
-    use ava_node::init::chain_manager::platform_vm_id;
+    use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
 
     // The node's root subnet token (the cancellation root the manager derives
@@ -804,28 +904,52 @@ pub async fn run_queued_pchain(
     let mut handles = Vec::new();
 
     for params in manager.queued_chains() {
-        if params.vm_id != platform_vm_id() {
-            // X/C/SAE VM dispatch is the deferred half of the chains milestone.
-            tracing::warn!(
-                chain_id = %params.id,
-                vm_id = %params.vm_id,
-                "skipping queued chain: only the platform VM is dispatched in this slice (X/C/SAE deferred)"
-            );
-            continue;
-        }
-
         // Register the chain first so its handler runs under the
         // manager-derived token (subnet shutdown then reaches it). The task
         // tracker is unused in-process (the handler joins via its JoinHandle).
-        let (chain_token, _tasks) =
-            manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
-
-        // Boot the real PlatformVm through the full create_snowman_chain
-        // pipeline as a solo node (empty beacons ⇒ Bootstrapping → NormalOp).
-        let handle = boot_pchain(network_id, false, chain_token).await?;
+        // We only register a chain we actually boot, so the per-`vm_id` branch
+        // does its own registration after deciding to dispatch.
+        let handle = if params.vm_id == platform_vm_id() {
+            let (chain_token, _tasks) =
+                manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+            // Boot the real PlatformVm as a solo node (empty beacons ⇒
+            // Bootstrapping → NormalOp).
+            boot_pchain(network_id, false, chain_token).await?
+        } else if params.vm_id == avm_id() {
+            let (chain_token, _tasks) =
+                manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+            // Boot the real AvmVm from the queued (synthetic) X genesis through
+            // the same solo-node pipeline.
+            boot_xchain(
+                network_id,
+                params.id,
+                params.subnet_id,
+                &params.genesis_data,
+                chain_token,
+            )
+            .await?
+        } else if params.vm_id == evm_id() {
+            // C-Chain: blocked on M6.8 (EvmVm::initialize is a stub — EvmVm::new
+            // is the construction seam). Skipped, not faked, so is_bootstrapped(C)
+            // stays honestly false until the genesis wiring lands.
+            tracing::warn!(
+                chain_id = %params.id,
+                "skipping queued C-Chain: EvmVm::initialize genesis wiring is M6.8 (not yet dispatchable)"
+            );
+            continue;
+        } else {
+            // SAE / unknown VM dispatch is the deferred half of the chains
+            // milestone.
+            tracing::warn!(
+                chain_id = %params.id,
+                vm_id = %params.vm_id,
+                "skipping queued chain: VM dispatch not yet wired (SAE / unknown VM deferred)"
+            );
+            continue;
+        };
 
         // Reflect the running engine's consensus context into the manager:
-        // is_bootstrapped(P) becomes a live read of `ctx.state == NormalOp`.
+        // is_bootstrapped(chain) becomes a live read of `ctx.state == NormalOp`.
         let ctx = Arc::clone(&handle.ctx);
         manager.set_bootstrapped_reporter(
             params.id,
@@ -842,7 +966,7 @@ pub async fn run_queued_pchain(
 /// `dispatch` path calls (M9.15 live-dispatch wiring): drive the chains that
 /// step-26 `init_chains` *queued* on `manager` so a **live** `avalanchers`
 /// process reflects each running engine through `info.isBootstrapped` (via the
-/// per-chain reporter [`run_queued_pchain`] installs on `manager`).
+/// per-chain reporter [`run_queued_chains`] installs on `manager`).
 ///
 /// `beaconless` gates the solo short-circuit. A node with **no** configured
 /// bootstrap beacons boots its critical chains straight to `NormalOp` — the
@@ -859,15 +983,16 @@ pub async fn run_queued_pchain(
 /// the node's lifetime (each booted chain is also registered with `manager`, so
 /// node shutdown step 5 cancels and drains it).
 ///
-/// **Documented deferrals (unchanged):** the booted P-Chain still uses
-/// [`run_queued_pchain`]'s own in-process `MemDb`/router/loopback `Sender`
+/// **Documented deferrals (unchanged):** the booted chains still use
+/// [`run_queued_chains`]'s own in-process `MemDb`/router/loopback `Sender`
 /// (the assembled `Node`'s real `Arc<dyn DynDatabase>`/router are not yet
-/// threaded through the generic `create_snowman_chain`), and X/C/SAE VM
-/// dispatch + the real multi-node `Sender` remain the larger chains-milestone
-/// work (plan/M9.15).
+/// threaded through the generic `create_snowman_chain`); the C-Chain dispatch is
+/// blocked on the M6.8 `EvmVm::initialize` genesis wiring; live X-Chain dispatch
+/// further needs `init_chains` to queue a parseable X genesis; and the real
+/// multi-node `Sender` remains the larger chains-milestone work (plan/M9.15).
 ///
 /// # Errors
-/// Propagates a P-Chain boot failure from [`run_queued_pchain`].
+/// Propagates a chain boot failure from [`run_queued_chains`].
 pub async fn drive_startup_chains(
     manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
     network_id: u32,
@@ -880,5 +1005,5 @@ pub async fn drive_startup_chains(
         );
         return Ok(Vec::new());
     }
-    run_queued_pchain(manager, network_id).await
+    run_queued_chains(manager, network_id).await
 }
