@@ -897,6 +897,34 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > - **Verified (main tree):** `-p avalanchers` **13/13**, clippy `--all-targets -D warnings` (avalanchers + all
 >   dependents), workspace fmt, `single_runtime_lint` all clean.
 
+> **STEP (d) — RESTART-PERSISTENCE TEST (2026-06-19, ralph iteration, TDD; closes the "end-to-end restart test"
+> deferral from STEP (c)).** New `avalanchers` `tests/in_process_chain.rs::node_restart_resumes_persisted_tip_over_
+> shared_base_db`: boot the queued P-/X-/C-Chains over one shared persistent base db (`Arc<dyn DynDatabase>` over
+> `MemDb` — the Arc survives the restart exactly as an on-disk rocksdb/leveldb backend survives a process restart),
+> drive to `NormalOp`, shut the node down cleanly (`manager.shutdown` drains the registered chains), then re-boot a
+> **fresh** `AssemblyChainManager` over the **same** base db (the real restart shape: a new process, the same backend).
+> Asserts: (1) the first boot persisted state and a clean shutdown did **not** clear it (the base db is still
+> non-empty); (2) the second boot reaches `NormalOp` again **over the now-non-empty db** — the re-open path does not
+> choke on pre-seeded state (the existing `run_queued_chains_persists_into_supplied_base_db` only covers a boot over an
+> *empty* db, so this is the genuinely new coverage); (3) every key the first boot persisted is still present with the
+> same value after the restart (the persisted tip resumes; the re-derivation is deterministic). `-p avalanchers`
+> **14/14**, full workspace **1673/1673** (2 skipped), clippy `--all-targets -D warnings`, fmt, `lint-determinism` clean.
+> - **★ ARCHITECTURAL FINDING (the honest scope — the resumed tip is genesis, height 0).** Tracing the boot path
+>   showed **no advanced-tip resume exists anywhere in the stack today** — every boot re-derives last-accepted from
+>   genesis rather than loading a persisted advanced tip: `ava_platformvm::state::State::new` (`state/state.rs:197`)
+>   initializes its in-memory caches to defaults (`last_accepted: Id::EMPTY`, `height: 0`) and **does not load from
+>   the base db**; `PlatformVm::initialize` (`vm.rs:543`) calls `seed_state` **unconditionally** (no Go-style
+>   `state.IsInitialized()` guard); and `create_snowman_chain` (`ava-chains/src/create_chain.rs:652-655`) roots the
+>   `Topological` consensus core at the **inner VM's freshly-re-seeded** `last_accepted` with **height hardcoded to
+>   `0`**. So STEP (c)'s real-DB threading guarantees that *writes land in a persistent backend and survive shutdown*,
+>   but nothing *reads them back to resume*. This test pins the round-trip that **is** guaranteed; resuming an
+>   *advanced* tip is a deferred follow-up needing (a) a load-from-disk path in `State::new`/VM `initialize` (read the
+>   persisted `last_accepted`/UTXOs/stakers + an `IsInitialized` guard that skips re-seed), (b) `create_snowman_chain`
+>   rooting consensus at the persisted height (not `0`), and (c) in-process block issuance to advance the tip past
+>   genesis in the first place (the same shared-mempool seam the M9.19 reexecute floors await).
+> - **★ STILL DEFERRED (unchanged):** **SAE** dispatch (custom-genesis harness); **multi-node `Sender`** for mixed-net;
+>   **advanced-tip resume** (the load-from-disk path above) — all single-track / gated, not a parallel-worktree wave.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

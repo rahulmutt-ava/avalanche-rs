@@ -385,6 +385,143 @@ async fn drive_startup_chains_gates_on_beacons() {
     }
 }
 
+/// M9.15 restart persistence — a node restart re-opens the **same** persistent
+/// base db and resumes. Boot the queued P-, X- and C-Chains over a shared base
+/// db, drive to `NormalOp`, shut the node down cleanly, then re-boot a **fresh**
+/// chain manager over the **same** base db — the real restart shape (a new
+/// process, the same on-disk backend). The second boot must reach `NormalOp`
+/// again *over the now-non-empty db* (the re-open path — the existing
+/// [`run_queued_chains_persists_into_supplied_base_db`] only covers a boot over
+/// an empty db), and every key the first boot persisted must still be present
+/// with the same value: the persisted tip resumes across the restart.
+///
+/// **As-built scope (the resumed tip is genesis, height 0).** The booted chains
+/// re-derive their last-accepted from genesis on each `initialize` rather than
+/// loading an advanced tip from disk: `ava_platformvm::state::State::new` starts
+/// with empty in-memory caches (no load-from-disk), `PlatformVm::initialize`
+/// re-seeds genesis unconditionally (no `IsInitialized` guard), and
+/// `create_snowman_chain` roots consensus at the inner VM's freshly-re-seeded
+/// last-accepted at height 0. So this test pins the persistence round-trip that
+/// **is** guaranteed today — writes land in the shared backend, survive a clean
+/// shutdown, and the re-open path is consistent and idempotent. Advancing the
+/// tip past genesis and resuming an *advanced* tip is the documented deferral
+/// (needs the inner-VM persisted-state load path + in-process block issuance);
+/// see plan/M9.15.
+#[tokio::test]
+async fn node_restart_resumes_persisted_tip_over_shared_base_db() {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use ava_database::{DynDatabase, MemDb};
+    use ava_node::init::chain_manager::{AssemblyChainManager, PLATFORM_CHAIN_ID, init_chains};
+    use ava_validators::{DefaultManager, ValidatorManager};
+    use avalanchers::wiring::chains::run_queued_chains_with_db;
+
+    // Snapshot every (key, value) currently in the base db.
+    fn snapshot(db: &Arc<dyn DynDatabase>) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let mut it = db.new_iterator_with_start_and_prefix(&[], &[]);
+        let mut out = BTreeMap::new();
+        while it.next() {
+            match (it.key(), it.value()) {
+                (Some(k), Some(v)) => {
+                    out.insert(k.to_vec(), v.to_vec());
+                }
+                _ => break,
+            }
+        }
+        out
+    }
+
+    // Build a fresh chain manager that has queued the P-, X- and C-Chains off
+    // the real genesis — exactly what a fresh `avalanchers` process does at
+    // startup (step 26 `init_chains`).
+    fn fresh_manager(genesis_bytes: &[u8]) -> Arc<AssemblyChainManager> {
+        let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+        let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
+        let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
+        init_chains(&manager, genesis_bytes).expect("queue the P-, X- and C-Chains");
+        manager
+    }
+
+    let network_id = 1u32; // mainnet embedded genesis (M8-complete source).
+    let (genesis_bytes, _avax_asset_id) =
+        ava_genesis::genesis_bytes(network_id, None).expect("build genesis bytes");
+
+    // Poll the manager until is_bootstrapped(P) flips (virtual time; bounded
+    // yield loop). A solo node short-circuits Bootstrapping → NormalOp.
+    async fn await_bootstrapped(manager: &Arc<AssemblyChainManager>) {
+        for _ in 0..400_000 {
+            if manager.is_bootstrapped(PLATFORM_CHAIN_ID) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("info.isBootstrapped(P) flips true once the solo engine reaches NormalOp");
+    }
+
+    // The node's single persistent base db — the Arc survives the restart, just
+    // as a real on-disk backend (rocksdb/leveldb) survives a process restart.
+    let base: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+
+    // ---- Boot 1: a fresh node over the empty base db ----
+    let manager1 = fresh_manager(&genesis_bytes);
+    let handles1 = run_queued_chains_with_db(&manager1, network_id, Arc::clone(&base))
+        .await
+        .expect("boot 1: the queued P-, X- and C-Chains over the empty base db");
+    assert_eq!(handles1.len(), 3, "boot 1: P, X and C all boot");
+    await_bootstrapped(&manager1).await;
+
+    // Shut the node down cleanly (the manager-registered chains drain), keeping
+    // the base db alive — this is the on-disk state a restart re-opens.
+    manager1.shutdown(std::time::Duration::from_secs(5)).await;
+    for handle in handles1 {
+        handle
+            .join
+            .await
+            .expect("boot 1: handler task joined cleanly");
+    }
+
+    // The first boot persisted consensus / VM metadata into the shared base db,
+    // and a clean shutdown did NOT clear it.
+    let persisted = snapshot(&base);
+    assert!(
+        !persisted.is_empty(),
+        "boot 1 persisted state into the base db, surviving a clean shutdown"
+    );
+
+    // ---- Boot 2: restart — a FRESH chain manager over the SAME base db ----
+    let manager2 = fresh_manager(&genesis_bytes);
+    let handles2 = run_queued_chains_with_db(&manager2, network_id, Arc::clone(&base))
+        .await
+        .expect("boot 2: re-open the persisted (non-empty) base db");
+    assert_eq!(handles2.len(), 3, "boot 2: P, X and C all re-boot");
+
+    // The re-open path reaches NormalOp again *over the non-empty db* — booting
+    // over a pre-seeded base db does not choke (no duplicate-init / must-be-empty
+    // failure).
+    await_bootstrapped(&manager2).await;
+
+    // The persisted tip resumed: every key the first boot wrote is still present
+    // with the same value (the genesis tip is re-derived consistently — nothing
+    // was wiped, and the re-derivation is deterministic).
+    let after = snapshot(&base);
+    for (k, v) in &persisted {
+        assert_eq!(
+            after.get(k),
+            Some(v),
+            "the persisted tip key survived the restart unchanged"
+        );
+    }
+
+    manager2.shutdown(std::time::Duration::from_secs(5)).await;
+    for handle in handles2 {
+        handle
+            .join
+            .await
+            .expect("boot 2: handler task joined cleanly");
+    }
+}
+
 /// `--version` and `--help` keep working unchanged (the M0 invariant).
 #[test]
 fn version_and_help_still_work() {
