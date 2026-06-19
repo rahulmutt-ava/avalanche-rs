@@ -29,6 +29,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tokio::runtime::Runtime;
@@ -48,6 +49,7 @@ use ava_snow::ChainContext;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
+use ava_utils::clock::MockClock;
 use ava_vm::app_sender::{AppSender, SendConfig};
 use ava_vm::block::ChainVm;
 use ava_vm::vm::Vm;
@@ -78,16 +80,15 @@ pub struct XchainReexecuteRoots {
 // ---------------------------------------------------------------------------
 
 const NETWORK_ID: u32 = 10;
-/// The (arbitrary) stop-vertex id the genesis block parents off (specs 09 §1).
-const STOP_VERTEX: [u8; 32] = [0x07; 32];
-/// The genesis Unix timestamp encoded into the synthetic genesis bytes.
+/// The pinned wall-clock time injected into the VM (specs 24 hazard #5 seam).
 ///
-/// Deliberately FAR in the future (year ~2255) so every built block inherits the
-/// fixed `parent_time` (the X-Chain builder stamps `time = max(parent_time, now)`
-/// and the engine feeds it wall-clock `now`); a future genesis pins the block ids
-/// deterministically across runs. (Same clock-pinning the `ava-differential`
-/// `xchain` collector uses until `build_block` adopts an injectable clock.)
-const GENESIS_TS: u64 = 9_000_000_000;
+/// Deliberately FAR in the future (year ~2255) so every built block stamps the
+/// same `time = max(parent_time, now)` (the X-Chain builder reads `now` through
+/// the injected clock). Since M5.f4 the genesis Snowman block's parent time comes
+/// from the upgrade config (`CortinaTime`, in the past), so without a pinned clock
+/// `now` would be the wall clock and the two replays could disagree across a
+/// second boundary; injecting a fixed `MockClock` pins the block ids deterministically.
+const PINNED_TIME_SECS: u64 = 9_000_000_000;
 
 fn chain_id() -> Id {
     Id::from([0x05; 32])
@@ -287,13 +288,16 @@ fn chain_ctx() -> Arc<ChainContext> {
     })
 }
 
-/// The minimal synthetic X-Chain genesis seed: the 32-byte stop-vertex id followed
-/// by the 8-byte big-endian Unix-second timestamp (the M5.19 shape).
-fn genesis_bytes() -> Vec<u8> {
-    let mut out = Vec::with_capacity(40);
-    out.extend_from_slice(&STOP_VERTEX);
-    out.extend_from_slice(&GENESIS_TS.to_be_bytes());
-    out
+/// Real (empty) Go-format X-Chain genesis bytes. Since M5.f4 `AvmVm::initialize`
+/// decodes the `Genesis{Txs}` format (and takes the genesis Snowman block's
+/// stop-vertex id + timestamp from the upgrade config, not the genesis bytes), so
+/// the old 40-byte synthetic seed no longer parses. An empty genesis seeds no
+/// assets — the reexecute case seeds its own synthetic UTXO `U0` + asset tx via
+/// `seed_genesis_state`, so genesis content is irrelevant to the replayed roots.
+fn genesis_bytes() -> Result<Vec<u8>> {
+    ava_avm::genesis::Genesis::default()
+        .marshal()
+        .map_err(|e| Error::Xchain(format!("marshal empty genesis: {e}")))
 }
 
 /// Replay a synthetic seed-derived X-Chain reexecute case through the REAL
@@ -317,7 +321,15 @@ pub fn replay_xchain(seed: u64) -> Result<XchainReexecuteRoots> {
 
 async fn replay_xchain_async(seed: u64) -> Result<XchainReexecuteRoots> {
     let token = CancellationToken::new();
-    let mut vm = AvmVm::new();
+    // Inject a pinned clock (specs 24 hazard #5) so built-block timestamps — and
+    // thus the chain-tip block ids — are deterministic across the two replays
+    // (M5.f4 moved the genesis parent time to the upgrade config, removing the
+    // old far-future-genesis pinning trick).
+    let pinned = UNIX_EPOCH
+        .checked_add(Duration::from_secs(PINNED_TIME_SECS))
+        .ok_or_else(|| Error::Xchain("pinned time overflows SystemTime".into()))?;
+    let clock = MockClock::at(pinned);
+    let mut vm = AvmVm::with_clock(Arc::new(clock));
     let db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
     // A zero-fee config keeps each full-amount transfer balanced without a fee
     // UTXO (the M5.19 conformance seeding).
@@ -331,7 +343,7 @@ async fn replay_xchain_async(seed: u64) -> Result<XchainReexecuteRoots> {
         &token,
         chain_ctx(),
         db,
-        &genesis_bytes(),
+        &genesis_bytes()?,
         b"",
         &config_bytes,
         Vec::new(),
