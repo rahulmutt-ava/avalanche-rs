@@ -41,6 +41,11 @@ ava-secp256k1fx = { path = "../../crates/ava-secp256k1fx" }
 ava-snow = { path = "../../crates/ava-snow" }
 ava-database = { path = "../../crates/ava-database" }
 ava-types = { path = "../../crates/ava-types" }
+# `ava-utils::clock::MockClock` pins the X-Chain collector's injected clock so
+# built-block timestamps (and thus block ids) are deterministic across the
+# determinism-gate's two runs (specs 24 hazard #5; M5.f4 moved genesis time to
+# the upgrade config, removing the old far-future-genesis pinning).
+ava-utils = { path = "../../crates/ava-utils" }
 ava-version = { path = "../../crates/ava-version" }
 # The `saevm` collector (M7.29) drives the REAL SAE recovery pipeline
 # (`ava_saevm_core::recover`) over a `RecoverySource` populated from a LIVE

@@ -47,6 +47,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tokio::runtime::Runtime;
@@ -65,6 +66,7 @@ use ava_snow::ChainContext;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
+use ava_utils::clock::MockClock;
 use ava_vm::app_sender::{AppSender, SendConfig};
 use ava_vm::block::ChainVm;
 use ava_vm::vm::Vm;
@@ -78,22 +80,20 @@ use crate::observation::Observation;
 // ---------------------------------------------------------------------------
 
 const NETWORK_ID: u32 = 10;
-/// The (arbitrary) stop-vertex id the genesis block parents off (specs 09 §1).
-const STOP_VERTEX: [u8; 32] = [0x07; 32];
-/// The genesis Unix timestamp encoded into the synthetic genesis bytes.
+/// The pinned wall-clock time injected into the X-Chain collector VM (specs 24
+/// hazard #5 seam).
 ///
 /// Deliberately set FAR in the future (year ~2255). The X-Chain block builder
-/// stamps each block with `time = max(parent_time, now)` (Unix seconds), and the
-/// engine-facing `ChainVm::build_block` feeds it `now = SystemTime::now()` — a
-/// wall-clock value the harness cannot inject. With a genesis time that always
-/// exceeds `now`, every built block inherits `parent_time` (the fixed
-/// genesis-derived value) deterministically, so the block ids are reproducible
-/// across runs. Were genesis in the past, `now` would win and the (second-
-/// truncated) wall clock would occasionally straddle a second boundary between
-/// the two determinism-gate runs, making the block id nondeterministic. This is
-/// the harness's clock-pinning until `ava-avm` `build_block` adopts the
-/// injectable `ava_utils::clock::Clock` seam (tracked by tier-X task X.19).
-const GENESIS_TS: u64 = 9_000_000_000;
+/// stamps each block with `time = max(parent_time, now)` (Unix seconds), reading
+/// `now` through the injected [`MockClock`]. Pinning `now` to this fixed instant
+/// makes every built block's time — and thus its id — reproducible across the
+/// determinism gate's two runs. Since M5.f4 the genesis Snowman block's parent
+/// time comes from the upgrade config (`CortinaTime`, in the past), so without a
+/// pinned clock `now` would be the wall clock and the (second-truncated) value
+/// could straddle a second boundary between the two runs, making the block id
+/// nondeterministic — exactly what the `AvmVm::with_clock` seam (commit 31a9929)
+/// now lets the harness avoid.
+const PINNED_TIME_SECS: u64 = 9_000_000_000;
 
 fn chain_id() -> Id {
     Id::from([0x05; 32])
@@ -303,13 +303,16 @@ fn chain_ctx() -> Arc<ChainContext> {
     })
 }
 
-/// The minimal synthetic X-Chain genesis seed: the 32-byte stop-vertex id
-/// followed by the 8-byte big-endian Unix-second timestamp (the M5.19 shape).
+/// Real (empty) Go-format X-Chain genesis bytes. Since M5.f4 `AvmVm::initialize`
+/// decodes the `Genesis{Txs}` format (taking the genesis block's stop-vertex id +
+/// timestamp from the upgrade config, not the genesis bytes), the old 40-byte
+/// synthetic seed no longer parses. An empty genesis seeds no assets — the
+/// collector seeds its own synthetic UTXO `U0` + asset tx, so genesis content is
+/// irrelevant to the observed roots.
 fn genesis_bytes() -> Vec<u8> {
-    let mut out = Vec::with_capacity(40);
-    out.extend_from_slice(&STOP_VERTEX);
-    out.extend_from_slice(&GENESIS_TS.to_be_bytes());
-    out
+    ava_avm::genesis::Genesis::default()
+        .marshal()
+        .expect("marshal empty genesis")
 }
 
 /// Runs the seed-derived program through a fresh `ava-avm` VM and returns the
@@ -337,7 +340,14 @@ pub fn run_program(seed: u64) -> Observation {
 
 async fn run_program_async(seed: u64) -> Observation {
     let token = CancellationToken::new();
-    let mut vm = AvmVm::new();
+    // Inject a pinned clock (specs 24 hazard #5) so built-block timestamps — and
+    // thus the chain-tip block ids — are deterministic across the gate's two runs
+    // (M5.f4 moved the genesis parent time to the upgrade config, removing the old
+    // far-future-genesis pinning trick).
+    let pinned = UNIX_EPOCH
+        .checked_add(Duration::from_secs(PINNED_TIME_SECS))
+        .expect("pinned time in range");
+    let mut vm = AvmVm::with_clock(Arc::new(MockClock::at(pinned)));
     let db: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
     // A zero-fee config keeps each full-amount transfer balanced without a fee
     // UTXO (the M5.19 conformance seeding).
