@@ -170,7 +170,7 @@ sentence/paragraph in the trail (see how the `cc3b103b91 → 0b0b57143c` sync is
 recorded). Also update the file list in the provenance block if this sync touched
 spec files not already listed there.
 
-### 6. Commit
+### 6. Commit, then merge to main
 
 Commit the fold as a single docs-only commit. Stage only what this sync touched —
 the `specs/` and `plan/` files you edited (and, if you updated it, the auto-memory
@@ -188,16 +188,30 @@ git commit -m "specs: sync avalanchego <old-pin>..<new-pin> — fold <N> upstrea
 ```
 
 Use a commit body that mirrors the report table: one line per commit with its
-disposition (spec §, plan task, or non-gating/irrelevant reason). Push or open a
-PR only if the user asks — committing locally is the default. Don't run
+disposition (spec §, plan task, or non-gating/irrelevant reason). Don't run
 lint/tests; this is docs-only (see step 7).
+
+Then **merge the sync branch back into `main`** (the fold is a complete,
+self-contained docs unit — no review checkpoint needed). Fast-forward when
+possible so history stays linear; the sync branch is disposable once merged:
+
+```sh
+git checkout main
+git merge --ff-only avalanchego-sync-<new-sha>   # falls back to --no-ff if main moved
+git branch -d avalanchego-sync-<new-sha>         # clean up the merged branch
+```
+
+If `--ff-only` fails because `main` advanced while you worked, re-run as
+`git merge --no-ff avalanchego-sync-<new-sha>` (a merge commit is fine for a
+docs fold). Leave the merge **local** — push or open a PR only if the user asks.
 
 ### 7. Report
 
 Summarize for the user: the old→new pin, a one-line-per-commit table of where
 each went (spec §, plan task, or "non-gating: reason" / "irrelevant: reason"),
-the commit SHA you just created, and any judgment calls worth a second opinion
-(especially: is a fork really unscheduled? does a "refactor" change wire bytes?).
+the commit SHA you just created, that it was merged to `main` (and the sync
+branch cleaned up), and any judgment calls worth a second opinion (especially:
+is a fork really unscheduled? does a "refactor" change wire bytes?).
 Don't run lint/tests — this is a docs-only change; `taulint`/`lint-determinism`
 etc. don't apply unless you also wrote code in a follow-up.
 
