@@ -509,11 +509,12 @@ mod tests {
             "root → subnet child token"
         );
 
-        // Assembly invariants (Go parity).
+        // Assembly invariants (Go parity): init_chains queues the platform
+        // chain plus the two standard chains the genesis spawns (X and C).
         assert_eq!(
             node.chain_manager.queued_chains().len(),
-            1,
-            "init_chains() queues exactly the platform chain"
+            3,
+            "init_chains() queues the platform chain plus the genesis X- and C-Chains"
         );
         assert!(
             node.networking.router_bridge.engine_router().is_some(),

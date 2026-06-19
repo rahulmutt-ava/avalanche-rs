@@ -430,6 +430,20 @@ reproduces it step-for-step:
 25. `health.start(freq)`, `init_profiler`.
 26. `init_chains(genesis_bytes)` — creates the P-Chain, which bootstraps X & C.
 
+> **AS-BUILT (M9.15, 2026-06-19).** Go's platform VM creates the X/C chains from
+> the genesis `CreateChainTx`s once it bootstraps; the Rust assembly chain
+> manager has no such bootstrap callback, so `init_chains` queues the platform
+> chain **plus** the genesis-spawned X (`avm_id`) and C (`evm_id`) chains
+> directly — reading each `CreateChainTx`'s blockchain id (the tx id; specs 23
+> §4.3) and `genesis_data` via the new `ava_genesis::vm_chain(genesis_bytes,
+> vm_id)` (so `ava-node` need not depend on `ava-platformvm`). The chain creator
+> (`avalanchers::wiring::chains::run_queued_chains`) dispatches by `vm_id`: P and
+> X boot the real VMs to `NormalOp` (the X genesis is the production AVM genesis,
+> parseable since M5.f4); C is honestly skipped until M6.8 wires
+> `EvmVm::initialize` from genesis. A solo `--network-id=local` node thus flips
+> `info.isBootstrapped` true for P and X (C false). Real-DB threading and the
+> live multi-node `Sender` remain deferred (plan/M9.15).
+
 ```rust
 pub struct Node {
     pub log: Logger,

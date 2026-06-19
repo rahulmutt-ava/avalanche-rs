@@ -678,23 +678,24 @@ async fn boot_pchain(
     .await
 }
 
-/// Materializes the **real `ava_avm::AvmVm`** from a *synthetic* X-Chain genesis
-/// (the 40-byte stop-vertex-id + Unix-timestamp seed the M5 conformance battery
-/// uses — `ava_avm` parses production AVM genesis only once that wiring lands),
-/// drives it through the same [`create_snowman_chain`] pipeline as the P-Chain,
-/// starts the handler, and returns a [`PChainBootHandle`]. Booted as a solo node
-/// (empty beacons ⇒ `Bootstrapping → NormalOp` short-circuit), so a queued
-/// X-Chain reaches `NormalOp` exactly as the P-Chain does (M9.15 X-dispatch).
+/// Materializes the **real `ava_avm::AvmVm`** from the **production AVM genesis**
+/// (the `CreateChainTx::genesis_data` the P-Chain genesis carries; parseable
+/// since M5.f4 `AvmVm::initialize` ports `initGenesis` + `Linearize`), drives it
+/// through the same [`create_snowman_chain`] pipeline as the P-Chain, starts the
+/// handler, and returns a [`PChainBootHandle`]. Booted as a solo node (empty
+/// beacons ⇒ `Bootstrapping → NormalOp` short-circuit), so a queued X-Chain
+/// reaches `NormalOp` exactly as the P-Chain does (M9.15 X-dispatch).
 ///
 /// `genesis_bytes` is the queued chain's genesis data (the dispatcher forwards
-/// `ChainParameters::genesis_data`); the handle's `genesis_id` is the 32-byte
-/// stop-vertex id the genesis block parents off (the leading 32 bytes — a
-/// deterministic synthetic-genesis marker, not the inner block id `AvmVm`
-/// computes during `initialize`).
+/// `ChainParameters::genesis_data`); the chain context's `avax_asset_id` is the
+/// index-0 genesis asset id, and the handle's `genesis_id` is the Cortina
+/// stop-vertex id the genesis block linearizes off (from the upgrade config — Go
+/// `Upgrades.CortinaXChainStopVertexID`, the same source `AvmVm::initialize`
+/// reads, not the inner Snowman block id it computes during `initialize`).
 ///
 /// # Errors
-/// Propagates DB / VM-init (e.g. an unparseable synthetic genesis) /
-/// consensus-construction / identity / timeout-manager failures.
+/// Propagates genesis-parse / DB / VM-init / consensus-construction / identity /
+/// timeout-manager failures.
 pub async fn boot_xchain(
     network_id: u32,
     chain_id: Id,
@@ -702,24 +703,19 @@ pub async fn boot_xchain(
     genesis_bytes: &[u8],
     token: CancellationToken,
 ) -> Result<PChainBootHandle> {
-    // The X-Chain genesis block parents off the stop-vertex id encoded in the
-    // leading 32 bytes of the synthetic genesis (specs 09 §1); use it as the
-    // handle's genesis marker.
-    let mut stop = [0u8; 32];
-    if let Some(slice) = genesis_bytes.get(..32) {
-        stop.copy_from_slice(slice);
-    }
+    // The AVAX asset id is the index-0 genesis asset (specs 09 §1); the X-Chain
+    // genesis block linearizes off the Cortina stop-vertex id from the upgrade
+    // config (the same value `AvmVm::initialize` uses), not the genesis bytes.
+    let avax_asset_id = ava_genesis::avax_asset_id(genesis_bytes)?;
+    let genesis_id = ava_version::upgrade::get_config(network_id).cortina_x_chain_stop_vertex_id;
     boot_chain(
         BootSpec {
             network_id,
             chain_id,
             subnet_id,
             primary_alias: "X",
-            // The synthetic X genesis carries no AVAX asset id; the boot path
-            // does not exercise cross-chain transfers (no atomic txs at NormalOp
-            // with zero blocks to process).
-            avax_asset_id: Id::EMPTY,
-            genesis_id: Id::from(stop),
+            avax_asset_id,
+            genesis_id,
             include_self_beacon: false,
         },
         ava_avm::vm::AvmVm::new(),
@@ -881,12 +877,13 @@ where
 ///   construction seam, not `initialize`), so it cannot reconstruct its
 ///   provider/config/store from genesis bytes through `create_snowman_chain`
 ///   yet. Once M6.8 lands, the C branch boots through [`boot_chain`] identically.
-/// - The live X-Chain dispatch additionally needs `init_chains` to *queue* an
-///   X-Chain whose genesis `ava_avm` can parse (the production AVM genesis vs the
-///   synthetic seed `boot_xchain` accepts) — an `ava-avm`/`ava-genesis`
-///   follow-up; today only the P-Chain is queued live.
 /// - SAE VM dispatch and the real ava-network-backed `Sender` for multi-node
 ///   frontier exchange — both tracked in plan/M9.15.
+///
+/// `init_chains` (specs/12 §2.2) now queues the X- and C-Chains live off the
+/// genesis `CreateChainTx`s — each carries the production `genesis_data`
+/// `AvmVm::initialize` parses (M5.f4) — so a live solo node flips
+/// `is_bootstrapped(X)` too (C stays false pending M6.8).
 ///
 /// # Errors
 /// Propagates a chain boot failure (genesis / DB / VM-init / consensus /
@@ -918,7 +915,7 @@ pub async fn run_queued_chains(
         } else if params.vm_id == avm_id() {
             let (chain_token, _tasks) =
                 manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
-            // Boot the real AvmVm from the queued (synthetic) X genesis through
+            // Boot the real AvmVm from the queued production X genesis through
             // the same solo-node pipeline.
             boot_xchain(
                 network_id,

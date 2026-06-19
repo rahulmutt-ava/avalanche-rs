@@ -525,6 +525,45 @@ pub fn vm_genesis(genesis_bytes: &[u8], vm_id: Id) -> Result<PTx> {
         .ok_or(GenesisError::UnknownVmId(vm_id))
 }
 
+/// The chain-creation parameters the node's chain manager needs to *queue* a
+/// chain spawned by the P-Chain genesis: the blockchain id (the `CreateChainTx`
+/// tx id), the validating subnet, the chain's genesis state bytes, and its fx
+/// ids. Lets a crate that does not depend on `ava-platformvm` (e.g. `ava-node`)
+/// read a genesis chain record without the `CreateChainTx` type in scope.
+#[derive(Clone, Debug)]
+pub struct VmChain {
+    /// The blockchain id (`CreateChainTx` id; specs 23 §4.3).
+    pub chain_id: Id,
+    /// The subnet validating the chain (Primary Network for X/C).
+    pub subnet_id: Id,
+    /// The chain's genesis state bytes (`GenesisData`).
+    pub genesis_data: Vec<u8>,
+    /// The fx ids the chain supports.
+    pub fx_ids: Vec<Id>,
+}
+
+/// `genesis.VMGenesis` projected to the [`VmChain`] queue parameters: parse the
+/// P-Chain genesis and return the chain record whose VM id matches.
+///
+/// # Errors
+/// [`GenesisError::UnknownVmId`] when no chain runs `vm_id`, else the parse
+/// error.
+pub fn vm_chain(genesis_bytes: &[u8], vm_id: Id) -> Result<VmChain> {
+    let tx = vm_genesis(genesis_bytes, vm_id)?;
+    let chain_id = tx.id();
+    match tx.unsigned {
+        PUnsignedTx::CreateChain(c) => Ok(VmChain {
+            chain_id,
+            subnet_id: c.subnet_id,
+            genesis_data: c.genesis_data,
+            fx_ids: c.fx_ids,
+        }),
+        // `vm_genesis` returns only a matched `CreateChainTx`, so this is
+        // unreachable; surfaced as the same not-found error for safety.
+        _ => Err(GenesisError::UnknownVmId(vm_id)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::{FUJI_CONFIG, MAINNET_CONFIG, UNMODIFIED_LOCAL_CONFIG};
@@ -559,5 +598,46 @@ mod tests {
                 config.network_id
             );
         }
+    }
+
+    /// `vm_chain` projects the genesis X-Chain `CreateChainTx` to the queue
+    /// parameters: the blockchain id == the `vm_genesis` tx id, the subnet ==
+    /// Primary Network, the genesis bytes are the parseable AVM genesis, and the
+    /// three standard fxs are carried.
+    #[test]
+    fn vm_chain_extracts_xchain_record() {
+        use crate::chains::{avm_id, evm_id, nftfx_id, propertyfx_id, secp256k1fx_id};
+
+        let (p_bytes, _asset_id) = from_config(&UNMODIFIED_LOCAL_CONFIG).expect("from_config");
+        let x = vm_chain(&p_bytes, avm_id()).expect("vm_chain(X)");
+
+        assert_eq!(
+            x.chain_id,
+            vm_genesis(&p_bytes, avm_id()).expect("vm_genesis(X)").id(),
+            "blockchain id == CreateChainTx id"
+        );
+        assert_eq!(
+            x.subnet_id,
+            ava_types::constants::PRIMARY_NETWORK_ID,
+            "X-Chain validates on the Primary Network"
+        );
+        assert_eq!(
+            x.fx_ids,
+            vec![secp256k1fx_id(), nftfx_id(), propertyfx_id()],
+            "X-Chain carries the three standard fxs"
+        );
+        // The genesis bytes round-trip through the AVM genesis codec.
+        avax_asset_id(&x.genesis_data).expect("X genesis_data is parseable AVM genesis");
+
+        // The C-Chain record is present too; an absent VM id errors.
+        let c = vm_chain(&p_bytes, evm_id()).expect("vm_chain(C)");
+        assert!(c.fx_ids.is_empty(), "C-Chain carries no fxs");
+        assert!(
+            matches!(
+                vm_chain(&p_bytes, Id::from([0xABu8; 32])),
+                Err(GenesisError::UnknownVmId(_))
+            ),
+            "an unknown VM id is UnknownVmId"
+        );
     }
 }

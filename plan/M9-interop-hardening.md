@@ -634,7 +634,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `info.peers` once a live net boots. Verified in main tree: `cargo nextest run -p ava-differential` 15/15 (incl. both
 > offline arms), clippy `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
-### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip 🟡 OFFLINE LOCKSTEP-REPLAY ARM DONE (2026-06-16c); live two-binary arm gated
+### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip 🟡 OFFLINE LOCKSTEP-REPLAY ARM DONE (2026-06-16c); SOLO live-dispatch flips P+X live (2026-06-19); mixed-net two-binary arm gated
 **Crate/area:** `ava-differential`  ·  **Depends on:** M9.14, M4/M5/M6/M7 (P/X/C/SAE)  ·  **Spec:** `16` §5(2), `02` §11.3 (peer/handshake row: "both reach the same height; no fork")
 **AS-BUILT (offline arm, merge 2026-06-16c):** `LockstepDriver::replay_recorded` + `Program::from_seed` now replay a seed-derived program through the REAL in-process `ava-avm` pipeline (`xchain::run_program` per finalization, pure sub-seed derivation), returning ordered normalized `Observation`s; `tests/mixed_network.rs::mixed_network_replay_is_deterministic` asserts twice-replayed byte-identity + non-trivial finalization + injected-divergence detection + a 64-case proptest. The live `mixed_network` arm (boot mixed net, replay across all nodes, no-fork/same-tip per chain) stays `#[cfg(feature="live")] #[ignore]`.
 
@@ -806,6 +806,39 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   **C-Chain dispatch** blocked on M6.8; **SAE** + **real-DB threading** + **multi-node `Sender`** unchanged.
 > - **Verified (main tree):** `-p avalanchers -p ava-node` **33/33**, `cargo build --workspace` + `-p avalanchers
 >   --release` green, clippy `--all-targets -D warnings` + workspace fmt clean. (`ava-avm` added to `avalanchers` deps.)
+
+> **STEP (a) — LIVE X QUEUE (2026-06-19, ralph iteration, TDD; closes wave-X/C-dispatch's "live X dispatch" deferral).**
+> The prior wave proved the *dispatcher* handles `avm_id` in-process but flagged the live gap: `init_chains` queued
+> only P, and the synthetic seed `boot_xchain` accepted was M5-only. **M5.f4 made the production AVM genesis
+> parseable** (`AvmVm::initialize` ports `initGenesis` + `Linearize`), which both *unblocked* this slice and *broke*
+> the synthetic-seed path (`Genesis::parse` now rejects the 40-byte seed — the in-process X-dispatch test was red).
+> Both are now closed by queuing the **real** genesis:
+> - **`ava-genesis` (`build.rs`):** new `VmChain { chain_id, subnet_id, genesis_data, fx_ids }` + `vm_chain(genesis_bytes,
+>   vm_id)` — projects the genesis `CreateChainTx` to the node's queue parameters so `ava-node` (which does **not**
+>   depend on `ava-platformvm`) can read a genesis chain record without the `CreateChainTx` type in scope. The
+>   blockchain id is the tx id (specs 23 §4.3).
+> - **`ava-node` (`init/chain_manager.rs`):** `init_chains` now queues the platform chain **plus** the two standard
+>   chains the genesis spawns — X (`avm_id`) and C (`evm_id`) — off the genesis `CreateChainTx`s via `vm_chain` (Go's
+>   platform VM creates these once it bootstraps; the assembly manager has no such callback, so we queue them
+>   directly). A custom genesis without a standard chain is skipped (`GenesisError::UnknownVmId`).
+> - **`avalanchers` (`wiring/chains.rs`):** `boot_xchain` now reads the **real** AVM genesis: `avax_asset_id` is the
+>   index-0 genesis asset (`ava_genesis::avax_asset_id`), and the handle's `genesis_id` is the Cortina stop-vertex id
+>   from the upgrade config (the same value `AvmVm::initialize` linearizes off — Go `Upgrades.CortinaXChainStopVertexID`),
+>   not the leading bytes of a synthetic seed.
+> - **Tests:** `chain_creator_dispatches_xchain_to_bootstrapped` rewritten to drive real genesis end-to-end (no
+>   manual synthetic queueing; X/C ids from `genesis_block_id(_, Chain::X/C)`); `init_chains` queues 3; creator boots
+>   P+X (`handles.len()==2`), skips C; P,X flip true, C false. `node.rs::init_order_matches_go` + the two
+>   `drive_startup_chains`/`run_queued_chains` P-Chain tests updated to expect the 3-queued / 2-booted shape.
+>   `ava_genesis::build::vm_chain_extracts_xchain_record` unit-tests the new helper.
+> - **★ LIVE PROOF (this iteration, real process):** built the release binary, ran a solo
+>   `avalanchers --network-id=local --db-type=memdb --staking-ephemeral-{cert,signer}-enabled --sybil-protection-enabled=false`
+>   node, curled `info.isBootstrapped`: **P=true, X=true, C=false** (X flips for the first time live; C honest),
+>   `kill -INT` → clean exit 0 (shutdown drains both chains). The prior wave's "live node flips only P" is closed.
+> - **★ STILL DEFERRED:** **C-Chain** dispatch blocked on M6.8 (`EvmVm::initialize` genesis wiring); **SAE** dispatch;
+>   **real-DB threading** (the booted chains still use `boot_chain`'s in-process `MemDb`/router/loopback `Sender`, not
+>   the assembled `Node`'s real handles — the generic↔trait-object impedance); **multi-node `Sender`** for mixed-net.
+> - **Verified (main tree):** `-p ava-genesis -p ava-node -p avalanchers` **53/53**, clippy `--all-targets -D warnings`,
+>   workspace fmt, `lint-determinism` all clean; `-p avalanchers --release` build + live boot green.
 
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.

@@ -421,7 +421,32 @@ pub fn init_chains(manager: &AssemblyChainManager, genesis_bytes: &[u8]) -> Resu
         // Go passes the beacon validators.Manager; `ChainParameters` carries
         // ids only — the manager retains the full set (`bootstrappers()`).
         custom_beacons: Vec::new(),
-    })
+    })?;
+
+    // The standard-network chains the P-Chain genesis spawns: X (avm) then C
+    // (evm). Go's platform VM creates these from the genesis `CreateChainTx`s
+    // once it bootstraps; the assembly chain manager has no such callback, so we
+    // queue them here directly off the genesis so the chain creator can dispatch
+    // each by VM id (X boots; C is skipped at boot until M6.8). Each chain's
+    // blockchain id is its `CreateChainTx` id and its `genesis_data` seeds the VM
+    // (specs 23 §4.3). A custom genesis without a standard chain is skipped.
+    for vm_id in [avm_id(), evm_id()] {
+        match ava_genesis::vm_chain(genesis_bytes, vm_id) {
+            Ok(chain) => manager.start_chain_creator(ChainParameters {
+                id: chain.chain_id,
+                subnet_id: chain.subnet_id,
+                genesis_data: chain.genesis_data,
+                vm_id,
+                fx_ids: chain.fx_ids,
+                custom_beacons: Vec::new(),
+            })?,
+            Err(ava_genesis::GenesisError::UnknownVmId(_)) => {
+                tracing::debug!(%vm_id, "genesis declares no chain for this VM id; skipping");
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
 }
 
 /// Derive a deterministic per-node benchlist seed from the first 8 NodeID

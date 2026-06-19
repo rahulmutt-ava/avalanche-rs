@@ -41,7 +41,7 @@ pub mod unparsed;
 pub mod validate;
 
 pub use bootstrappers::{Bootstrapper, bootstrappers, sample_bootstrappers};
-pub use build::{avax_asset_id, from_config, vm_genesis};
+pub use build::{VmChain, avax_asset_id, from_config, vm_chain, vm_genesis};
 pub use config::{Allocation, Config, LockedAmount, Staker, get_config};
 pub use error::{GenesisError, Result};
 

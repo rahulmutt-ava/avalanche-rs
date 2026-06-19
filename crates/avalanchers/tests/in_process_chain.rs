@@ -169,8 +169,9 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
     let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
     let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
 
-    // Step 26: queue the platform chain. Nothing runs yet, nothing is
-    // bootstrapped — this is the documented pre-wiring state (wave-18h).
+    // Step 26: queue the platform chain (plus the genesis X- and C-Chains).
+    // Nothing runs yet, nothing is bootstrapped — the documented pre-wiring
+    // state (wave-18h).
     init_chains(&manager, &genesis_bytes).expect("queue the platform chain");
     assert!(
         !manager.is_bootstrapped(PLATFORM_CHAIN_ID),
@@ -182,17 +183,21 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
         "no chain is registered before the chain creator runs"
     );
 
-    // The chain creator constructs + drives the queued P-Chain through the full
-    // create_snowman_chain pipeline and reflects its ConsensusContext into the
-    // manager's is_bootstrapped.
+    // The chain creator constructs + drives the queued chains through the full
+    // create_snowman_chain pipeline and reflects each ConsensusContext into the
+    // manager's is_bootstrapped. P and X boot; C is skipped (M6.8).
     let handles = run_queued_chains(&manager, network_id)
         .await
-        .expect("the chain creator boots the queued P-Chain");
-    assert_eq!(handles.len(), 1, "exactly one P-Chain booted");
+        .expect("the chain creator boots the queued P- and X-Chains");
+    assert_eq!(
+        handles.len(),
+        2,
+        "the P- and X-Chains boot (C skipped, M6.8)"
+    );
     assert_eq!(
         manager.running_chains(),
-        1,
-        "the booted P-Chain is registered as a running chain"
+        2,
+        "the booted P- and X-Chains are registered as running chains"
     );
 
     // Poll the manager until is_bootstrapped(P) flips (virtual time; bounded
@@ -229,12 +234,10 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
 async fn chain_creator_dispatches_xchain_to_bootstrapped() {
     use std::sync::Arc;
 
-    use ava_chains::manager::ChainParameters;
+    use ava_genesis::Chain;
     use ava_node::init::chain_manager::{
         AssemblyChainManager, PLATFORM_CHAIN_ID, avm_id, evm_id, init_chains, platform_vm_id,
     };
-    use ava_types::constants::PRIMARY_NETWORK_ID;
-    use ava_types::id::Id;
     use ava_validators::{DefaultManager, ValidatorManager};
     use avalanchers::wiring::chains::run_queued_chains;
 
@@ -242,42 +245,27 @@ async fn chain_creator_dispatches_xchain_to_bootstrapped() {
     let (genesis_bytes, _avax_asset_id) =
         ava_genesis::genesis_bytes(network_id, None).expect("build P-Chain genesis bytes");
 
+    // The X/C blockchain ids are the genesis `CreateChainTx` ids (specs 23 §4).
+    let x_chain_id = ava_genesis::genesis_block_id(network_id, Chain::X).expect("X blockchain id");
+    let c_chain_id = ava_genesis::genesis_block_id(network_id, Chain::C).expect("C blockchain id");
+
     // Critical set = {P, X, C} (init_chain_manager's set); beacons empty (solo).
     let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
-    let x_chain_id = Id::from([0x11u8; 32]);
-    let c_chain_id = Id::from([0x22u8; 32]);
     let critical = [PLATFORM_CHAIN_ID, x_chain_id, c_chain_id]
         .into_iter()
         .collect();
     let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
 
-    // Step 26 queues the platform chain (Go: the P-Chain genesis specifies the
-    // others). Here we additionally queue an X-Chain (with a synthetic genesis
-    // `ava_avm` parses: 32-byte stop-vertex id + 8-byte BE Unix timestamp) and a
-    // C-Chain to prove the per-`vm_id` dispatch + the honest C-Chain skip.
-    init_chains(&manager, &genesis_bytes).expect("queue the platform chain");
-    let mut x_genesis = vec![0x42u8; 32]; // arbitrary stop-vertex id.
-    x_genesis.extend_from_slice(&0u64.to_be_bytes()); // genesis timestamp = epoch.
-    manager
-        .start_chain_creator(ChainParameters {
-            id: x_chain_id,
-            subnet_id: PRIMARY_NETWORK_ID,
-            genesis_data: x_genesis,
-            vm_id: avm_id(),
-            fx_ids: Vec::new(),
-            custom_beacons: Vec::new(),
-        })
-        .expect("queue the X-Chain");
-    manager
-        .start_chain_creator(ChainParameters {
-            id: c_chain_id,
-            subnet_id: PRIMARY_NETWORK_ID,
-            genesis_data: Vec::new(),
-            vm_id: evm_id(),
-            fx_ids: Vec::new(),
-            custom_beacons: Vec::new(),
-        })
-        .expect("queue the C-Chain");
+    // Step 26 queues the platform chain AND the two standard chains the genesis
+    // spawns — X (avm, real production genesis) and C (evm) — directly off the
+    // genesis `CreateChainTx`s, so the per-`vm_id` dispatch + the honest C-Chain
+    // skip are exercised end-to-end from real genesis (no synthetic seed).
+    init_chains(&manager, &genesis_bytes).expect("queue the platform, X- and C-Chains");
+    assert_eq!(
+        manager.queued_chains().len(),
+        3,
+        "init_chains queues P, X and C"
+    );
 
     // Sanity: distinct, well-known VM ids.
     assert_ne!(platform_vm_id(), avm_id(), "P and X VM ids differ");
@@ -364,8 +352,9 @@ async fn drive_startup_chains_gates_on_beacons() {
         );
     }
 
-    // A beaconless (solo) node: the creator drives the queued P-Chain to
-    // NormalOp and `info.isBootstrapped(P)` flips true.
+    // A beaconless (solo) node: the creator drives the queued chains to
+    // NormalOp and `info.isBootstrapped(P)` flips true. P and X boot; C is
+    // skipped (M6.8).
     {
         let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
         let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
@@ -374,12 +363,16 @@ async fn drive_startup_chains_gates_on_beacons() {
 
         let handles = drive_startup_chains(&manager, network_id, /* beaconless = */ true)
             .await
-            .expect("the creator drives the solo P-Chain");
-        assert_eq!(handles.len(), 1, "exactly one solo P-Chain booted");
+            .expect("the creator drives the solo P- and X-Chains");
+        assert_eq!(
+            handles.len(),
+            2,
+            "the solo P- and X-Chains boot (C skipped)"
+        );
         assert_eq!(
             manager.running_chains(),
-            1,
-            "the booted P-Chain is registered as a running chain"
+            2,
+            "the booted P- and X-Chains are registered as running chains"
         );
 
         let mut flipped = false;
