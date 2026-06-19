@@ -19,6 +19,7 @@
 
 use std::collections::HashSet;
 
+use ava_avm::genesis::{Genesis as AvmGenesis, GenesisAsset as AvmGenesisAsset};
 use ava_avm::txs::codec::GenesisCodec as AvmGenesisCodec;
 use ava_avm::txs::components::{AvaxBaseTx as AvmAvaxBaseTx, Output as AvmOutput};
 use ava_avm::txs::initial_state::InitialState;
@@ -26,7 +27,6 @@ use ava_avm::txs::{
     BaseTx as AvmBaseTx, CODEC_VERSION as AVM_CODEC_VERSION, CreateAssetTx, Tx as AvmTx,
     UnsignedTx as AvmUnsignedTx,
 };
-use ava_codec::AvaCodec;
 use ava_platformvm::genesis::{Genesis as PGenesis, GenesisUtxo, Utxo};
 use ava_platformvm::signer::{ProofOfPossession, Signer};
 use ava_platformvm::stakeable::LockOut;
@@ -49,30 +49,6 @@ use crate::chains::{ChainSpec, genesis_chains};
 use crate::config::{Allocation, Config};
 use crate::error::{GenesisError, Result};
 use crate::split::split_allocations;
-
-// ---------------------------------------------------------------------------
-// AVM genesis shapes (`vms/avm/genesis.go`)
-// ---------------------------------------------------------------------------
-
-/// `avm.Genesis` — the X-Chain genesis state (`Txs []*GenesisAsset`).
-#[derive(AvaCodec, Clone, Debug, Default, PartialEq, Eq)]
-pub struct AvmGenesis {
-    /// The genesis assets, sorted by alias.
-    #[codec]
-    pub txs: Vec<AvmGenesisAsset>,
-}
-
-/// `avm.GenesisAsset` — an alias plus the embedded `CreateAssetTx` (the
-/// embedded Go struct serializes inline after `Alias`).
-#[derive(AvaCodec, Clone, Debug, Default, PartialEq, Eq)]
-pub struct AvmGenesisAsset {
-    /// The asset alias (`"AVAX"` for the genesis asset).
-    #[codec]
-    pub alias: String,
-    /// The embedded `txs.CreateAssetTx`.
-    #[codec]
-    pub tx: CreateAssetTx,
-}
 
 /// `avm.Holder` — how much asset an address owns at genesis (the address is
 /// carried as its 20-byte payload; Go uses the bech32 string).
