@@ -185,19 +185,15 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
 
     // The chain creator constructs + drives the queued chains through the full
     // create_snowman_chain pipeline and reflects each ConsensusContext into the
-    // manager's is_bootstrapped. P and X boot; C is skipped (M6.8).
+    // manager's is_bootstrapped. P, X and C all boot.
     let handles = run_queued_chains(&manager, network_id)
         .await
-        .expect("the chain creator boots the queued P- and X-Chains");
-    assert_eq!(
-        handles.len(),
-        2,
-        "the P- and X-Chains boot (C skipped, M6.8)"
-    );
+        .expect("the chain creator boots the queued P-, X- and C-Chains");
+    assert_eq!(handles.len(), 3, "the P-, X- and C-Chains boot");
     assert_eq!(
         manager.running_chains(),
-        2,
-        "the booted P- and X-Chains are registered as running chains"
+        3,
+        "the booted P-, X- and C-Chains are registered as running chains"
     );
 
     // Poll the manager until is_bootstrapped(P) flips (virtual time; bounded
@@ -225,11 +221,11 @@ async fn chain_creator_drives_queued_pchain_to_bootstrapped() {
 
 /// M9.15 X/C dispatch — the chain creator dispatches by `vm_id`: it boots both
 /// the queued **P-Chain** (`platform_vm_id`) and the queued **X-Chain**
-/// (`avm_id`) to `NormalOp`, flipping `is_bootstrapped(P)` and
-/// `is_bootstrapped(X)` true, while a queued **C-Chain** (`evm_id`) is **skipped**
-/// (its `EvmVm::initialize` genesis wiring is the M6.8 deferral) so
-/// `is_bootstrapped(C)` stays honestly false. Both booted chains register with
-/// the manager (`running_chains() == 2`) and drain cleanly on shutdown.
+/// (`avm_id`) AND the **C-Chain** (`evm_id`) to `NormalOp`, flipping
+/// `is_bootstrapped(P)`, `is_bootstrapped(X)` and `is_bootstrapped(C)` true. The
+/// C-Chain boots through the `EvmVm::from_genesis` construction seam (M6.8
+/// genesis wiring), so all three critical chains register with the manager
+/// (`running_chains() == 3`) and drain cleanly on shutdown.
 #[tokio::test]
 async fn chain_creator_dispatches_xchain_to_bootstrapped() {
     use std::sync::Arc;
@@ -258,8 +254,8 @@ async fn chain_creator_dispatches_xchain_to_bootstrapped() {
 
     // Step 26 queues the platform chain AND the two standard chains the genesis
     // spawns — X (avm, real production genesis) and C (evm) — directly off the
-    // genesis `CreateChainTx`s, so the per-`vm_id` dispatch + the honest C-Chain
-    // skip are exercised end-to-end from real genesis (no synthetic seed).
+    // genesis `CreateChainTx`s, so the per-`vm_id` dispatch is exercised
+    // end-to-end from real genesis (no synthetic seed).
     init_chains(&manager, &genesis_bytes).expect("queue the platform, X- and C-Chains");
     assert_eq!(
         manager.queued_chains().len(),
@@ -273,31 +269,30 @@ async fn chain_creator_dispatches_xchain_to_bootstrapped() {
 
     let handles = run_queued_chains(&manager, network_id)
         .await
-        .expect("the chain creator boots the queued P- and X-Chains");
-    assert_eq!(handles.len(), 2, "P and X boot; C is skipped (M6.8)");
+        .expect("the chain creator boots the queued P-, X- and C-Chains");
+    assert_eq!(handles.len(), 3, "P, X and C all boot");
     assert_eq!(
         manager.running_chains(),
-        2,
-        "exactly the P- and X-Chains are registered as running"
+        3,
+        "the P-, X- and C-Chains are all registered as running"
     );
 
-    // Poll until both P and X flip bootstrapped (solo ⇒ Bootstrapping → NormalOp).
+    // Poll until P, X and C all flip bootstrapped (solo ⇒ Bootstrapping → NormalOp).
     let mut p_flipped = false;
     let mut x_flipped = false;
+    let mut c_flipped = false;
     for _ in 0..400_000 {
         p_flipped |= manager.is_bootstrapped(PLATFORM_CHAIN_ID);
         x_flipped |= manager.is_bootstrapped(x_chain_id);
-        if p_flipped && x_flipped {
+        c_flipped |= manager.is_bootstrapped(c_chain_id);
+        if p_flipped && x_flipped && c_flipped {
             break;
         }
         tokio::task::yield_now().await;
     }
     assert!(p_flipped, "info.isBootstrapped(P) flips true at NormalOp");
     assert!(x_flipped, "info.isBootstrapped(X) flips true at NormalOp");
-    assert!(
-        !manager.is_bootstrapped(c_chain_id),
-        "info.isBootstrapped(C) stays honestly false (C-Chain skipped, M6.8)"
-    );
+    assert!(c_flipped, "info.isBootstrapped(C) flips true at NormalOp");
 
     manager.shutdown(std::time::Duration::from_secs(5)).await;
     for handle in handles {
@@ -353,8 +348,7 @@ async fn drive_startup_chains_gates_on_beacons() {
     }
 
     // A beaconless (solo) node: the creator drives the queued chains to
-    // NormalOp and `info.isBootstrapped(P)` flips true. P and X boot; C is
-    // skipped (M6.8).
+    // NormalOp and `info.isBootstrapped(P)` flips true. P, X and C all boot.
     {
         let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
         let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
@@ -363,16 +357,12 @@ async fn drive_startup_chains_gates_on_beacons() {
 
         let handles = drive_startup_chains(&manager, network_id, /* beaconless = */ true)
             .await
-            .expect("the creator drives the solo P- and X-Chains");
-        assert_eq!(
-            handles.len(),
-            2,
-            "the solo P- and X-Chains boot (C skipped)"
-        );
+            .expect("the creator drives the solo P-, X- and C-Chains");
+        assert_eq!(handles.len(), 3, "the solo P-, X- and C-Chains boot");
         assert_eq!(
             manager.running_chains(),
-            2,
-            "the booted P- and X-Chains are registered as running chains"
+            3,
+            "the booted P-, X- and C-Chains are registered as running chains"
         );
 
         let mut flipped = false;

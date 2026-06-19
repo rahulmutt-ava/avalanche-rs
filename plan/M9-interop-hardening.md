@@ -840,6 +840,40 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > - **Verified (main tree):** `-p ava-genesis -p ava-node -p avalanchers` **53/53**, clippy `--all-targets -D warnings`,
 >   workspace fmt, `lint-determinism` all clean; `-p avalanchers --release` build + live boot green.
 
+> **STEP (b) — C-CHAIN DISPATCH (2026-06-19, ralph iteration, TDD; closes the M6.8 `EvmVm::initialize` genesis-wiring
+> deferral for the last standard chain). ★ A SOLO LIVE NODE NOW FLIPS `info.isBootstrapped(C)=true`.** The prior waves
+> skipped the `evm_id()` branch because `EvmVm::new` needed *pre-built* collaborators (provider/config/store) — there
+> was no path from genesis bytes to a running VM through the generic `boot_chain`. Closed by a new construction seam:
+> - **`ava-evm` (`vm.rs`):** new `EvmVm::from_genesis(network_id, data_dir, genesis_bytes) -> Result<(EvmVm, Id)>` —
+>   the M6.8 `golden::cchain_genesis_root` parse + alloc-materialization path, now wired into VM construction:
+>   `CChainGenesis::parse` → `AvaChainSpec::c_chain(network_id, Chain::from_id(config.chainId))` → open Firewood at
+>   `data_dir` → seed bytecode side store → `propose_from_bundle(alloc) + commit` on a fresh db → `genesis_header(root)`
+>   → `EvmVm::new`. **★ Also seeds the accepted genesis block into the `verified` tree** so the engine's bootstrap
+>   (`ava-engine snowman::bootstrap::start` calls `vm.get_block(last_accepted)` and reads its height) resolves the
+>   genesis tip — without this, `get_block(genesis)` returned `NotFound`, `start()` errored, and C stalled before
+>   `NormalOp` (the symptom that first surfaced live). Side stores (canonical/bytecode/block-hashes) are in-memory
+>   here — threading the node's real chain db is the deferred real-DB half.
+> - **`avalanchers` (`wiring/chains.rs`):** new `boot_cchain` opens a `tempfile::TempDir` for the C-Chain Firewood
+>   state db (owned by the boot handle — `PChainBootHandle._data_dir`/`BootSpec.data_dir` added so it outlives the VM),
+>   builds the VM via `EvmVm::from_genesis`, and drives it through the same generic `boot_chain` solo pipeline as P/X.
+>   `run_queued_chains`' `evm_id()` branch now registers + boots C (was: log + skip). Two `Error` variants added
+>   (`CChainVm(#[from] ava_evm::Error)`, `DataDir(#[from] io::Error)`); `ava-evm` + `tempfile` added to `avalanchers` deps.
+> - **Tests:** `ava-evm` `tests/vm_genesis.rs::from_genesis_builds_vm_at_coreth_genesis_root` (state root + genesis id
+>   + `get_block(genesis)` height-0 vs the coreth `expected.json` oracle). `chain_creator_dispatches_xchain_to_bootstrapped`
+>   + the two P-Chain creator tests flipped to the **3-booted** shape (P+X+C all flip `is_bootstrapped` true,
+>   `running_chains()==3`).
+> - **★ LIVE PROOF (this iteration, real process):** release binary, solo
+>   `avalanchers --network-id=local --db-type=memdb --staking-ephemeral-{cert,signer}-enabled --sybil-protection-enabled=false`
+>   node, curled `info.isBootstrapped`: **P=true, X=true, C=true** (C flips for the first time live), `kill -INT` →
+>   clean exit 0. All three standard chains now bootstrap on a solo node.
+> - **★ STILL DEFERRED:** **SAE** dispatch; **real-DB threading** (booted chains still use `boot_chain`'s in-process
+>   `MemDb`/router/loopback `Sender`, not the assembled `Node`'s real handles — the generic↔trait-object impedance);
+>   **multi-node `Sender`** for mixed-net. C-Chain re-open (persisted-tip path in `from_genesis`) is exercised only by
+>   the materialize-on-fresh-db guard, not yet by an end-to-end restart test.
+> - **Verified (main tree):** `-p ava-evm` **186/186** (single-threaded, firewood-ethhash global switch),
+>   `-p ava-genesis -p ava-node -p avalanchers` **53/53**, clippy `--all-targets -D warnings`, workspace fmt +
+>   build, `lint-determinism` all clean; `-p avalanchers --release` build + live boot green.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

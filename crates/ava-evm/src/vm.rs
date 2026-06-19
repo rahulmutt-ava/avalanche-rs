@@ -54,6 +54,7 @@
 //! returns [`Error::NotFound`] — coreth's `ErrNoPendingBlock` shape.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -62,8 +63,8 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
 
-use ava_database::DynDatabase;
-use ava_evm_reth::B256;
+use ava_database::{DynDatabase, MemDb};
+use ava_evm_reth::{B256, Chain, EMPTY_ROOT_HASH};
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
@@ -78,9 +79,12 @@ use ava_vm::health::HealthCheck;
 use ava_vm::vm::{HttpHandler, LockOptions, Vm, VmEvent, VmHttpService};
 
 use crate::atomic::mempool::AtomicMempool;
-use crate::block::{EvmBlock, EvmBlockContext, decode_ava_evm_block};
+use crate::block::{
+    AvaBlockParts, EvmBlock, EvmBlockContext, assemble_ava_block, decode_ava_evm_block,
+};
 use crate::builder::BlockBuilderDriver;
 use crate::canonical::CanonicalStore;
+use crate::chainspec::{AvaChainSpec, CChainGenesis};
 use crate::error::Error;
 use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
 use crate::rpc::admin::AdminRpc;
@@ -332,6 +336,96 @@ impl EvmVm {
             engine_state: EngineState::Initializing,
             clock: Arc::new(RealClock),
         }
+    }
+
+    /// Builds a fully-initialized `EvmVm` straight from the production C-Chain
+    /// genesis JSON — the construction seam the C-Chain boot path
+    /// (`run_queued_chains`, M9.15) drives so a solo node can dispatch the
+    /// C-Chain to `NormalOp`. This is the M6.8 `golden::cchain_genesis_root`
+    /// parse + alloc-materialization path, now wired into VM construction (the
+    /// completion of the `Vm::initialize` genesis wiring noted on [`EvmVm::new`]).
+    ///
+    /// `network_id` selects the C-Chain fork schedule ([`AvaChainSpec::c_chain`]);
+    /// the chain id is read from the genesis `config`. `data_dir` is the on-disk
+    /// Firewood directory (the chain's `chain_data_dir`). `genesis_bytes` is the
+    /// coreth `core.Genesis` JSON the genesis `CreateChainTx` carries (M5.f4).
+    /// Returns the VM paired with its genesis block id
+    /// (`keccak256(genesis header)`).
+    ///
+    /// The genesis `alloc` is materialized + committed only on a fresh db (the
+    /// Firewood tip is the empty-trie root); on re-open the persisted tip stands.
+    /// The block-metadata side stores (canonical / bytecode / block-hashes) are
+    /// in-memory here — threading the node's real chain db through this seam is
+    /// the deferred real-DB-threading half of the chains milestone (plan/M9.15).
+    ///
+    /// # Errors
+    /// Returns [`Error::GenesisParse`] on non-UTF-8 / malformed genesis JSON or a
+    /// bytecode-seed failure, or a provider error from opening Firewood or
+    /// materializing the alloc.
+    pub fn from_genesis(
+        network_id: u32,
+        data_dir: impl AsRef<Path>,
+        genesis_bytes: &[u8],
+    ) -> Result<(Self, Id), Error> {
+        let json = std::str::from_utf8(genesis_bytes)
+            .map_err(|e| Error::GenesisParse(format!("genesis bytes are not UTF-8: {e}")))?;
+        let genesis = CChainGenesis::parse(json)?;
+
+        // Fork schedule from the chosen network; chain id from the genesis config.
+        let chain_spec = AvaChainSpec::c_chain(network_id, Chain::from_id(genesis.chain_id()));
+        let config = AvaEvmConfig::new(chain_spec);
+
+        // Open the Firewood-ethhash state db at the chain's data dir. The bytecode
+        // + block-hash side stores are in-memory (real-DB threading deferred).
+        let bytecode: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+        let block_hashes: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+        let provider = FirewoodStateProvider::open(data_dir, bytecode, block_hashes)?;
+
+        // Seed contract bytecode (the state root commits only the code_hash; the
+        // bytecode lives in the side KV — spec 10 §5.1).
+        for (code_hash, code) in genesis.bytecode() {
+            provider
+                .bytecode_store()
+                .put(code_hash.as_slice(), code)
+                .map_err(|e| Error::GenesisParse(format!("seed genesis bytecode: {e}")))?;
+        }
+
+        // Materialize + commit the alloc on a fresh db (the empty-trie tip); a
+        // re-opened db keeps its persisted tip.
+        if provider.root() == EMPTY_ROOT_HASH {
+            let root = provider.propose_from_bundle(genesis.alloc_bundle())?;
+            provider.commit(root)?;
+        }
+        let genesis_root = provider.root();
+        let genesis_header = genesis.genesis_header(genesis_root);
+        let genesis_id = id_of(genesis_header.hash());
+
+        let canonical = Arc::new(CanonicalStore::new(Arc::new(MemDb::new())));
+        let vm = Self::new(provider, config, canonical, genesis_id);
+
+        // Seed the accepted genesis block into the processing tree so the engine's
+        // bootstrap (`vm.get_block(last_accepted)`, ava-engine
+        // `snowman::bootstrap`) resolves the genesis tip — mirroring how `accept`
+        // retains accepted blocks in `verified` for resolvability. Genesis has no
+        // body/atomic/ext_data; its pre-commit root IS the committed genesis root.
+        let genesis_block = assemble_ava_block(
+            AvaBlockParts {
+                header: genesis_header,
+                transactions: Vec::new(),
+                atomic_txs: Vec::new(),
+                ext_data: Vec::new(),
+                version: 0,
+            },
+            vm.evm_config.chain_spec(),
+        )?;
+        vm.shared.verified.insert(
+            genesis_id,
+            ProcessingBlock {
+                block: genesis_block,
+                precommit_root: genesis_root,
+            },
+        );
+        Ok((vm, genesis_id))
     }
 
     /// Overrides the injectable wall clock (specs/24 hazard #5). Builder-style

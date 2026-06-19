@@ -77,6 +77,12 @@ pub enum Error {
     /// The network genesis could not be built / parsed.
     #[error("genesis: {0}")]
     Genesis(#[from] ava_genesis::GenesisError),
+    /// The C-Chain VM could not be built from genesis (`EvmVm::from_genesis`).
+    #[error("c-chain vm: {0}")]
+    CChainVm(#[from] ava_evm::error::Error),
+    /// The C-Chain on-disk state scratch dir could not be created.
+    #[error("c-chain data dir: {0}")]
+    DataDir(#[from] std::io::Error),
 }
 
 /// Result alias for the wiring module.
@@ -609,6 +615,11 @@ pub struct PChainBootHandle {
     /// The handler sink, kept alive for the handler's lifetime (dropping it
     /// would unregister the chain from the router).
     pub _sink: ava_engine::networking::handler::ChainHandlerSink,
+    /// The chain's on-disk scratch dir (the C-Chain Firewood state db), kept
+    /// alive for the booted chain's lifetime; dropping it would delete the state
+    /// db out from under the running VM. `None` for chains with no on-disk state
+    /// (P/X boot over in-memory state).
+    pub _data_dir: Option<tempfile::TempDir>,
 }
 
 /// Materializes the **real `ava_platformvm::PlatformVm`** (seeded from the
@@ -670,6 +681,7 @@ async fn boot_pchain(
             avax_asset_id,
             genesis_id,
             include_self_beacon,
+            data_dir: None,
         },
         ava_platformvm::vm::PlatformVm::new(),
         &genesis_bytes,
@@ -717,8 +729,53 @@ pub async fn boot_xchain(
             avax_asset_id,
             genesis_id,
             include_self_beacon: false,
+            data_dir: None,
         },
         ava_avm::vm::AvmVm::new(),
+        genesis_bytes,
+        token,
+    )
+    .await
+}
+
+/// Boots the real [`ava_evm::vm::EvmVm`] from the queued production C-Chain
+/// genesis (the genesis `CreateChainTx`'s `genesis_data`, a coreth
+/// `core.Genesis` JSON) through the same solo-node pipeline as P/X, to
+/// `NormalOp` (M9.15 C-Chain dispatch). The VM is built via
+/// [`EvmVm::from_genesis`](ava_evm::vm::EvmVm::from_genesis) (the M6.8 genesis
+/// wiring); its Firewood state db is opened in a fresh scratch dir that the
+/// returned handle owns (dropping it would delete the state db under the VM).
+///
+/// # Errors
+/// Propagates a scratch-dir / genesis-parse / Firewood-open / consensus boot
+/// failure.
+pub async fn boot_cchain(
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    genesis_bytes: &[u8],
+    token: CancellationToken,
+) -> Result<PChainBootHandle> {
+    // The C-Chain Firewood state db lives in an owned scratch dir kept alive by
+    // the boot handle for the running VM's lifetime.
+    let data_dir = tempfile::tempdir()?;
+    let (vm, genesis_id) =
+        ava_evm::vm::EvmVm::from_genesis(network_id, data_dir.path(), genesis_bytes)?;
+    boot_chain(
+        BootSpec {
+            network_id,
+            chain_id,
+            subnet_id,
+            primary_alias: "C",
+            // The C-Chain's EVM genesis carries no AVAX asset id (AVAX is the
+            // P-Chain's native asset); the in-process atomic mempool is not
+            // exercised during boot, so EMPTY matches `EvmVm::new`'s mempool seed.
+            avax_asset_id: Id::EMPTY,
+            genesis_id,
+            include_self_beacon: false,
+            data_dir: Some(data_dir),
+        },
+        vm,
         genesis_bytes,
         token,
     )
@@ -735,6 +792,9 @@ struct BootSpec {
     avax_asset_id: Id,
     genesis_id: Id,
     include_self_beacon: bool,
+    /// The chain's on-disk state dir, moved into the boot handle to outlive the
+    /// running VM (the C-Chain Firewood db). `None` for in-memory chains (P/X).
+    data_dir: Option<tempfile::TempDir>,
 }
 
 /// Generic in-process chain boot: wires the network-facing loopback impls (the
@@ -849,6 +909,7 @@ where
         genesis_id: spec.genesis_id,
         beacons: beacon_nodes,
         _sink: chain.sink,
+        _data_dir: spec.data_dir,
     })
 }
 
@@ -926,14 +987,18 @@ pub async fn run_queued_chains(
             )
             .await?
         } else if params.vm_id == evm_id() {
-            // C-Chain: blocked on M6.8 (EvmVm::initialize is a stub — EvmVm::new
-            // is the construction seam). Skipped, not faked, so is_bootstrapped(C)
-            // stays honestly false until the genesis wiring lands.
-            tracing::warn!(
-                chain_id = %params.id,
-                "skipping queued C-Chain: EvmVm::initialize genesis wiring is M6.8 (not yet dispatchable)"
-            );
-            continue;
+            let (chain_token, _tasks) =
+                manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+            // Boot the real EvmVm from the queued production C genesis through the
+            // same solo-node pipeline (M6.8 genesis wiring via EvmVm::from_genesis).
+            boot_cchain(
+                network_id,
+                params.id,
+                params.subnet_id,
+                &params.genesis_data,
+                chain_token,
+            )
+            .await?
         } else {
             // SAE / unknown VM dispatch is the deferred half of the chains
             // milestone.

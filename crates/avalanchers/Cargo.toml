@@ -52,10 +52,19 @@ ava-platformvm = { path = "../ava-platformvm" }
 # synthetic X-Chain genesis and drive it in-process through the same
 # `create_snowman_chain` pipeline as the P-Chain, to `NormalOp`.
 ava-avm = { path = "../ava-avm" }
+# Real C-Chain boot (M9.15 C-Chain dispatch): build a fully-initialized
+# `ava_evm::EvmVm` from the production C-Chain genesis JSON
+# (`EvmVm::from_genesis`, M6.8 genesis wiring) and drive it in-process through
+# the same `create_snowman_chain` pipeline as P/X, to `NormalOp`.
+ava-evm = { path = "../ava-evm" }
 ava-genesis = { path = "../ava-genesis" }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+# On-disk scratch dir for the C-Chain Firewood state db (the chain's
+# `chain_data_dir`); kept alive for the booted chain's lifetime via the boot
+# handle.
+tempfile = "3"
 # Chain-creator diagnostics (e.g. logging queued chains whose VM dispatch is
 # deferred), matching the `ava-node` logging convention.
 tracing = { workspace = true }

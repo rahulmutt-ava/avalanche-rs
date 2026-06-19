@@ -298,8 +298,11 @@ The reuse-contract task is M6.26 (one EVM engine, two drivers — SAE's `ava-sae
 > Fold the store-schema gap into M6.23/24. (2) `build_block` returns `Err(NotFound)` ("no pending block",
 > coreth `ErrNoPendingBlock` shape) pending the **M6.20** builder driver (`crate::builder` still a stub) — a
 > documented seam, not a blocker. (3) `Vm::initialize` is minimal (records the `ChainContext`); genesis-JSON
-> collaborator construction is M6.8 — `EvmVm::new(provider, config, blocks, genesis_id)` is the construction
-> seam; RPC handlers (M6.23/24) + state-sync probes (M6.25) stubbed empty/`None` per the avm/platformvm
+> collaborator construction landed as **`EvmVm::from_genesis(network_id, data_dir, genesis_bytes)`** (M9.15
+> C-Chain dispatch wave, 2026-06-19): it runs the M6.8 parse + alloc-materialization through `EvmVm::new` and
+> seeds the genesis block into `verified` so the engine bootstrap's `get_block(last_accepted)` resolves. The
+> pre-built `EvmVm::new(provider, config, blocks, genesis_id)` remains the test + collaborator-injection seam.
+> RPC handlers (M6.23/24) + state-sync probes (M6.25) stubbed empty/`None` per the avm/platformvm
 > precedent. (4) `dashmap = "6"` declared directly in `crates/ava-evm/Cargo.toml` (not a workspace dep; already
 > in `Cargo.lock` via reth's graph — no new external crate) — consider promoting to a workspace dep. Deps added:
 > `ava-snow`, `ava-vm`(already), `async-trait`, `tokio-util`, `dashmap`, `arc-swap`; dev `tokio`. **No facade
