@@ -406,3 +406,60 @@ fn version_and_help_still_work() {
     let h = Command::new(exe).arg("--help").output().unwrap();
     assert!(h.status.success(), "--help exits 0");
 }
+
+/// Real-DB threading — the chain creator boots every queued chain over **one
+/// shared persistent base db** (Go's model: a single base DB, a `prefixdb` per
+/// chain) rather than each chain using its own ephemeral in-memory db. The
+/// caller-supplied `Arc<dyn DynDatabase>` is empty before boot and non-empty
+/// after, proving the booted P-, X- and C-Chains persisted their consensus / VM
+/// state into it (each namespaced under `build_db_stack`'s per-chain prefix).
+/// This is the prerequisite for live-node restart persistence — a solo
+/// `avalanchers` node now threads its real `node.db` through this path.
+#[tokio::test]
+async fn run_queued_chains_persists_into_supplied_base_db() {
+    use std::sync::Arc;
+
+    use ava_database::{DynDatabase, MemDb};
+    use ava_node::init::chain_manager::{AssemblyChainManager, PLATFORM_CHAIN_ID, init_chains};
+    use ava_validators::{DefaultManager, ValidatorManager};
+    use avalanchers::wiring::chains::run_queued_chains_with_db;
+
+    fn db_has_keys(db: &Arc<dyn DynDatabase>) -> bool {
+        db.new_iterator_with_start_and_prefix(&[], &[]).next()
+    }
+
+    let network_id = 1u32; // mainnet embedded genesis (M8-complete source).
+    let (genesis_bytes, _avax_asset_id) =
+        ava_genesis::genesis_bytes(network_id, None).expect("build genesis bytes");
+
+    let bootstrappers: Arc<dyn ValidatorManager> = Arc::new(DefaultManager::new());
+    let critical = std::iter::once(PLATFORM_CHAIN_ID).collect();
+    let manager = Arc::new(AssemblyChainManager::new(critical, bootstrappers));
+    init_chains(&manager, &genesis_bytes).expect("queue the P-, X- and C-Chains");
+
+    // One shared base db for the whole node, threaded into the chain creator.
+    let base: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+    assert!(
+        !db_has_keys(&base),
+        "run_queued_chains_with_db(): the base db is empty before any chain boots"
+    );
+
+    let handles = run_queued_chains_with_db(&manager, network_id, Arc::clone(&base))
+        .await
+        .expect("boot the queued P-, X- and C-Chains over the supplied base db");
+    assert_eq!(
+        handles.len(),
+        3,
+        "P, X and C all boot over the shared base db"
+    );
+
+    assert!(
+        db_has_keys(&base),
+        "run_queued_chains_with_db(): the booted chains persisted state into the supplied base db"
+    );
+
+    manager.shutdown(std::time::Duration::from_secs(5)).await;
+    for handle in handles {
+        handle.join.await.expect("handler task joined cleanly");
+    }
+}

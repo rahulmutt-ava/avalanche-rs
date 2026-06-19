@@ -874,6 +874,29 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `-p ava-genesis -p ava-node -p avalanchers` **53/53**, clippy `--all-targets -D warnings`, workspace fmt +
 >   build, `lint-determinism` all clean; `-p avalanchers --release` build + live boot green.
 
+> **STEP (c) — REAL-DB THREADING (2026-06-19, ralph iteration, TDD; closes the "real-DB threading" deferral from
+> STEP (b)).** The booted chains no longer each get their own ephemeral in-process `MemDb` — they now share **one
+> persistent base db**, namespaced per chain by `build_db_stack`'s `prefixdb(chain_id)` (Go's exact model: a single
+> base DB, a prefixed sub-db per chain). The live `avalanchers` node threads its real assembled `node.db`
+> (`Arc<dyn DynDatabase>`) through, so consensus / VM state now lands in the persistent backend rather than being
+> discarded each boot — the prerequisite for restart persistence.
+> - **`avalanchers` (`wiring/chains.rs`):** `boot_chain` gains a `base_db: Arc<dyn DynDatabase>` param and wraps it in
+>   the existing object-safe `ava_node::init::database::DynDb` bridge (the generic↔trait-object impedance noted in
+>   STEP (b)) instead of `MemDb::new()`; `boot_pchain`/`boot_xchain`/`boot_cchain` forward it. New `*_with_db` variants
+>   `run_queued_chains_with_db` + `drive_startup_chains_with_db` take the base db explicitly (all chains in one node
+>   share it, `Arc::clone`d per chain); the no-db `run_queued_chains`/`drive_startup_chains` wrappers supply a fresh
+>   ephemeral `MemDb` for tests via a `fresh_mem_db()` helper. **The C-Chain's EVM *state* trie stays in its own
+>   Firewood `TempDir`** (STEP (b)); only the snowman/proposervm consensus metadata threads through the shared base.
+> - **`avalanchers` (`main.rs`):** the live dispatch call now uses `drive_startup_chains_with_db(.., Arc::clone(&node.db))`.
+> - **Test:** `tests/in_process_chain.rs::run_queued_chains_persists_into_supplied_base_db` — a caller-supplied base db
+>   is empty before boot and **non-empty after** P/X/C boot, proving the chains persist into the shared base (with the
+>   old `MemDb::new()` the supplied db stayed empty).
+> - **★ STILL DEFERRED:** **SAE** dispatch (no `vm_id` in `chain_manager`; the local-network genesis queues no SAE
+>   chain, so it is not exercisable by a solo node without custom genesis); **multi-node `Sender`** for mixed-net; an
+>   end-to-end **restart** test that re-opens the same base db and asserts the persisted tip resumes.
+> - **Verified (main tree):** `-p avalanchers` **13/13**, clippy `--all-targets -D warnings` (avalanchers + all
+>   dependents), workspace fmt, `single_runtime_lint` all clean.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

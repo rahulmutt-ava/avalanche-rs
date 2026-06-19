@@ -165,10 +165,14 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
         // bootstrap path. The handles must outlive `dispatch` — node shutdown
         // (step 5) cancels and drains the registered chains.
         let beaconless = node.config.bootstrap_config.bootstrappers.is_empty();
-        let _chain_handles = avalanchers::wiring::chains::drive_startup_chains(
+        // Thread the assembled node's real persistent database into the chain
+        // creator so every booted chain shares one base db (prefixdb-namespaced
+        // per chain) — Go's model, and the prerequisite for restart persistence.
+        let _chain_handles = avalanchers::wiring::chains::drive_startup_chains_with_db(
             &node.chain_manager,
             node.config.network_id,
             beaconless,
+            Arc::clone(&node.db),
         )
         .await
         .context("failed to drive the startup chains")?;

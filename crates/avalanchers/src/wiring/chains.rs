@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 use ava_chains::create_snowman_chain;
 use ava_chains::manager::{DynProbe, Factory, ProbeableVm, VmManager};
 use ava_crypto::staking;
-use ava_database::MemDb;
+use ava_database::{DynDatabase, MemDb};
 use ava_engine::networking::router::ChainRouter;
 use ava_engine::networking::timeout::{AdaptiveTimeoutConfig, AdaptiveTimeoutManager};
 use ava_proposervm::{BlockSigner, StakingIdentity};
@@ -638,7 +638,15 @@ pub struct PChainBootHandle {
 /// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
 /// timeout-manager failures.
 pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle> {
-    boot_pchain(network_id, true, CancellationToken::new()).await
+    boot_pchain(network_id, true, fresh_mem_db(), CancellationToken::new()).await
+}
+
+/// A fresh ephemeral in-memory base db — the default for the in-process boot
+/// entrypoints and the `*_with_db`-less wrappers (tests / non-persistent runs).
+/// The live `avalanchers` node instead threads its real `Arc<dyn DynDatabase>`
+/// (the assembled `Node`'s persistent backend) through the `*_with_db` path.
+fn fresh_mem_db() -> Arc<dyn DynDatabase> {
+    Arc::new(MemDb::new())
 }
 
 /// Like [`boot_in_process_pchain`], but boots as a **solo node with an empty
@@ -655,7 +663,7 @@ pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle>
 /// Propagates genesis-build, DB / VM-init, consensus-construction, identity, or
 /// timeout-manager failures.
 pub async fn boot_in_process_pchain_to_normalop(network_id: u32) -> Result<PChainBootHandle> {
-    boot_pchain(network_id, false, CancellationToken::new()).await
+    boot_pchain(network_id, false, fresh_mem_db(), CancellationToken::new()).await
 }
 
 /// Shared body for the two P-Chain boot entrypoints. When `include_self_beacon`
@@ -666,6 +674,7 @@ pub async fn boot_in_process_pchain_to_normalop(network_id: u32) -> Result<PChai
 async fn boot_pchain(
     network_id: u32,
     include_self_beacon: bool,
+    base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
 ) -> Result<PChainBootHandle> {
     // Real P-Chain genesis for the network (the M8-complete embedded source).
@@ -685,6 +694,7 @@ async fn boot_pchain(
         },
         ava_platformvm::vm::PlatformVm::new(),
         &genesis_bytes,
+        base_db,
         token,
     )
     .await
@@ -713,6 +723,7 @@ pub async fn boot_xchain(
     chain_id: Id,
     subnet_id: Id,
     genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
 ) -> Result<PChainBootHandle> {
     // The AVAX asset id is the index-0 genesis asset (specs 09 §1); the X-Chain
@@ -733,6 +744,7 @@ pub async fn boot_xchain(
         },
         ava_avm::vm::AvmVm::new(),
         genesis_bytes,
+        base_db,
         token,
     )
     .await
@@ -754,10 +766,13 @@ pub async fn boot_cchain(
     chain_id: Id,
     subnet_id: Id,
     genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
 ) -> Result<PChainBootHandle> {
     // The C-Chain Firewood state db lives in an owned scratch dir kept alive by
-    // the boot handle for the running VM's lifetime.
+    // the boot handle for the running VM's lifetime. (This is the EVM *state*
+    // trie store; the snowman/proposervm consensus metadata still persists into
+    // the shared `base_db` like every other chain.)
     let data_dir = tempfile::tempdir()?;
     let (vm, genesis_id) =
         ava_evm::vm::EvmVm::from_genesis(network_id, data_dir.path(), genesis_bytes)?;
@@ -777,6 +792,7 @@ pub async fn boot_cchain(
         },
         vm,
         genesis_bytes,
+        base_db,
         token,
     )
     .await
@@ -807,6 +823,7 @@ async fn boot_chain<V>(
     spec: BootSpec,
     inner_vm: V,
     genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
 ) -> Result<PChainBootHandle>
 where
@@ -876,7 +893,11 @@ where
         spec.chain_id,
         spec.subnet_id,
         single_node_params(),
-        MemDb::new(),
+        // The node's one persistent base db (Go's model: a single base DB,
+        // `prefixdb`-namespaced per chain by `build_db_stack`). Bridged through
+        // the object-safe `DynDb` so the generic `create_snowman_chain` runs
+        // over the dynamically-chosen backend without making boot generic.
+        ava_node::init::database::DynDb::new(base_db),
         spec.primary_alias,
         chain_ctx,
         clock,
@@ -932,19 +953,25 @@ where
 /// derived from the node's root subnet token, and a live reporter is installed
 /// so `is_bootstrapped(chain_id)` reflects the engine reaching `NormalOp`.
 ///
-/// **Documented deferrals (the larger chains milestone):**
-/// - The **C-Chain** (`vm_id == evm_id()`) is logged and **skipped**:
-///   `ava_evm::EvmVm::initialize` is the M6.8 stub (`EvmVm::new` is the
-///   construction seam, not `initialize`), so it cannot reconstruct its
-///   provider/config/store from genesis bytes through `create_snowman_chain`
-///   yet. Once M6.8 lands, the C branch boots through [`boot_chain`] identically.
-/// - SAE VM dispatch and the real ava-network-backed `Sender` for multi-node
-///   frontier exchange — both tracked in plan/M9.15.
+/// The C-Chain (`vm_id == evm_id()`) now boots too, through the
+/// [`EvmVm::from_genesis`](ava_evm::vm::EvmVm::from_genesis) construction seam
+/// (M6.8 genesis wiring), so a live solo node flips `is_bootstrapped` true for
+/// all three standard chains.
 ///
-/// `init_chains` (specs/12 §2.2) now queues the X- and C-Chains live off the
-/// genesis `CreateChainTx`s — each carries the production `genesis_data`
-/// `AvmVm::initialize` parses (M5.f4) — so a live solo node flips
-/// `is_bootstrapped(X)` too (C stays false pending M6.8).
+/// **Documented deferrals (the larger chains milestone):** SAE VM dispatch and
+/// the real ava-network-backed `Sender` for multi-node frontier exchange — both
+/// tracked in plan/M9.15.
+///
+/// All booted chains share **one persistent base db** (`base_db`), namespaced
+/// per chain by `build_db_stack`'s `prefixdb(chain_id)` — Go's model (one base
+/// DB, a prefixed sub-db per chain). This variant of [`run_queued_chains`] takes
+/// that base db explicitly so the live `avalanchers` node can thread its real
+/// `node.db` through; the no-arg [`run_queued_chains`] wrapper supplies a fresh
+/// ephemeral [`MemDb`] for tests / non-persistent runs.
+///
+/// `init_chains` (specs/12 §2.2) queues the X- and C-Chains live off the genesis
+/// `CreateChainTx`s — each carries the production `genesis_data` `AvmVm`/`EvmVm`
+/// parse — so a live solo node flips `is_bootstrapped(X)` and `(C)` too.
 ///
 /// # Errors
 /// Propagates a chain boot failure (genesis / DB / VM-init / consensus /
@@ -952,6 +979,22 @@ where
 pub async fn run_queued_chains(
     manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
     network_id: u32,
+) -> Result<Vec<PChainBootHandle>> {
+    run_queued_chains_with_db(manager, network_id, fresh_mem_db()).await
+}
+
+/// Like [`run_queued_chains`], but driving every queued chain over the
+/// caller-supplied persistent `base_db` (shared across chains, prefixed per
+/// chain by `build_db_stack`). This is the persistence-bearing path the live
+/// node uses; see [`run_queued_chains`] for the dispatch semantics.
+///
+/// # Errors
+/// Propagates a chain boot failure (genesis / DB / VM-init / consensus /
+/// identity / timeout-manager).
+pub async fn run_queued_chains_with_db(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    base_db: Arc<dyn DynDatabase>,
 ) -> Result<Vec<PChainBootHandle>> {
     use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
@@ -971,8 +1014,9 @@ pub async fn run_queued_chains(
             let (chain_token, _tasks) =
                 manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
             // Boot the real PlatformVm as a solo node (empty beacons ⇒
-            // Bootstrapping → NormalOp).
-            boot_pchain(network_id, false, chain_token).await?
+            // Bootstrapping → NormalOp). All chains share the one base db,
+            // prefixdb-namespaced per chain by `build_db_stack`.
+            boot_pchain(network_id, false, Arc::clone(&base_db), chain_token).await?
         } else if params.vm_id == avm_id() {
             let (chain_token, _tasks) =
                 manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
@@ -983,6 +1027,7 @@ pub async fn run_queued_chains(
                 params.id,
                 params.subnet_id,
                 &params.genesis_data,
+                Arc::clone(&base_db),
                 chain_token,
             )
             .await?
@@ -996,6 +1041,7 @@ pub async fn run_queued_chains(
                 params.id,
                 params.subnet_id,
                 &params.genesis_data,
+                Arc::clone(&base_db),
                 chain_token,
             )
             .await?
@@ -1046,12 +1092,12 @@ pub async fn run_queued_chains(
 /// node shutdown step 5 cancels and drains it).
 ///
 /// **Documented deferrals (unchanged):** the booted chains still use
-/// [`run_queued_chains`]'s own in-process `MemDb`/router/loopback `Sender`
-/// (the assembled `Node`'s real `Arc<dyn DynDatabase>`/router are not yet
-/// threaded through the generic `create_snowman_chain`); the C-Chain dispatch is
-/// blocked on the M6.8 `EvmVm::initialize` genesis wiring; live X-Chain dispatch
-/// further needs `init_chains` to queue a parseable X genesis; and the real
+/// [`run_queued_chains`]'s own in-process router/loopback `Sender`; the real
 /// multi-node `Sender` remains the larger chains-milestone work (plan/M9.15).
+/// The persistent base db **is** now threaded — [`drive_startup_chains_with_db`]
+/// takes the assembled `Node`'s real `Arc<dyn DynDatabase>` so chain state
+/// survives across restarts; this no-db wrapper supplies a fresh ephemeral
+/// [`MemDb`] for tests.
 ///
 /// # Errors
 /// Propagates a chain boot failure from [`run_queued_chains`].
@@ -1060,6 +1106,22 @@ pub async fn drive_startup_chains(
     network_id: u32,
     beaconless: bool,
 ) -> Result<Vec<PChainBootHandle>> {
+    drive_startup_chains_with_db(manager, network_id, beaconless, fresh_mem_db()).await
+}
+
+/// Like [`drive_startup_chains`], but driving the queued chains over the
+/// assembled node's real persistent `base_db` (so consensus / VM state survives
+/// a restart). This is the path the live `avalanchers` binary calls with
+/// `node.db`; see [`drive_startup_chains`] for the beacon-gating semantics.
+///
+/// # Errors
+/// Propagates a chain boot failure from [`run_queued_chains_with_db`].
+pub async fn drive_startup_chains_with_db(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    beaconless: bool,
+    base_db: Arc<dyn DynDatabase>,
+) -> Result<Vec<PChainBootHandle>> {
     if !beaconless {
         tracing::info!(
             network_id,
@@ -1067,5 +1129,5 @@ pub async fn drive_startup_chains(
         );
         return Ok(Vec::new());
     }
-    run_queued_chains(manager, network_id).await
+    run_queued_chains_with_db(manager, network_id, base_db).await
 }
