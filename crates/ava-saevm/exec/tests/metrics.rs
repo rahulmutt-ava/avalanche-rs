@@ -238,12 +238,26 @@ async fn queue_drain_records_queue_metrics() {
         .await
         .expect("enqueue");
 
-    // Block until the drain loop has executed the block (deterministic — no
-    // sleeps): the chain-head event fires after execute_one + mark_dequeued.
+    // Block until the drain loop has executed the block (no sleeps): the
+    // chain-head event is emitted by `execute_one` (= "block executed").
     let evt = head.recv().await.expect("chain-head event");
     assert_eq!(evt.height, 1, "block 1 executed");
 
-    let families = registry.gather();
+    // The drain loop records the *dequeue* metrics (`mark_dequeued`:
+    // queue-residence histogram + queue gauges) immediately AFTER `execute_one`
+    // returns — i.e. just after the chain-head event fires — so they settle a
+    // beat later than the event. Poll (bounded, deterministic yield loop, no
+    // wall-clock sleep) until the queue-residence observation lands, rather than
+    // assuming zero-delay ordering (which races under concurrent load).
+    let mut families = registry.gather();
+    for _ in 0..1_000_000 {
+        if hist_count(&families, "execution_queue_duration_seconds") == Some(1) {
+            break;
+        }
+        tokio::task::yield_now().await;
+        families = registry.gather();
+    }
+
     assert_eq!(
         counter(&families, "accepted_gas_limit_total"),
         Some(GAS_LIMIT),
