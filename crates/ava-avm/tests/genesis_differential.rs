@@ -19,6 +19,10 @@ use ava_types::id::Id;
 
 /// AVM genesis bytes for the local network (network-id 12345), recorded from
 /// the Go oracle (`genesis.FromConfig` X-Chain block, avalanchego local).
+///
+/// Recorder: `genesis/avm_genesis_oracle_test.go` in `~/avalanchego`
+/// (env-gated `AVAX_GENESIS_ORACLE=1`; `avm.NewGenesis(...).Bytes()` + `AVAXAssetID`).
+/// Go oracle source HEAD: `84533ec` (avalanchego, rpcchainvm=45).
 const LOCAL_GENESIS_HEX: &str = include_str!("vectors/genesis/local.hex");
 
 /// Index-0 (AVAX) asset id recorded from the Go oracle.

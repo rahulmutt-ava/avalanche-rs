@@ -240,6 +240,7 @@ pub struct AvmVm {
     /// `vm.Alias(txID, alias)` — genesis asset alias → asset id, for the API's
     /// `lookupAssetID`. Populated by `initialize` from the genesis bytes; not
     /// wired to the node `BCLookup`.
+    // TODO(M8): wire to the avm.* service `lookupAssetID` endpoint.
     aliases: HashMap<Id, String>,
 }
 
