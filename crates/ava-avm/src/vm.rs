@@ -310,11 +310,12 @@ impl AvmVm {
         }))
     }
 
-    /// **Test helper** — seed the genesis state's UTXO / tx stores directly.
+    /// **Test helper** — seed additional UTXO / tx stores directly.
     ///
-    /// The full Go-format X-Chain genesis-asset alloc is the M8/`ava-genesis`
-    /// follow-up; until then a caller (the conformance battery / a node
-    /// bootstrap shim) seeds the spendable UTXO set this way. Commits the seed.
+    /// `initialize` already decodes the real Go-format `Genesis{Txs}` bytes and
+    /// seeds genesis-asset UTXOs automatically (M5.f4). This helper exists for
+    /// conformance tests and integration harnesses that need to inject *extra*
+    /// UTXOs beyond what the genesis bytes supply. Commits the seed.
     ///
     /// # Errors
     /// Returns [`Error::NotInitialized`] before `initialize`, or an
@@ -364,8 +365,12 @@ impl AvmVm {
     }
 }
 
-/// Builds the executor [`Backend`] from the chain context + fee config
-/// (read-only-sync subset; the full per-network config is M8/`ava-genesis`).
+/// Builds the executor [`Backend`] from the chain context + fee config.
+///
+/// Fee parameters come from the engine-supplied JSON config (mainnet defaults
+/// when empty); the full per-network allocation data (Fuji/mainnet genesis
+/// asset IDs, balances) lives in the `ava-genesis` crate and is the M8
+/// follow-up.
 fn backend(ctx: &ChainContext, fees: Config, bootstrapped: bool) -> Backend {
     Backend::new(
         ctx.network_id,
@@ -379,11 +384,12 @@ fn backend(ctx: &ChainContext, fees: Config, bootstrapped: bool) -> Backend {
 
 /// Builds the fx [`Dispatch`] table (secp256k1fx / nftfx / propertyfx).
 ///
-/// The fx ids match the avm registration (secp at the AVAX/empty id; nft /
-/// property at their conventional sentinel ids — the real registration ids land
-/// with the genesis-asset alloc in M8). All three share the VM's injected
-/// `clock` (specs 24 hazard #5), so the fx locktime/credential checks and the
-/// proposed block time observe one clock.
+/// The fx ids match the AVM registration order: secp at `Id::EMPTY`, nft at
+/// `[1u8; 32]`, property at `[2u8; 32]`. The real per-network registration ids
+/// are determined by the genesis asset ordering, which `initialize` now derives
+/// from the parsed `Genesis{Txs}` bytes (M5.f4). All three share the VM's
+/// injected `clock` (specs 24 hazard #5), so the fx locktime/credential checks
+/// and the proposed block time observe one clock.
 fn dispatch(clock: &Arc<dyn Clock>) -> Dispatch {
     Dispatch::new(
         Id::EMPTY,
