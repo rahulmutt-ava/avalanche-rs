@@ -16,10 +16,10 @@ serde = { workspace = true }
 # `syn` needs the `visit` + `extra-traits` features for the determinism AST pass;
 # the workspace pin only enables `full`, so this crate declares its own feature
 # set (same major version, resolved to the workspace `syn` in `Cargo.lock`).
-syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+syn = { version = "2", features = [ "full", "visit", "extra-traits" ] }
 # `span-locations` exposes line/column on spans (it is off by default and only
 # valid outside a proc-macro, which is exactly this offline AST pass).
-proc-macro2 = { version = "1", features = ["span-locations"] }
+proc-macro2 = { version = "1", features = [ "span-locations" ] }
 toml = "1"
 walkdir = "2"
 serde_json = { workspace = true }
