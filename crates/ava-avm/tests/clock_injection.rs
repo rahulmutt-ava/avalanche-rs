@@ -8,10 +8,11 @@
 //! INJECTED clock, NOT the wall clock and NOT the parent timestamp.
 //!
 //! The block time is `max(parent_time, now)` (specs 09 §7.1). The genesis ts is
-//! `GENESIS_TS` (1_000_000); the clock is pinned at `PINNED` (2_000_000),
-//! strictly past the parent, so the resolved block time is exactly the pinned
-//! `now`. A wall-clock read (≈1.7e9) or a parent read (1_000_000) would both
-//! fail the assertion.
+//! the local-network `cortina_time` (M5.f4: the genesis Snowman block's
+//! timestamp now comes from the upgrade config, not the genesis bytes); the
+//! clock is pinned at `PINNED`, strictly past that parent, so the resolved block
+//! time is exactly the pinned `now`. A wall-clock read or a parent read would
+//! both fail the assertion.
 //!
 //! Mirrors `ava-platformvm`'s `vm::clock_injection::build_block_reads_injected_clock`
 //! and reuses the funded single-UTXO build harness from `vm_conformance.rs` (the
@@ -46,10 +47,9 @@ use ava_vm::app_sender::{AppSender, SendConfig};
 use ava_vm::vm::Vm;
 
 const NETWORK_ID: u32 = 10;
-/// The genesis Unix timestamp encoded into the synthetic genesis bytes.
-const GENESIS_TS: u64 = 1_000_000;
-/// The pinned clock time — strictly past `GENESIS_TS` so `max(parent, now)` == now.
-const PINNED: u64 = 2_000_000;
+/// The pinned clock time (2033-05-18 UTC) — strictly past the local-network
+/// `cortina_time` (2020-12-05, the genesis/parent ts) so `max(parent, now)` == now.
+const PINNED: u64 = 2_000_000_000;
 
 fn chain_id() -> Id {
     Id::from([0x05; 32])
@@ -183,11 +183,13 @@ fn base_tx(in_tx_id: Id, asset_id: Id, amt: u64) -> Tx {
     tx
 }
 
-/// The minimal synthetic genesis bytes: 32-byte stop-vertex id + 8-byte ts.
+/// Real (empty) Go-format genesis bytes (M5.f4): the VM's `initialize` decodes
+/// the `Genesis{Txs}` format and takes the genesis Snowman block's stop-vertex
+/// id + timestamp from the upgrade config, not the genesis bytes.
 fn genesis_bytes() -> Vec<u8> {
-    let mut out = vec![0x07; 32];
-    out.extend_from_slice(&GENESIS_TS.to_be_bytes());
-    out
+    ava_avm::genesis::Genesis::default()
+        .marshal()
+        .expect("marshal empty genesis")
 }
 
 #[tokio::test]

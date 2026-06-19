@@ -104,6 +104,41 @@ impl UnsignedTx {
         &self.base().outs
     }
 
+    /// `Tx.UTXOs()` (`vms/avm/txs/visitor.go:utxoGetter`) — the UTXOs this tx
+    /// produces. Base `outs` occupy indices `0..len(outs)` (asset = the output's
+    /// own asset id); a `CreateAssetTx`'s `states[*].outs` then continue the
+    /// running index with asset id = `tx_id` (the asset is itself).
+    #[must_use]
+    pub fn utxos(&self, tx_id: ava_types::id::Id) -> Vec<executor::semantic::Utxo> {
+        let mut utxos = Vec::new();
+        let base = self.base();
+        for (i, out) in base.outs.iter().enumerate() {
+            // `i` is bounded by the decoded vec length; the codec caps it well
+            // below u32::MAX, so the cast is safe.
+            let output_index = u32::try_from(i).unwrap_or(u32::MAX);
+            utxos.push(executor::semantic::Utxo {
+                tx_id,
+                output_index,
+                asset_id: out.asset_id,
+                out: out.out.clone(),
+            });
+        }
+        if let UnsignedTx::CreateAsset(tx) = self {
+            for state in &tx.states {
+                for out in &state.outs {
+                    let output_index = u32::try_from(utxos.len()).unwrap_or(u32::MAX);
+                    utxos.push(executor::semantic::Utxo {
+                        tx_id,
+                        output_index,
+                        asset_id: tx_id,
+                        out: out.clone(),
+                    });
+                }
+            }
+        }
+        utxos
+    }
+
     /// The set of UTXO ids this tx consumes (`Tx.InputIDs`) — the `BaseTx.ins`
     /// plus the `ImportTx.imported_ins`.
     #[must_use]

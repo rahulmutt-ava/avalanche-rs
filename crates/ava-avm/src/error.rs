@@ -211,9 +211,10 @@ pub enum Error {
     /// [`Config`](crate::config::Config) (`vms/avm` config parse, specs 09 §6).
     #[error("invalid config bytes: {0}")]
     Config(String),
-    /// The `genesis_bytes` handed to [`initialize`](crate::vm::AvmVm) were too
-    /// short to carry the synthetic stop-vertex id + timestamp seed (specs 09
-    /// §1; the full Go genesis-asset format is the M8/`ava-genesis` follow-up).
+    /// The `genesis_bytes` handed to [`initialize`](crate::vm::AvmVm) failed to
+    /// decode as the Go-format `Genesis{Txs}` struct (specs 09 §1; the codec
+    /// path is `ava_avm::genesis::Genesis::parse`). Also raised when a genesis
+    /// asset's base transaction has non-empty `outs` (value must be in `states`).
     #[error("invalid genesis bytes")]
     InvalidGenesis,
 

@@ -62,16 +62,21 @@
 //! * **`verify.SameSubnet`** validator-state stays SKIPPED (no `validator_state`
 //!   on [`ChainContext`] yet) — the same documented seam as M5.13. M5.20+ wires
 //!   it.
-//! * **X-Chain genesis.** There is no `ava-genesis` crate (M8) and no avm
-//!   genesis-asset format yet. `initialize` derives the genesis seed
-//!   (stop-vertex id + Unix timestamp) from a **minimal synthetic genesis**: the
-//!   32-byte stop-vertex id followed by the 8-byte big-endian Unix timestamp.
-//!   Full Go-format X-Chain genesis (the `CreateAssetTx` list + alloc) is
-//!   deferred to **M8/`ava-genesis`**.
+//! * **X-Chain genesis (M5.f4).** `initialize` ports Go `vms/avm/vm.go`'s
+//!   `initGenesis` + `Linearize`: it decodes the real Go-format genesis bytes (a
+//!   [`Genesis`]`{ txs: Vec<GenesisAsset> }` list), builds + initializes a
+//!   `CreateAssetTx` per asset (genesis assets MUST have empty base outs — the
+//!   value lives in `states`), records each `alias → asset id` mapping (see
+//!   [`AvmVm::lookup_alias`]), and seeds the produced UTXOs + the asset tx into
+//!   state (idempotent via the `is_initialized` marker). The genesis Snowman
+//!   block's **stop-vertex id + timestamp** come from the upgrade config
+//!   (Go `Upgrades.CortinaXChainStopVertexID` / `CortinaTime`), NOT the genesis
+//!   bytes. The real Fuji/mainnet allocation *data* (a full `ava-genesis`
+//!   `Config`) is still the M8 follow-up; this path consumes whatever
+//!   genesis-asset bytes the node hands it.
 //! * **No-tx ⇒ no block.** The X-Chain has only `StandardBlock`; the builder
 //!   returns [`Error::NoPendingBlocks`] when nothing packs. Callers must keep the
-//!   mempool fed (via gossip / the issue path); the genesis-asset UTXO seeding a
-//!   real node performs is the M8 follow-up.
+//!   mempool fed (via gossip / the issue path).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,17 +107,18 @@ use crate::block::{Block, build_block};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::fx::dispatch::Dispatch;
+use crate::genesis::Genesis;
 use crate::jsonrpc::registry_service;
 use crate::mempool::Mempool;
 use crate::network::atomic::{AppGossipHandler, AtomicAppHandler};
 use crate::network::gossip::{DropReason, HandleOutcome, TxGossipHandler, TxMarshaller};
 use crate::network::tx_verifier::SyntacticTxVerifier;
 use crate::state::State;
-use crate::state::chain::ReadOnlyChain;
+use crate::state::chain::{Chain, ReadOnlyChain};
 use crate::state::versions::Versions;
-use crate::txs::Tx;
-use crate::txs::codec::{Codec, codec};
+use crate::txs::codec::{Codec, GenesisCodec, codec};
 use crate::txs::executor::{Backend, Config as FeeConfig};
+use crate::txs::{Tx, UnsignedTx};
 
 mod dyndb;
 pub use dyndb::DynDb;
@@ -231,6 +237,11 @@ pub struct AvmVm {
     /// clock. [`AvmVm::new`] installs a [`RealClock`]; tests inject a `MockClock`
     /// via [`AvmVm::with_clock`].
     clock: Arc<dyn Clock>,
+    /// `vm.Alias(txID, alias)` — genesis asset alias → asset id, for the API's
+    /// `lookupAssetID`. Populated by `initialize` from the genesis bytes; not
+    /// wired to the node `BCLookup`.
+    // TODO(M8): wire to the avm.* service `lookupAssetID` endpoint.
+    aliases: HashMap<Id, String>,
 }
 
 impl Default for AvmVm {
@@ -265,7 +276,15 @@ impl AvmVm {
             gossip_handler: None,
             fee_config: Config::default(),
             clock,
+            aliases: HashMap::new(),
         }
+    }
+
+    /// Resolve a genesis-registered asset alias by id (mirrors Go `vm.Lookup`'s
+    /// reverse direction; used by the avm.* service).
+    #[must_use]
+    pub fn lookup_alias(&self, id: Id) -> Option<&str> {
+        self.aliases.get(&id).map(String::as_str)
     }
 
     /// The shared core, or [`Error::NotInitialized`] if `initialize` has not run.
@@ -292,11 +311,12 @@ impl AvmVm {
         }))
     }
 
-    /// **Test helper** — seed the genesis state's UTXO / tx stores directly.
+    /// **Test helper** — seed additional UTXO / tx stores directly.
     ///
-    /// The full Go-format X-Chain genesis-asset alloc is the M8/`ava-genesis`
-    /// follow-up; until then a caller (the conformance battery / a node
-    /// bootstrap shim) seeds the spendable UTXO set this way. Commits the seed.
+    /// `initialize` already decodes the real Go-format `Genesis{Txs}` bytes and
+    /// seeds genesis-asset UTXOs automatically (M5.f4). This helper exists for
+    /// conformance tests and integration harnesses that need to inject *extra*
+    /// UTXOs beyond what the genesis bytes supply. Commits the seed.
     ///
     /// # Errors
     /// Returns [`Error::NotInitialized`] before `initialize`, or an
@@ -346,8 +366,12 @@ impl AvmVm {
     }
 }
 
-/// Builds the executor [`Backend`] from the chain context + fee config
-/// (read-only-sync subset; the full per-network config is M8/`ava-genesis`).
+/// Builds the executor [`Backend`] from the chain context + fee config.
+///
+/// Fee parameters come from the engine-supplied JSON config (mainnet defaults
+/// when empty); the full per-network allocation data (Fuji/mainnet genesis
+/// asset IDs, balances) lives in the `ava-genesis` crate and is the M8
+/// follow-up.
 fn backend(ctx: &ChainContext, fees: Config, bootstrapped: bool) -> Backend {
     Backend::new(
         ctx.network_id,
@@ -361,11 +385,12 @@ fn backend(ctx: &ChainContext, fees: Config, bootstrapped: bool) -> Backend {
 
 /// Builds the fx [`Dispatch`] table (secp256k1fx / nftfx / propertyfx).
 ///
-/// The fx ids match the avm registration (secp at the AVAX/empty id; nft /
-/// property at their conventional sentinel ids — the real registration ids land
-/// with the genesis-asset alloc in M8). All three share the VM's injected
-/// `clock` (specs 24 hazard #5), so the fx locktime/credential checks and the
-/// proposed block time observe one clock.
+/// The fx ids match the AVM registration order: secp at `Id::EMPTY`, nft at
+/// `[1u8; 32]`, property at `[2u8; 32]`. The real per-network registration ids
+/// are determined by the genesis asset ordering, which `initialize` now derives
+/// from the parsed `Genesis{Txs}` bytes (M5.f4). All three share the VM's
+/// injected `clock` (specs 24 hazard #5), so the fx locktime/credential checks
+/// and the proposed block time observe one clock.
 fn dispatch(clock: &Arc<dyn Clock>) -> Dispatch {
     Dispatch::new(
         Id::EMPTY,
@@ -375,24 +400,15 @@ fn dispatch(clock: &Arc<dyn Clock>) -> Dispatch {
     )
 }
 
-/// The minimal synthetic X-Chain genesis seed (specs 09 §1): the 32-byte
-/// stop-vertex id followed by the 8-byte big-endian Unix-second timestamp.
-///
-/// The full Go genesis-asset format (the `CreateAssetTx` list + alloc) is the
-/// M8/`ava-genesis` follow-up; this seed carries exactly what
-/// [`State::initialize_chain_state`] consumes.
-fn parse_genesis(genesis_bytes: &[u8]) -> Result<(Id, SystemTime)> {
-    let stop_slice = genesis_bytes.get(..32).ok_or(Error::InvalidGenesis)?;
-    let ts_slice = genesis_bytes.get(32..40).ok_or(Error::InvalidGenesis)?;
-    let mut stop = [0u8; 32];
-    stop.copy_from_slice(stop_slice);
-    let mut ts = [0u8; 8];
-    ts.copy_from_slice(ts_slice);
-    let secs = u64::from_be_bytes(ts);
-    let genesis_ts = UNIX_EPOCH
+/// Convert an upgrade-config Unix-second timestamp (`DateTime<Utc>::timestamp()`)
+/// to a `SystemTime` (pre-epoch clamps to the epoch — upgrade times are always
+/// post-epoch). Takes the bare `i64` seconds so `ava-avm` need not depend on
+/// `chrono` directly.
+fn systemtime_from_unix_secs(secs: i64) -> SystemTime {
+    let secs = u64::try_from(secs).unwrap_or(0);
+    UNIX_EPOCH
         .checked_add(Duration::from_secs(secs))
-        .unwrap_or(UNIX_EPOCH);
-    Ok((Id::from(stop), genesis_ts))
+        .unwrap_or(UNIX_EPOCH)
 }
 
 // ---------------------------------------------------------------------------
@@ -658,9 +674,53 @@ impl Vm for AvmVm {
         // Open State over the engine-provided DB (adapted to the typed surface).
         let mut state = State::new(Arc::new(DynDb::new(db))).map_err(VmError::from)?;
 
-        // Seed the genesis Snowman block (height 0) from the synthetic genesis
-        // seed (stop-vertex id + Unix timestamp), idempotent on re-open.
-        let (stop_vertex_id, genesis_ts) = parse_genesis(genesis_bytes).map_err(VmError::from)?;
+        // initGenesis (`vm.go`): decode the Go-format genesis assets and seed
+        // them. Each asset is a `CreateAssetTx` with an EMPTY base (the value
+        // lives in `states[*].outs`); the asset's tx id is computed via the
+        // genesis codec, recorded as the alias → id mapping, and its produced
+        // UTXOs + the asset tx are written to state. The asset seeding is guarded
+        // by the pre-existing `is_initialized` marker (read BEFORE
+        // `initialize_chain_state` sets it) so re-open does not re-seed.
+        let genesis = Genesis::parse(genesis_bytes).map_err(VmError::from)?;
+        let genesis_codec = GenesisCodec();
+        let already_init = state.is_initialized().map_err(VmError::from)?;
+        let mut aliases: HashMap<Id, String> = HashMap::new();
+        for (index, asset) in genesis.txs.into_iter().enumerate() {
+            if !asset.tx.base.base.outs.is_empty() {
+                return Err(VmError::from(Error::GenesisAssetMustHaveState));
+            }
+            let mut tx = Tx::new(UnsignedTx::CreateAsset(asset.tx));
+            tx.initialize(genesis_codec)
+                .map_err(|e| VmError::from(Error::from(e)))?;
+            let tx_id = tx.id();
+            aliases.insert(tx_id, asset.alias);
+            if index == 0 && tx_id != chain_ctx.avax_asset_id {
+                // The node derives ctx.avax_asset_id from the same bytes via
+                // avax_asset_id(); a mismatch is a programmer error, not attacker
+                // input.
+                tracing::warn!(
+                    ?tx_id, avax_asset_id = ?chain_ctx.avax_asset_id,
+                    "genesis index-0 asset id != ctx.avax_asset_id",
+                );
+            }
+            if !already_init {
+                state.add_tx(tx_id, tx.bytes().to_vec());
+                for utxo in tx.unsigned.utxos(tx_id) {
+                    let id = utxo.input_id();
+                    let bytes = utxo.marshal().map_err(VmError::from)?;
+                    state.add_utxo(id, bytes);
+                }
+            }
+        }
+
+        // Linearize (`vm.go`): the stop-vertex id + genesis time come from the
+        // upgrade config (Go `Upgrades.CortinaXChainStopVertexID` / `CortinaTime`),
+        // NOT the genesis bytes. `initialize_chain_state` builds + persists the
+        // height-0 Snowman block and commits the buffered asset seeds in one
+        // batch (idempotent on re-open via the same `is_initialized` marker).
+        let upgrades = ava_version::upgrade::get_config(chain_ctx.network_id);
+        let stop_vertex_id = upgrades.cortina_x_chain_stop_vertex_id;
+        let genesis_ts = systemtime_from_unix_secs(upgrades.cortina_time.timestamp());
         let c = codec().map_err(|e| VmError::from(Error::from(e)))?;
         state
             .initialize_chain_state(stop_vertex_id, genesis_ts, &c)
@@ -699,6 +759,7 @@ impl Vm for AvmVm {
         self.genesis_id = genesis_id;
         self.preferred = genesis_id;
         self.state = EngineState::Initializing;
+        self.aliases = aliases;
         Ok(())
     }
 
@@ -1013,10 +1074,13 @@ mod tests {
         })
     }
 
+    /// Real (empty) Go-format genesis bytes: a `Genesis` with no genesis assets.
+    /// The inline tests seed their own UTXOs directly, so an empty genesis is
+    /// sufficient (the stop-vertex id + timestamp come from the upgrade config).
     fn genesis_bytes() -> Vec<u8> {
-        let mut out = vec![0x07; 32];
-        out.extend_from_slice(&1_000_000u64.to_be_bytes());
-        out
+        crate::genesis::Genesis::default()
+            .marshal()
+            .expect("marshal empty genesis")
     }
 
     async fn init_vm() -> AvmVm {

@@ -778,12 +778,16 @@ Parallelism: M5.2/5.3/5.4 in parallel after 5.1. M5.6/5.7/5.8 in parallel after 
 >   the gate):** (1) `build_block` un-injectable `SystemTime::now()` → adopt `ava_utils::clock::Clock`
 >   (tier-X **X.19**); (2) VM-`initialize` production cross-chain `SharedMemory` wiring needs a
 >   `ChainContext.shared_memory` field (chain-manager/M8); (3) `verify.SameSubnet` validator-state hook
->   (M8); (4) full Go X-Chain genesis-asset parsing (M8/ava-genesis); (5) JSON-RPC HTTP router / `ava-api`
->   (M8/M12) — the typed `avm.*` service handlers are ready to wire; (6) the OperationTx typed fx-op
->   codec (concrete op type-ids 8/12/13/17/18 + `components.rs` nft/property Output/Input variants) →
->   unblocks full OperationTx semantic+exec+output-production + address-indexed `getUTXOs`/`getBalance`;
->   (7) the Go recorded-oracle + live two-binary differential arms + richer tx kinds + 10k scaling
->   (tier-X X.13/X.15); (8) the `avm` `Client<Transport>` + `wallet.*` keystore.
+>   (M8); (4) ~~full Go X-Chain genesis-asset parsing (M8/ava-genesis)~~ **DONE (M5.f4,
+>   commits dcb105c–HEAD):** `Genesis::parse` + `initGenesis`/`Linearize` port in `AvmVm::initialize`;
+>   types in `ava-avm::genesis` (re-exported from `ava-genesis`); stop-vertex id + genesis time from
+>   `ava_version::upgrade::get_config(network_id)`; recorded-Go-oracle differential test; NFT/property
+>   genesis outputs and the `_upgrade_bytes` overlay remain open follow-ups; (5) JSON-RPC HTTP router /
+>   `ava-api` (M8/M12) — the typed `avm.*` service handlers are ready to wire; (6) the OperationTx
+>   typed fx-op codec (concrete op type-ids 8/12/13/17/18 + `components.rs` nft/property Output/Input
+>   variants) → unblocks full OperationTx semantic+exec+output-production + address-indexed
+>   `getUTXOs`/`getBalance`; (7) the Go recorded-oracle + live two-binary differential arms + richer tx
+>   kinds + 10k scaling (tier-X X.13/X.15); (8) the `avm` `Client<Transport>` + `wallet.*` keystore.
 
 ---
 

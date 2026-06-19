@@ -198,8 +198,11 @@ impl<D: Database + 'static> BlockManager<D> {
     }
 
     /// **Test/genesis-seed helper** — mutate the persisted [`State`] directly and
-    /// commit, then refresh the frozen base view (M5.19; the full Go genesis-asset
-    /// alloc is the M8/`ava-genesis` follow-up).
+    /// commit, then refresh the frozen base view.
+    ///
+    /// Production genesis-asset seeding now happens in `AvmVm::initialize` via
+    /// the real Go-format `Genesis{Txs}` parse (M5.f4). This helper is retained
+    /// for conformance tests and harnesses that inject extra UTXOs beyond genesis.
     ///
     /// # Errors
     /// Returns an [`Error::Database`] if the commit fails.
