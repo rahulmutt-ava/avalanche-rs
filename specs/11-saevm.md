@@ -793,6 +793,48 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 `sae::NewVM`, then the atomic txpool. It is the *harness* that supplies the
 `Initialize` method `sae::Vm` deliberately omits (§5).
 
+> **Upstream delta (avalanchego `ff8f0e5020`, #5536 — folded 2026-06-19).**
+> `cchain.Initialize` replaces the placeholder `json.Unmarshal` into a bare
+> `core.Genesis` + `core.SetupGenesisBlock` with a dedicated **coreth-compatible
+> genesis path** (new `cchain/genesis.go`). `parseGenesis(ctx, bytes)` unmarshals
+> only the **chain-specific** config — the JSON supplies `ChainID` + alloc + the
+> SAE-allowed `BaseFee`, while almost every `core.Genesis` testing-only field is
+> now *rejected* (`errNonZeroGenesisNumber`/`GasUsed`/`ParentHash`,
+> `errNonNilGenesisExcessBlobGas`/`BlobGasUsed`) — then **synthesizes the full
+> `ChainConfig`** from `ctx.NetworkUpgrades`: all eth forks at block 0 except
+> **`BerlinBlock`/`LondonBlock` pinned to the historical AP2/AP3 activation
+> heights per chainID** (mainnet `1_640_340`/`3_308_552`, fuji `184_985`/`805_078`,
+> else 0), `ShanghaiTime = DurangoTime`, `CancunTime = EtnaTime`, the coreth
+> `extras.NetworkUpgrades` (AP1…Helicon) timestamps, and the Durango-gated Warp
+> precompile upgrade. `genesis.setup(db, trieConfig)` then writes the genesis
+> block + canonical/head/finalized pointers + (nil) receipts, checks
+> `GenesisMismatchError` and `CheckCompatible` against any stored config, and
+> writes genesis **state** only when the trie is not already initialized —
+> returning the genesis `*types.Block` that seeds `sae.NewVM` (replacing the old
+> `genesis.ToBlock()`). **Rust seam:** this is the canonical C-Chain genesis the
+> M6.8 `EvmVm::from_genesis` wiring (parse → materialize → commit → seed) must
+> reproduce for the SAE C-Chain; the per-chainID Berlin/London pins and the
+> `ChainConfig`-from-`NetworkUpgrades` synthesis are the parity-critical bits.
+> Tracked as `plan/M7` M7.43.
+
+> **Upstream delta (avalanchego `484daf4593`, #5524 — folded 2026-06-19).**
+> The SAE C-Chain now **preserves millisecond block timestamps** end-to-end.
+> `builder.BuildHeader` stamps `now := b.now().UnixMilli()`, sets the seconds
+> field `Time = now/1000` and the Granite-gated **`TimeMilliseconds = &now`**
+> (previously a `new(uint64)` placeholder), and the `block_time` hook
+> (`hooks.BlockTime(h)`) reconstructs the instant as
+> `time.Unix(h.Time, (HeaderTimeMilliseconds(h) % 1000)·1ms)` — **anchoring the
+> seconds to `h.Time`** so the invariant `BlockTime(h).Unix() == h.Time` holds
+> even when a malicious peer's `TimeMilliseconds` disagrees with `Time`. The
+> clock is now **injected**: `cchain.VM` carries a `now func() time.Time` threaded
+> into both `newHooks(..., now)` and `sae.Config.Now`, replacing the direct
+> `time.Now` in the builder (consistent with `00` §6.1 / `24` clock-injection).
+> **Rust seam:** the `ava-saevm-cchain` builder / `block_time` hook must fill the
+> `TimeMilliseconds` header field from the injected clock's millis and read the
+> sub-second component back while anchoring `.timestamp() == header.time`; the
+> clock must come from the determinism-gated injected source (§1 `BlockTime`,
+> `gastime` §2.2), not wall time. Tracked as `plan/M7` M7.44.
+
 > **Upstream delta (avalanchego `fb174e8` → `cc3b103b9`, folded 2026-06-10).**
 > Three post-snapshot Go commits extend `cchain`/`sae`:
 >

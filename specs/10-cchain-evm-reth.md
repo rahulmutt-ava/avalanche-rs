@@ -813,6 +813,14 @@ coreth header is not plain-`alloy::Header`-decodable — the extras above are wh
 > syntactic check to the extData-hash verify above, since the header commits
 > neither the `Version` nor the `extData` bytes. See `11` §8 and `plan/M7` M7.39.
 
+> **Upstream delta (avalanchego `484daf4593`, #5524 — folded 2026-06-19).** The
+> Granite-gated `TimeMilliseconds` header field (table above) is now actually
+> **populated and consumed** by the SAE C-Chain: `BuildHeader` sets it from the
+> injected clock's `UnixMilli` (with `Time = TimeMilliseconds/1000`), and the
+> block-time hook reads the sub-second component back while anchoring the seconds
+> to `Header.Time` (`BlockTime(h).Unix() == h.Time`). This is SAE-C-Chain behavior
+> on the *same* header format documented here; see `11` §8 and `plan/M7` M7.44.
+
 > **Genesis-header subtlety (M6.8).** The **genesis** header's `ExtDataHash` is the
 > **zero hash** (`0x0000…0000`), **NOT** `EmptyExtDataHash` — coreth's `Genesis.toBlock`
 > leaves the field at its zero value (genesis carries no `ExtData`, so the hash is never

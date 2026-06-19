@@ -710,6 +710,58 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.43: `cchain` coreth-compatible genesis path (`parseGenesis` + `setup`) **[UPSTREAM DELTA — added 2026-06-19]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (+ ava-evm genesis materialization reuse)  ·  **Depends on:** M7.23 (VM `Initialize` harness), M6.8 (`EvmVm::from_genesis` parse→materialize→commit→seed)  ·  **Spec:** `11` §8 upstream-delta (Go `ff8f0e5020` #5536)
+> **Upstream parity (Go `ff8f0e5020`, #5536).** `cchain.Initialize` dropped the
+> placeholder `json.Unmarshal`→`core.Genesis`→`core.SetupGenesisBlock` in favor of a
+> dedicated `genesis.go`: `parseGenesis(ctx, bytes)` reads only the chain-specific
+> JSON (`ChainID` + alloc + SAE-allowed `BaseFee`; rejects every other testing-only
+> `core.Genesis` field), then synthesizes the full `ChainConfig` from
+> `ctx.NetworkUpgrades` — all eth forks at block 0 except **`BerlinBlock`/`LondonBlock`
+> pinned to historical AP2/AP3 activation heights per chainID** (mainnet
+> `1_640_340`/`3_308_552`, fuji `184_985`/`805_078`, else 0), `ShanghaiTime=DurangoTime`,
+> `CancunTime=EtnaTime`, the coreth `extras.NetworkUpgrades` timestamps, and the
+> Durango-gated Warp precompile. `genesis.setup(db, trieConfig)` writes the genesis
+> block + canonical/head/finalized pointers + nil receipts, enforces `GenesisMismatchError`
+> + `CheckCompatible` against stored config, writes genesis state only if the trie isn't
+> already initialized, and returns the genesis `*types.Block` seeding `sae.NewVM`.
+> **Rust task:** route the SAE C-Chain `Initialize` genesis through (or share with) the
+> M6.8 `EvmVm::from_genesis` path so a coreth-format genesis JSON parses → materializes
+> alloc → commits → seeds the genesis block; reproduce the per-chainID Berlin/London
+> pins and the `ChainConfig`-from-`NetworkUpgrades` synthesis (the parity-critical bits),
+> plus the rejected-field validation and the mismatch/compatible re-init guards. **Why
+> added:** the current SAE C-Chain genesis is the placeholder this PR replaced; matching
+> Go's genesis block hash + chain config is required for C-Chain interop. **Non-gating:**
+> SAE C-Chain is dormant behind Helicon (unscheduled), but the genesis block hash must
+> still match for any future bring-up — stage it now while the Go reference is concrete.
+**Files (anticipated):** `crates/ava-saevm/cchain/src/genesis.rs` (new, the `parse`/`setup` analog), `crates/ava-saevm/cchain/src/vm.rs` (`initialize` wiring), reuse of `crates/ava-evm` genesis materialization, `crates/ava-saevm/cchain/tests/` (genesis-hash + rejected-field + mismatch goldens).
+
+### Task M7.44: `cchain` preserves millisecond block timestamps (injected clock) **[UPSTREAM DELTA — added 2026-06-19]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (builder + `block_time` hook)  ·  **Depends on:** M7.21 (C-Chain hooks: `build_header`, `block_time`), M7.23 (VM `Initialize` clock seam)  ·  **Spec:** `11` §8 + `10` §header-tail upstream-delta (Go `484daf4593` #5524)
+> **Upstream parity (Go `484daf4593`, #5524).** `builder.BuildHeader` now stamps
+> `now := b.now().UnixMilli()`, sets `Time = now/1000` and the Granite-gated
+> `TimeMilliseconds = &now` (was a `new(uint64)` placeholder). `BlockTime(h)`
+> reconstructs the instant as `time.Unix(h.Time, (HeaderTimeMilliseconds(h)%1000)·1ms)`,
+> **anchoring seconds to `h.Time`** so `BlockTime(h).Unix() == h.Time` holds even when a
+> malicious peer's `TimeMilliseconds` disagrees with `Time`. The clock is now injected:
+> `cchain.VM` threads a `now func() time.Time` into both `newHooks(...)` and
+> `sae.Config.Now`, replacing the direct `time.Now`.
+> **Rust task:** in `ava-saevm-cchain`'s `build_header`, fill the `TimeMilliseconds`
+> header field from the injected clock's millis and set `time = millis/1000`; in the
+> `block_time` hook, read the sub-second component back from the header while anchoring
+> `.timestamp()/.unix() == header.time`. The clock must be the determinism-gated injected
+> source (the `now`/`Now` seam), never wall-clock — consistent with `00` §6.1, `24`, and
+> the existing all-VM `build_block` clock injection (see determinism gate). Add a
+> regression test mirroring Go's `hooks_test`/`vm_test`: a sub-second timestamp round-trips
+> through build→parse→`block_time`, and a header whose `TimeMilliseconds` disagrees with
+> `Time` still yields `block_time().unix() == header.time`. **Why added:** millisecond
+> precision is required for SAE gas-clock parity (sub-second precision finding, M7 streaming
+> vectors). **Non-gating:** Helicon-dormant SAE C-Chain, but the header-field semantics are
+> a wire/format parity constraint worth matching now.
+**Files (anticipated):** `crates/ava-saevm/cchain/src/hooks.rs` (`build_header` + `block_time`), `crates/ava-saevm/cchain/src/vm.rs` (clock seam threading), `crates/ava-saevm/cchain/tests/` (millisecond round-trip + malformed-header regression).
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -750,6 +802,8 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 + `10` §9 upstream-delta | `cchain` `ParseBlock` rejects non-zero block `Version` (Go `4772ab3c97` #5543) | **M7.39** (non-gating, Helicon; extends M7.37) |
 | `11` §5 upstream-delta | `ava-saevm-adaptor` `ConvertStateSync` syncable-VM wrapper (Go `b1393ecb06` #5480) | **M7.40** (non-gating, Helicon; state sync dormant) |
 | `11` §4 upstream-delta | `VM.GetBlock` propagates unexpected lookup errors (`return b, err`) + `RestoreSettledBlock` `%v`→`%w` (Go `84533ec5b1` #5547) | **M7.42** (correctness fix, not Helicon-gated) |
+| `11` §8 upstream-delta | `cchain` coreth-compatible genesis path (`parseGenesis` + `setup`, per-chainID Berlin/London pins, `ChainConfig`-from-`NetworkUpgrades`) (Go `ff8f0e5020` #5536) | **M7.43** (non-gating, Helicon; genesis-hash parity) |
+| `11` §8 + `10` §header-tail upstream-delta | `cchain` preserves millisecond block timestamps (`BuildHeader` fills `TimeMilliseconds`, `BlockTime` anchors seconds to `h.Time`, injected clock) (Go `484daf4593` #5524) | **M7.44** (non-gating, Helicon; wire/format parity) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |

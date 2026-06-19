@@ -10,10 +10,10 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `84533ec5b1` (2026-06-18) have been reviewed and folded in as **"Upstream
+> `331bcfb106` (2026-06-19) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
 > `18`, `21`, `27`) and plan files (`plan/M4`, `plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `84533ec5b1`.
+> against newer avalanchego, start the review from `331bcfb106`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -60,6 +60,23 @@ from these documents.
 > toolchain bump (`86602f460f`, #5551) — regenerated `*.pb.go` / contract-binding
 > outputs and `flake.{nix,lock}`; no spec surface (avalanche-rs has its own
 > `flake.nix`).
+>
+> The `84533ec5b1 → 331bcfb106` sync (reviewed 2026-06-19) folded two SAE
+> C-Chain commits, both non-gating (Helicon unscheduled). (1) **Coreth-compatible
+> genesis** (`ff8f0e5020`, #5536) — `cchain.Initialize` replaces the placeholder
+> `core.Genesis` unmarshal with a dedicated `genesis.go` (`parseGenesis` rejecting
+> testing-only fields + synthesizing `ChainConfig` from `ctx.NetworkUpgrades` with
+> per-chainID Berlin/London activation-height pins; `setup` writing the genesis
+> block/state + mismatch/compatibility guards) → `11` §8 upstream-delta + `plan/M7`
+> task **M7.43**. (2) **Millisecond block timestamps** (`484daf4593`, #5524) —
+> `BuildHeader` now fills the Granite-gated `TimeMilliseconds` from an injected
+> clock's `UnixMilli` and `BlockTime` reads the sub-second component back while
+> anchoring the seconds to `h.Time` → `11` §8 + `10` §header-tail upstream-deltas
+> + `plan/M7` task **M7.44**. **Non-gating/test-only:** the stateful-RPC test
+> expansion (`b8da248b24`, #5283) — `sae/rpc/server.go` change is doc-comment-only
+> (enumerates the already-registered stateful RPCs), the rest is tests — and the
+> flaky-bloom-inclusion-check removal (`331bcfb106`, #5562) — `cchain/gossip_test.go`
+> only. No irrelevant commits in this range.
 
 ## Read this first
 
