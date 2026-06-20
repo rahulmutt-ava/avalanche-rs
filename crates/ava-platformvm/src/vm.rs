@@ -537,18 +537,39 @@ impl Vm for PlatformVm {
         // Open State over the engine-provided DB (adapted to the typed surface).
         let mut state = State::new(DynDb::new(db)).map_err(VmError::from)?;
 
-        // Seed genesis (M4.24): timestamp, supply, UTXOs, current validators,
-        // chains — and derive the genesis ApricotCommit block id (height 0).
-        let genesis = crate::genesis::parse(genesis_bytes).map_err(VmError::from)?;
-        let genesis_id = crate::genesis::seed_state(&mut state, &genesis, genesis_bytes)
-            .map_err(VmError::from)?;
-
-        // Record the genesis block as last-accepted at height 0 WITHOUT Accept
-        // (the BlockManager seeds its last-accepted from `state.last_accepted()`).
+        // The genesis ApricotCommit block id (height 0) is derived purely from
+        // the genesis bytes (no seeding required), so it tracks the VM's genesis
+        // pointer on both the fresh and the recovered path.
         let genesis_block = crate::genesis::genesis_block(genesis_bytes).map_err(VmError::from)?;
-        state.add_block(genesis_id, 0, genesis_block.bytes());
-        state.set_last_accepted(genesis_id);
-        state.set_height(0);
+        let genesis_id = genesis_block.id();
+
+        // `IsInitialized` guard (spec 27 §5.1, cf. Go `state.shouldInit`): a base
+        // DB that already holds persisted state is a *restart*, so resume the
+        // persisted (possibly advanced) tip — every byte space `seed_state` would
+        // write is already on disk or rebuilt by `State::load` (the LA/height +
+        // scalar singletons, stakers, L1 validators, subnets/chains, UTXO index).
+        // Re-seeding would clobber the persisted last-accepted/height back to the
+        // genesis block at height 0, so it is only done on a fresh DB.
+        if state.is_initialized() {
+            state.load().map_err(VmError::from)?;
+        } else {
+            // Seed genesis (M4.24): timestamp, supply, UTXOs, current validators,
+            // chains.
+            let genesis = crate::genesis::parse(genesis_bytes).map_err(VmError::from)?;
+            crate::genesis::seed_state(&mut state, &genesis, genesis_bytes)
+                .map_err(VmError::from)?;
+
+            // Record the genesis block as last-accepted at height 0 WITHOUT
+            // Accept (the BlockManager seeds last-accepted from
+            // `state.last_accepted()`).
+            state.add_block(genesis_id, 0, genesis_block.bytes());
+            state.set_last_accepted(genesis_id);
+            state.set_height(0);
+        }
+
+        // The VM's preference is the resumed tip on a restart, the genesis block
+        // on a fresh DB (where `state.last_accepted() == genesis_id`).
+        let preferred = state.last_accepted();
 
         // Build the M4.21 validator manager from the seeded state, then the
         // M4.20 block manager with the validator manager wired as the acceptance
@@ -568,7 +589,7 @@ impl Vm for PlatformVm {
         }));
         self.ctx = Some(chain_ctx);
         self.genesis_id = genesis_id;
-        self.preferred = genesis_id;
+        self.preferred = preferred;
         self.state = EngineState::Initializing;
         Ok(())
     }
@@ -1022,6 +1043,95 @@ mod conformance {
 
         // The ValidatorState is exposed to the snow context.
         assert!(vm.validator_state().is_some());
+    }
+
+    /// Re-`initialize`ing the VM over a base DB that already holds an **advanced**
+    /// accepted tip resumes that tip (the `IsInitialized` guard, M9.15 STEP (h)),
+    /// rather than blindly re-seeding genesis — which would clobber the persisted
+    /// last-accepted/height back to the genesis block at height 0. This is the
+    /// restart shape: a first process seeds genesis + accepts blocks, the node
+    /// restarts, and the second `initialize` over the SAME backend must come up
+    /// at the persisted tip, not genesis (spec 27 §5.1).
+    #[tokio::test]
+    async fn initialize_over_recovered_db_resumes_persisted_tip_not_genesis() {
+        let token = CancellationToken::new();
+        let genesis = crate::genesis::test_synthetic_genesis();
+        let genesis_bytes = crate::genesis::marshal(&genesis).expect("marshal genesis");
+        let genesis_id = crate::genesis::genesis_block(&genesis_bytes)
+            .expect("genesis block")
+            .id();
+
+        let shared: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+
+        // First "process": a real genesis init over the shared backend.
+        {
+            let mut vm1 = PlatformVm::new();
+            vm1.initialize(
+                &token,
+                chain_ctx(),
+                Arc::clone(&shared),
+                &genesis_bytes,
+                b"",
+                b"",
+                Vec::new(),
+                Arc::new(NoopAppSender),
+            )
+            .await
+            .expect("initialize process 1");
+            assert_eq!(
+                vm1.last_accepted(&token).await.expect("last accepted 1"),
+                genesis_id,
+                "a fresh init seeds genesis as last-accepted"
+            );
+        }
+
+        // Simulate the node having accepted blocks: advance the persisted tip
+        // directly through `State` (the acceptor's write-through path), the way
+        // accepted blocks would have left the on-disk backend before a restart.
+        let advanced_id = Id::from([0x9A; 32]);
+        {
+            let mut state =
+                State::new(DynDb::new(Arc::clone(&shared))).expect("State over shared db");
+            state.add_block(advanced_id, 7, &[0xAB, 0xCD]);
+            state.set_last_accepted(advanced_id);
+            state.set_height(7);
+        }
+
+        // Second "process": re-initialize over the SAME backend. The guard must
+        // detect the already-initialized DB and resume the advanced tip.
+        let mut vm2 = PlatformVm::new();
+        vm2.initialize(
+            &token,
+            chain_ctx(),
+            Arc::clone(&shared),
+            &genesis_bytes,
+            b"",
+            b"",
+            Vec::new(),
+            Arc::new(NoopAppSender),
+        )
+        .await
+        .expect("initialize process 2");
+
+        assert_eq!(
+            vm2.last_accepted(&token).await.expect("last accepted 2"),
+            advanced_id,
+            "resumed the persisted advanced tip, not genesis"
+        );
+        assert_eq!(
+            vm2.preferred, advanced_id,
+            "preferred resumes to the advanced tip, not genesis"
+        );
+        // The genesis block id is still tracked for the VM's genesis pointer.
+        assert_eq!(vm2.genesis_id, genesis_id, "genesis id still derived");
+        // The advanced block resolves through the resumed height index.
+        assert_eq!(
+            vm2.get_block_id_at_height(&token, 7)
+                .await
+                .expect("height 7"),
+            advanced_id,
+            "resumed block-id-at-height index"
+        );
     }
 
     /// M8.22 end-to-end: `create_handlers` mounts the gorilla `platform.*`

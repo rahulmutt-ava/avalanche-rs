@@ -1038,6 +1038,36 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   (b) `create_snowman_chain` rooting consensus at the persisted height; (c) in-process block issuance (the
 >   shared-mempool seam, same blocker as M9.19) to *create* an advanced tip to resume.
 
+> **STEP (i) — `IsInitialized` GUARD IN `PlatformVm::initialize` (2026-06-20, ralph iteration, TDD; closes item-(a)
+> init-guard — the load-bearing wire-up that finally makes STEP (e)–(h)'s resume primitives RUN in the live boot
+> path).** `PlatformVm::initialize` previously *always* re-seeded genesis (`seed_state` → `set_last_accepted(genesis_id)`
+> / `set_height(0)`), so a restart over a populated DB came up at genesis (height 0), discarding the persisted tip even
+> though STEP (e)–(h) persist & resume every field. Now guarded:
+> - **`ava-platformvm` `vm.rs`:** the genesis block id is derived purely from the genesis bytes
+>   (`genesis::genesis_block(genesis_bytes)?.id()` — no seeding needed, so it tracks `self.genesis_id` on both paths).
+>   Then `if state.is_initialized() { state.load()? } else { parse + seed_state + add_block + set_last_accepted +
+>   set_height(0) }`. `self.preferred` becomes `state.last_accepted()` (the resumed tip on a restart, `genesis_id` on a
+>   fresh DB where they're equal — **zero behavior change on the fresh path**, confirmed by the unchanged
+>   `vm_initialize_and_last_accepted`). The `BlockManager` already seeds its last-accepted from `state.last_accepted()`,
+>   so the resumed tip flows through with no further change.
+> - **★ Why the STEP (e) "needs `seed_state` factored" caveat is now MOOT:** every byte space `seed_state` writes
+>   (timestamp/supply/UTXOs/validators/chains/genesis-block) goes through the write-through `Chain`-trait path
+>   (`set_*`/`add_*`/`put_current_validator`/`add_chain`/`add_tx`) and is therefore either persisted in a byte space or
+>   rebuilt by `State::load` (STEP (e)–(h)). So on a recovered DB we resume rather than re-derive; nothing needed
+>   factoring out of `seed_state`.
+> - **TDD:** `vm::tests::initialize_over_recovered_db_resumes_persisted_tip_not_genesis` (process 1 = real genesis
+>   `initialize` over a shared `Arc<dyn DynDatabase>`; advance the persisted tip to height 7 directly through `State`'s
+>   write-through path, the restart shape; process 2 = a fresh `PlatformVm::initialize` over the SAME backend must come
+>   up at the advanced tip + `preferred`, not genesis, while still tracking `genesis_id` and resolving the height-7
+>   block). `-p ava-platformvm` **166/166** (+1), clippy `--all-targets -D warnings` + fmt clean, **full workspace
+>   <run>** (an `initialize` VM-contract change ⇒ full-workspace gate per the M5.f4 lesson).
+> - **★ STILL DEFERRED (the remaining advanced-tip-resume items):** the **reward-utxo index** (keyed under hashed
+>   `reward_utxos.join(tx)` sub-spaces with no enumerable tx-id set on disk — needs a flat tx-id index added first);
+>   (b) `create_snowman_chain` rooting consensus at the persisted height (the in-process-boot wiring in `avalanchers`,
+>   not platformvm); (c) in-process block issuance (the shared-mempool seam, same blocker as M9.19) to *create* an
+>   advanced tip to resume in-process. With the init-guard wired, a restart now resumes its persisted tip at the `State`
+>   layer; rooting the *consensus engine* at that height (b) is the next slice up the stack.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
