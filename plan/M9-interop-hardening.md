@@ -981,6 +981,32 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   blocker STEP (e) flagged); (b) `create_snowman_chain` rooting consensus at the persisted height; (c) in-process
 >   block issuance (the shared-mempool seam, same blocker as M9.19) to *create* an advanced tip to resume.
 
+> **STEP (g) — SUBNET / CHAIN / UTXO-INDEX CACHE RESUME (2026-06-20, ralph iteration, TDD; closes the "subnet / chain
+> / UTXO-index caches" half of STEP (f)'s item-(a) deferral).** `State::load()` now also rebuilds the three in-memory
+> caches that mirror an already-write-through byte space, so a recovered node reports its subnets, per-subnet chains,
+> and `getUTXOs` address index instead of empty collections:
+> - **`ava-platformvm` `state/state.rs`:** new `load_subnets()` / `load_chains()` / `load_utxo_index()`, called from
+>   `load()` after `load_stakers()`. `load_subnets` flat-scans the `subnets` byte space (key = 32-byte subnet id) into
+>   `subnet_ids`. `load_utxo_index` flat-scans `utxo_index_db` (key = `addr(20)‖utxoID(32)`, the `utxo_index_key`
+>   layout) into the address → utxo-id `BTreeMap`. **`load_chains` must run after `load_subnets`** and enumerates
+>   per-subnet: each subnet's chains live under the **hashed** `chains.join(subnet)` sub-space (`join` compresses to a
+>   SHA-256 prefix — the parent space is *not* flat-scannable), so it iterates over the resumed `subnet_ids` **plus**
+>   `PRIMARY_NETWORK_ID` (genesis chains are recorded under the primary network). Defensive decode (`Error::CorruptState`
+>   on bad key widths); the byte spaces are an on-disk migration concern, not a consensus/wire contract.
+> - **TDD:** `state::state::tests::reopen_resumes_persisted_subnet_chain_and_utxo_index_caches` (persist a created
+>   subnet + a primary-network genesis chain + a subnet chain + two multi-owner UTXOs into a shared `Arc<dyn
+>   DynDatabase>`, drop the in-memory `State`, re-open a fresh `State` over the same backend — the real restart shape —
+>   assert all three caches are empty before `load()` and resume exactly after). `-p ava-platformvm` **164/164** (+1),
+>   clippy `--all-targets -D warnings` + fmt clean, **full workspace 1678/1678 (2 skipped)**.
+> - **★ STILL DEFERRED (the remaining advanced-tip-resume items):** (a)-init-guard — wire the `IsInitialized` guard into
+>   `PlatformVm::initialize` (skip `seed_state` on a recovered DB; needs `seed_state` factored so genesis stakers
+>   re-derive without clobbering persisted LA/height); the **reward-utxo index** (keyed under hashed
+>   `reward_utxos.join(tx)` sub-spaces with no enumerable tx-id set on disk — needs a flat tx-id index added first) and
+>   the **L1-validator set** (in-memory-only — `put_l1_validator` has no disk write path yet, the same gap stakers had
+>   before STEP (f); needs disk-persistence built first, then resume); (b) `create_snowman_chain` rooting consensus at
+>   the persisted height; (c) in-process block issuance (the shared-mempool seam, same blocker as M9.19) to *create* an
+>   advanced tip to resume.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

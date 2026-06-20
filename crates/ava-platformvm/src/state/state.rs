@@ -37,6 +37,7 @@ use ava_database::error::Error as DbError;
 use ava_database::{
     Database, Iteratee, Iterator as _, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb,
 };
+use ava_types::constants::PRIMARY_NETWORK_ID;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
@@ -410,10 +411,15 @@ impl<D: Database> State<D> {
     /// 27 §5.1: "read `singleton→last accepted`; the base DB is the truth"). A
     /// no-op on a fresh, never-seeded DB (every singleton read misses).
     ///
-    /// Note: the in-memory staker / subnet / chain / UTXO-index caches are NOT
-    /// rebuilt here — the staker set is in-memory-only today (its disk write path
-    /// is the deferred M4.14/M4.20 acceptor flush), so a faithful validator-set
-    /// resume is a separate follow-up. This restores exactly what is persisted.
+    /// Also rebuilds the in-memory caches that mirror a write-through byte
+    /// space: the current/pending stakers ([`Self::load_stakers`]), the subnet
+    /// set ([`Self::load_subnets`]), the per-subnet chain index
+    /// ([`Self::load_chains`]), and the address → utxo-id index
+    /// ([`Self::load_utxo_index`]). Still NOT rebuilt: the reward-utxo index
+    /// (keyed under hashed `reward_utxos.join(tx)` sub-spaces with no
+    /// enumerable tx-id set on disk) and the L1-validator set (in-memory-only —
+    /// `put_l1_validator` has no disk write path yet, the same gap stakers had
+    /// before their acceptor flush); both are separate follow-ups.
     ///
     /// # Errors
     /// Returns [`Error::CorruptState`] if a persisted singleton or block-index
@@ -459,6 +465,9 @@ impl<D: Database> State<D> {
         self.load_supply()?;
         self.load_block_id_index()?;
         self.load_stakers()?;
+        self.load_subnets()?;
+        self.load_chains()?;
+        self.load_utxo_index()?;
         Ok(())
     }
 
@@ -549,6 +558,98 @@ impl<D: Database> State<D> {
         }
         for (height, id) in entries {
             self.block_id_index.insert(height, id);
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the in-memory subnet set ([`Self::subnet_ids`]) from the
+    /// persisted `subnets` byte space (each key is a 32-byte subnet id). The
+    /// space is flat (not joined), so a single scan suffices.
+    fn load_subnets(&mut self) -> Result<()> {
+        let mut ids: Vec<Id> = Vec::new();
+        {
+            let mut it = self.subnets.db.new_iterator_with_start_and_prefix(&[], &[]);
+            while it.next() {
+                let Some(k) = it.key() else { continue };
+                let id = Id::from_slice(k).map_err(|_| Error::CorruptState("subnet id length"))?;
+                ids.push(id);
+            }
+            it.error().map_err(Error::Database)?;
+            it.release();
+        }
+        for id in ids {
+            if !self.subnet_ids.contains(&id) {
+                self.subnet_ids.push(id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the in-memory `subnet → chains` index ([`Self::chain_index`])
+    /// from the persisted `chains` space. Each subnet's chains live under the
+    /// **hashed** sub-space `chains.join(subnet)` (the join compresses to a
+    /// SHA-256 prefix, so the parent space is not flat-scannable), so this
+    /// enumerates per subnet over the resumed [`Self::subnet_ids`] plus the
+    /// primary network (genesis chains are recorded under it). Must run after
+    /// [`Self::load_subnets`].
+    fn load_chains(&mut self) -> Result<()> {
+        let mut subnets: Vec<Id> = self.subnet_ids.clone();
+        subnets.push(PRIMARY_NETWORK_ID);
+        for subnet in subnets {
+            let space = self.chains.join(subnet.as_bytes());
+            let mut chain_ids: Vec<Id> = Vec::new();
+            {
+                let mut it = space.new_iterator_with_start_and_prefix(&[], &[]);
+                while it.next() {
+                    let Some(k) = it.key() else { continue };
+                    let id =
+                        Id::from_slice(k).map_err(|_| Error::CorruptState("chain id length"))?;
+                    chain_ids.push(id);
+                }
+                it.error().map_err(Error::Database)?;
+                it.release();
+            }
+            if !chain_ids.is_empty() {
+                let list = self.chain_index.entry(subnet).or_default();
+                for id in chain_ids {
+                    if !list.contains(&id) {
+                        list.push(id);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the in-memory address → utxo-id index ([`Self::utxo_index`])
+    /// from the persisted `utxo_index_db` space (flat keys `addr(20) ‖
+    /// utxoID(32)`, mirroring [`Self::utxo_index_key`]), so `getUTXOs` /
+    /// [`Self::utxo_ids`] resolve after a restart.
+    fn load_utxo_index(&mut self) -> Result<()> {
+        let mut entries: Vec<(ShortId, Id)> = Vec::new();
+        {
+            let mut it = self
+                .utxo_index_db
+                .new_iterator_with_start_and_prefix(&[], &[]);
+            while it.next() {
+                let Some(k) = it.key() else { continue };
+                let addr_bytes = k
+                    .get(..20)
+                    .ok_or(Error::CorruptState("utxo-index key length"))?;
+                let id_bytes = k
+                    .get(20..)
+                    .ok_or(Error::CorruptState("utxo-index key length"))?;
+                let addr = ShortId::from_slice(addr_bytes)
+                    .map_err(|_| Error::CorruptState("utxo-index addr length"))?;
+                let id = Id::from_slice(id_bytes)
+                    .map_err(|_| Error::CorruptState("utxo-index id length"))?;
+                entries.push((addr, id));
+            }
+            it.error().map_err(Error::Database)?;
+            it.release();
+        }
+        for (addr, id) in entries {
+            self.utxo_index.entry(addr).or_default().insert(id);
         }
         Ok(())
     }
@@ -1453,6 +1554,91 @@ mod tests {
         assert!(
             pending[0].equals(&pend_validator),
             "resumed pending validator matches"
+        );
+    }
+
+    /// Re-opening a `State` over a base DB that persisted subnets, per-subnet
+    /// chains, and the UTXO address index rebuilds those in-memory caches. The
+    /// byte-valued spaces are write-through, but `State::new` leaves their
+    /// in-memory mirrors (`subnet_ids` / `chain_index` / `utxo_index`) empty, so
+    /// without `load()` a recovered node would report no subnets, no chains, and
+    /// an empty `getUTXOs` index despite the data being on disk — the
+    /// "subnet / chain / UTXO-index caches" half of advanced-tip resume.
+    #[test]
+    fn reopen_resumes_persisted_subnet_chain_and_utxo_index_caches() {
+        let shared: std::sync::Arc<dyn ava_database::DynDatabase> =
+            std::sync::Arc::new(MemDb::new());
+
+        let user_subnet = Id::from([0x5B; 32]);
+        // A genesis chain recorded under the primary network (subnet id EMPTY)
+        // and a chain recorded under the created subnet — `add_chain` nests
+        // each under its subnet via the hashed `chains.join(subnet)` sub-space,
+        // so the resume must enumerate per-subnet, not a flat scan.
+        let primary_chain = Id::from([0xC1; 32]);
+        let subnet_chain = Id::from([0xC2; 32]);
+        let addr_a = ShortId::from_slice(&[0x0A; 20]).expect("addr");
+        let addr_b = ShortId::from_slice(&[0x0B; 20]).expect("addr");
+
+        let u1 = utxo(0x01, 0, &[addr_a]);
+        let u2 = utxo(0x02, 0, &[addr_a, addr_b]);
+
+        // First "process": persist subnets, chains, and UTXOs + an advanced tip.
+        {
+            let mut a = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+                .expect("State::new A");
+            a.add_subnet(user_subnet);
+            a.add_chain(Id::EMPTY, primary_chain);
+            a.add_chain(user_subnet, subnet_chain);
+            a.add_utxo(u1.input_id(), u1.marshal().expect("marshal u1"));
+            a.add_utxo(u2.input_id(), u2.marshal().expect("marshal u2"));
+            a.set_last_accepted(Id::from([0x7C; 32]));
+            a.set_height(3);
+        } // drop A — only the base DB survives.
+
+        // Second "process": fresh State over the SAME backend.
+        let mut b = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+            .expect("State::new B");
+        // Before load: the bug this closes — the populated db's byte spaces are
+        // on disk, but the in-memory caches are empty.
+        assert!(b.subnets().is_empty(), "no in-memory subnets before load");
+        assert!(
+            b.chains(Id::EMPTY).is_empty(),
+            "no in-memory primary-network chains before load"
+        );
+        assert!(
+            b.chains(user_subnet).is_empty(),
+            "no in-memory subnet chains before load"
+        );
+        assert!(
+            b.utxo_ids(&addr_a, Id::EMPTY, usize::MAX).is_empty(),
+            "no in-memory utxo index before load"
+        );
+
+        b.load().expect("load()");
+
+        assert_eq!(b.subnets(), vec![user_subnet], "resumed subnet set");
+        assert_eq!(
+            b.chains(Id::EMPTY),
+            vec![primary_chain],
+            "resumed primary-network chains"
+        );
+        assert_eq!(
+            b.chains(user_subnet),
+            vec![subnet_chain],
+            "resumed subnet chains"
+        );
+
+        let mut a_ids = vec![u1.input_id(), u2.input_id()];
+        a_ids.sort();
+        assert_eq!(
+            b.utxo_ids(&addr_a, Id::EMPTY, usize::MAX),
+            a_ids,
+            "resumed addr_a utxo index"
+        );
+        assert_eq!(
+            b.utxo_ids(&addr_b, Id::EMPTY, usize::MAX),
+            vec![u2.input_id()],
+            "resumed addr_b utxo index"
         );
     }
 }
