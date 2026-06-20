@@ -54,6 +54,28 @@ impl Priority {
         self as u8
     }
 
+    /// The [`Priority`] for a raw protocol byte `1..=11`, or `None` if out of
+    /// range — the inverse of [`Priority::as_u8`]. Used by the on-disk staker
+    /// codec to recover a staker's current/pending + validator/delegator
+    /// partition on restart.
+    #[must_use]
+    pub const fn from_u8(b: u8) -> Option<Priority> {
+        match b {
+            1 => Some(Priority::PrimaryNetworkDelegatorApricotPending),
+            2 => Some(Priority::PrimaryNetworkValidatorPending),
+            3 => Some(Priority::PrimaryNetworkDelegatorBanffPending),
+            4 => Some(Priority::SubnetPermissionlessValidatorPending),
+            5 => Some(Priority::SubnetPermissionlessDelegatorPending),
+            6 => Some(Priority::SubnetPermissionedValidatorPending),
+            7 => Some(Priority::SubnetPermissionedValidatorCurrent),
+            8 => Some(Priority::SubnetPermissionlessDelegatorCurrent),
+            9 => Some(Priority::SubnetPermissionlessValidatorCurrent),
+            10 => Some(Priority::PrimaryNetworkDelegatorCurrent),
+            11 => Some(Priority::PrimaryNetworkValidatorCurrent),
+            _ => None,
+        }
+    }
+
     /// `Priority.IsCurrent` — in the current validator set.
     #[must_use]
     pub const fn is_current(self) -> bool {
@@ -158,6 +180,17 @@ mod golden {
         assert_eq!(Priority::SubnetPermissionlessValidatorCurrent.as_u8(), 9);
         assert_eq!(Priority::PrimaryNetworkDelegatorCurrent.as_u8(), 10);
         assert_eq!(Priority::PrimaryNetworkValidatorCurrent.as_u8(), 11);
+    }
+
+    #[test]
+    fn priority_u8_round_trips() {
+        for b in 1u8..=11 {
+            let p = Priority::from_u8(b).expect("valid priority byte");
+            assert_eq!(p.as_u8(), b, "from_u8 ∘ as_u8 is the identity");
+        }
+        assert_eq!(Priority::from_u8(0), None, "0 is out of range");
+        assert_eq!(Priority::from_u8(12), None, "12 is out of range");
+        assert_eq!(Priority::from_u8(255), None, "255 is out of range");
     }
 
     #[test]

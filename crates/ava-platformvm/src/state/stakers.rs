@@ -38,15 +38,19 @@ impl Stakers {
         Self::default()
     }
 
-    /// Inserts/replaces a validator and indexes it by `(subnet, node)`.
-    pub fn put_validator(&mut self, s: Staker) {
+    /// Inserts/replaces a validator and indexes it by `(subnet, node)`,
+    /// returning any prior validator it displaced (so a write-through caller can
+    /// drop the replaced staker's persisted record when the tx id differs).
+    pub fn put_validator(&mut self, s: Staker) -> Option<Staker> {
         // Replace any prior entry for the same (subnet, node) so the ordered set
         // does not retain a stale staker under a different ordering key.
-        if let Some(prev) = self.validators.remove(&(s.subnet_id, s.node_id)) {
-            self.set.remove(&prev);
+        let prev = self.validators.remove(&(s.subnet_id, s.node_id));
+        if let Some(prev) = &prev {
+            self.set.remove(prev);
         }
         self.validators.insert((s.subnet_id, s.node_id), s.clone());
         self.set.insert(s);
+        prev
     }
 
     /// Removes a validator from both the ordered set and the index.

@@ -32,6 +32,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ava_crypto::bls;
 use ava_database::error::Error as DbError;
 use ava_database::{
     Database, Iteratee, Iterator as _, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb,
@@ -48,6 +49,7 @@ use crate::state::l1_validator::L1Validator;
 use crate::state::prefixes;
 use crate::state::staker::Staker;
 use crate::state::stakers::Stakers;
+use crate::txs::Priority;
 use crate::txs::fee::gas::GasState;
 
 /// The default per-space LRU capacity (Go uses a handful of fixed cache sizes;
@@ -151,6 +153,16 @@ pub struct State<D: Database> {
     block_ids: ByteSpace<D>,
     /// Signed-tx byte store (`txDB`), keyed by tx id (M4.20).
     txs: ByteSpace<D>,
+    /// Persisted current-staker sublist (`validator/current`), keyed by staker
+    /// tx id → its encoded record. Written through by the `put_current_*` /
+    /// `delete_current_*` acceptor path and rebuilt into [`Self::current`] by
+    /// [`Self::load`] on restart (M9.15 advanced-tip resume — the validator-set
+    /// half). The on-disk record is a migration concern, not a consensus/wire
+    /// contract (specs 00 §4.4), so it uses a self-describing fixed layout.
+    current_stakers_db: PrefixDb<D>,
+    /// Persisted pending-staker sublist (`validator/pending`); the pending
+    /// counterpart of [`Self::current_stakers_db`].
+    pending_stakers_db: PrefixDb<D>,
 
     // ----- scalar singletons (in-memory, written through to `singletons`) -----
     timestamp: SystemTime,
@@ -200,6 +212,7 @@ impl<D: Database> State<D> {
         let base = Arc::new(base);
 
         let l1_parent = PrefixDb::new_arc(prefixes::L1_VALIDATORS_PREFIX, Arc::clone(&base));
+        let validators_parent = PrefixDb::new_arc(prefixes::VALIDATORS_PREFIX, Arc::clone(&base));
 
         Ok(Self {
             utxos: ByteSpace::new(prefixes::UTXO_PREFIX, &base),
@@ -216,6 +229,8 @@ impl<D: Database> State<D> {
             blocks: ByteSpace::new(prefixes::BLOCK_PREFIX, &base),
             block_ids: ByteSpace::new(prefixes::BLOCK_ID_PREFIX, &base),
             txs: ByteSpace::new(prefixes::TX_PREFIX, &base),
+            current_stakers_db: validators_parent.join(prefixes::CURRENT_PREFIX),
+            pending_stakers_db: validators_parent.join(prefixes::PENDING_PREFIX),
 
             timestamp: UNIX_EPOCH,
             fee_state: GasState::default(),
@@ -443,6 +458,7 @@ impl<D: Database> State<D> {
         }
         self.load_supply()?;
         self.load_block_id_index()?;
+        self.load_stakers()?;
         Ok(())
     }
 
@@ -537,6 +553,152 @@ impl<D: Database> State<D> {
         Ok(())
     }
 
+    // ----- staker disk codec + resume (M9.15 advanced-tip resume) -----
+
+    /// The fixed-width prefix of an encoded staker record (everything before the
+    /// optional BLS public key): `txID(32) ‖ nodeID(20) ‖ subnetID(32) ‖
+    /// weight(8) ‖ start(8) ‖ end(8) ‖ potentialReward(8) ‖ nextTime(8) ‖
+    /// priority(1) ‖ pkPresent(1)` = 126 bytes.
+    const STAKER_FIXED_LEN: usize = 32 + 20 + 32 + 8 + 8 + 8 + 8 + 8 + 1 + 1;
+
+    /// Unix-seconds since the epoch for `t` (saturating at the epoch for any
+    /// pre-epoch time, matching [`set_timestamp`](Self::set_timestamp)).
+    fn staker_secs(t: SystemTime) -> u64 {
+        t.duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_secs()
+    }
+
+    /// `UNIX_EPOCH + secs`, or [`Error::CorruptState`] on overflow.
+    fn staker_time(secs: u64) -> Result<SystemTime> {
+        UNIX_EPOCH
+            .checked_add(Duration::from_secs(secs))
+            .ok_or(Error::CorruptState("staker time overflow"))
+    }
+
+    /// Encodes a [`Staker`] to its on-disk record (the self-describing fixed
+    /// layout documented on [`Self::current_stakers_db`]). The optional BLS key
+    /// is a 1-byte present flag followed by the 48-byte compressed key when set.
+    fn encode_staker(s: &Staker) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(Self::STAKER_FIXED_LEN + bls::PUBLIC_KEY_LEN);
+        buf.extend_from_slice(s.tx_id.as_bytes());
+        buf.extend_from_slice(s.node_id.as_bytes());
+        buf.extend_from_slice(s.subnet_id.as_bytes());
+        buf.extend_from_slice(&s.weight.to_be_bytes());
+        buf.extend_from_slice(&Self::staker_secs(s.start_time).to_be_bytes());
+        buf.extend_from_slice(&Self::staker_secs(s.end_time).to_be_bytes());
+        buf.extend_from_slice(&s.potential_reward.to_be_bytes());
+        buf.extend_from_slice(&Self::staker_secs(s.next_time).to_be_bytes());
+        buf.push(s.priority.as_u8());
+        match &s.public_key {
+            Some(pk) => {
+                buf.push(1);
+                buf.extend_from_slice(&pk.compress());
+            }
+            None => buf.push(0),
+        }
+        buf
+    }
+
+    /// Decodes an on-disk staker record written by [`Self::encode_staker`].
+    /// Defensive against truncation/garbage (the base DB is untrusted on
+    /// recovery): every field read is length-checked into [`Error::CorruptState`].
+    fn decode_staker(buf: &[u8]) -> Result<Staker> {
+        let field = |start: usize, len: usize| -> Result<&[u8]> {
+            buf.get(start..start.saturating_add(len))
+                .ok_or(Error::CorruptState("staker record truncated"))
+        };
+        let be_u64 = |start: usize| -> Result<u64> {
+            let arr: [u8; 8] = field(start, 8)?
+                .try_into()
+                .map_err(|_| Error::CorruptState("staker u64 field"))?;
+            Ok(u64::from_be_bytes(arr))
+        };
+
+        let tx_id =
+            Id::from_slice(field(0, 32)?).map_err(|_| Error::CorruptState("staker tx id"))?;
+        let node_id = NodeId::from_slice(field(32, 20)?)
+            .map_err(|_| Error::CorruptState("staker node id"))?;
+        let subnet_id =
+            Id::from_slice(field(52, 32)?).map_err(|_| Error::CorruptState("staker subnet id"))?;
+        let weight = be_u64(84)?;
+        let start_time = Self::staker_time(be_u64(92)?)?;
+        let end_time = Self::staker_time(be_u64(100)?)?;
+        let potential_reward = be_u64(108)?;
+        let next_time = Self::staker_time(be_u64(116)?)?;
+        let priority_byte = *field(124, 1)?
+            .first()
+            .ok_or(Error::CorruptState("staker priority byte"))?;
+        let priority =
+            Priority::from_u8(priority_byte).ok_or(Error::CorruptState("staker priority byte"))?;
+        let pk_present = *field(125, 1)?
+            .first()
+            .ok_or(Error::CorruptState("staker pk-present flag"))?;
+        let public_key = match pk_present {
+            0 => None,
+            1 => Some(
+                bls::PublicKey::from_compressed(field(
+                    Self::STAKER_FIXED_LEN,
+                    bls::PUBLIC_KEY_LEN,
+                )?)
+                .map_err(|_| Error::CorruptState("staker public key"))?,
+            ),
+            _ => return Err(Error::CorruptState("staker pk-present flag")),
+        };
+
+        Ok(Staker {
+            tx_id,
+            node_id,
+            public_key,
+            subnet_id,
+            weight,
+            start_time,
+            end_time,
+            potential_reward,
+            next_time,
+            priority,
+        })
+    }
+
+    /// Reads and decodes every staker record from a sublist `db`, in iteration
+    /// (key) order.
+    fn read_staker_sublist(db: &PrefixDb<D>) -> Result<Vec<Staker>> {
+        let mut out: Vec<Staker> = Vec::new();
+        let mut it = db.new_iterator_with_start_and_prefix(&[], &[]);
+        while it.next() {
+            let Some(v) = it.value() else { continue };
+            out.push(Self::decode_staker(v)?);
+        }
+        it.error().map_err(Error::Database)?;
+        it.release();
+        Ok(out)
+    }
+
+    /// Rebuilds the in-memory current & pending [`Stakers`] collections from the
+    /// persisted staker sublists, dispatching each record to the validator or
+    /// delegator slot by its [`Priority`]. Validators also seed the mutable
+    /// `staking_info` default, mirroring [`put_current_validator`](Self::put_current_validator).
+    fn load_stakers(&mut self) -> Result<()> {
+        for s in Self::read_staker_sublist(&self.current_stakers_db)? {
+            if s.priority.is_validator() {
+                self.staking_info
+                    .entry((s.subnet_id, s.node_id))
+                    .or_default();
+                let _ = self.current.put_validator(s);
+            } else {
+                self.current.put_delegator(s);
+            }
+        }
+        for s in Self::read_staker_sublist(&self.pending_stakers_db)? {
+            if s.priority.is_validator() {
+                let _ = self.pending.put_validator(s);
+            } else {
+                self.pending.put_delegator(s);
+            }
+        }
+        Ok(())
+    }
+
     // ----- staker weight/pk-diff stores (M4.14/M4.20) -----
 
     /// The persisted staker weight-diff store
@@ -588,6 +750,7 @@ impl<D: Database> State<D> {
     {
         let base = Arc::clone(&self.base);
         let l1_parent = PrefixDb::new_arc(prefixes::L1_VALIDATORS_PREFIX, Arc::clone(&base));
+        let validators_parent = PrefixDb::new_arc(prefixes::VALIDATORS_PREFIX, Arc::clone(&base));
         Arc::new(State {
             utxos: ByteSpace::new(prefixes::UTXO_PREFIX, &base),
             utxo_index_db: PrefixDb::new_arc(prefixes::UTXO_PREFIX, Arc::clone(&base))
@@ -603,6 +766,8 @@ impl<D: Database> State<D> {
             blocks: ByteSpace::new(prefixes::BLOCK_PREFIX, &base),
             block_ids: ByteSpace::new(prefixes::BLOCK_ID_PREFIX, &base),
             txs: ByteSpace::new(prefixes::TX_PREFIX, &base),
+            current_stakers_db: validators_parent.join(prefixes::CURRENT_PREFIX),
+            pending_stakers_db: validators_parent.join(prefixes::PENDING_PREFIX),
 
             timestamp: self.timestamp,
             fee_state: self.fee_state,
@@ -786,21 +951,37 @@ impl<D: Database> Chain for State<D> {
         self.staking_info
             .entry((s.subnet_id, s.node_id))
             .or_default();
-        self.current.put_validator(s);
+        let tx_id = s.tx_id;
+        let bytes = Self::encode_staker(&s);
+        // A validator replaced under a different tx id leaves an orphaned disk
+        // key — drop it so the sublist mirrors the in-memory set.
+        if let Some(prev) = self
+            .current
+            .put_validator(s)
+            .filter(|prev| prev.tx_id != tx_id)
+        {
+            let _ = self.current_stakers_db.delete(prev.tx_id.as_bytes());
+        }
+        let _ = self.current_stakers_db.put(tx_id.as_bytes(), &bytes);
         Ok(())
     }
 
     fn delete_current_validator(&mut self, s: &Staker) {
         self.staking_info.remove(&(s.subnet_id, s.node_id));
         self.current.delete_validator(s);
+        let _ = self.current_stakers_db.delete(s.tx_id.as_bytes());
     }
 
     fn put_current_delegator(&mut self, s: Staker) {
+        let _ = self
+            .current_stakers_db
+            .put(s.tx_id.as_bytes(), &Self::encode_staker(&s));
         self.current.put_delegator(s);
     }
 
     fn delete_current_delegator(&mut self, s: &Staker) {
         self.current.delete_delegator(s);
+        let _ = self.current_stakers_db.delete(s.tx_id.as_bytes());
     }
 
     fn current_stakers(&self) -> Vec<Staker> {
@@ -837,20 +1018,34 @@ impl<D: Database> Chain for State<D> {
         if !s.priority.is_pending() {
             return Err(Error::WrongTxType);
         }
-        self.pending.put_validator(s);
+        let tx_id = s.tx_id;
+        let bytes = Self::encode_staker(&s);
+        if let Some(prev) = self
+            .pending
+            .put_validator(s)
+            .filter(|prev| prev.tx_id != tx_id)
+        {
+            let _ = self.pending_stakers_db.delete(prev.tx_id.as_bytes());
+        }
+        let _ = self.pending_stakers_db.put(tx_id.as_bytes(), &bytes);
         Ok(())
     }
 
     fn delete_pending_validator(&mut self, s: &Staker) {
         self.pending.delete_validator(s);
+        let _ = self.pending_stakers_db.delete(s.tx_id.as_bytes());
     }
 
     fn put_pending_delegator(&mut self, s: Staker) {
+        let _ = self
+            .pending_stakers_db
+            .put(s.tx_id.as_bytes(), &Self::encode_staker(&s));
         self.pending.put_delegator(s);
     }
 
     fn delete_pending_delegator(&mut self, s: &Staker) {
         self.pending.delete_delegator(s);
+        let _ = self.pending_stakers_db.delete(s.tx_id.as_bytes());
     }
 
     fn pending_stakers(&self) -> Vec<Staker> {
@@ -1146,5 +1341,118 @@ mod tests {
         );
         assert_eq!(b.l1_validator_excess(), 55, "resumed L1 excess singleton");
         assert_eq!(b.accrued_fees(), 77, "resumed accrued-fees singleton");
+    }
+
+    /// Re-opening a `State` over a base DB that persisted current & pending
+    /// stakers resumes the full current/pending validator sets (the
+    /// validator-set half of advanced-tip resume): `put_*` writes each staker
+    /// through to its disk sublist, and `load()` rebuilds the in-memory
+    /// [`Stakers`] collections so a recovered node sees its validators rather
+    /// than an empty set. Mirrors the singleton/block-index resume above.
+    #[test]
+    fn reopen_resumes_persisted_stakers() {
+        use ava_crypto::bls;
+
+        use crate::txs::Priority;
+
+        let shared: std::sync::Arc<dyn ava_database::DynDatabase> =
+            std::sync::Arc::new(MemDb::new());
+
+        let t0 = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let t1 = UNIX_EPOCH + Duration::from_secs(1_700_009_999);
+
+        // A primary-network current validator carrying a BLS key, a primary
+        // current delegator with no key, and a permissioned subnet pending
+        // validator — exercises both `Option<PublicKey>` arms and the
+        // current/pending + validator/delegator dispatch.
+        let pk = bls::SecretKey::from_bytes(&[7u8; 32])
+            .expect("sk")
+            .public_key();
+        let subnet = Id::from([0x5B; 32]);
+        let cur_validator = Staker::new_current(
+            Id::from([0x01; 32]),
+            NodeId::from([0xAA; 20]),
+            Some(pk),
+            Id::EMPTY,
+            1_000,
+            t0,
+            t1,
+            500,
+            Priority::PrimaryNetworkValidatorCurrent,
+        );
+        let cur_delegator = Staker::new_current(
+            Id::from([0x02; 32]),
+            NodeId::from([0xBB; 20]),
+            None,
+            Id::EMPTY,
+            250,
+            t0,
+            t1,
+            7,
+            Priority::PrimaryNetworkDelegatorCurrent,
+        );
+        let pend_validator = Staker::new_pending(
+            Id::from([0x03; 32]),
+            NodeId::from([0xCC; 20]),
+            None,
+            subnet,
+            42,
+            t0,
+            t1,
+            Priority::SubnetPermissionedValidatorPending,
+        );
+
+        // First "process": persist the stakers + an advanced tip (so the
+        // re-open path is the recovery shape, not a fresh seed).
+        {
+            let mut a = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+                .expect("State::new A");
+            a.put_current_validator(cur_validator.clone())
+                .expect("put current validator");
+            a.put_current_delegator(cur_delegator.clone());
+            a.put_pending_validator(pend_validator.clone())
+                .expect("put pending validator");
+            a.set_last_accepted(Id::from([0x7C; 32]));
+            a.set_height(9);
+        } // drop A — only the base DB survives.
+
+        // Second "process": fresh State over the SAME backend.
+        let mut b = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+            .expect("State::new B");
+        assert!(b.is_initialized(), "populated db is initialized");
+        assert!(
+            b.current_stakers().is_empty(),
+            "fresh State has no in-memory current stakers before load"
+        );
+        assert!(
+            b.pending_stakers().is_empty(),
+            "fresh State has no in-memory pending stakers before load"
+        );
+
+        b.load().expect("load()");
+
+        // The current set resumes both stakers, in `Staker` (Less) order.
+        let current = b.current_stakers();
+        assert_eq!(current.len(), 2, "resumed both current stakers");
+        // Full-field equality (incl. the BLS key round-trip) for each.
+        let resumed_val = b
+            .get_current_validator(Id::EMPTY, NodeId::from([0xAA; 20]))
+            .expect("current validator point lookup");
+        assert!(
+            resumed_val.equals(&cur_validator),
+            "resumed current validator matches (incl. BLS key) — got {resumed_val:?}"
+        );
+        assert!(
+            current.iter().any(|s| s.equals(&cur_delegator)),
+            "resumed current delegator matches"
+        );
+
+        // The pending set resumes the subnet validator.
+        let pending = b.pending_stakers();
+        assert_eq!(pending.len(), 1, "resumed the pending validator");
+        assert!(
+            pending[0].equals(&pend_validator),
+            "resumed pending validator matches"
+        );
     }
 }

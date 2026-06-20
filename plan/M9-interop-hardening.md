@@ -949,6 +949,38 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   height and (c) in-process block issuance (the shared-mempool seam, same blocker as M9.19 — you cannot yet *create* an
 >   advanced tip in-process to resume) remain. `State::load()` is the verified primitive those steps will call.
 
+> **STEP (f) — STAKER DISK-PERSISTENCE (2026-06-20, ralph iteration, TDD; closes item (a)-stakers of STEP (e)'s
+> advanced-tip-resume follow-up — the validator-set half).** The blocker STEP (e) surfaced — "the staker set is
+> in-memory-only today (`put_current_validator` writes no disk keys; the staker→disk acceptor flush of M4.14/M4.20 was
+> never built)" — is now closed at the `State` layer. The `Chain`-trait acceptor write path now persists stakers and
+> `State::load()` rebuilds the in-memory validator/delegator sets on restart:
+> - **`ava-platformvm` `state/state.rs`:** two new persisted sublists `current_stakers_db` / `pending_stakers_db`
+>   (`validator/current` and `validator/pending`, keyed by staker tx id → an encoded record). `put_current_validator`/
+>   `put_current_delegator`/`put_pending_validator`/`put_pending_delegator` and their `delete_*` counterparts now
+>   **write through** to these sublists (the established write-through pattern of `set_last_accepted`/`add_block`/
+>   `add_utxo` — Rust's `State` is write-through where Go batches at commit). New `load_stakers()` (called from
+>   `load()`) decodes every record and dispatches it to the validator vs delegator slot by its `Priority`. The on-disk
+>   record is a **self-describing fixed layout** (`txID‖nodeID‖subnetID‖weight‖start‖end‖potentialReward‖nextTime‖
+>   priority‖pkPresent[‖pk48]`), decoded defensively (`Error::CorruptState` on truncation/garbage) — the P-Chain
+>   staker sublists are an on-disk migration concern, **not** a consensus/wire byte contract (specs 00 §4.4 / the
+>   `state.rs` module docs), so it mirrors the singleton encoding rather than Go's validator-metadata codec.
+> - **`Stakers::put_validator`** now returns the displaced prior validator (`Option<Staker>`) so the write-through
+>   caller can drop a replaced staker's orphaned disk key when the tx id differs.
+> - **`Priority::from_u8`** (inverse of `as_u8`) recovers the current/pending + validator/delegator partition on load.
+> - **TDD:** `state::state::tests::reopen_resumes_persisted_stakers` (persist a primary current validator carrying a
+>   BLS key + a current delegator + a permissioned-subnet pending validator into a shared `Arc<dyn DynDatabase>`, drop
+>   the in-memory `State`, re-open a fresh `State` over the same backend — the real restart shape — assert the sets are
+>   empty before `load()` and resume with full-field `Staker::equals` (incl. the BLS-key round-trip) after) +
+>   `txs::priorities::golden::priority_u8_round_trips`. `-p ava-platformvm` **165/165**, clippy `--all-targets -D
+>   warnings` + fmt clean.
+> - **★ STILL DEFERRED (the rest of advanced-tip resume — items (a)-init-guard / (b) / (c)):** wiring the
+>   `IsInitialized` guard into `PlatformVm::initialize` (skip `seed_state` on a recovered DB) now has its prerequisite
+>   met (the validator set resumes), but still needs `seed_state` factored so the in-memory genesis stakers are
+>   re-derivable without clobbering the persisted LA/height, **plus** the L1-validator / subnet / chain / UTXO-index
+>   caches given the same disk-resume treatment (this slice covered the current/pending stakers, the validator-set
+>   blocker STEP (e) flagged); (b) `create_snowman_chain` rooting consensus at the persisted height; (c) in-process
+>   block issuance (the shared-mempool seam, same blocker as M9.19) to *create* an advanced tip to resume.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
