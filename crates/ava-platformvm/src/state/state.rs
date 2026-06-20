@@ -33,7 +33,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ava_database::error::Error as DbError;
-use ava_database::{Database, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb};
+use ava_database::{
+    Database, Iteratee, Iterator as _, KeyValueDeleter, KeyValueReader, KeyValueWriter, PrefixDb,
+};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_types::short_id::ShortId;
@@ -371,6 +373,168 @@ impl<D: Database> State<D> {
     pub fn set_height(&mut self, height: u64) {
         self.height = height;
         self.write_u64_singleton(prefixes::HEIGHT_KEY, height);
+    }
+
+    // ----- restart / recovery: resume persisted state from disk (M9.15) -----
+
+    /// `IsInitialized` (cf. Go `state.shouldInit`) — whether this base DB already
+    /// holds persisted state. Detected by the presence of the last-accepted
+    /// singleton, which `Accept` writes in the same committed batch as the state
+    /// diff (specs 27 §5.1), so it is the canonical "already seeded" sentinel: a
+    /// fresh DB has no last-accepted, a recovered DB always does.
+    #[must_use]
+    pub fn is_initialized(&self) -> bool {
+        self.singletons.get(prefixes::LAST_ACCEPTED_KEY).is_ok()
+    }
+
+    /// Resumes the persisted consensus pointer (last-accepted id + height), the
+    /// scalar singletons (timestamp, supply, fee state, L1 excess, accrued fees),
+    /// and the block-id-at-height index from the base DB into the in-memory
+    /// caches — so a re-opened `State` resumes a previously-persisted (possibly
+    /// advanced) tip instead of the genesis defaults `State::new` installs (specs
+    /// 27 §5.1: "read `singleton→last accepted`; the base DB is the truth"). A
+    /// no-op on a fresh, never-seeded DB (every singleton read misses).
+    ///
+    /// Note: the in-memory staker / subnet / chain / UTXO-index caches are NOT
+    /// rebuilt here — the staker set is in-memory-only today (its disk write path
+    /// is the deferred M4.14/M4.20 acceptor flush), so a faithful validator-set
+    /// resume is a separate follow-up. This restores exactly what is persisted.
+    ///
+    /// # Errors
+    /// Returns [`Error::CorruptState`] if a persisted singleton or block-index
+    /// entry is present but has an unexpected byte length, or [`Error::Database`]
+    /// on an iterator error (never on a missing key).
+    pub fn load(&mut self) -> Result<()> {
+        if let Some(bytes) = self.read_singleton(prefixes::LAST_ACCEPTED_KEY)? {
+            self.last_accepted = Id::from_slice(&bytes)
+                .map_err(|_| Error::CorruptState("last-accepted id length"))?;
+        }
+        if let Some(h) = self.read_u64_singleton(prefixes::HEIGHT_KEY)? {
+            self.height = h;
+        }
+        if let Some(secs) = self.read_u64_singleton(prefixes::TIMESTAMP_KEY)? {
+            self.timestamp = UNIX_EPOCH
+                .checked_add(Duration::from_secs(secs))
+                .ok_or(Error::CorruptState("timestamp overflow"))?;
+        }
+        if let Some(excess) = self.read_u64_singleton(prefixes::L1_VALIDATOR_EXCESS_KEY)? {
+            self.l1_validator_excess = excess;
+        }
+        if let Some(fees) = self.read_u64_singleton(prefixes::ACCRUED_FEES_KEY)? {
+            self.accrued_fees = fees;
+        }
+        if let Some(buf) = self.read_singleton(prefixes::FEE_STATE_KEY)? {
+            // 16 bytes: capacity(8 BE) ‖ excess(8 BE) — see `set_fee_state`.
+            let buf: [u8; 16] = buf
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::CorruptState("fee-state length"))?;
+            let (cap, exc) = buf.split_at(8);
+            self.fee_state = GasState {
+                capacity: u64::from_be_bytes(
+                    cap.try_into()
+                        .map_err(|_| Error::CorruptState("fee-state capacity"))?,
+                ),
+                excess: u64::from_be_bytes(
+                    exc.try_into()
+                        .map_err(|_| Error::CorruptState("fee-state excess"))?,
+                ),
+            };
+        }
+        self.load_supply()?;
+        self.load_block_id_index()?;
+        Ok(())
+    }
+
+    /// Reads a singleton's raw bytes, mapping a missing key to `None` (so a fresh
+    /// DB resumes nothing) and propagating any other DB error.
+    fn read_singleton(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        match self.singletons.get(key) {
+            Ok(v) => Ok(Some(v)),
+            Err(Error::Database(DbError::NotFound)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Reads an 8-byte big-endian `u64` singleton (`None` if absent).
+    fn read_u64_singleton(&self, key: &[u8]) -> Result<Option<u64>> {
+        match self.read_singleton(key)? {
+            Some(bytes) => {
+                let arr: [u8; 8] = bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Error::CorruptState("u64 singleton length"))?;
+                Ok(Some(u64::from_be_bytes(arr)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Rebuilds the in-memory supply map from the persisted `current supply`
+    /// singletons (the primary network's bare key plus any per-subnet suffixed
+    /// keys).
+    fn load_supply(&mut self) -> Result<()> {
+        let prefix = prefixes::CURRENT_SUPPLY_KEY;
+        let mut entries: Vec<(Id, u64)> = Vec::new();
+        {
+            let mut it = self
+                .singletons
+                .db
+                .new_iterator_with_start_and_prefix(&[], prefix);
+            while it.next() {
+                let (Some(k), Some(v)) = (it.key(), it.value()) else {
+                    continue;
+                };
+                // `k` is singleton-space-relative and starts with `prefix`; the
+                // suffix is the subnet id (empty for the primary network).
+                let suffix = k.get(prefix.len()..).unwrap_or(&[]);
+                let subnet = if suffix.is_empty() {
+                    Id::EMPTY
+                } else {
+                    Id::from_slice(suffix)
+                        .map_err(|_| Error::CorruptState("supply subnet id length"))?
+                };
+                let amount: [u8; 8] = v
+                    .try_into()
+                    .map_err(|_| Error::CorruptState("supply value length"))?;
+                entries.push((subnet, u64::from_be_bytes(amount)));
+            }
+            it.error().map_err(Error::Database)?;
+            it.release();
+        }
+        for (subnet, amount) in entries {
+            self.supply.insert(subnet, amount);
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the in-memory `height → accepted block id` index from the
+    /// persisted `blockIDDB` space.
+    fn load_block_id_index(&mut self) -> Result<()> {
+        let mut entries: Vec<(u64, Id)> = Vec::new();
+        {
+            let mut it = self
+                .block_ids
+                .db
+                .new_iterator_with_start_and_prefix(&[], &[]);
+            while it.next() {
+                let (Some(k), Some(v)) = (it.key(), it.value()) else {
+                    continue;
+                };
+                let height: [u8; 8] = k
+                    .try_into()
+                    .map_err(|_| Error::CorruptState("block-index height key length"))?;
+                let id =
+                    Id::from_slice(v).map_err(|_| Error::CorruptState("block-index id length"))?;
+                entries.push((u64::from_be_bytes(height), id));
+            }
+            it.error().map_err(Error::Database)?;
+            it.release();
+        }
+        for (height, id) in entries {
+            self.block_id_index.insert(height, id);
+        }
+        Ok(())
     }
 
     // ----- staker weight/pk-diff stores (M4.14/M4.20) -----
@@ -879,5 +1043,108 @@ mod tests {
         // Unknown address: empty.
         let addr_c = ShortId::from_slice(&[0x0C; 20]).expect("addr");
         assert!(s.utxo_ids(&addr_c, Id::EMPTY, usize::MAX).is_empty());
+    }
+
+    /// A never-seeded base DB is not initialized; `load()` over it is a harmless
+    /// no-op leaving the genesis defaults (the engine then seeds genesis).
+    #[test]
+    fn fresh_db_is_not_initialized_and_load_is_a_noop() {
+        let shared: std::sync::Arc<dyn ava_database::DynDatabase> =
+            std::sync::Arc::new(MemDb::new());
+        let mut s =
+            State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared))).expect("State::new");
+        assert!(
+            !s.is_initialized(),
+            "is_initialized() over a fresh db (no persisted last-accepted)"
+        );
+        s.load().expect("load() over fresh db");
+        assert_eq!(
+            s.last_accepted(),
+            Id::EMPTY,
+            "load() leaves genesis default LA"
+        );
+        assert_eq!(s.height(), 0, "load() leaves genesis default height");
+    }
+
+    /// Re-opening a `State` over a base DB that already holds an **advanced**
+    /// accepted tip resumes the persisted last-accepted pointer, height, block
+    /// index, and the scalar singletons — it does NOT reset to genesis defaults
+    /// (spec 27 §5.1: read `singleton→last accepted`; the base DB is the truth).
+    #[test]
+    fn reopen_resumes_persisted_advanced_tip_not_genesis_defaults() {
+        let shared: std::sync::Arc<dyn ava_database::DynDatabase> =
+            std::sync::Arc::new(MemDb::new());
+
+        // First "process": persist an advanced, accepted tip + scalar state.
+        let block_id = Id::from([0x7C; 32]);
+        let block_bytes = vec![0xAB, 0xCD, 0xEF];
+        {
+            let mut a = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+                .expect("State::new A");
+            a.set_timestamp(UNIX_EPOCH + Duration::from_secs(1_700_000_123));
+            a.set_current_supply(Id::EMPTY, 999_000);
+            a.set_fee_state(GasState {
+                capacity: 4_321,
+                excess: 8_765,
+            });
+            a.set_l1_validator_excess(55);
+            a.set_accrued_fees(77);
+            a.add_block(block_id, 5, &block_bytes);
+            a.set_last_accepted(block_id);
+            a.set_height(5);
+        } // drop A — the in-memory view is gone; the base DB survives the restart.
+
+        // Second "process": a fresh State over the SAME backend (the real restart
+        // shape — a new process, the same on-disk backend).
+        let mut b = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+            .expect("State::new B");
+
+        // Before load: the bug this closes — the populated db is detected as
+        // initialized, but the in-memory caches are still genesis defaults.
+        assert!(
+            b.is_initialized(),
+            "is_initialized() reads persisted last-accepted"
+        );
+        assert_eq!(
+            b.last_accepted(),
+            Id::EMPTY,
+            "fresh State has not loaded yet"
+        );
+        assert_eq!(b.height(), 0, "fresh State has not loaded yet");
+
+        // Load resumes the persisted advanced tip.
+        b.load().expect("load()");
+        assert_eq!(b.last_accepted(), block_id, "resumed last-accepted pointer");
+        assert_eq!(b.height(), 5, "resumed height");
+        assert_eq!(
+            b.get_block_id_at_height(5),
+            Some(block_id),
+            "resumed block-id-at-height index"
+        );
+        assert_eq!(
+            b.get_block(block_id).expect("get_block"),
+            block_bytes,
+            "block bytes persist across the restart"
+        );
+        assert_eq!(
+            b.current_supply(Id::EMPTY).expect("supply"),
+            999_000,
+            "resumed primary-network supply singleton"
+        );
+        assert_eq!(
+            b.timestamp(),
+            UNIX_EPOCH + Duration::from_secs(1_700_000_123),
+            "resumed timestamp singleton"
+        );
+        assert_eq!(
+            b.fee_state(),
+            GasState {
+                capacity: 4_321,
+                excess: 8_765,
+            },
+            "resumed fee-state singleton"
+        );
+        assert_eq!(b.l1_validator_excess(), 55, "resumed L1 excess singleton");
+        assert_eq!(b.accrued_fees(), 77, "resumed accrued-fees singleton");
     }
 }

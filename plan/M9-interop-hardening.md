@@ -925,6 +925,30 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > - **★ STILL DEFERRED (unchanged):** **SAE** dispatch (custom-genesis harness); **multi-node `Sender`** for mixed-net;
 >   **advanced-tip resume** (the load-from-disk path above) — all single-track / gated, not a parallel-worktree wave.
 
+> **STEP (e) — LOAD-FROM-DISK PRIMITIVE (2026-06-20, ralph iteration, TDD; closes item (a) of STEP (d)'s
+> advanced-tip-resume follow-up at the `State` layer).** New `ava_platformvm::state::State` methods
+> `is_initialized()` + `load()` (`state/state.rs`): `is_initialized()` reports whether the base DB already holds
+> persisted state (presence of the `singleton→last accepted` key — the canonical "already seeded" sentinel, specs 27
+> §5.1, cf. Go `state.shouldInit`); `load()` resumes the persisted consensus pointer (`last_accepted` + `height`), the
+> scalar singletons (timestamp, primary+per-subnet supply, fee state, L1 excess, accrued fees), and the
+> `height → block id` index from disk into the in-memory caches `State::new` otherwise leaves at genesis defaults. New
+> `Error::CorruptState(&'static str)` for malformed fixed-width persisted entries (the base DB is the truth on
+> recovery). TDD: `reopen_resumes_persisted_advanced_tip_not_genesis_defaults` (seed an advanced tip + scalars into a
+> shared `Arc<dyn DynDatabase>`, drop the in-memory `State`, re-open a **fresh** `State` over the same backend — the
+> real restart shape — assert the pre-`load()` defaults are the bug and `load()` resumes every persisted field) +
+> `fresh_db_is_not_initialized_and_load_is_a_noop`. `-p ava-platformvm` **145/145** (+2), clippy `--all-targets -D
+> warnings` clean (note `arithmetic_side_effects`: `UNIX_EPOCH.checked_add`, not `+`), fmt clean.
+> - **★ STILL DEFERRED (the rest of advanced-tip resume — items (a)-stakers / (b) / (c)):** `load()` deliberately does
+>   **not** rebuild the in-memory **staker / subnet / chain / UTXO-index** caches — confirmed the staker set is
+>   **in-memory-only today** (`put_current_validator` writes no disk keys; the staker→disk acceptor flush of M4.14/M4.20
+>   was never built — only the weight/pk-diff iterators were), so a faithful **validator-set** resume is blocked on first
+>   building staker disk-persistence. **Wiring the `IsInitialized` guard into `PlatformVm::initialize`** is therefore
+>   left out this pass (skipping `seed_state` on resume without a staker rebuild would regress to an *empty* validator
+>   set, worse than today's re-seed-to-genesis); it needs `seed_state` factored so the in-memory genesis stakers can be
+>   re-derived without clobbering the persisted LA/height. (b) `create_snowman_chain` rooting consensus at the persisted
+>   height and (c) in-process block issuance (the shared-mempool seam, same blocker as M9.19 — you cannot yet *create* an
+>   advanced tip in-process to resume) remain. `State::load()` is the verified primitive those steps will call.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

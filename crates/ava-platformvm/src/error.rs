@@ -23,6 +23,12 @@ pub enum Error {
     #[error("tx is nil")]
     NilTx,
 
+    /// A persisted singleton or block-index entry had an unexpected byte length
+    /// when resuming state from disk (`State::load`) — a corrupt-DB signal,
+    /// since the base DB is the truth on recovery (specs 27 §5.1).
+    #[error("corrupt persisted state: {0}")]
+    CorruptState(&'static str),
+
     /// `errWrongTxType` — a [`crate`] visitor was invoked for a tx type it does
     /// not handle (the default `Visitor` method).
     #[error("wrong tx type")]
