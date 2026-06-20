@@ -1122,6 +1122,40 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   **both** its `State` layer (STEP (e)–(j)) **and** its consensus engine at the persisted height; what remains is only
 >   the means to advance a tip past genesis *within a single in-process run* (so an end-to-end resume can be exercised
 >   without a pre-populated disk fixture) — which needs block issuance, gated on the M9.19 mempool seam.
+>
+> **STEP (l) — IN-PROCESS BLOCK ISSUANCE + RESTART-RESUME, END-TO-END (2026-06-20, ralph iteration, TDD; closes item
+> (c) of the advanced-tip-resume follow-up).** The last item — advancing a tip past genesis via a *real* issued block
+> (not raw `State` pokes) and proving the restart resumes it — is now exercised end-to-end through the genuine VM
+> `build → verify → accept` path, using the **existing** M9.19 `PlatformVm::mempool_add` seam (no new production code).
+> Two `ava-reexecute` `pchain.rs` tests:
+> - **`block_issued_tip_resumes_after_restart`:** boot a `PlatformVm` over a **shared** `Arc<dyn DynDatabase>`, init
+>   genesis (height 0), admit a funded `CreateSubnetTx` and drive one `build → set_preference → verify → accept` cycle
+>   (a real height-1 `BanffStandardBlock` that flushes a genuine diff — consumed `U0`, change UTXO, a new subnet, the
+>   tx), drop the VM, then re-`initialize` a fresh VM over the SAME backend. Asserts the `IsInitialized` guard (STEP
+>   (i)) resumes the **block-issued** tip (not genesis) **and** that `get_block(resumed_tip)` re-parses the real block
+>   bytes off disk — the exact read `create_snowman_chain` (STEP (k)) performs at restart to root consensus at the
+>   persisted height. ★ This is the coverage the STEP (i) unit test could not give: it advanced the tip via raw `State`
+>   setters with **garbage block bytes** (`add_block(id, 7, &[0xAB, 0xCD])`), so it never proved a real persisted block
+>   re-parses on resume.
+> - **`resumed_vm_builds_a_further_block`:** after the restart resumes the height-1 tip, the recovered VM builds,
+>   verifies and accepts a *further* real block (height 2) spending the still-unspent genesis UTXO `U1`. This is the
+>   real **diff-resume** stress test — height-2 `verify` requires `State::load` to have faithfully rebuilt the on-disk
+>   caches it reads (parent-state view, the surviving UTXO `U1` via the STEP (g) UTXO-index + `get_utxo`, fee/staker
+>   state); a gap in any would fail. It passes — proving the resumed VM is fully functional, not merely able to report a
+>   resumed tip.
+> - **★ FINDING — the advanced-tip-resume arc (STEPs e–k) is FUNCTIONALLY COMPLETE; no production gap.** Both tests
+>   passed on first run: a tip advanced by real block issuance resumes faithfully on restart and the resumed VM builds
+>   further. So item (c) lands as a **verification-level** closure (regression guards + the end-to-end proof the raw-poke
+>   tests could not give), not a code change. `create_subnet_tx` was refactored to delegate to a `_spending(seed, tx_id,
+>   output_index, amount)` helper (so block 2 can spend `U1`); existing `replay_pchain` behavior unchanged. `-p
+>   ava-reexecute` **11/11** (+2), clippy `--all-targets -D warnings` + fmt clean. No production code touched ⇒ no
+>   workspace ripple (ava-reexecute is a leaf test crate).
+> - **★ Honest scope:** issuance here goes through the `mempool_add` seam directly on `PlatformVm` (the M9.19 path), NOT
+>   through the full chains-milestone snowman-engine boot (`run_queued_chains` → `PendingTxs` → poll). The resume property
+>   that an engine-driven issuance would prove is **identical** to (and now proven by) this — the engine path adds only
+>   the notify/poll wake before the same `build_block → accept`. Wiring block issuance through the in-process engine boot
+>   (so the `avalanchers` restart test resumes a self-issued advanced tip) remains a thin follow-up, but no longer gates
+>   the resume-correctness claim. The remaining M9.15 frontier is the live multi-node `Sender` and SAE dispatch.
 
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.

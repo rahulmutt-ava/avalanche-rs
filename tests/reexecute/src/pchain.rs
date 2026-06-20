@@ -190,10 +190,18 @@ fn genesis_amount0(seed: u64) -> u64 {
     (mix(seed) % 900_000_000).saturating_add(100_000_000)
 }
 
+/// The seed-derived amount of the second genesis UTXO `U1` (`output_index = 1`),
+/// the one a *post-restart* block spends to prove the resumed VM can build
+/// further (the resumed UTXO set must still resolve it). A pure function of
+/// `seed`, so the builder and the tx-construction path agree on the input amount.
+fn genesis_amount1(seed: u64) -> u64 {
+    (mix(seed.wrapping_add(0xABCD)) % 900_000_000).saturating_add(100_000_000)
+}
+
 fn build_genesis(seed: u64) -> Result<Genesis> {
     let avax = Id::from(AVAX_ASSET_ID);
     let amount0 = genesis_amount0(seed);
-    let amount1 = (mix(seed.wrapping_add(0xABCD)) % 900_000_000).saturating_add(100_000_000);
+    let amount1 = genesis_amount1(seed);
     let stake = (mix(seed.wrapping_add(0x5555)) % 1_000_000_000).saturating_add(2_000_000_000);
 
     let utxo0 = GenesisUtxo {
@@ -296,9 +304,18 @@ fn create_subnet_fee() -> Result<u64> {
 /// phase), so — exactly like the X-Chain leg — the input credential is not
 /// signature-checked; an empty credential keeps the tx byte-deterministic.
 fn create_subnet_tx(seed: u64, amount0: u64) -> Result<Tx> {
+    create_subnet_tx_spending(seed, Id::EMPTY, 0, amount0)
+}
+
+/// Builds a signed, initialized [`CreateSubnetTx`] spending an arbitrary genesis
+/// UTXO `(tx_id, output_index)` holding `amount`. [`create_subnet_tx`] spends the
+/// first genesis UTXO `U0`; the restart-resume test additionally spends the second
+/// genesis UTXO `U1` (`output_index = 1`) from a *resumed* VM, which exercises the
+/// resumed UTXO-index / `get_utxo` path the in-process write-through left on disk.
+fn create_subnet_tx_spending(seed: u64, tx_id: Id, output_index: u32, amount: u64) -> Result<Tx> {
     let avax = Id::from(AVAX_ASSET_ID);
     let fee = create_subnet_fee()?;
-    let change = amount0
+    let change = amount
         .checked_sub(fee)
         .ok_or_else(|| Error::Pchain("genesis UTXO too small to cover create-subnet fee".into()))?;
 
@@ -311,10 +328,10 @@ fn create_subnet_tx(seed: u64, amount0: u64) -> Result<Tx> {
                 out: Output::Transfer(TransferOutput::new(change, owners(seed))),
             }],
             ins: vec![TransferableInput {
-                tx_id: Id::EMPTY,
-                output_index: 0,
+                tx_id,
+                output_index,
                 asset_id: avax,
-                r#in: Input::Transfer(TransferInput::new(amount0, vec![0])),
+                r#in: Input::Transfer(TransferInput::new(amount, vec![0])),
             }],
             memo: vec![],
         }),
@@ -578,5 +595,234 @@ mod tests {
         let a = replay_pchain(1).expect("replay seed 1");
         let b = replay_pchain(2).expect("replay seed 2");
         assert_ne!(a, b, "different cases should produce different roots");
+    }
+
+    /// M9.15 STEP (l) — **in-process block issuance + restart-resume.** A tip
+    /// advanced by a *real* issued block (not raw `State` pokes) resumes after a
+    /// restart at the advanced height — closing the advanced-tip-resume arc
+    /// (STEPs e–k) under the genuine `build → verify → accept` path.
+    ///
+    /// The STEP (i) unit test resumed a tip advanced via raw `State` setters with
+    /// **garbage block bytes** (`add_block(id, 7, &[0xAB, 0xCD])`), so it could
+    /// never prove that `get_block(resumed_tip)` *parses* a real persisted block —
+    /// which is exactly what `create_snowman_chain` (STEP k) reads at restart to
+    /// root consensus at the persisted height. This drives one real height-1
+    /// `BanffStandardBlock` (the `CreateSubnetTx` flushes a genuine diff: consumed
+    /// `U0`, change UTXO, a new subnet, the tx) over a shared backend, drops the
+    /// VM, then re-`initialize`s a fresh VM over the SAME backend and asserts the
+    /// `IsInitialized` guard resumes the block-issued tip — and that `get_block`
+    /// re-parses its bytes.
+    #[test]
+    fn block_issued_tip_resumes_after_restart() {
+        let rt = Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let seed = 7u64;
+            let token = CancellationToken::new();
+            let pinned = UNIX_EPOCH
+                .checked_add(Duration::from_secs(GENESIS_TS))
+                .expect("genesis timestamp fits SystemTime");
+            // One shared backend that outlives the first VM, exactly as an on-disk
+            // rocksdb/leveldb survives a process restart.
+            let shared: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+            let genesis = build_genesis(seed).expect("build genesis");
+            let genesis_bytes =
+                ava_platformvm::genesis::marshal(&genesis).expect("marshal genesis");
+
+            // ---- Boot 1: init genesis, issue ONE real height-1 block ----
+            let h1_id = {
+                let mut vm = PlatformVm::with_clock(Arc::new(MockClock::at(pinned)));
+                vm.initialize(
+                    &token,
+                    chain_ctx(),
+                    Arc::clone(&shared),
+                    &genesis_bytes,
+                    b"",
+                    b"",
+                    Vec::new(),
+                    Arc::new(NoopAppSender),
+                )
+                .await
+                .expect("boot 1 initialize");
+
+                // A fresh init seeds genesis at height 0.
+                let g = vm
+                    .last_accepted(&token)
+                    .await
+                    .expect("boot 1 last_accepted");
+                let g_block = vm.get_block(&token, g).await.expect("boot 1 genesis block");
+                assert_eq!(g_block.height(), 0, "fresh init seeds genesis at height 0");
+
+                let tx = create_subnet_tx(seed, genesis_amount0(seed)).expect("create-subnet tx");
+                vm.mempool_add(tx).expect("mempool add");
+
+                let blk = vm.build_block(&token).await.expect("build block 1");
+                let id = blk.id();
+                vm.set_preference(&token, id)
+                    .await
+                    .expect("set_preference 1");
+                blk.verify(&token).await.expect("verify block 1");
+                blk.accept(&token).await.expect("accept block 1");
+
+                let la = vm.last_accepted(&token).await.expect("la after accept 1");
+                assert_eq!(la, id, "tip is the issued block after accept");
+                assert_eq!(
+                    vm.get_block(&token, la)
+                        .await
+                        .expect("tip block 1")
+                        .height(),
+                    1,
+                    "the issued block is height 1"
+                );
+                vm.shutdown(&token).await.expect("boot 1 shutdown");
+                id
+            };
+
+            // ---- Boot 2: restart over the SAME backend; resume the issued tip ----
+            let mut vm2 = PlatformVm::new();
+            vm2.initialize(
+                &token,
+                chain_ctx(),
+                Arc::clone(&shared),
+                &genesis_bytes,
+                b"",
+                b"",
+                Vec::new(),
+                Arc::new(NoopAppSender),
+            )
+            .await
+            .expect("boot 2 initialize (resume over recovered db)");
+
+            let resumed = vm2
+                .last_accepted(&token)
+                .await
+                .expect("boot 2 last_accepted");
+            assert_eq!(
+                resumed, h1_id,
+                "restart resumed the block-issued advanced tip, not genesis"
+            );
+            // The resumed tip's real block bytes re-parse from disk — the exact read
+            // `create_snowman_chain` performs at restart to root consensus at height.
+            let resumed_block = vm2
+                .get_block(&token, resumed)
+                .await
+                .expect("resumed tip block re-parses from the recovered backend");
+            assert_eq!(
+                resumed_block.height(),
+                1,
+                "consensus would root at the persisted height (1), not genesis (0)"
+            );
+            vm2.shutdown(&token).await.expect("boot 2 shutdown");
+        });
+    }
+
+    /// M9.15 STEP (l) — **the resumed VM is fully functional.** After a restart
+    /// resumes a block-issued height-1 tip, the recovered VM builds, verifies and
+    /// accepts a *further* real block (height 2). This is the real diff-resume
+    /// stress test: building block 2 over the resumed tip requires `State::load`
+    /// to have faithfully rebuilt the on-disk caches a `verify` reads — the
+    /// resumed parent-state view (height/timestamp), the surviving UTXO `U1` that
+    /// block 2 spends (the UTXO-index + `get_utxo` resumed by STEP (g)), and the
+    /// fee/staker state. A gap in any of those (e.g. a UTXO not resumed) would
+    /// fail the height-2 `verify`, so this catches what the resume-only test
+    /// cannot. Block 1 spends `U0`; block 2 spends the still-unspent `U1`.
+    #[test]
+    fn resumed_vm_builds_a_further_block() {
+        let rt = Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let seed = 11u64;
+            let token = CancellationToken::new();
+            let pinned = UNIX_EPOCH
+                .checked_add(Duration::from_secs(GENESIS_TS))
+                .expect("genesis timestamp fits SystemTime");
+            let shared: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+            let genesis = build_genesis(seed).expect("build genesis");
+            let genesis_bytes =
+                ava_platformvm::genesis::marshal(&genesis).expect("marshal genesis");
+
+            // ---- Boot 1: genesis → issue height-1 block (spends U0) ----
+            {
+                let mut vm = PlatformVm::with_clock(Arc::new(MockClock::at(pinned)));
+                vm.initialize(
+                    &token,
+                    chain_ctx(),
+                    Arc::clone(&shared),
+                    &genesis_bytes,
+                    b"",
+                    b"",
+                    Vec::new(),
+                    Arc::new(NoopAppSender),
+                )
+                .await
+                .expect("boot 1 initialize");
+
+                let tx = create_subnet_tx(seed, genesis_amount0(seed)).expect("block 1 tx");
+                vm.mempool_add(tx).expect("mempool add 1");
+                let blk = vm.build_block(&token).await.expect("build block 1");
+                let id = blk.id();
+                vm.set_preference(&token, id)
+                    .await
+                    .expect("set_preference 1");
+                blk.verify(&token).await.expect("verify block 1");
+                blk.accept(&token).await.expect("accept block 1");
+                assert_eq!(vm.get_block(&token, id).await.expect("block 1").height(), 1);
+                vm.shutdown(&token).await.expect("boot 1 shutdown");
+            }
+
+            // ---- Boot 2: restart, resume, then build a FURTHER block (spends U1) ----
+            let mut vm2 = PlatformVm::with_clock(Arc::new(MockClock::at(pinned)));
+            vm2.initialize(
+                &token,
+                chain_ctx(),
+                Arc::clone(&shared),
+                &genesis_bytes,
+                b"",
+                b"",
+                Vec::new(),
+                Arc::new(NoopAppSender),
+            )
+            .await
+            .expect("boot 2 initialize (resume)");
+
+            let resumed = vm2
+                .last_accepted(&token)
+                .await
+                .expect("boot 2 last_accepted");
+            assert_eq!(
+                vm2.get_block(&token, resumed)
+                    .await
+                    .expect("resumed tip")
+                    .height(),
+                1,
+                "boot 2 resumes the block-issued height-1 tip"
+            );
+
+            // Spend the still-unspent genesis UTXO `U1` (output_index 1) on the
+            // resumed VM — only resolvable if `State::load` rebuilt the UTXO set.
+            let tx2 = create_subnet_tx_spending(seed, Id::EMPTY, 1, genesis_amount1(seed))
+                .expect("block 2 tx");
+            vm2.mempool_add(tx2).expect("mempool add 2");
+
+            let blk2 = vm2
+                .build_block(&token)
+                .await
+                .expect("build block 2 on resumed VM");
+            let id2 = blk2.id();
+            vm2.set_preference(&token, id2)
+                .await
+                .expect("set_preference 2");
+            blk2.verify(&token)
+                .await
+                .expect("verify block 2 over the resumed state (UTXO U1 must resolve)");
+            blk2.accept(&token).await.expect("accept block 2");
+
+            let la2 = vm2.last_accepted(&token).await.expect("la after accept 2");
+            assert_eq!(la2, id2, "resumed VM advanced its tip to the new block");
+            assert_eq!(
+                vm2.get_block(&token, la2).await.expect("block 2").height(),
+                2,
+                "the resumed VM built a real height-2 block on top of the recovered height-1 tip"
+            );
+            vm2.shutdown(&token).await.expect("boot 2 shutdown");
+        });
     }
 }

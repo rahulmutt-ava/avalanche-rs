@@ -320,7 +320,7 @@ one base DB; `Accept` is the single-batch case (C1), so recovery is trivial:
 3. Report LA to the engine; the engine reconciles (C4) and resumes bootstrap (`19`).
    No replay or repair is needed beyond the proposervm wrapper (§5.5).
 
-> **AS-BUILT (M9.15 STEP (e)–(j), advanced-tip resume).** `State::new` installs genesis
+> **AS-BUILT (M9.15 STEP (e)–(l), advanced-tip resume).** `State::new` installs genesis
 > defaults; the read-back of step 1/2 above is `State::is_initialized()` (presence of the
 > `singleton→last accepted` key) + `State::load()`, which resumes the LA pointer + height,
 > the scalar singletons (timestamp, supply, fee state, L1 excess, accrued fees), the
@@ -346,8 +346,21 @@ one base DB; `Accept` is the single-batch case (C1), so recovery is trivial:
 > on demand), a read knows its `tx_id` and recomputes the join, so `get_reward_utxos` returns
 > the in-memory list on a hit and reads the sub-space straight off disk on a miss (the
 > restart case). This completes the entire `State`-layer advanced-tip-resume surface.
-> **Still deferred (consensus/boot half only):** consensus rooting at the persisted height,
-> and in-process block issuance to *create* an advanced tip to resume in-process.
+> **STEP (k) rooted consensus at the persisted height:** `create_snowman_chain` reads
+> `vm.get_block(vm.last_accepted()).height()` (exactly Go) rather than a hardcoded `0`, so a
+> recovered node roots its `Topological` core at the persisted height N (not 0) — a height-N+1
+> block then verifies as a child of the resumed root. **STEP (l) verified the loop end-to-end
+> under real block issuance:** a `PlatformVm` over a shared backend advances its tip via a genuine
+> `build → verify → accept` (admitting a `CreateSubnetTx` through the `mempool_add` seam — a real
+> diff: consumed UTXO, change, new subnet, tx), the VM is dropped, and a fresh VM re-`initialize`d
+> over the SAME backend resumes the block-issued tip — `get_block(resumed_tip)` re-parses the real
+> block bytes (what `create_snowman_chain` reads at restart) and the resumed VM builds a *further*
+> block (height 2) spending a surviving UTXO, proving `State::load` faithfully rebuilt the caches
+> `verify` reads. The advanced-tip-resume arc is functionally complete; no resume gap was found
+> (`ava-reexecute pchain.rs` tests). **Still deferred:** driving block issuance through the
+> in-process snowman-engine boot (notify/poll wake before the same `build → accept`) so the
+> `avalanchers` restart test resumes a self-issued tip — a thin follow-up that does not gate the
+> resume-correctness claim.
 
 ### 5.2 X-Chain (`ava-avm`, cross-ref `09`)
 
