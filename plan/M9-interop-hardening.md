@@ -1068,6 +1068,30 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   advanced tip to resume in-process. With the init-guard wired, a restart now resumes its persisted tip at the `State`
 >   layer; rooting the *consensus engine* at that height (b) is the next slice up the stack.
 
+> **STEP (j) — REWARD-UTXO RESUME via LAZY READ-THROUGH (2026-06-20, ralph iteration, TDD; closes the
+> **reward-utxo index** item STEP (e)–(i) repeatedly parked as "needs a flat tx-id index added first").** The
+> in-memory `reward_utxo_index` was the only read path for `Chain::get_reward_utxos`, so after a restart a recovered
+> node reported *no* reward UTXOs for any tx (empty cache) even though `add_reward_utxo` had written them through to
+> disk — `platform.getRewardUTXOs` would have wrongly answered none. ★ KEY ORIENT FINDING that dissolved the "needs a
+> flat tx-id index first" blocker: `PrefixDb::join` is **hashed** (`SHA256(parent_prefix ‖ tx_id)`), so the reward
+> outputs land under a top-level hashed sub-space — iterating the `reward_utxos` space yields nothing *and* the
+> `tx_id` is unrecoverable from the hash. An **eager** `load_reward_utxos` is therefore impossible without a separate
+> flat index. But Go (`platformvm/state.go`) doesn't preload reward UTXOs — it reads them **per-tx on demand**, and a
+> read *knows* its `tx_id`, so it can recompute the join hash and prefix-scan that sub-space. So the fix is a **lazy
+> read-through**, not an eager load: `State::get_reward_utxos` returns the in-memory list on a cache hit (rewards
+> added this run) and on a miss reads `reward_utxos.join(tx_id)` straight off disk (new `read_reward_utxos_from_disk`,
+> ascending-ordinal order = the sub-space's lexicographic key order). **Zero behavior change in-process** (cache-hit
+> path identical; the disk read only fires on a miss, which never happens within the writing process); a restart now
+> resolves reward UTXOs with no `load()` call and no flat index. **TDD:** `state::tests::reopen_resumes_persisted_reward_utxos`
+> (process 1 persists 2 + 1 reward UTXOs across two txs through `add_reward_utxo`; process 2 = a fresh `State` over the
+> SAME backend resolves both txs' reward UTXOs in ordinal order via the read-through, and an unknown tx is empty).
+> `-p ava-platformvm` **167/167** (+1), clippy `--all-targets -D warnings` + fmt clean, full workspace re-run.
+> - **★ STILL DEFERRED (the remaining advanced-tip-resume items, now just the consensus/boot half):** (b)
+>   `create_snowman_chain` rooting consensus at the persisted height (in-process-boot wiring in `avalanchers`, not
+>   platformvm); (c) in-process block issuance (the shared-mempool seam, same blocker as M9.19) to *create* an advanced
+>   tip to resume in-process. **The entire `State`-layer advanced-tip-resume surface (STEP (e)–(j)) is now complete** —
+>   LA/height/scalars, stakers, L1 validators, subnets/chains, UTXO index, and reward UTXOs all survive a restart.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

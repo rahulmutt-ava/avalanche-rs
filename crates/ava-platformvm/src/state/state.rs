@@ -424,9 +424,12 @@ impl<D: Database> State<D> {
     /// L1-validator set ([`Self::load_l1_validators`]), the subnet set
     /// ([`Self::load_subnets`]), the per-subnet chain index
     /// ([`Self::load_chains`]), and the address → utxo-id index
-    /// ([`Self::load_utxo_index`]). Still NOT rebuilt: the reward-utxo index
-    /// (keyed under hashed `reward_utxos.join(tx)` sub-spaces with no
-    /// enumerable tx-id set on disk) — a separate follow-up.
+    /// ([`Self::load_utxo_index`]). The reward-utxo index is NOT preloaded: like
+    /// Go (`platformvm/state.go` loads reward UTXOs per-tx on demand), it is read
+    /// through from disk lazily on a [`Chain::get_reward_utxos`] cache miss — the
+    /// `reward_utxos.join(tx)` sub-space is a hashed prefix with no enumerable
+    /// tx-id set, but a read knows its `tx_id` and recomputes the join, so no
+    /// eager scan (or flat tx-id index) is needed.
     ///
     /// # Errors
     /// Returns [`Error::CorruptState`] if a persisted singleton or block-index
@@ -660,6 +663,29 @@ impl<D: Database> State<D> {
             self.utxo_index.entry(addr).or_default().insert(id);
         }
         Ok(())
+    }
+
+    /// Reads the persisted reward UTXOs for `tx_id` directly from disk (the lazy
+    /// per-tx read-through behind [`Chain::get_reward_utxos`], used on an
+    /// in-memory cache miss after a restart). `add_reward_utxo` writes each
+    /// reward output under the hashed `reward_utxos.join(tx_id)` sub-space keyed
+    /// by an 8-byte big-endian ordinal; recomputing that join and scanning it
+    /// yields the outputs in ascending-ordinal order (the lexicographic key
+    /// order), i.e. the order they were written. Returns `Vec::new()` for a tx
+    /// with no persisted reward UTXOs. A DB iterator error is swallowed (the
+    /// trait returns a bare `Vec`, matching the in-memory path) — a torn read
+    /// degrades to "no reward UTXOs", never a panic.
+    fn read_reward_utxos_from_disk(&self, tx_id: Id) -> Vec<UtxoBytes> {
+        let sub = self.reward_utxos.join(tx_id.as_bytes());
+        let mut out = Vec::new();
+        let mut it = sub.new_iterator_with_start_and_prefix(&[], &[]);
+        while it.next() {
+            if let Some(v) = it.value() {
+                out.push(v.to_vec());
+            }
+        }
+        it.release();
+        out
     }
 
     // ----- staker disk codec + resume (M9.15 advanced-tip resume) -----
@@ -1277,10 +1303,14 @@ impl<D: Database> Chain for State<D> {
     }
 
     fn get_reward_utxos(&self, tx_id: Id) -> Vec<UtxoBytes> {
-        self.reward_utxo_index
-            .get(&tx_id)
-            .cloned()
-            .unwrap_or_default()
+        // In-memory hit: the reward UTXOs were added (and persisted) this run.
+        // Miss: read through from disk — on a restart the cache is empty but the
+        // `reward_utxos.join(tx_id)` sub-space is still on disk (resume path,
+        // M9.15; Go loads reward UTXOs per-tx on demand).
+        match self.reward_utxo_index.get(&tx_id) {
+            Some(list) => list.clone(),
+            None => self.read_reward_utxos_from_disk(tx_id),
+        }
     }
 
     fn add_reward_utxo(&mut self, tx_id: Id, utxo: UtxoBytes) {
@@ -1793,6 +1823,64 @@ mod tests {
             b.active_l1_validators(),
             vec![active],
             "only the active validator is in the active iterator"
+        );
+    }
+
+    /// Re-opening a `State` over a base DB that persisted reward UTXOs resumes
+    /// the `tx_id → [reward utxo]` mapping (the reward-utxo half of advanced-tip
+    /// resume): `add_reward_utxo` writes each reward output through to its hashed
+    /// `reward_utxos.join(tx_id)` ordinal sub-space, and a recovered node reads
+    /// them back lazily on a cache miss (Go loads reward UTXOs per-tx on demand),
+    /// so `platform.getRewardUTXOs` still answers rather than reporting none
+    /// despite the data being on disk. Because the read knows its `tx_id`, the
+    /// per-tx Vec resolves in ascending-ordinal order (the lexicographic key
+    /// order of the sub-space scan) — no eager `load()` or flat tx-id index
+    /// needed.
+    #[test]
+    fn reopen_resumes_persisted_reward_utxos() {
+        let shared: std::sync::Arc<dyn ava_database::DynDatabase> =
+            std::sync::Arc::new(MemDb::new());
+
+        // Two staking txs, the first with two reward outputs (ordering matters),
+        // the second with one — proves both the per-tx grouping and the
+        // ascending-ordinal Vec reconstruction.
+        let tx_a = Id::from([0xA1; 32]);
+        let tx_b = Id::from([0xB2; 32]);
+        let a0: UtxoBytes = vec![0x00, 0x11, 0x22];
+        let a1: UtxoBytes = vec![0x33, 0x44];
+        let b0: UtxoBytes = vec![0x55];
+
+        // First "process": persist reward UTXOs + an advanced tip.
+        {
+            let mut a = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+                .expect("State::new A");
+            a.add_reward_utxo(tx_a, a0.clone());
+            a.add_reward_utxo(tx_a, a1.clone());
+            a.add_reward_utxo(tx_b, b0.clone());
+            a.set_last_accepted(Id::from([0x7C; 32]));
+            a.set_height(5);
+        } // drop A — only the base DB survives.
+
+        // Second "process": fresh State over the SAME backend. The in-memory
+        // reward-utxo index starts empty, so each read is a lazy disk
+        // read-through — no `load()` needed for reward UTXOs.
+        let b = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+            .expect("State::new B");
+
+        // Per-tx grouping + ascending-ordinal order preserved across the reopen.
+        assert_eq!(
+            b.get_reward_utxos(tx_a),
+            vec![a0, a1],
+            "resumed tx_a reward utxos in ordinal order"
+        );
+        assert_eq!(
+            b.get_reward_utxos(tx_b),
+            vec![b0],
+            "resumed tx_b reward utxos"
+        );
+        assert!(
+            b.get_reward_utxos(Id::from([0xCC; 32])).is_empty(),
+            "an unknown tx has no reward utxos"
         );
     }
 }
