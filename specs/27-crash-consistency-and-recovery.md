@@ -320,19 +320,25 @@ one base DB; `Accept` is the single-batch case (C1), so recovery is trivial:
 3. Report LA to the engine; the engine reconciles (C4) and resumes bootstrap (`19`).
    No replay or repair is needed beyond the proposervm wrapper (§5.5).
 
-> **AS-BUILT (M9.15 STEP (e)/(f), advanced-tip resume).** `State::new` installs genesis
+> **AS-BUILT (M9.15 STEP (e)–(h), advanced-tip resume).** `State::new` installs genesis
 > defaults; the read-back of step 1/2 above is `State::is_initialized()` (presence of the
 > `singleton→last accepted` key) + `State::load()`, which resumes the LA pointer + height,
 > the scalar singletons (timestamp, supply, fee state, L1 excess, accrued fees), the
-> `height→blockID` index, **and the current/pending validator & delegator sets** from the
-> persisted staker sublists (`validator/current`, `validator/pending`). Stakers are written
-> through by the `Chain`-trait acceptor path (`put_current_validator`, …) rather than batched
-> at commit; their on-disk record is a self-describing fixed layout (a migration concern,
-> **not** a consensus/wire byte contract — `00` §4.4), decoded defensively into
-> `Error::CorruptState` since the base DB is untrusted on recovery. **Still deferred:** the
-> `IsInitialized` guard skipping `seed_state` in `PlatformVm::initialize`, resume of the
-> L1-validator / subnet / chain / UTXO-index caches, consensus rooting at the persisted
-> height, and in-process block issuance to *create* an advanced tip to resume.
+> `height→blockID` index, **the current/pending validator & delegator sets** from the
+> persisted staker sublists (`validator/current`, `validator/pending`), **the subnet set,
+> per-subnet chain index, and `getUTXOs` address index** (STEP (g)), **and the ACP-77
+> L1-validator set** (STEP (h)) from the persisted `l1Validators/l1Validator` sublist.
+> Stakers, subnets/chains, the UTXO index, and L1 validators are written through by the
+> `Chain`-trait acceptor path (`put_current_validator`, `put_l1_validator`, …) rather than
+> batched at commit. The staker record is a self-describing fixed layout; the L1-validator
+> value reuses its existing `GenesisCodec` `marshal`/`unmarshal` (keyed by `ValidationID`,
+> which is the DB key and is restored on load). Both are migration concerns, **not** a
+> consensus/wire byte contract (`00` §4.4), decoded defensively into `Error::CorruptState`
+> since the base DB is untrusted on recovery. **Still deferred:** the `IsInitialized` guard
+> skipping `seed_state` in `PlatformVm::initialize`, resume of the reward-utxo index (hashed
+> `reward_utxos.join(tx)` sub-spaces with no enumerable tx-id set on disk — needs a flat
+> tx-id index first), consensus rooting at the persisted height, and in-process block
+> issuance to *create* an advanced tip to resume.
 
 ### 5.2 X-Chain (`ava-avm`, cross-ref `09`)
 

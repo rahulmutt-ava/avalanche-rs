@@ -164,6 +164,13 @@ pub struct State<D: Database> {
     /// Persisted pending-staker sublist (`validator/pending`); the pending
     /// counterpart of [`Self::current_stakers_db`].
     pending_stakers_db: PrefixDb<D>,
+    /// Persisted ACP-77 L1-validator sublist (`l1Validators/l1Validator`), keyed
+    /// by `ValidationID` → the `GenesisCodec`-marshalled [`L1Validator`] value
+    /// (the `ValidationID` is the key, not serialized — see
+    /// [`L1Validator::marshal`]). Written through by the `put_l1_validator`
+    /// acceptor path and rebuilt into [`Self::l1_validators`] by [`Self::load`]
+    /// on restart (M9.15 advanced-tip resume — the L1-validator half).
+    l1_validators_db: PrefixDb<D>,
 
     // ----- scalar singletons (in-memory, written through to `singletons`) -----
     timestamp: SystemTime,
@@ -232,6 +239,7 @@ impl<D: Database> State<D> {
             txs: ByteSpace::new(prefixes::TX_PREFIX, &base),
             current_stakers_db: validators_parent.join(prefixes::CURRENT_PREFIX),
             pending_stakers_db: validators_parent.join(prefixes::PENDING_PREFIX),
+            l1_validators_db: l1_parent.join(prefixes::L1_VALIDATOR_PREFIX),
 
             timestamp: UNIX_EPOCH,
             fee_state: GasState::default(),
@@ -412,14 +420,13 @@ impl<D: Database> State<D> {
     /// no-op on a fresh, never-seeded DB (every singleton read misses).
     ///
     /// Also rebuilds the in-memory caches that mirror a write-through byte
-    /// space: the current/pending stakers ([`Self::load_stakers`]), the subnet
-    /// set ([`Self::load_subnets`]), the per-subnet chain index
+    /// space: the current/pending stakers ([`Self::load_stakers`]), the ACP-77
+    /// L1-validator set ([`Self::load_l1_validators`]), the subnet set
+    /// ([`Self::load_subnets`]), the per-subnet chain index
     /// ([`Self::load_chains`]), and the address → utxo-id index
     /// ([`Self::load_utxo_index`]). Still NOT rebuilt: the reward-utxo index
     /// (keyed under hashed `reward_utxos.join(tx)` sub-spaces with no
-    /// enumerable tx-id set on disk) and the L1-validator set (in-memory-only —
-    /// `put_l1_validator` has no disk write path yet, the same gap stakers had
-    /// before their acceptor flush); both are separate follow-ups.
+    /// enumerable tx-id set on disk) — a separate follow-up.
     ///
     /// # Errors
     /// Returns [`Error::CorruptState`] if a persisted singleton or block-index
@@ -465,6 +472,7 @@ impl<D: Database> State<D> {
         self.load_supply()?;
         self.load_block_id_index()?;
         self.load_stakers()?;
+        self.load_l1_validators()?;
         self.load_subnets()?;
         self.load_chains()?;
         self.load_utxo_index()?;
@@ -800,6 +808,37 @@ impl<D: Database> State<D> {
         Ok(())
     }
 
+    /// Rebuilds the in-memory ACP-77 L1-validator map ([`Self::l1_validators`])
+    /// from the persisted `l1Validators/l1Validator` sublist. Each entry's key
+    /// is the `ValidationID` (not serialized in the value), so the decoded
+    /// record's [`validation_id`](L1Validator::validation_id) is restored from
+    /// the DB key before insertion. Defensive against truncation/garbage (the
+    /// base DB is untrusted on recovery): a bad key width or codec failure is an
+    /// [`Error::CorruptState`] / [`Error::Codec`].
+    fn load_l1_validators(&mut self) -> Result<()> {
+        let mut entries: Vec<(Id, L1Validator)> = Vec::new();
+        {
+            let mut it = self
+                .l1_validators_db
+                .new_iterator_with_start_and_prefix(&[], &[]);
+            while it.next() {
+                let Some(k) = it.key() else { continue };
+                let Some(v) = it.value() else { continue };
+                let validation_id =
+                    Id::from_slice(k).map_err(|_| Error::CorruptState("l1 validator id length"))?;
+                let mut record = L1Validator::unmarshal(v)?;
+                record.validation_id = validation_id;
+                entries.push((validation_id, record));
+            }
+            it.error().map_err(Error::Database)?;
+            it.release();
+        }
+        for (id, record) in entries {
+            self.l1_validators.insert(id, record);
+        }
+        Ok(())
+    }
+
     // ----- staker weight/pk-diff stores (M4.14/M4.20) -----
 
     /// The persisted staker weight-diff store
@@ -869,6 +908,7 @@ impl<D: Database> State<D> {
             txs: ByteSpace::new(prefixes::TX_PREFIX, &base),
             current_stakers_db: validators_parent.join(prefixes::CURRENT_PREFIX),
             pending_stakers_db: validators_parent.join(prefixes::PENDING_PREFIX),
+            l1_validators_db: l1_parent.join(prefixes::L1_VALIDATOR_PREFIX),
 
             timestamp: self.timestamp,
             fee_state: self.fee_state,
@@ -1161,6 +1201,15 @@ impl<D: Database> Chain for State<D> {
     }
 
     fn put_l1_validator(&mut self, v: L1Validator) -> Result<()> {
+        // Write through to the disk sublist (keyed by ValidationID — stable, so a
+        // re-put overwrites the same key with no orphan) so [`Self::load`] can
+        // rebuild the in-memory map on restart. The value omits the ValidationID
+        // (it is the key); `marshal` uses the `GenesisCodec`, matching Go
+        // `putL1Validator`.
+        let bytes = v.marshal()?;
+        let _ = self
+            .l1_validators_db
+            .put(v.validation_id.as_bytes(), &bytes);
         self.l1_validators.insert(v.validation_id, v);
         Ok(())
     }
@@ -1639,6 +1688,111 @@ mod tests {
             b.utxo_ids(&addr_b, Id::EMPTY, usize::MAX),
             vec![u2.input_id()],
             "resumed addr_b utxo index"
+        );
+    }
+
+    /// Re-opening a `State` over a base DB that persisted ACP-77 L1 validators
+    /// rebuilds the in-memory `validation_id → L1Validator` map (the
+    /// L1-validator half of advanced-tip resume): `put_l1_validator` writes each
+    /// record through to its disk sublist (marshalled with the `GenesisCodec`,
+    /// keyed by the `ValidationID`), and `load()` decodes them back so a
+    /// recovered node sees its subnet validators, their summed weight, and the
+    /// active-validator iterator — rather than an empty set. Mirrors the staker
+    /// resume above; the in-memory map only grows via `put_l1_validator` (the
+    /// key is the stable `ValidationID`, no orphan/replace cleanup needed).
+    #[test]
+    fn reopen_resumes_persisted_l1_validators() {
+        let shared: std::sync::Arc<dyn ava_database::DynDatabase> =
+            std::sync::Arc::new(MemDb::new());
+
+        let subnet = Id::from([0x5B; 32]);
+        // An ACTIVE validator (non-zero weight + non-zero end_accumulated_fee)
+        // carrying a non-empty public key, and an INACTIVE validator
+        // (end_accumulated_fee == 0) on a different subnet — exercises the
+        // active iterator, the per-subnet weight sum, and a multi-subnet map.
+        let other_subnet = Id::from([0x6C; 32]);
+        let active = L1Validator {
+            validation_id: Id::from([0x01; 32]),
+            subnet_id: subnet,
+            node_id: NodeId::from([0xAA; 20]),
+            public_key: vec![0x33, 0x44, 0x55],
+            remaining_balance_owner: vec![0x66, 0x77],
+            deactivation_owner: vec![0x88],
+            start_time: 1_700_000_000,
+            weight: 1_000,
+            min_nonce: 3,
+            end_accumulated_fee: 9_999,
+        };
+        let inactive = L1Validator {
+            validation_id: Id::from([0x02; 32]),
+            subnet_id: other_subnet,
+            node_id: NodeId::from([0xBB; 20]),
+            public_key: vec![0x01],
+            remaining_balance_owner: Vec::new(),
+            deactivation_owner: Vec::new(),
+            start_time: 1_700_000_001,
+            weight: 500,
+            min_nonce: 0,
+            end_accumulated_fee: 0,
+        };
+
+        // First "process": persist the L1 validators + an advanced tip.
+        {
+            let mut a = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+                .expect("State::new A");
+            a.put_l1_validator(active.clone())
+                .expect("put active l1 validator");
+            a.put_l1_validator(inactive.clone())
+                .expect("put inactive l1 validator");
+            a.set_last_accepted(Id::from([0x7C; 32]));
+            a.set_height(4);
+        } // drop A — only the base DB survives.
+
+        // Second "process": fresh State over the SAME backend.
+        let mut b = State::new(crate::vm::DynDb::new(std::sync::Arc::clone(&shared)))
+            .expect("State::new B");
+        assert!(b.is_initialized(), "populated db is initialized");
+        assert!(
+            b.get_l1_validator(active.validation_id).is_err(),
+            "fresh State has no in-memory L1 validators before load"
+        );
+        assert!(
+            b.active_l1_validators().is_empty(),
+            "no active L1 validators before load"
+        );
+
+        b.load().expect("load()");
+
+        // Full-field equality (incl. the GenesisCodec round-trip + the
+        // ValidationID supplied from the DB key) for each.
+        assert_eq!(
+            b.get_l1_validator(active.validation_id)
+                .expect("active resolves"),
+            active,
+            "resumed active L1 validator matches"
+        );
+        assert_eq!(
+            b.get_l1_validator(inactive.validation_id)
+                .expect("inactive resolves"),
+            inactive,
+            "resumed inactive L1 validator matches"
+        );
+        // Per-subnet weight sums and the active-only iterator resume.
+        assert_eq!(
+            b.weight_of_l1_validators(subnet).expect("weight subnet"),
+            1_000,
+            "resumed subnet weight"
+        );
+        assert_eq!(
+            b.weight_of_l1_validators(other_subnet)
+                .expect("weight other"),
+            500,
+            "resumed other-subnet weight"
+        );
+        assert_eq!(
+            b.active_l1_validators(),
+            vec![active],
+            "only the active validator is in the active iterator"
         );
     }
 }

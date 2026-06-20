@@ -1007,6 +1007,37 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   the persisted height; (c) in-process block issuance (the shared-mempool seam, same blocker as M9.19) to *create* an
 >   advanced tip to resume.
 
+> **STEP (h) — L1-VALIDATOR DISK-PERSISTENCE + RESUME (2026-06-20, ralph iteration, TDD; closes the **L1-validator set**
+> half of STEP (g)'s item-(a) deferral — the gap that "needs disk-persistence built first, then resume", the exact
+> mirror of what STEP (f) did for stakers).** The ACP-77 L1-validator set was in-memory-only — `put_l1_validator`
+> inserted into the `BTreeMap` with **no disk write path** — so a recovered node lost every subnet validator. Now
+> persisted and resumed:
+> - **`ava-platformvm` `state/state.rs`:** new persisted sublist `l1_validators_db` (`l1Validators/l1Validator`, the
+>   already-reserved `L1_VALIDATOR_PREFIX` child of `L1_VALIDATORS_PREFIX`), keyed by `ValidationID` → the value.
+>   `put_l1_validator` now **writes through** (`v.marshal()?` then `put`, mirroring the established
+>   `set_last_accepted`/`put_current_validator` write-through pattern) before the in-memory insert. The key is the stable
+>   `ValidationID`, so a re-put overwrites the same key — **no orphan/replace cleanup needed** (unlike stakers, whose
+>   key is the tx id and can change), and there is no `delete_l1_validator` in the `Chain` trait, so the map only grows.
+>   New `load_l1_validators()` (called from `load()` after `load_stakers()`) decodes every record and restores its
+>   `validation_id` from the DB key (the value omits it).
+> - **★ KEY: reuses the EXISTING wire codec, no hand-rolled record.** Unlike stakers (which needed a self-describing
+>   fixed layout because `Staker` had no on-disk encoding), `L1Validator` **already** has `marshal`/`unmarshal` via the
+>   `GenesisCodec` (it IS a real Go on-disk record, `state/l1_validator.go`), and `Error::Codec` has a `#[from]`, so the
+>   write-through/resume is a thin wrapper. The `ValidationID` is the DB key (not serialized), matching Go `putL1Validator`.
+> - **TDD:** `state::state::tests::reopen_resumes_persisted_l1_validators` (persist an active validator carrying a
+>   public key + an inactive validator (`end_accumulated_fee == 0`) on a second subnet into a shared `Arc<dyn
+>   DynDatabase>`, drop the in-memory `State`, re-open a fresh `State` over the same backend — the real restart shape —
+>   assert `get_l1_validator` errors + `active_l1_validators()` empty before `load()`, then full-field `L1Validator`
+>   equality (incl. the `ValidationID`-from-key + GenesisCodec round-trip), per-subnet `weight_of_l1_validators`, and the
+>   active-only iterator resume after). `-p ava-platformvm` **165/165** (+1), clippy `--all-targets -D warnings` + fmt clean.
+> - **★ STILL DEFERRED (the remaining advanced-tip-resume items):** (a)-init-guard — wire the `IsInitialized` guard into
+>   `PlatformVm::initialize` (skip `seed_state` on a recovered DB; needs `seed_state` factored so genesis stakers
+>   re-derive without clobbering persisted LA/height — its disk-persistence prereqs (stakers/subnets/chains/UTXO/L1) are
+>   **all now met**, so this is the natural next slice); the **reward-utxo index** (keyed under hashed
+>   `reward_utxos.join(tx)` sub-spaces with no enumerable tx-id set on disk — needs a flat tx-id index added first);
+>   (b) `create_snowman_chain` rooting consensus at the persisted height; (c) in-process block issuance (the
+>   shared-mempool seam, same blocker as M9.19) to *create* an advanced tip to resume.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
