@@ -563,6 +563,11 @@ pub struct SnowmanChain<V: ChainVm, S, M> {
     /// both engine adapters + the transition channel; starting it activates the
     /// initial (`Bootstrapping`) engine.
     pub handler: ChainHandler,
+    /// The height the `Topological` consensus core was rooted at — the height of
+    /// the VM's last-accepted block at chain creation (`0` for a fresh genesis
+    /// tip, the persisted height for a node that recovered an advanced tip from
+    /// disk; M9.15 STEP (b)).
+    pub last_accepted_height: u64,
     /// Carries the generic `V`/`S`/`M` parameters (the concrete engines moved
     /// into the type-erased `EngineManager` inside the handler).
     _vm: std::marker::PhantomData<(V, S, M)>,
@@ -649,11 +654,17 @@ where
     .await?;
 
     // 4. Wire the proposervm wrapper's preferred id from the inner last-accepted.
+    //    The consensus core must be rooted at that block's *height* (Go
+    //    `vm.GetBlock(vm.LastAccepted()).Height()`), so a node that recovered an
+    //    advanced tip from disk roots consensus at the persisted height, not `0`
+    //    (M9.15 STEP (b)). On a fresh genesis tip this is `0` — unchanged.
     let last_accepted = vm.last_accepted(token).await?;
+    let last_accepted_height = vm.get_block(token, last_accepted).await?.height();
 
     // 5. Build the Topological consensus core rooted at the VM's last-accepted.
-    let consensus = Topological::new_default(SnowballFactory, params, last_accepted, 0)
-        .map_err(|e| crate::error::Error::Other(format!("topological: {e}")))?;
+    let consensus =
+        Topological::new_default(SnowballFactory, params, last_accepted, last_accepted_height)
+            .map_err(|e| crate::error::Error::Other(format!("topological: {e}")))?;
 
     // 6. Share ONE wrapped-VM mutex between the Snowman engine and the
     //    bootstrapper. Only one engine is active at a time, so the shared mutex
@@ -727,6 +738,7 @@ where
         ctx,
         sink,
         handler,
+        last_accepted_height,
         _vm: std::marker::PhantomData,
     })
 }

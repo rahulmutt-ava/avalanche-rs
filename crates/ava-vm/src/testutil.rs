@@ -167,6 +167,10 @@ pub struct TestVm {
     pub http_handlers: HashMap<String, HttpHandler>,
     /// The handler returned by `new_http_handler` (configurable; M8.22).
     pub http_header_handler: Option<HttpHandler>,
+    /// If non-zero, `initialize` seeds a chain `genesis → … → resume_height` and
+    /// reports the height-`resume_height` block as last-accepted, simulating a
+    /// node that recovered an advanced tip from disk (M9.15 STEP (b)).
+    resume_height: u64,
 }
 
 impl Default for TestVm {
@@ -187,6 +191,20 @@ impl TestVm {
             next_payload: 0,
             http_handlers: HashMap::new(),
             http_header_handler: None,
+            resume_height: 0,
+        }
+    }
+
+    /// Builds an uninitialized [`TestVm`] that, on [`Vm::initialize`], resumes an
+    /// advanced tip: it seeds a chain `genesis → … → height` and reports the
+    /// height-`height` block as last-accepted, the way a real VM resumes a
+    /// persisted tip from disk after a restart (M9.15 STEP (b) — the consensus
+    /// engine must be rooted at that height, not `0`).
+    #[must_use]
+    pub fn resuming_at_height(height: u64) -> Self {
+        Self {
+            resume_height: height,
+            ..Self::new()
         }
     }
 
@@ -295,6 +313,24 @@ impl Vm for TestVm {
             inner.preference = genesis.id();
             inner.accepted_at_height.insert(0, genesis.id());
         }
+
+        // Resume an advanced tip (recovered-from-disk simulation): seed the
+        // accepted chain `genesis → … → resume_height` and report its top as
+        // last-accepted/preference. Each step's payload is its height so the
+        // block ids differ.
+        let mut parent = genesis.id();
+        for height in 1..=self.resume_height {
+            let block = self.register(parent, height, &height.to_be_bytes());
+            let id = block.id();
+            {
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                inner.last_accepted = id;
+                inner.preference = id;
+                inner.accepted_at_height.insert(height, id);
+            }
+            parent = id;
+        }
+
         self.state = Some(EngineState::Initializing);
         Ok(())
     }

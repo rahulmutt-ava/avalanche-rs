@@ -1092,6 +1092,37 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   tip to resume in-process. **The entire `State`-layer advanced-tip-resume surface (STEP (e)–(j)) is now complete** —
 >   LA/height/scalars, stakers, L1 validators, subnets/chains, UTXO index, and reward UTXOs all survive a restart.
 
+> **STEP (k) — `create_snowman_chain` ROOTS CONSENSUS AT THE PERSISTED HEIGHT (2026-06-20, ralph iteration, TDD;
+> closes item (b) of the advanced-tip-resume follow-up — the consensus-engine half).** `create_snowman_chain`
+> (`ava-chains/src/create_chain.rs`) built its `Topological` consensus core with a **hardcoded `0`** last-accepted
+> height (`Topological::new_default(.., last_accepted, 0)`), so a node that recovered an advanced tip from disk (the
+> inner VM resumes last-accepted at height N — proven for `PlatformVm` by STEP (i)) came up with consensus rooted at
+> height **0** while the VM thought the tip was N. The first issued block (height N+1) would then be rejected by
+> consensus as a non-child of the height-0 root. Now rooted correctly:
+> - **`ava-chains` `create_chain.rs`:** after `let last_accepted = vm.last_accepted(token).await?;`, fetch the block
+>   and read its height — `let last_accepted_height = vm.get_block(token, last_accepted).await?.height();` — and pass it
+>   to `Topological::new_default`. This is **exactly Go** (`snowman/transitive.go`: `vm.GetBlock(vm.LastAccepted()).Height()`).
+>   On a fresh genesis tip this is `0` — **zero behavior change on the fresh path** (the existing `pipeline_wrapping_order`
+>   is unchanged). The wrapped proposervm forwards `last_accepted` to the inner VM pre-fork and `get_block(id).height()`
+>   returns the inner block's height, so the persisted height threads through the full ratified stack.
+> - **Observability:** `SnowmanChain` gained a `pub last_accepted_height: u64` field recording what the consensus core
+>   was rooted at (mirrors Go's recorded `lastAcceptedHeight`), so the resume height is assertable without reaching into
+>   the type-erased `EngineManager`.
+> - **★ New error path:** `create_snowman_chain` now `get_block`s the last-accepted after `initialize`, so it errors if
+>   that block is unresolvable. This is the Go contract; confirmed harmless for all three real VMs — the `avalanchers`
+>   `in_process_chain` boot tests drive real `PlatformVm`/`AvmVm`/`EvmVm` through `create_snowman_chain` and all pass.
+> - **TDD:** added `TestVm::resuming_at_height(n)` to `ava-vm/testutil.rs` (on `initialize`, seeds the accepted chain
+>   `genesis → … → n` and reports the height-`n` block as last-accepted — the recovered-from-disk shape) + new
+>   `ava-chains` `tests/pipeline.rs::pipeline_roots_consensus_at_resumed_height` (resume at height 5, assert
+>   `chain.last_accepted_height == 5`; RED with the hardcoded `0`, GREEN after). `-p ava-chains` **7/7** (+1),
+>   `-p ava-vm -p avalanchers` + `-p ava-engine` (the `TestVm`/`create_snowman_chain` reverse-deps) green (48 + 34),
+>   clippy `--all-targets -D warnings` + fmt clean.
+> - **★ STILL DEFERRED (the last advanced-tip-resume item):** (c) in-process block issuance (the shared-mempool seam,
+>   same blocker as M9.19) to *create* an advanced tip to resume in-process. With (b) done, a recovered node now roots
+>   **both** its `State` layer (STEP (e)–(j)) **and** its consensus engine at the persisted height; what remains is only
+>   the means to advance a tip past genesis *within a single in-process run* (so an end-to-end resume can be exercised
+>   without a pre-populated disk fixture) — which needs block issuance, gated on the M9.19 mempool seam.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

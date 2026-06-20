@@ -267,6 +267,79 @@ async fn wait_for<F: Fn() -> bool>(cond: F) -> bool {
     cond()
 }
 
+/// M9.15 STEP (b): `create_snowman_chain` must root the `Topological` consensus
+/// core at the VM's *persisted* last-accepted height — not a hardcoded `0`. A
+/// node that recovers an advanced tip from disk (the inner VM reports
+/// last-accepted at height N) must come up with consensus rooted at N, or the
+/// first issued block (height N+1) would be rejected as a non-child of the
+/// height-0 root.
+#[tokio::test]
+async fn pipeline_roots_consensus_at_resumed_height() {
+    let token = CancellationToken::new();
+    let (identity, node_id) = staking_identity();
+    let ctx = test_chain_context();
+    let clock: Arc<dyn Clock> = Arc::new(MockClock::at(std::time::UNIX_EPOCH));
+
+    let set = {
+        let mut m = BTreeMap::new();
+        m.insert(
+            node_id,
+            GetValidatorOutput {
+                node_id,
+                public_key: None,
+                weight: 1,
+            },
+        );
+        m
+    };
+    let validator_state = FixedState { set };
+
+    let chain_id = Id::from([7u8; 32]);
+    let reg = Registry::new();
+    let router = RecordingRouter::default();
+    let sender = RecordingSender::new();
+    let (validators, _ids) = build_validators(node_id);
+    let beacons: BTreeMap<NodeId, u64> = {
+        let mut m = BTreeMap::new();
+        m.insert(node_id, 1u64);
+        m
+    };
+
+    // The inner VM resumes a persisted tip at height 5 (recovered-from-disk
+    // simulation): last-accepted is the height-5 block, not genesis.
+    const RESUMED_HEIGHT: u64 = 5;
+    let chain = create_snowman_chain(
+        &token,
+        chain_id,
+        Id::EMPTY,
+        DEFAULT_PARAMETERS,
+        MemDb::new(),
+        "P",
+        Arc::clone(&ctx),
+        Arc::clone(&clock),
+        validator_state,
+        Some(identity),
+        TestVm::resuming_at_height(RESUMED_HEIGHT),
+        Vec::new(),
+        b"genesis",
+        Arc::clone(&sender),
+        Arc::new(NoopAppSender),
+        validators,
+        beacons,
+        &router,
+        &reg,
+    )
+    .await
+    .expect("create snowman chain");
+
+    assert_eq!(
+        chain.last_accepted_height, RESUMED_HEIGHT,
+        "consensus is rooted at the VM's persisted last-accepted height, not 0"
+    );
+
+    token.cancel();
+}
+
 /// Builds a `DefaultManager` with one validator (this node) on the empty subnet.
 fn build_validators(node: NodeId) -> (Arc<DefaultManager>, Vec<NodeId>) {
     let mgr = Arc::new(DefaultManager::new());
