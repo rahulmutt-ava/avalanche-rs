@@ -42,8 +42,8 @@ pub use gossip::{
     PULL_GOSSIP_PERIOD, PUSH_GOSSIP_PERIOD, PullGossiper, PushGossiper,
 };
 pub use hooks::{
-    AtomicOp, AtomicOpSource, BLACKHOLE_ADDR, CChainHooks, Error, GAS_CONFIG_AFTER_TARGET,
-    Rebuilder,
+    AtomicOp, AtomicOpSource, BLACKHOLE_ADDR, CChainHooks, Clock, Error, GAS_CONFIG_AFTER_TARGET,
+    Rebuilder, header_time_milliseconds, set_header_time_milliseconds,
 };
 pub use state::State;
 pub use tx::{Credential, Export, Import, Input, Output, Tx, Unsigned};

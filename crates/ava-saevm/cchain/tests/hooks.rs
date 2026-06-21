@@ -16,6 +16,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ava_evm_reth::{Header, RethBlock, SealedBlock, SealedHeader};
 use ava_saevm_cchain::{AtomicOp, AtomicOpSource, CChainHooks};
@@ -218,6 +220,81 @@ fn can_execute_transaction_gates_atomic() {
             .can_execute_transaction(blocked, None, &state)
             .is_err(),
         "blocked sender must be rejected"
+    );
+}
+
+/// A clock pinned to a fixed [`SystemTime`], used to inject a deterministic
+/// sub-second instant into [`CChainHooks`] (mirrors Go's `withTime(...)` test
+/// knob feeding the injected `now func() time.Time`).
+fn pinned_clock(millis: u64) -> Arc<dyn Fn() -> SystemTime + Send + Sync> {
+    let at = UNIX_EPOCH + Duration::from_millis(millis);
+    Arc::new(move || at)
+}
+
+#[test]
+fn build_header_stamps_and_block_time_round_trips_subsecond() {
+    // Mirrors Go `TestBuildBlockPreservesMillisecondTimestamp`: a non-zero
+    // sub-second component (123 ms) must survive build -> block_time, with the
+    // whole-seconds in `time` and the millisecond instant preserved.
+    const WANT_MILLIS: u64 = 1_700_000_000_123;
+    const WANT_SECONDS: u64 = WANT_MILLIS / 1000;
+
+    let hooks =
+        CChainHooks::new(FakeAtomicSource { ops: vec![] }).with_clock(pinned_clock(WANT_MILLIS));
+
+    let parent = header(B256::repeat_byte(0xaa), 7, 0);
+    let built = hooks.build_header(&parent).expect("build_header");
+
+    // The header's whole-seconds component is millis/1000.
+    assert_eq!(built.timestamp, WANT_SECONDS, "built header.time (seconds)");
+
+    // block_time reconstructs the instant: seconds anchored to header.time, the
+    // sub-second component (123 ms = 123_000_000 ns) recovered from the carrier.
+    let (secs, nanos) = hooks.block_time(&built);
+    assert_eq!(secs, WANT_SECONDS, "block_time seconds == header.time");
+    assert_eq!(nanos, 123_000_000, "block_time sub-second nanos (123 ms)");
+
+    // The reconstructed instant equals the pinned build instant to the ms.
+    let reconstructed_millis = secs
+        .checked_mul(1000)
+        .and_then(|ms| ms.checked_add(u64::from(nanos / 1_000_000)))
+        .expect("reconstructed millis");
+    assert_eq!(reconstructed_millis, WANT_MILLIS, "round-trip millis");
+}
+
+#[test]
+fn block_time_anchors_seconds_to_header_time_under_mismatch() {
+    // Mirrors Go `TestVerifyBlockRejectsMismatchedTime`'s anchoring invariant:
+    // a malicious peer bumps the seconds encoded in TimeMilliseconds without
+    // touching Header.Time. block_time().unix() MUST still equal header.time.
+    const BUILD_MILLIS: u64 = 1_700_000_000_123;
+
+    let hooks =
+        CChainHooks::new(FakeAtomicSource { ops: vec![] }).with_clock(pinned_clock(BUILD_MILLIS));
+    let parent = header(B256::repeat_byte(0xbb), 3, 0);
+    let built = hooks.build_header(&parent).expect("build_header");
+    let honest_time = built.timestamp;
+
+    // Forge the millisecond carrier so its encoded seconds disagree with
+    // header.time by +1000 ms (= +1 s), every other field untouched.
+    let mut forged = built.clone().into_header();
+    let forged_millis = ava_saevm_cchain::header_time_milliseconds(built.header())
+        .checked_add(1000)
+        .expect("forged millis");
+    ava_saevm_cchain::set_header_time_milliseconds(&mut forged, forged_millis);
+    let forged = SealedHeader::seal_slow(forged);
+
+    // The seconds component is anchored to header.time, NOT to forged_millis/1000.
+    let (secs, _nanos) = hooks.block_time(&forged);
+    assert_eq!(
+        secs, honest_time,
+        "block_time seconds anchored to header.time even under mismatch"
+    );
+    // Sub-second component still tracks the (forged) carrier modulo 1000 — here
+    // unchanged (the forge added a whole second), so nanos stay 123 ms.
+    assert_eq!(
+        forged.timestamp, honest_time,
+        "header.time untouched by forge"
     );
 }
 

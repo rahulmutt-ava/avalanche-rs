@@ -316,7 +316,13 @@ impl Vm {
         let genesis = build_genesis().map_err(|e| Error::Genesis(e.to_string()))?;
 
         // 2. Build the C-Chain hooks (the SAE hook surface = the BlockBuilderSeam).
-        let hooks = CChainHooks::new(EmptyAtomicSource);
+        //    The hooks' header-build path uses the injected `now` clock (Go
+        //    threads `now func() time.Time` into both `newHooks` and
+        //    `sae.Config.Now`, PR #5524); here the system wall clock is the
+        //    determinism-gated source (specs/00 §6.1, spec/24). The core VM's own
+        //    `now` (the parse-time future-block bound) is the same source.
+        let hooks = CChainHooks::new(EmptyAtomicSource)
+            .with_clock(Arc::new(SystemTime::now) as crate::hooks::Clock);
         let builder = HookBuilderSeam { hooks };
 
         // 3. Compose the SAE core VM (`sae.NewVM` — composing core::Vm IS the
