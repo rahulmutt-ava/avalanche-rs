@@ -23,6 +23,14 @@ ava-vm = { path = "../ava-vm" }
 # The networking glue reads time through the injected clock: monotonic for
 # latency/deadlines (specs 24 §B.4), and the benchlist EWMA timestamps.
 ava-utils = { path = "../ava-utils" }
+# The concrete `OutboundSender` (specs 06 §5.3) translates each engine `send_*`
+# into a `proto/p2p` wire message (ava-message) and hands it to the network's
+# `ExternalSender` (ava-network `Network::send`/`gossip`). Both are lower-tier
+# than the engine (neither depends on ava-engine), so this stays acyclic.
+ava-message = { path = "../ava-message" }
+ava-network = { path = "../ava-network" }
+# Construct `proto/p2p` message fields (`prost::bytes::Bytes`) directly.
+bytes = { workspace = true }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }

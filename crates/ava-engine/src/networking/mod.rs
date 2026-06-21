@@ -12,6 +12,7 @@ pub mod engine_adapter;
 pub mod handler;
 pub mod message_queue;
 pub mod router;
+pub mod sender;
 pub mod timeout;
 pub mod tracker;
 
@@ -23,6 +24,7 @@ pub use handler::{
 };
 pub use message_queue::{MessageClass, MessageQueue};
 pub use router::{ChainMessageSink, ChainRouter, InboundMessage, InboundOp, Router};
+pub use sender::OutboundSender;
 pub use timeout::{
     AdaptiveTimeoutConfig, AdaptiveTimeoutManager, RequestId, TimeoutError, TimeoutHandler,
 };

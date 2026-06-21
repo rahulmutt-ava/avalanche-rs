@@ -1235,6 +1235,36 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   nightly/operator-gated). Production SAE dispatch (a `run_queued_chains` `saevm_id()` branch booting a real SAE VM from
 >   queued genesis bytes) stays deferred on the M7.21/M7.26 production seams + genesis-bytes materialization.
 
+> **STEP (o) — THE REAL ava-network-backed `Sender` (`OutboundSender`); the multi-node `Sender`'s production wire-out
+> half (2026-06-21, ralph iteration, TDD; single-track `ava-engine`).** STEP (m)'s self-loopback `Sender` is the
+> *in-process* half of the multi-node machinery; this step builds the *production* half — the concrete
+> `ava_engine::common::sender::Sender` that the `Sender` trait's own doc comment named as "the concrete `OutboundSender`
+> (a later task)". A real multi-node node drives consensus + app traffic to **real peers** through it.
+> - **`ava-engine` (`networking/sender.rs`):** new `OutboundSender` implementing `Sender` (port of Go
+>   `snow/networking/sender.sender`, specs 06 §5.3). Each `send_*` builds the matching `proto/p2p` wire message via
+>   `ava_message::codec::MsgBuilder::create_outbound`, then dispatches it through `ava_network::network::Network::send`
+>   (targeted, Go `ExternalSender.Send`) or `gossip` (app-gossip, Go `ExternalSender.Gossip`). All ~20 trait methods
+>   covered: frontier/accepted (bootstrap), fetch (`Get`/`GetAncestors`/`Put`/`Ancestors`), query/vote
+>   (`PushQuery`/`PullQuery`/`Chits`), and the 4 app ops. Recipient selection maps the engine-facing `SendConfig`
+>   field-for-field to the network's `SendConfig`/`GossipConfig` (Go has a single `common.SendConfig`); the chain's
+>   subnet `Allower` is applied by the network. Request ops carry the configured `request_timeout` as the on-wire
+>   `deadline` (relative nanos — what peers use to expire the request, matching `MsgBuilder::parse_inbound`).
+> - **Dep direction:** `ava-engine` gained `ava-message` + `ava-network` + `bytes` deps — **acyclic** (neither
+>   ava-message nor ava-network depends on ava-engine; the engine's own `lib.rs` already documents `networking` as "the
+>   bridge to ava-network"). `GetAncestors.engine_type = ENGINE_TYPE_CHAIN` (Snowman; the X-Chain DAG path is unused).
+> - **TDD:** new `crates/ava-engine/tests/outbound_sender.rs` drives a recording mock `Network` and **decodes the
+>   marshaled bytes back** to assert op + recipients + subnet + every wire field, for `PushQuery` (multi-recipient),
+>   `Chits`/`Get`/`AcceptedFrontier` (single-recipient), `AppGossip` (gossip path), and `AppRequest` (targeted app).
+>   RED-confirmed (module absent ⇒ `cargo build -p ava-engine --tests` E0432). Verified: `ava-engine` **40/40** (6 new),
+>   clippy `--all-targets -D warnings` clean, fmt clean, workspace build green.
+> - **★ DEFERRED follow-up (documented in the module):** registering each outgoing request with the
+>   `AdaptiveTimeoutManager` (so a `*Failed` handler callback fires on a non-response) is NOT wired here — the engine
+>   `Sender` request methods are sync (`fn`, fire-and-forget, matching Go) but this port's timeout-manager
+>   `put`/`remove` are `async`; bridging needs an async seam (a request-registration channel drained by the router
+>   task). The on-wire deadline is already correct. **★ Remaining M9.15 frontier:** wiring `OutboundSender` into the
+>   live node-assembly boot path (replacing the loopback/`RecordingSender`) + the timeout-registration seam + the
+>   two-binary `mixed_network` live arm (nightly/operator-gated).
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
