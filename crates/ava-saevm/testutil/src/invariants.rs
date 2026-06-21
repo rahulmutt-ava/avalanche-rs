@@ -91,6 +91,38 @@ fn genesis() -> Arc<Block> {
     g
 }
 
+/// The SAE genesis block (synchronous, self-settling, height 0) the harness VMs
+/// are rooted at.
+///
+/// Exposed for cross-crate boot tests (e.g. the `avalanchers` in-process SAE
+/// dispatch test) that need to assert a freshly-booted SAE VM's `last_accepted`
+/// resolves to genesis.
+///
+/// # Panics
+/// Only if the genesis fixture is malformed (a harness programming error).
+#[must_use]
+pub fn live_genesis() -> Arc<Block> {
+    genesis()
+}
+
+/// A ready-to-boot SAE core [`Vm`] over the deterministic harness seams
+/// (`FakeBuilder` / `FakeExecutor`), rooted at [`live_genesis`].
+///
+/// This is the same construction `build_live_chain` uses, packaged for
+/// cross-crate boot tests: the production `BlockBuilderSeam`/`ExecutorSeam`
+/// wiring (M7.21/M7.26) does not exist yet, so a live SAE `Vm` can only be built
+/// from these test seams. The VM is returned **by value** so the caller can
+/// wrap it in the `Arc<tokio::sync::Mutex<_>>` that
+/// `ava_saevm_adaptor::convert` requires (and retain a clone to inspect the VM
+/// after it is wrapped into a consensus `ava_vm::block::ChainVm`).
+#[must_use]
+pub fn boot_ready_vm() -> Vm<FakeBuilder, FakeExecutor> {
+    let disk = Arc::new(DiskState::default());
+    let g = genesis();
+    let exec = Arc::new(FakeExecutor::new(disk));
+    Vm::new(&g, FakeBuilder, exec, now)
+}
+
 /// The fixed worst-case bounds the fake builder predicts for every block.
 fn bounds() -> WorstCaseBounds {
     WorstCaseBounds {
@@ -152,7 +184,7 @@ fn derived_receipt_root() -> B256 {
 /// `build_on`/`rebuild` share one recipe, a faithfully re-broadcast block
 /// rebuilds to the same hash (so verify-by-rebuild is exercisable).
 #[derive(Clone, Default)]
-struct FakeBuilder;
+pub struct FakeBuilder;
 
 impl FakeBuilder {
     fn settled_root(parent: &Arc<Block>) -> B256 {
@@ -196,7 +228,7 @@ impl BlockBuilderSeam for FakeBuilder {
 /// advances `last_executed` (I), and fires the `executed` notify (X). So any
 /// `wait_until_executed` waiter woken by X is guaranteed to read the persisted
 /// disk state (invariant 3) and the advanced pointer (invariant 6).
-struct FakeExecutor {
+pub struct FakeExecutor {
     disk: Arc<DiskState>,
     queue: Mutex<Vec<Arc<Block>>>,
 }

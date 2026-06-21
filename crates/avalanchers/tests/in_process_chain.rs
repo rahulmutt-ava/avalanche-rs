@@ -625,6 +625,122 @@ async fn engine_accepts_self_built_block_via_loopback() {
     handle.join.await.expect("handler task joined cleanly");
 }
 
+/// M9.15 SAE in-process dispatch — a **real `ava_saevm_core::Vm`** (built over
+/// the `ava-saevm-testutil` boot seams + SAE genesis, wrapped into a consensus
+/// `ava_vm::block::ChainVm` via `ava_saevm_adaptor::convert`) dispatches and
+/// runs to `NormalOp` through the genuine `create_snowman_chain` consensus
+/// pipeline — exactly as P/X/C do.
+///
+/// This proves the in-process boot machinery is SAE-ready. It uses the
+/// `#[doc(hidden)]` test seam `boot_generic_chain` (loopback off, solo node ⇒
+/// `Bootstrapping → NormalOp` short-circuit; no poll, no issuance), *not* a
+/// production dispatch branch — `run_queued_chains` still defers SAE because the
+/// production `BlockBuilderSeam`/`ExecutorSeam` wiring (M7.21/M7.26) and SAE
+/// genesis materialization do not exist yet (only the testutil fakes can build a
+/// live `Vm`).
+///
+/// After NormalOp, the booted VM's `last_accepted` resolves to the SAE genesis
+/// block at height 0.
+#[tokio::test]
+async fn saevm_chain_boots_to_normalop() {
+    use std::sync::Arc;
+
+    use ava_database::{DynDatabase, MemDb};
+    use ava_node::init::chain_manager::{PLATFORM_CHAIN_ID, saevm_id};
+    use ava_saevm_adaptor::ChainVm as SaeChainVm;
+    use ava_saevm_adaptor::{BlockProperties, convert};
+    use ava_saevm_testutil::invariants::{boot_ready_vm, live_genesis};
+    use ava_types::id::Id;
+    use avalanchers::wiring::chains::boot_generic_chain;
+    use tokio::sync::Mutex;
+
+    // Sanity: the SAE VM id is the documented `ascii32("saevm")` identity (this
+    // is the id a production dispatch branch would match on; the boot below uses
+    // the platform chain id only because `local` queues no SAE chain).
+    assert_eq!(
+        saevm_id(),
+        ava_genesis::chains::saevm_id(),
+        "ava-node re-exports the ava-genesis SAE VM id"
+    );
+
+    // A real SAE core VM over the deterministic testutil seams, rooted at the
+    // SAE genesis block (height 0). Retain an `Arc<Mutex<_>>` clone so the VM is
+    // inspectable after `convert` wraps it into the consensus pipeline.
+    let vm = Arc::new(Mutex::new(boot_ready_vm()));
+    let consensus_vm = convert(Arc::clone(&vm));
+
+    let base: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+
+    let handle = boot_generic_chain(
+        1, // network_id
+        PLATFORM_CHAIN_ID,
+        ava_types::constants::PRIMARY_NETWORK_ID,
+        "SAE",
+        Id::EMPTY, // avax_asset_id — unused by the SAE VM
+        Id::EMPTY, // genesis_id — the SAE VM is rooted at its own genesis block
+        consensus_vm,
+        Vec::new(), // the SAE VM is constructed from its genesis fixture, not bytes
+        Arc::clone(&base),
+    )
+    .await
+    .expect("boot a real SAE core VM through the in-process consensus pipeline");
+
+    // Solo node (empty beacons) short-circuits Bootstrapping → NormalOp.
+    let mut reached = false;
+    for _ in 0..200_000 {
+        if matches!(**handle.ctx.state.load(), EngineState::NormalOp) {
+            reached = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        reached,
+        "the solo SAE engine reached NormalOp (last state: {:?})",
+        **handle.ctx.state.load()
+    );
+
+    // The chain rooted at the SAE genesis: the engine reports height 0.
+    assert_eq!(
+        handle.last_accepted_height, 0,
+        "the SAE chain's last-accepted height is genesis (0)"
+    );
+
+    // The inner VM's `last_accepted` resolves to the SAE genesis block (height 0).
+    let last_accepted_id = vm
+        .lock()
+        .await
+        .last_accepted()
+        .await
+        .expect("SAE VM last_accepted");
+    let genesis_block = vm
+        .lock()
+        .await
+        .get_block(last_accepted_id)
+        .await
+        .expect("SAE VM get_block(last_accepted)");
+    assert_eq!(
+        genesis_block.height(),
+        0,
+        "the SAE VM's last_accepted is the genesis block (height 0)"
+    );
+    assert_eq!(
+        last_accepted_id,
+        genesis_block.id(),
+        "last_accepted id matches the resolved genesis block id"
+    );
+    // The retained genesis fixture is the same height-0 block.
+    assert_eq!(
+        live_genesis().height(),
+        0,
+        "the SAE genesis fixture is height 0"
+    );
+
+    // No leaked task: cancel and join cleanly.
+    handle.token.cancel();
+    handle.join.await.expect("handler task joined cleanly");
+}
+
 /// `--version` and `--help` keep working unchanged (the M0 invariant).
 #[test]
 fn version_and_help_still_work() {

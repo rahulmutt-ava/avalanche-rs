@@ -91,3 +91,11 @@ tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macro
 # `ava-reexecute` P-Chain leg; `ava-secp256k1fx` supplies the fx output/input
 # types (every other P-Chain crate it needs is already a regular dependency).
 ava-secp256k1fx = { path = "../ava-secp256k1fx" }
+# SAE in-process dispatch test (M9.15 SAE dispatch): build a real
+# `ava_saevm_core::Vm` over the `ava-saevm-testutil` boot seams, wrap it via
+# `ava_saevm_adaptor::convert`, and boot it through `boot_generic_chain` to
+# `NormalOp`. Test-only — there is NO production SAE dependency (the production
+# SAE seams M7.21/M7.26 + genesis materialization are not yet wired).
+ava-saevm-core = { path = "../ava-saevm/core" }
+ava-saevm-adaptor = { path = "../ava-saevm/adaptor" }
+ava-saevm-testutil = { path = "../ava-saevm/testutil" }

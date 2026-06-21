@@ -30,6 +30,14 @@ pub const PLATFORM_VM_ID_BYTES: [u8; 32] = ascii32("platformvm");
 pub const AVM_ID_BYTES: [u8; 32] = ascii32("avm");
 /// `constants.EVMID`.
 pub const EVM_ID_BYTES: [u8; 32] = ascii32("evm");
+/// The SAE VM id (ACP-194 Streaming Asynchronous Execution).
+///
+/// Go upstream does not yet pin a `constants.*` VMID for the SAE/ACP-194 VM
+/// (`vms/saevm/` carries no API-stability guarantee), so this follows the
+/// documented ascii-prefixed convention the other built-in VMs use:
+/// `ascii32("saevm")`. If/when upstream pins a concrete SAE VMID byte pattern,
+/// replace this with that value (and the matching assertion below).
+pub const SAEVM_ID_BYTES: [u8; 32] = ascii32("saevm");
 /// `secp256k1fx.ID`.
 pub const SECP256K1FX_ID_BYTES: [u8; 32] = ascii32("secp256k1fx");
 /// `nftfx.ID`.
@@ -53,6 +61,12 @@ pub fn avm_id() -> Id {
 #[must_use]
 pub fn evm_id() -> Id {
     Id::from(EVM_ID_BYTES)
+}
+
+/// The SAE VM id (ACP-194) as an [`Id`].
+#[must_use]
+pub fn saevm_id() -> Id {
+    Id::from(SAEVM_ID_BYTES)
 }
 
 /// `secp256k1fx.ID` as an [`Id`].
@@ -122,6 +136,8 @@ mod tests {
         assert_eq!(&AVM_ID_BYTES[..3], b"avm");
         assert!(AVM_ID_BYTES[3..].iter().all(|&b| b == 0));
         assert_eq!(&EVM_ID_BYTES[..3], b"evm");
+        assert_eq!(&SAEVM_ID_BYTES[..5], b"saevm");
+        assert!(SAEVM_ID_BYTES[5..].iter().all(|&b| b == 0));
         assert_eq!(&PLATFORM_VM_ID_BYTES[..10], b"platformvm");
         assert_eq!(&SECP256K1FX_ID_BYTES[..11], b"secp256k1fx");
         assert_eq!(&NFTFX_ID_BYTES[..5], b"nftfx");
