@@ -27,6 +27,8 @@
 //! later implement/feed this seam. See the `// TODO(M7.22)` markers.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ava_evm_reth::{EthReceipt, Header, RethBlock, SealedBlock, TransactionSigned};
 use ava_saevm_gastime::GasPriceConfig;
@@ -50,6 +52,49 @@ pub const BLACKHOLE_ADDR: Address = {
 /// Mirrors the hard-coded `1_000_000` in Go's `hooks.GasConfigAfter`
 /// (TODO upstream: extract from the header).
 pub const GAS_CONFIG_AFTER_TARGET: Gas = Gas(1_000_000);
+
+/// The injected wall-clock seam: a `now` source returning a [`SystemTime`].
+///
+/// Mirrors Go's `cchain.VM` threading a `now func() time.Time` into `newHooks`
+/// and `sae.Config.Now` (PR #5524). The build/header path NEVER calls
+/// [`SystemTime::now`] directly — it goes through this injected source so the
+/// determinism gate (specs/00 §6.1, spec/24) and tests can pin the clock. The
+/// rebuild/verify path does not consult the clock (it freezes the block's time),
+/// so this only governs [`BlockBuilder::build_header`].
+pub type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
+
+/// The default injected clock: the system wall clock.
+#[must_use]
+fn system_clock() -> Clock {
+    Arc::new(SystemTime::now)
+}
+
+/// Reads the header's millisecond timestamp carrier (Rust analog of Go's
+/// `customtypes.HeaderTimeMilliseconds`).
+///
+/// SAE C-Chain headers stamp the full `now().UnixMilli()` value into the header's
+/// otherwise-unused 8-byte proof-of-work `nonce` slot (big-endian), since the Rust
+/// C-Chain rides on the stock alloy [`Header`] which has no `HeaderExtra`
+/// `TimeMilliseconds` field. When the carrier is zero (a header that does not commit a millisecond
+/// timestamp — e.g. genesis or a legacy block) this falls back to
+/// `header.time * 1000`, exactly mirroring Go's fallback when `TimeMilliseconds`
+/// is unset.
+#[must_use]
+pub fn header_time_milliseconds(header: &Header) -> u64 {
+    let raw = u64::from_be_bytes(header.nonce.0);
+    if raw == 0 {
+        return header.timestamp.saturating_mul(1000);
+    }
+    raw
+}
+
+/// Stamps the header's millisecond timestamp carrier (the 8-byte `nonce` slot,
+/// big-endian). The inverse of [`header_time_milliseconds`] for an unsealed
+/// [`Header`]; used by [`CChainHooks::header_for`] and exercised by the
+/// malicious-peer regression test.
+pub fn set_header_time_milliseconds(header: &mut Header, millis: u64) {
+    header.nonce.0 = millis.to_be_bytes();
+}
 
 /// Errors returned by the C-Chain hooks.
 ///
@@ -193,15 +238,20 @@ pub struct CChainHooks<S: AtomicOpSource> {
     /// `CanExecuteTransaction` returns `nil` unconditionally today; the libevm
     /// `RulesAllowlistHooks` gate is modelled here as a deny-set).
     blocked_senders: BTreeSet<Address>,
+    /// The injected `now` clock (Go's `cchain.VM` threads `now func() time.Time`
+    /// into `newHooks`/`sae.Config.Now`). Drives [`BlockBuilder::build_header`];
+    /// never bypassed by a direct [`SystemTime::now`] in the build path.
+    now: Clock,
 }
 
 impl<S: AtomicOpSource> CChainHooks<S> {
     /// Constructs hooks over the given atomic-op `source` with an empty
-    /// sender allowlist.
+    /// sender allowlist and the system wall clock.
     pub fn new(source: S) -> Self {
         Self {
             source,
             blocked_senders: BTreeSet::new(),
+            now: system_clock(),
         }
     }
 
@@ -212,23 +262,36 @@ impl<S: AtomicOpSource> CChainHooks<S> {
         self
     }
 
+    /// Injects the `now` clock used by [`BlockBuilder::build_header`] (Go's
+    /// `now func() time.Time`). Tests pin this to a fixed sub-second instant; the
+    /// determinism gate requires the build path to read it instead of the wall
+    /// clock (specs/00 §6.1, spec/24).
+    #[must_use]
+    pub fn with_clock(mut self, now: Clock) -> Self {
+        self.now = now;
+        self
+    }
+
     /// Builds the deterministic C-Chain header for `parent` at the given
-    /// `time_unix` (Unix seconds).
+    /// `time_milliseconds` (Unix milliseconds).
     ///
     /// Mirrors Go's `builder.BuildHeader`: parent-hash, blackhole coinbase,
-    /// difficulty 1, number = parent + 1, and the supplied block time. Root,
-    /// gas-limit, base-fee and gas-used are left at their defaults — the SAE
-    /// execution path overwrites them (see [`BlockBuilder::build_header`] doc).
-    fn header_for(parent: &SealedHeader, time_unix: u64) -> SealedHeader {
+    /// difficulty 1, number = parent + 1, `Time = millis / 1000`, and the full
+    /// `TimeMilliseconds` stamped into the millisecond carrier (the `nonce` slot —
+    /// see [`set_header_time_milliseconds`]). Root, gas-limit, base-fee and
+    /// gas-used are left at their defaults — the SAE execution path overwrites
+    /// them (see [`BlockBuilder::build_header`] doc).
+    fn header_for(parent: &SealedHeader, time_milliseconds: u64) -> SealedHeader {
         let number = parent.number.saturating_add(1);
-        let h = Header {
+        let mut h = Header {
             parent_hash: parent.hash(),
             beneficiary: BLACKHOLE_ADDR,
             difficulty: U256::from(1u64),
             number,
-            timestamp: time_unix,
+            timestamp: time_milliseconds.checked_div(1000).unwrap_or(0),
             ..Header::default()
         };
+        set_header_time_milliseconds(&mut h, time_milliseconds);
         SealedHeader::seal_slow(h)
     }
 }
@@ -260,9 +323,22 @@ impl<S: AtomicOpSource> Points for CChainHooks<S> {
     }
 
     fn block_time(&self, header: &SealedHeader) -> (u64, u32) {
-        // Mirrors Go's `hooks.BlockTime`: `time.Unix(header.Time, 0)`.
-        // TODO(M7.23): extract sub-second milliseconds from the header.
-        (header.timestamp, 0)
+        // Mirrors Go's `hooks.BlockTime` (PR #5524): anchor the whole-seconds
+        // component to `header.time` so the documented invariant
+        // `block_time(h).unix() == h.time` holds, taking ONLY the sub-second
+        // component from the millisecond carrier. This guards against a malformed
+        // header whose `TimeMilliseconds` disagrees with `time` (e.g. a malicious
+        // peer), which would otherwise yield an unexpected block time.
+        let millis = header_time_milliseconds(header.header());
+        // `millis % 1000 < 1000`, so the nanos multiply cannot overflow `u32`
+        // (max 999 * 1_000_000 = 999_000_000 < u32::MAX). `try_from`/`checked_*`
+        // keep the SAE no-raw-cast / no-unchecked-arithmetic bar.
+        let sub_second_millis = millis.checked_rem(1000).unwrap_or(0);
+        let sub_second_nanos = u32::try_from(sub_second_millis)
+            .ok()
+            .and_then(|ms| ms.checked_mul(1_000_000))
+            .unwrap_or(0);
+        (header.timestamp, sub_second_nanos)
     }
 
     fn settled_by(&self, _header: &SealedHeader) -> Settled {
@@ -338,13 +414,20 @@ impl<S: AtomicOpSource> BlockBuilder<AtomicOp> for CChainHooks<S> {
     type BlockSource = ();
 
     fn build_header(&self, parent: &SealedHeader) -> Result<SealedHeader, Error> {
-        // Build at the parent's timestamp + 1 so the result is deterministic
-        // (Go uses `time.Now()`, but the rebuild path freezes the header time;
-        // we make the build path deterministic too so build == rebuild without
-        // a wall clock). TODO(M7.23): enforce the minimum block time / inject a
-        // clock.
-        let time_unix = parent.timestamp.saturating_add(1);
-        Ok(Self::header_for(parent, time_unix))
+        // Mirrors Go's `builder.BuildHeader` (PR #5524): stamp the injected
+        // clock's `UnixMilli()` value as the header's `TimeMilliseconds`, with
+        // `Time = millis / 1000`. The clock is injected (Go's `now func()
+        // time.Time`) so the build path never reads the wall clock directly
+        // (determinism gate, specs/00 §6.1, spec/24). The rebuild path
+        // ([`Rebuilder`]) freezes the built block's millis so verify is
+        // byte-identical. TODO(M7.23): enforce the minimum block time.
+        let millis = (self.now)()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        // The header carrier is a `u64`; clamp a far-future instant rather than
+        // wrap (keeps the SAE no-unchecked-arithmetic bar).
+        let millis = u64::try_from(millis).unwrap_or(u64::MAX);
+        Ok(Self::header_for(parent, millis))
     }
 
     fn potential_end_of_block_ops(
@@ -387,9 +470,11 @@ impl<S: AtomicOpSource> PointsG<AtomicOp> for CChainHooks<S> {
 
     fn block_rebuilder_from(&self, block: &SealedBlock<RethBlock>) -> Result<Rebuilder, Error> {
         // Mirrors Go's `hooks.BlockRebuilderFrom`: freeze the block's time so
-        // the rebuilt header is reconstructed identically.
+        // the rebuilt header is reconstructed identically. We freeze the full
+        // millisecond timestamp (read back from the header carrier) so the
+        // rebuilt header's `Time` AND `TimeMilliseconds` are byte-identical.
         Ok(Rebuilder {
-            frozen_time: block.header().timestamp,
+            frozen_millis: header_time_milliseconds(block.header()),
         })
     }
 }
@@ -401,8 +486,10 @@ impl<S: AtomicOpSource> PointsG<AtomicOp> for CChainHooks<S> {
 /// block's time frozen so [`BlockBuilder::build_header`] is deterministic and
 /// byte-identical to the originally-built header.
 pub struct Rebuilder {
-    /// The block time captured from the block being rebuilt (Unix seconds).
-    frozen_time: u64,
+    /// The block time captured from the block being rebuilt (Unix milliseconds —
+    /// the full `TimeMilliseconds`, so the rebuilt header's `Time` and millisecond
+    /// carrier are both byte-identical).
+    frozen_millis: u64,
 }
 
 impl BlockBuilder<AtomicOp> for Rebuilder {
@@ -416,7 +503,7 @@ impl BlockBuilder<AtomicOp> for Rebuilder {
     fn build_header(&self, parent: &SealedHeader) -> Result<SealedHeader, Error> {
         Ok(CChainHooks::<NoopSource>::header_for(
             parent,
-            self.frozen_time,
+            self.frozen_millis,
         ))
     }
 
