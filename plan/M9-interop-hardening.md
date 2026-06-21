@@ -634,7 +634,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `info.peers` once a live net boots. Verified in main tree: `cargo nextest run -p ava-differential` 15/15 (incl. both
 > offline arms), clippy `--all-targets -D warnings` clean, `--features live --tests` compiles, fmt clean.
 
-### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip 🟡 OFFLINE LOCKSTEP-REPLAY ARM DONE (2026-06-16c); SOLO live-dispatch flips P+X live (2026-06-19); mixed-net two-binary arm gated
+### Task M9.15: `differential::mixed_network` — live Go+Rust, all chains, no fork, same tip 🟡 OFFLINE LOCKSTEP-REPLAY ARM DONE (2026-06-16c); SOLO live-dispatch flips P+X+C live (2026-06-19); SAE in-process dispatch DONE (2026-06-21 STEP n); mixed-net two-binary arm gated
 **Crate/area:** `ava-differential`  ·  **Depends on:** M9.14, M4/M5/M6/M7 (P/X/C/SAE)  ·  **Spec:** `16` §5(2), `02` §11.3 (peer/handshake row: "both reach the same height; no fork")
 **AS-BUILT (offline arm, merge 2026-06-16c):** `LockstepDriver::replay_recorded` + `Program::from_seed` now replay a seed-derived program through the REAL in-process `ava-avm` pipeline (`xchain::run_program` per finalization, pure sub-seed derivation), returning ordered normalized `Observation`s; `tests/mixed_network.rs::mixed_network_replay_is_deterministic` asserts twice-replayed byte-identity + non-trivial finalization + injected-divergence detection + a 64-case proptest. The live `mixed_network` arm (boot mixed net, replay across all nodes, no-fork/same-tip per chain) stays `#[cfg(feature="live")] #[ignore]`.
 
@@ -1197,6 +1197,43 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   7/7, `avalanchers`+`ava-chains`+`ava-vm` 50/50, `ava-engine`+`ava-node`+`ava-reexecute` 66/66, full workspace
 >   `--all-targets` compiles, clippy `-D warnings` + fmt clean. **The remaining M9.15 frontier is unchanged: the live
 >   multi-node `Sender` (the self-loopback is the in-process half of that machinery) and SAE dispatch.**
+
+> **STEP (n) — SAE IN-PROCESS CHAIN DISPATCH (2026-06-21, ralph iteration, TDD; closes the "SAE dispatch" half of the
+> M9.15 frontier in-process).** The standard chains (P/X/C) already dispatch & boot in-process through
+> `run_queued_chains` → a per-`vm_id` `boot_*` → `create_snowman_chain` → `NormalOp`; SAE was the last
+> `else { warn; continue }` branch. SAE now boots a **real `ava_saevm_core::Vm`** to `NormalOp` through the genuine
+> consensus pipeline, proving the boot machinery is SAE-ready (mirrors how C-Chain dispatch first landed via a test seam
+> before `EvmVm::from_genesis`):
+> - **`ava-genesis` `chains.rs`:** new `pub const SAEVM_ID_BYTES = ascii32("saevm")` + `pub fn saevm_id() -> Id` (mirrors
+>   `evm_id()`; upstream pins no SAE VMID so `ascii32("saevm")` is the documented choice), asserted in the existing
+>   `vm_ids_ascii_layout` test. Re-exported as `ava_node::init::chain_manager::saevm_id()`.
+> - **`avalanchers` `wiring/chains.rs`:** new `#[doc(hidden)] boot_generic_chain<V: ChainVm>(...)` — the sibling of
+>   `boot_chain_with_loopback`, differing only in `loopback: false` (solo node, empty beacons ⇒ `Bootstrapping → NormalOp`
+>   short-circuit, no poll/issuance). Reuses the existing `BootSpec`/`boot_chain` core; **zero behavior change** to the
+>   production startup-boot paths. The deferred `run_queued_chains` SAE branch comment was tightened to name `saevm_id()`
+>   and state precisely *why* a production boot is still deferred (no production `BlockBuilderSeam`/`ExecutorSeam` wiring —
+>   M7.21/M7.26 — and no genesis-bytes → SAE `Vm` materialization; plus the `local` genesis queues no SAE chain, so the
+>   branch is unreachable on a solo `local` node).
+> - **`ava-saevm-core` `vm.rs` (the one production change):** `BaseVm::initialize` previously hard-returned
+>   `Err(InitializeDeferred)`, which `create_snowman_chain`'s unconditional `vm.initialize()` mapped to `Vm(NotFound)` ⇒
+>   boot failed regardless of the seam. A `Vm::new`-constructed VM is **already genesis-rooted** (genesis seeded into the
+>   block store/height index, frontier + preference rooted at it), so `initialize` is now a **no-op success** for it — the
+>   pipeline's immediate `last_accepted`/`get_block` queries resolve. The genesis-*bytes* → VM materialization path stays
+>   explicitly deferred (the `InitializeDeferred` variant is retained, re-documented as reserved for it). Not a faked boot:
+>   the adaptor/lifecycle are untouched and no error is swallowed.
+> - **`ava-saevm-testutil` `invariants.rs`:** `FakeBuilder`/`FakeExecutor` made `pub` + new `pub fn live_genesis()` and
+>   `pub fn boot_ready_vm() -> Vm<FakeBuilder, FakeExecutor>` so a cross-crate test can build a live SAE VM (the only way
+>   to construct one today, since the production seams don't exist). **No testutil → production dep introduced** — the
+>   three SAE crates are `avalanchers` **`[dev-dependencies]`** (test-only).
+> - **TDD:** `avalanchers tests/in_process_chain.rs::saevm_chain_boots_to_normalop` — build the real SAE `Vm` over the
+>   testutil seams + SAE genesis, `ava_saevm_adaptor::convert` it, boot via `boot_generic_chain`, assert `NormalOp` +
+>   `last_accepted` resolves to the SAE genesis (height 0). RED before the `initialize` fix (`Manager(Vm(NotFound))`),
+>   GREEN after. Verified in main tree: `cargo nextest run -p avalanchers -p ava-genesis -p ava-node -p ava-saevm-core
+>   -p ava-saevm-adaptor -p ava-saevm-testutil` = **115 passed, 1 skipped** (the expected nextest-leaky GC skip), clippy
+>   `--all-targets -D warnings` clean (incl. `lint-saevm`), fmt clean.
+> - **★ The remaining M9.15 frontier is now just the live multi-node `Sender`** (the two-binary `mixed_network` arm —
+>   nightly/operator-gated). Production SAE dispatch (a `run_queued_chains` `saevm_id()` branch booting a real SAE VM from
+>   queued genesis bytes) stays deferred on the M7.21/M7.26 production seams + genesis-bytes materialization.
 
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
