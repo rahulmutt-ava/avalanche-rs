@@ -30,4 +30,6 @@ pub use metrics::SaeMetrics;
 pub use recovery::{RecoverError, Recovered, RecoverySource, recover};
 pub use rpc::{RpcBlockLabel, RpcError, resolve_rpc_number};
 pub use settle::{SettleError, settle};
-pub use vm::{BlockBuilderSeam, BuildError, Error, ExecutorSeam, Vm};
+pub use vm::{
+    BlockBuilderSeam, BuildError, Error, ExecutorSeam, SettledBlockSource, SettledReadError, Vm,
+};
