@@ -179,6 +179,38 @@ impl Default for TestVm {
     }
 }
 
+/// A read-only observer over a [`TestVm`]'s shared accepted state, obtained via
+/// [`TestVm::observer`]. Shares the VM's `Arc<Mutex<Inner>>`, so a test can watch
+/// the chain tip advance through the engine after the VM has been moved into a
+/// chain (M9.15 STEP (m) — engine-driven block issuance).
+#[derive(Clone, Debug)]
+pub struct TestVmObserver {
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl TestVmObserver {
+    /// The height of the last-accepted block (genesis = 0).
+    #[must_use]
+    pub fn last_accepted_height(&self) -> u64 {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .accepted_at_height
+            .keys()
+            .next_back()
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The id of the last-accepted block.
+    #[must_use]
+    pub fn last_accepted_id(&self) -> Id {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_accepted
+    }
+}
+
 impl TestVm {
     /// Builds an uninitialized [`TestVm`]. Call [`Vm::initialize`] before use.
     #[must_use]
@@ -205,6 +237,17 @@ impl TestVm {
         Self {
             resume_height: height,
             ..Self::new()
+        }
+    }
+
+    /// A read-only observer over this VM's shared accepted state. Clone it out
+    /// **before** moving the VM into a chain to watch the chain tip advance
+    /// through the engine (the VM itself is moved into the type-erased engine, so
+    /// this is the only post-boot window into its last-accepted block).
+    #[must_use]
+    pub fn observer(&self) -> TestVmObserver {
+        TestVmObserver {
+            inner: Arc::clone(&self.inner),
         }
     }
 

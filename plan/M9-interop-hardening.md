@@ -1157,6 +1157,47 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   (so the `avalanchers` restart test resumes a self-issued advanced tip) remains a thin follow-up, but no longer gates
 >   the resume-correctness claim. The remaining M9.15 frontier is the live multi-node `Sender` and SAE dispatch.
 
+> **STEP (m) — ENGINE-DRIVEN BLOCK ISSUANCE (the self-loopback `Sender`); STEP (l)'s "thin follow-up" CLOSED
+> (2026-06-21, ralph iteration, TDD; single-track `ava-chains`/`ava-vm`/`avalanchers`).** STEP (l) issued its block by
+> calling `build → set_preference → verify → accept` **directly on the VM**, bypassing consensus, because a solo
+> in-process node's poll never resolves: the boot harness's `RecordingSender`/`NoopSender` *drop* every outbound op, so
+> the engine's own `push_query` for a self-built block is never answered with `Chits` and the block stays *processing*,
+> never accepted. This step builds the missing piece — a **self-loopback `Sender`** — and proves the engine itself
+> drives a real block to acceptance + persistence + restart-resume.
+> - **`ava-chains` (`create_chain.rs`):** `create_snowman_chain` stopped discarding the handler's `vm_tx`
+>   (`mpsc::Sender<VmEvent>`) and now returns it on `SnowmanChain.vm_tx` — the in-process equivalent of a VM's
+>   `toEngine` channel. Sending `VmEvent::PendingTxs` there reaches the handler → `engine.notify_pending_txs` →
+>   `build_blocks` → `vm.build_block` → `issue_from`.
+> - **`avalanchers` (`wiring/chains.rs`):** opt-in self-loopback on `RecordingSender` (installable
+>   `Loopback{self_node, sink}`, default off ⇒ **zero behavior change** for the startup-boot paths). When installed, the
+>   consensus **poll path** is delivered back to the node's own handler as inbound ops *from* the self node:
+>   `send_push_query`→`InboundOp::PushQuery`, `send_pull_query`→`PullQuery`, `send_chits`→`Chits` (fire-and-forget
+>   `tokio::spawn`; the handler drains sequentially, so no re-entrancy). The loop closes: `issue_from`'s `push_query` is
+>   delivered back, the engine answers with self-`Chits`, and the `k=1`/`β=1` poll completes ⇒ the block is **accepted
+>   through the genuine engine path**. New `BootSpec.loopback` + the test seam `boot_chain_with_loopback`;
+>   `PChainBootHandle` gained `vm_tx` + `last_accepted_height` (the create-time consensus-rooting height — STEP (k) — so
+>   a restart's resumed tip is assertable without reaching into the type-erased engine).
+> - **`ava-vm` (`testutil.rs`):** `TestVm::observer()` → a `TestVmObserver` sharing the VM's `Arc<Mutex<Inner>>`, so a
+>   test can watch the chain tip advance *after* the VM is moved into the type-erased engine.
+> - **TDD — two tests, both RED-confirmed (loopback off ⇒ tip stuck at genesis):**
+>   - `avalanchers in_process_chain::engine_accepts_self_built_block_via_loopback` — boot a `TestVm` chain with the
+>     loopback, reach `NormalOp`, signal `PendingTxs`, assert the engine builds + issues + **accepts** a height-1 block
+>     (tip 0→1) with **no direct `accept()` on the VM**. RED without the loopback (built+issued but never voted ⇒
+>     processing forever).
+>   - `avalanchers engine_issuance::engine_issued_pchain_tip_resumes_after_restart` — the **real `PlatformVm`** leg
+>     (funded synthetic genesis + signed `CreateSubnetTx` ported from the `ava-reexecute` P-Chain leg, pre-loaded into
+>     the mempool via the M9.19 `mempool_add` holding-pen seam *before* boot). The engine builds + issues + accepts a
+>     real height-1 `BanffStandardBlock` over a shared base db; a fresh node re-booted over the **same** db resumes
+>     rooted at height 1 (STEP (i)+(k) machinery), not genesis. RED without the loopback (never accepts ⇒ db never grows
+>     ⇒ restart resumes genesis). ★ The proposervm wrapper the pipeline adds is **pre-fork pass-through** here (boot
+>     clock at the Unix epoch, before any fork), so `build_block` reaches the inner `PlatformVm` directly — no proposer
+>     windowing.
+> - **★ This closes the STEP (l) "engine-driven issuance" follow-up.** A self-built tip is now driven to acceptance by
+>   the genuine handler→engine→poll machinery (not a direct VM call) AND survives a restart. Verification: `ava-chains`
+>   7/7, `avalanchers`+`ava-chains`+`ava-vm` 50/50, `ava-engine`+`ava-node`+`ava-reexecute` 66/66, full workspace
+>   `--all-targets` compiles, clippy `-D warnings` + fmt clean. **The remaining M9.15 frontier is unchanged: the live
+>   multi-node `Sender` (the self-loopback is the in-process half of that machinery) and SAE dispatch.**
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.

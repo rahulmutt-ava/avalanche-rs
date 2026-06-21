@@ -29,13 +29,15 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use ava_chains::create_snowman_chain;
 use ava_chains::manager::{DynProbe, Factory, ProbeableVm, VmManager};
 use ava_crypto::staking;
 use ava_database::{DynDatabase, MemDb};
-use ava_engine::networking::router::ChainRouter;
+use ava_engine::networking::handler::ChainHandlerSink;
+use ava_engine::networking::router::{ChainMessageSink, ChainRouter, InboundOp};
 use ava_engine::networking::timeout::{AdaptiveTimeoutConfig, AdaptiveTimeoutManager};
 use ava_proposervm::{BlockSigner, StakingIdentity};
 use ava_snow::snowball::Parameters;
@@ -474,14 +476,37 @@ pub enum Sent {
     Other,
 }
 
+/// The self-delivery target installed on a [`RecordingSender`] to make a solo
+/// node's consensus poll self-resolve: the running node's own handler sink plus
+/// its node id. With it installed, the engine's outbound poll/vote ops are
+/// looped back as inbound ops addressed *from* the self node, so a `k=1`/`β=1`
+/// poll on a self-built block completes and the block is accepted through the
+/// genuine consensus path (M9.15 STEP (m)).
+struct Loopback {
+    /// The node the looped-back inbound ops appear to come from (the sole
+    /// validator — itself).
+    self_node: NodeId,
+    /// The running chain's handler sink (the inbound-message ingress the router
+    /// would otherwise drive from the network).
+    sink: ChainHandlerSink,
+}
+
 /// An in-process [`ava_engine::common::sender::Sender`] that **records**
 /// outbound messages so a node-level test can observe the bootstrapper's
 /// frontier broadcast. An in-process node has no peers, so nothing is actually
 /// transmitted — this is the recording stand-in for the live ava-network-backed
 /// `Sender` (the documented live arm).
+///
+/// **Opt-in self-loopback.** When [`install_loopback`](Self::install_loopback)
+/// has been called, the consensus **poll path** (`send_push_query` /
+/// `send_pull_query` / `send_chits`) is additionally *delivered back* to the
+/// node's own handler as inbound ops — closing the query→chits→accept loop a
+/// solo node needs to finalize a self-built block. Until then (the default), every
+/// outbound op is dropped exactly as before, so existing callers are unchanged.
 #[derive(Default)]
 pub struct RecordingSender {
     log: Mutex<Vec<Sent>>,
+    loopback: std::sync::OnceLock<Loopback>,
 }
 
 impl RecordingSender {
@@ -493,6 +518,27 @@ impl RecordingSender {
     #[must_use]
     pub fn drain(&self) -> Vec<Sent> {
         std::mem::take(&mut self.log.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Install the self-loopback: route the consensus poll path back into
+    /// `sink` as inbound ops appearing to come from `self_node`. Idempotent — a
+    /// second call is ignored (the channel is set once at boot).
+    fn install_loopback(&self, self_node: NodeId, sink: ChainHandlerSink) {
+        let _ = self.loopback.set(Loopback { self_node, sink });
+    }
+
+    /// Deliver `op` back to the node's own handler as an inbound message from the
+    /// self node, if the loopback has been installed. Fire-and-forget: the
+    /// handler drains its queue sequentially, so the looped-back op is processed
+    /// after the engine call that produced it returns (no re-entrancy).
+    fn loopback(&self, op: InboundOp) {
+        if let Some(lb) = self.loopback.get() {
+            let sink = lb.sink.clone();
+            let node = lb.self_node;
+            tokio::spawn(async move {
+                sink.push(node, op).await;
+            });
+        }
     }
 }
 
@@ -534,30 +580,47 @@ impl ava_engine::common::sender::Sender for RecordingSender {
     fn send_push_query(
         &self,
         _nodes: &HashSet<NodeId>,
-        _req: u32,
-        _container: Vec<u8>,
-        _requested_height: u64,
+        req: u32,
+        container: Vec<u8>,
+        requested_height: u64,
     ) {
         self.push(Sent::Other);
+        self.loopback(InboundOp::PushQuery {
+            request_id: req,
+            container,
+            requested_height,
+        });
     }
     fn send_pull_query(
         &self,
         _nodes: &HashSet<NodeId>,
-        _req: u32,
-        _container_id: Id,
-        _requested_height: u64,
+        req: u32,
+        container_id: Id,
+        requested_height: u64,
     ) {
         self.push(Sent::Other);
+        self.loopback(InboundOp::PullQuery {
+            request_id: req,
+            container_id,
+            requested_height,
+        });
     }
     fn send_chits(
         &self,
         _node: NodeId,
-        _req: u32,
-        _preferred: Id,
-        _preferred_at_height: Id,
-        _accepted: Id,
-        _accepted_height: u64,
+        req: u32,
+        preferred: Id,
+        preferred_at_height: Id,
+        accepted: Id,
+        accepted_height: u64,
     ) {
+        self.loopback(InboundOp::Chits {
+            request_id: req,
+            preferred_id: preferred,
+            preferred_id_at_height: preferred_at_height,
+            accepted_id: accepted,
+            accepted_height,
+        });
     }
 
     async fn send_app_request(
@@ -609,9 +672,22 @@ pub struct PChainBootHandle {
     pub token: CancellationToken,
     /// The P-Chain genesis block id (`sha256(p_chain_genesis_bytes)`).
     pub genesis_id: Id,
+    /// The height the consensus core was rooted at when this chain was created
+    /// — `0` for a fresh genesis tip, the persisted height for a node that
+    /// recovered an advanced tip from disk (read from
+    /// `vm.get_block(vm.last_accepted()).height()` at boot; M9.15 STEP (k)/(m)).
+    /// A restart over a base db that already holds an engine-issued tip resumes
+    /// at that height.
+    pub last_accepted_height: u64,
     /// The bootstrap beacon node set (sorted), as addressed by the frontier
     /// broadcast.
     pub beacons: Vec<NodeId>,
+    /// The VM→engine notification channel. Sending
+    /// [`VmEvent::PendingTxs`](ava_vm::vm::VmEvent::PendingTxs) drives the running
+    /// engine to build + issue + (with the loopback installed) accept a block —
+    /// the in-process equivalent of a VM signalling its `toEngine` channel
+    /// (M9.15 STEP (m)).
+    pub vm_tx: mpsc::Sender<ava_vm::vm::VmEvent>,
     /// The handler sink, kept alive for the handler's lifetime (dropping it
     /// would unregister the chain from the router).
     pub _sink: ava_engine::networking::handler::ChainHandlerSink,
@@ -690,6 +766,7 @@ async fn boot_pchain(
             avax_asset_id,
             genesis_id,
             include_self_beacon,
+            loopback: false,
             data_dir: None,
         },
         ava_platformvm::vm::PlatformVm::new(),
@@ -740,6 +817,7 @@ pub async fn boot_xchain(
             avax_asset_id,
             genesis_id,
             include_self_beacon: false,
+            loopback: false,
             data_dir: None,
         },
         ava_avm::vm::AvmVm::new(),
@@ -788,12 +866,60 @@ pub async fn boot_cchain(
             avax_asset_id: Id::EMPTY,
             genesis_id,
             include_self_beacon: false,
+            loopback: false,
             data_dir: Some(data_dir),
         },
         vm,
         genesis_bytes,
         base_db,
         token,
+    )
+    .await
+}
+
+/// **Test seam (M9.15 STEP (m) — engine-driven block issuance).** Boot a single
+/// in-process Snowman chain around a caller-supplied inner VM, over a
+/// caller-supplied base db, **with the self-loopback installed**. The returned
+/// [`PChainBootHandle::vm_tx`] drives engine-side block building: sending
+/// [`VmEvent::PendingTxs`](ava_vm::vm::VmEvent::PendingTxs) makes the running
+/// engine `build_block`, issue it, and — because the loopback closes the
+/// `k=1`/`β=1` poll — accept it through the genuine consensus path. Solo node
+/// (empty beacons), so the bootstrapper short-circuits straight to `NormalOp`.
+///
+/// # Errors
+/// Propagates a VM-init / consensus-boot failure.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn boot_chain_with_loopback<V>(
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    primary_alias: &'static str,
+    avax_asset_id: Id,
+    genesis_id: Id,
+    inner_vm: V,
+    genesis_bytes: Vec<u8>,
+    base_db: Arc<dyn DynDatabase>,
+) -> Result<PChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    boot_chain(
+        BootSpec {
+            network_id,
+            chain_id,
+            subnet_id,
+            primary_alias,
+            avax_asset_id,
+            genesis_id,
+            include_self_beacon: false,
+            loopback: true,
+            data_dir: None,
+        },
+        inner_vm,
+        &genesis_bytes,
+        base_db,
+        CancellationToken::new(),
     )
     .await
 }
@@ -808,6 +934,11 @@ struct BootSpec {
     avax_asset_id: Id,
     genesis_id: Id,
     include_self_beacon: bool,
+    /// Install the self-loopback on the [`RecordingSender`] so a solo node's
+    /// consensus poll self-resolves and a self-built block is accepted through
+    /// the genuine engine path (M9.15 STEP (m)). `false` (the default for the
+    /// startup-boot paths) keeps the record-and-drop behavior unchanged.
+    loopback: bool,
     /// The chain's on-disk state dir, moved into the boot handle to outlive the
     /// running VM (the C-Chain Firewood db). `None` for in-memory chains (P/X).
     data_dir: Option<tempfile::TempDir>,
@@ -917,6 +1048,17 @@ where
 
     let ctx = Arc::clone(&chain.ctx);
     let beacon_nodes: Vec<NodeId> = beacons.keys().copied().collect();
+    let vm_tx = chain.vm_tx.clone();
+    let last_accepted_height = chain.last_accepted_height;
+
+    // Opt-in self-loopback: route the engine's own poll path (push/pull query +
+    // chits) back into this chain's handler as inbound ops from the self node, so
+    // a `k=1`/`β=1` poll on a self-built block self-resolves and the block is
+    // accepted through the genuine consensus path (M9.15 STEP (m)). Installed
+    // before the handler starts; the startup-boot paths leave it off.
+    if spec.loopback {
+        sender.install_loopback(node_id, chain.sink.clone());
+    }
 
     // Start the handler task: it activates the initial (`Bootstrapping`) engine,
     // which flips `ctx.state` and broadcasts `GetAcceptedFrontier`.
@@ -928,7 +1070,9 @@ where
         join,
         token,
         genesis_id: spec.genesis_id,
+        last_accepted_height,
         beacons: beacon_nodes,
+        vm_tx,
         _sink: chain.sink,
         _data_dir: spec.data_dir,
     })

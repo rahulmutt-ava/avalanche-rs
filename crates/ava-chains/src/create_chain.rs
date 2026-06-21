@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use ava_database::{Database, DynDatabase, MeterDb, PrefixDb};
@@ -568,6 +569,13 @@ pub struct SnowmanChain<V: ChainVm, S, M> {
     /// tip, the persisted height for a node that recovered an advanced tip from
     /// disk; M9.15 STEP (b)).
     pub last_accepted_height: u64,
+    /// The VM→engine notification channel (`common.Message`). Sending
+    /// [`VmEvent::PendingTxs`](ava_vm::vm::VmEvent::PendingTxs) here drives the
+    /// running [`SnowmanEngine`](ava_engine::snowman::SnowmanEngine) to build,
+    /// issue, and (given votes) accept a block — the in-process equivalent of a
+    /// VM's `toEngine` channel. The caller keeps this to issue blocks through the
+    /// genuine engine path (M9.15 STEP (m)); the handler owns the receiver.
+    pub vm_tx: mpsc::Sender<VmEvent>,
     /// Carries the generic `V`/`S`/`M` parameters (the concrete engines moved
     /// into the type-erased `EngineManager` inside the handler).
     _vm: std::marker::PhantomData<(V, S, M)>,
@@ -723,7 +731,7 @@ where
     //     handler.start() immediately activates the bootstrapper
     //     (→ SendGetAcceptedFrontier to the beacons). Register its sink with the
     //     router (which owns the AdaptiveTimeoutManager).
-    let (handler, sink, _vm_tx) = ChainHandler::new(
+    let (handler, sink, vm_tx) = ChainHandler::new(
         engines,
         EngineState::Bootstrapping,
         1024,
@@ -739,6 +747,7 @@ where
         sink,
         handler,
         last_accepted_height,
+        vm_tx,
         _vm: std::marker::PhantomData,
     })
 }

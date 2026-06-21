@@ -522,6 +522,109 @@ async fn node_restart_resumes_persisted_tip_over_shared_base_db() {
     }
 }
 
+/// M9.15 STEP (m) — **engine-driven block issuance**. With the self-loopback
+/// installed, signalling [`VmEvent::PendingTxs`] on the VM→engine channel makes
+/// the running Snowman engine `build_block`, issue it, and — because the loopback
+/// closes the solo node's `k=1`/`β=1` poll (the engine's own `push_query` is
+/// delivered back as an inbound query, answered with self-`Chits`) — **accept**
+/// the block through the genuine consensus path. The chain tip advances from
+/// genesis (height 0) to height 1 with **no direct `accept()` on the VM**: the
+/// engine did it.
+///
+/// This is the property STEP (l) deferred: STEP (l) drove `build → verify →
+/// accept` directly on a bare `PlatformVm` precisely because, without the
+/// loopback, a self-built block is built + issued but never voted, so it stays
+/// *processing* and the tip never advances. (Confirmed: flipping the loopback off
+/// makes this test time out at height 0.) Here the block reaches acceptance
+/// through the real handler → engine → poll machinery.
+#[tokio::test]
+async fn engine_accepts_self_built_block_via_loopback() {
+    use std::sync::Arc;
+
+    use ava_database::{DynDatabase, MemDb};
+    use ava_node::init::chain_manager::PLATFORM_CHAIN_ID;
+    use ava_types::id::Id;
+    use ava_vm::testutil::TestVm;
+    use ava_vm::vm::VmEvent;
+    use avalanchers::wiring::chains::boot_chain_with_loopback;
+
+    // A trivial VM whose `build_block` appends a child of the preferred tip; its
+    // shared accepted state is observable after the VM is moved into the chain.
+    let vm = TestVm::new();
+    let observer = vm.observer();
+    let base: Arc<dyn DynDatabase> = Arc::new(MemDb::new());
+
+    let handle = boot_chain_with_loopback(
+        1, // network_id
+        PLATFORM_CHAIN_ID,
+        ava_types::constants::PRIMARY_NETWORK_ID,
+        "P",
+        Id::EMPTY, // avax_asset_id — unused by TestVm
+        Id::EMPTY, // genesis_id — unused by TestVm (it seeds its own genesis)
+        vm,
+        Vec::new(), // TestVm ignores genesis bytes
+        Arc::clone(&base),
+    )
+    .await
+    .expect("boot a TestVm chain with the self-loopback installed");
+
+    // Solo node (empty beacons) short-circuits Bootstrapping → NormalOp.
+    let mut reached = false;
+    for _ in 0..200_000 {
+        if matches!(**handle.ctx.state.load(), EngineState::NormalOp) {
+            reached = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        reached,
+        "the solo engine reached NormalOp (last state: {:?})",
+        **handle.ctx.state.load()
+    );
+
+    // The tip is genesis (height 0) before any issuance.
+    assert_eq!(
+        observer.last_accepted_height(),
+        0,
+        "the chain tip is genesis before issuance"
+    );
+    let genesis_id = observer.last_accepted_id();
+
+    // Signal pending txs: the engine builds + issues + (via the loopback's
+    // self-chits) accepts a height-1 block.
+    handle
+        .vm_tx
+        .send(VmEvent::PendingTxs)
+        .await
+        .expect("signal PendingTxs to the running engine");
+
+    // Poll until the engine-accepted block advances the tip to height 1.
+    let mut advanced = false;
+    for _ in 0..2_000_000 {
+        if observer.last_accepted_height() == 1 {
+            advanced = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        advanced,
+        "the engine built, issued, and ACCEPTED a height-1 block through the \
+         loopback poll path (tip height: {})",
+        observer.last_accepted_height()
+    );
+    assert_ne!(
+        observer.last_accepted_id(),
+        genesis_id,
+        "the new tip is a freshly-built child block, not genesis"
+    );
+
+    // No leaked task: cancel and join cleanly.
+    handle.token.cancel();
+    handle.join.await.expect("handler task joined cleanly");
+}
+
 /// `--version` and `--help` keep working unchanged (the M0 invariant).
 #[test]
 fn version_and_help_still_work() {

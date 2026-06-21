@@ -86,3 +86,8 @@ libc = "0.2"
 [dev-dependencies]
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macros", "time", "signal" ] }
+# The engine-driven-issuance test (M9.15 STEP (m)) builds a funded synthetic
+# P-Chain genesis + a signed CreateSubnetTx spending it, mirroring the
+# `ava-reexecute` P-Chain leg; `ava-secp256k1fx` supplies the fx output/input
+# types (every other P-Chain crate it needs is already a regular dependency).
+ava-secp256k1fx = { path = "../ava-secp256k1fx" }
