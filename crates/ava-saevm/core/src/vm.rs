@@ -11,9 +11,13 @@
 //!
 //! # What this delivers vs. what is deferred
 //!
-//! `Initialize` is **deferred to M7.23** (the cchain harness supplies it — specs/11
-//! §5), so [`Vm::initialize`] returns a "not yet wired" error here; everything
-//! else in the consensus lifecycle is implemented. The C-Chain hook *bodies*
+//! `Initialize` on a [`Vm::new`]-constructed VM is a **no-op success** — the VM
+//! is already genesis-rooted at construction, so the standard consensus boot
+//! pipeline (`ava_chains::create_snowman_chain`) can drive it. The genesis-*bytes*
+//! → VM materialization path (parsing `genesis_bytes`/`db`/`config` into a fresh
+//! VM via the production seams) is still **deferred to the cchain harness**
+//! (M7.21/M7.26/M7.23 — specs/11 §5); everything else in the consensus lifecycle
+//! is implemented. The C-Chain hook *bodies*
 //! (M7.21) and the executor reactor loop (M7.26) are reached through two
 //! object-safe seams ([`BlockBuilderSeam`], [`ExecutorSeam`]) so the real wiring
 //! lands later without touching this lifecycle. The VM uses interior mutability
@@ -176,8 +180,12 @@ pub enum Error {
     /// Settlement failed (e.g. an ancestor could not be marked settled).
     #[error("settling: {0}")]
     Settle(String),
-    /// `Initialize` is supplied by the cchain harness (M7.23), not here.
-    #[error("initialize is deferred to the cchain harness (M7.23)")]
+    /// Reserved for the deferred genesis-*bytes* → VM materialization path
+    /// (parsing `genesis_bytes`/`db`/`config` into a fresh VM via the production
+    /// builder/executor seams), owned by the cchain harness (M7.21/M7.26/M7.23,
+    /// specs/11 §5). `initialize` on a [`Vm::new`]-constructed VM is a no-op
+    /// success (it is already genesis-rooted), so this is not currently returned.
+    #[error("initialize from genesis bytes is deferred to the cchain harness (M7.23)")]
     InitializeDeferred,
     /// A lifecycle invariant in `ava-saevm-blocks` was violated.
     #[error("block lifecycle: {0}")]
@@ -572,9 +580,21 @@ impl<B: BlockBuilderSeam, E: ExecutorSeam> BaseVm for Vm<B, E> {
         _fxs: Vec<Fx>,
         _app_sender: Arc<dyn AppSender>,
     ) -> VmResult<()> {
-        // Deferred to the cchain harness (M7.23) — specs/11 §5. The harness owns
-        // the db/genesis/hook wiring; the lifecycle methods above are complete.
-        Err(Error::InitializeDeferred.into())
+        // A `Vm` constructed via [`Vm::new`] is *already* initialized: genesis is
+        // seeded into the block store / height index, and the frontier +
+        // preference are rooted at it (see `Vm::new`). So when such an
+        // in-process VM is driven through the standard consensus boot pipeline
+        // (`ava_chains::create_snowman_chain`, which calls `initialize` then
+        // reads `last_accepted`/`get_block`), `initialize` is a no-op success —
+        // the genesis root the pipeline immediately queries is already present.
+        //
+        // The genesis-*bytes* → VM materialization path (parsing
+        // `genesis_bytes`/`db`/`config` into a fresh VM, i.e. the production
+        // builder/executor seams) is the deferred cchain-harness work
+        // (M7.21/M7.26/M7.23, specs/11 §5); a from-bytes VM is not constructed
+        // here. `_genesis_bytes`/`_db`/`_config_bytes` are therefore ignored:
+        // the VM owns its genesis from construction.
+        Ok(())
     }
 
     async fn set_state(&mut self, _token: &CancellationToken, state: EngineState) -> VmResult<()> {

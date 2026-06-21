@@ -66,6 +66,12 @@ pub fn evm_id() -> Id {
     Id::from(ava_genesis::chains::EVM_ID_BYTES)
 }
 
+/// The SAE VM's well-known ID (ACP-194; see [`ava_genesis::chains::saevm_id`]).
+#[must_use]
+pub fn saevm_id() -> Id {
+    Id::from(ava_genesis::chains::SAEVM_ID_BYTES)
+}
+
 /// A running chain's shutdown handles (17 §4.1/§4.4). A chain's `token` is a
 /// child of its subnet's token, which is a child of the node's root
 /// `subnet_token`; cancelling a subnet token therefore reaches only that

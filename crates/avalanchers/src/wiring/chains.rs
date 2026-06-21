@@ -924,6 +924,60 @@ where
     .await
 }
 
+/// **Test seam (M9.15 SAE in-process dispatch).** Boot a single in-process
+/// Snowman chain around a caller-supplied inner consensus VM through the same
+/// [`BootSpec`]/[`boot_chain`] core the startup-boot paths use, with the
+/// self-loopback **off** (`loopback: false`). As a solo node (empty beacons),
+/// the bootstrapper short-circuits `Bootstrapping → NormalOp` without any poll
+/// — so this seam proves an arbitrary [`ChainVm`](ava_vm::block::ChainVm)
+/// dispatches and runs to `NormalOp` through the genuine consensus pipeline, no
+/// issuance required.
+///
+/// This is the sibling of [`boot_chain_with_loopback`]; the two differ only in
+/// the `loopback` flag. It exists so the SAE in-process boot test can drive a
+/// real `ava_saevm_core::Vm` (wrapped via `ava_saevm_adaptor::convert`) through
+/// the same pipeline P/X/C use, without yet adding a production SAE dispatch
+/// branch (the production `BlockBuilderSeam`/`ExecutorSeam` wiring is
+/// M7.21/M7.26).
+///
+/// # Errors
+/// Propagates a VM-init / consensus-boot failure.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn boot_generic_chain<V>(
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    primary_alias: &'static str,
+    avax_asset_id: Id,
+    genesis_id: Id,
+    inner_vm: V,
+    genesis_bytes: Vec<u8>,
+    base_db: Arc<dyn DynDatabase>,
+) -> Result<PChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    boot_chain(
+        BootSpec {
+            network_id,
+            chain_id,
+            subnet_id,
+            primary_alias,
+            avax_asset_id,
+            genesis_id,
+            include_self_beacon: false,
+            loopback: false,
+            data_dir: None,
+        },
+        inner_vm,
+        &genesis_bytes,
+        base_db,
+        CancellationToken::new(),
+    )
+    .await
+}
+
 /// The chain-identity + boot-mode inputs the generic [`boot_chain`] core needs;
 /// the VM, genesis bytes, and cancellation token are passed alongside.
 struct BootSpec {
@@ -1190,12 +1244,30 @@ pub async fn run_queued_chains_with_db(
             )
             .await?
         } else {
-            // SAE / unknown VM dispatch is the deferred half of the chains
-            // milestone.
+            // SAE (`saevm_id()`) and any unknown VM are not dispatched here yet.
+            //
+            // The in-process boot machinery itself is SAE-ready — a real
+            // `ava_saevm_core::Vm` wrapped via `ava_saevm_adaptor::convert`
+            // already runs to `NormalOp` through `boot_generic_chain` (see the
+            // `saevm_chain_boots_to_normalop` test). What is still missing for a
+            // *production* boot is:
+            //   1. no production `BlockBuilderSeam`/`ExecutorSeam` wiring exists
+            //      yet (the concrete seams are M7.21/M7.26; only the testutil
+            //      fakes can construct a live `Vm` today), and there is no
+            //      genesis-bytes → SAE `Vm` materialization
+            //      (`BaseVm::initialize` is a stubbed TODO), so we cannot build
+            //      a real SAE VM from a queued chain's `genesis_data`; and
+            //   2. the `local` network genesis queues no SAE chain (only X/C),
+            //      so on a solo `local` node this branch is unreachable in
+            //      practice — there is nothing to skip.
+            // Faking a production SAE boot here would be dishonest; the branch
+            // stays a warn until the seams + genesis materialization land.
             tracing::warn!(
                 chain_id = %params.id,
                 vm_id = %params.vm_id,
-                "skipping queued chain: VM dispatch not yet wired (SAE / unknown VM deferred)"
+                "skipping queued chain: SAE / unknown VM production dispatch not yet wired \
+                 (SAE seams M7.21/M7.26 + genesis materialization pending; no SAE chain in \
+                 `local` genesis ⇒ unreachable on a solo local node)"
             );
             continue;
         };
