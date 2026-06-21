@@ -1292,6 +1292,41 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   the live node-assembly boot path (replace the loopback/`RecordingSender`) + the two-binary `mixed_network` live arm
 >   (nightly/operator-gated). The sender's wire-out + timeout-registration are now both production-complete.
 
+> **STEP (q) — `OutboundSender` WIRED INTO THE `avalanchers` BOOT PATH; STEP (o)/(p)'s "wire into the live boot path"
+> frontier CLOSED (2026-06-22, ralph iteration, TDD; single-track `avalanchers`).** STEP (o)/(p) built + unit-tested the
+> production `OutboundSender` inside `ava-engine`; this step is the node-assembly wire-up — the chain-boot path can now
+> select the real ava-network-backed `Sender` instead of the in-process `RecordingSender`.
+> - **`crates/avalanchers/src/wiring/chains.rs`:** new additive `pub async fn boot_chain_over_network(chain_id, subnet_id,
+>   network: Arc<dyn ava_network::network::Network>, allower: Arc<dyn Allower>, inner_vm, genesis_bytes, base_db, token)
+>   -> Result<NetworkChainBootHandle>`. It drives the same `create_snowman_chain` pipeline as the existing `boot_chain`
+>   but the chain's `Sender` is `OutboundSender::new(network, allower, Arc::clone(&router) as Arc<dyn Router>, chain_id,
+>   subnet_id, timeout_config().initial_timeout)` — `router.as_ref()` still feeds `create_snowman_chain`, so the one
+>   `ChainRouter` both registers request timeouts (via the `OutboundSender`, STEP (p)) and routes inbound. The shared
+>   assembly body was factored into a private generic `boot_chain_with_sender<V, Snd, F>(.. sender: Arc<Snd>, router,
+>   clock, .., after_create: F)`; both `boot_chain` (RecordingSender, `after_create` = loopback-install) and
+>   `boot_chain_over_network` (OutboundSender, `after_create` = no-op) call it — **`boot_chain`/`PChainBootHandle`/
+>   `RecordingSender` are behavior-identical** (all existing tests green through the refactor). New lightweight
+>   `NetworkChainBootHandle` (`ctx`/`join`/`token`/`genesis_id`/`last_accepted_height`/`beacons`/`vm_tx`/`_sink`/
+>   `_data_dir`) has **no `sender` field** — the network path observes outbound traffic via the caller-held `Network`,
+>   not a recording stand-in.
+> - **Deps:** `avalanchers` gained `ava-network` (`[dependencies]`, the seam's signature) + `ava-network`/`ava-message`
+>   (`[dev-dependencies]`, the test's mock `Network` + wire-byte decode). Both already workspace members; root `Cargo.toml`
+>   untouched.
+> - **TDD:** new `crates/avalanchers/tests/outbound_sender_boot.rs::boot_over_network_carries_frontier_broadcast_out_to_the_network`
+>   boots a `TestVm` chain with `include_self_beacon: true` over a recording mock `Network` (ported from the STEP-(o)
+>   `ava-engine/tests/outbound_sender.rs` precedent), polls the mock's recorded sends (bounded non-blocking
+>   `tokio::time` loop) for the bootstrapper's `GetAcceptedFrontier`, decodes the `OutboundMessage` back
+>   (`MsgBuilder::parse_inbound`), and asserts op == `GetAcceptedFrontier` + subnet + the beacon (self) recipient set —
+>   proving the **production `OutboundSender`** (not the loopback/noop) carried the engine's outbound op to the
+>   `Network`. RED-confirmed (function/deps absent ⇒ E0432). Cleanly cancels + awaits the handler on teardown.
+> - **Verified (main tree, post-merge):** `cargo nextest run -p avalanchers` = **18/18** (new test + every pre-existing
+>   `boot_chain`/loopback/restart/dispatch test through the refactor), `cargo build -p avalanchers` + `cargo clippy -p
+>   avalanchers --all-targets -- -D warnings` + `cargo fmt --check` all clean. **★ Remaining M9.15 frontier:** only the
+>   two-binary `mixed_network` live arm (boot a real `ava_network::NetworkImpl` over TLS + dialer + real Go peers and
+>   replay the lockstep program) — nightly/operator-gated, needs a live Go node the sandbox can't run. The
+>   `OutboundSender`'s wire-out + timeout-registration AND its node-assembly wire-up are now all production-complete; what
+>   is left is purely the live two-binary *execution*.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
