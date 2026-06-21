@@ -140,6 +140,33 @@ pub trait ExecutorSeam: Send + Sync + 'static {
     fn enqueue(&self, block: &Arc<Block>) -> std::result::Result<(), BuildError>;
 }
 
+/// The opaque underlying error from a [`SettledBlockSource`] read. The concrete
+/// type is preserved through the chain (via [`Error::SettledRead`]) so a corrupt
+/// / failed DB read is never silently masked as a not-found miss — the Rust
+/// analogue of Go's `%v`→`%w` (specs/11 §4 upstream-delta, Go `84533ec5b1`,
+/// PR #5547).
+pub type SettledReadError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// A fallible, DB-backed source for *settled* blocks that have been evicted from
+/// the in-memory store (Go `settledBlockFromDB` / the `fromDB` reader behind
+/// `VM.GetBlock`). [`Vm::block_by_id`] consults it only on an in-memory miss.
+///
+/// The read is fallible by contract: a genuine absence is `Ok(None)` (maps to
+/// [`Error::NotFound`]), while any other failure (corrupt index, I/O error)
+/// returns `Err(_)` and MUST surface to the caller as [`Error::SettledRead`]
+/// rather than being swallowed as a miss. This is the seam Go's `TestBlockSources`
+/// `corrupted` case exercises; the production DB-backed reader (the settled-block
+/// store, M7.12/M7.24) plugs in here. A [`Vm::new`]-constructed VM has no source,
+/// so its lookups stay purely in-memory (no behaviour change).
+pub trait SettledBlockSource: Send + Sync + 'static {
+    /// Reads the settled block stored under `hash`.
+    ///
+    /// # Errors
+    /// Returns the underlying read error for any failure *other than* a genuine
+    /// absence (which is reported as `Ok(None)`).
+    fn settled_block(&self, hash: B256) -> std::result::Result<Option<SaeBlock>, SettledReadError>;
+}
+
 // ---------------------------------------------------------------------------
 // Error mapping
 // ---------------------------------------------------------------------------
@@ -155,6 +182,13 @@ pub enum Error {
     /// A block/height lookup missed (maps to `ava_vm::Error::NotFound`).
     #[error("not found")]
     NotFound,
+    /// A settled-block source (DB) read failed for a reason *other than* a
+    /// genuine absence. The underlying source error is preserved (the Rust
+    /// analogue of Go's `%v`→`%w`) so a corrupt/failed read surfaces to
+    /// consensus rather than being swallowed as [`Error::NotFound`]
+    /// (specs/11 §4 upstream-delta, Go `84533ec5b1`, PR #5547).
+    #[error("settled-block read failed: {0}")]
+    SettledRead(#[source] SettledReadError),
     /// The block's declared parent is not known to the VM.
     #[error("unknown parent {0:#x}")]
     UnknownParent(B256),
@@ -235,6 +269,10 @@ pub struct Vm<B: BlockBuilderSeam, E: ExecutorSeam> {
     builder: B,
     /// The executor seam (M7.26).
     executor: Arc<E>,
+    /// Optional DB-backed source for settled blocks evicted from `blocks`
+    /// (Go `settledBlockFromDB`). `None` for a [`Vm::new`]-constructed VM, whose
+    /// lookups stay purely in-memory. Consulted by [`Vm::block_by_id`] on a miss.
+    settled_source: Option<Arc<dyn SettledBlockSource>>,
     /// Injected wall-clock for the future-block bound at parse time (specs/24).
     now: fn() -> SystemTime,
 }
@@ -254,6 +292,31 @@ impl<B: BlockBuilderSeam, E: ExecutorSeam> Vm<B, E> {
         executor: Arc<E>,
         now: fn() -> SystemTime,
     ) -> Self {
+        Self::construct(genesis, builder, executor, now, None)
+    }
+
+    /// Constructs a VM rooted at `genesis` with a DB-backed [`SettledBlockSource`]
+    /// for settled blocks evicted from the in-memory store. Identical to
+    /// [`Vm::new`] except [`Vm::block_by_id`] falls through to `settled_source`
+    /// on an in-memory miss (Go's `VM.GetBlock` consulting `settledBlockFromDB`).
+    #[must_use]
+    pub fn with_settled_source(
+        genesis: &Arc<Block>,
+        builder: B,
+        executor: Arc<E>,
+        now: fn() -> SystemTime,
+        settled_source: Arc<dyn SettledBlockSource>,
+    ) -> Self {
+        Self::construct(genesis, builder, executor, now, Some(settled_source))
+    }
+
+    fn construct(
+        genesis: &Arc<Block>,
+        builder: B,
+        executor: Arc<E>,
+        now: fn() -> SystemTime,
+        settled_source: Option<Arc<dyn SettledBlockSource>>,
+    ) -> Self {
         let genesis_handle = SaeBlock::new(Arc::clone(genesis));
         let mut blocks = HashMap::new();
         blocks.insert(genesis.hash(), genesis_handle);
@@ -271,6 +334,7 @@ impl<B: BlockBuilderSeam, E: ExecutorSeam> Vm<B, E> {
             preference,
             builder,
             executor,
+            settled_source,
             now,
         }
     }
@@ -462,7 +526,22 @@ impl<B: BlockBuilderSeam, E: ExecutorSeam> Vm<B, E> {
     /// [`Error::NotFound`] if no such block is stored.
     pub fn block_by_id(&self, id: Id) -> Result<SaeBlock> {
         let hash = B256::from(*id.as_bytes());
-        self.lookup(hash).ok_or(Error::NotFound)
+        if let Some(handle) = self.lookup(hash) {
+            return Ok(handle);
+        }
+        // In-memory miss: consult the optional DB-backed settled-block source.
+        // Crucially, a *failed* read propagates as `Error::SettledRead` and is
+        // NEVER swallowed as `Error::NotFound`; only a genuine `Ok(None)` absence
+        // maps to the not-found sentinel (Go `VM.GetBlock` `return b, err`, the
+        // `84533ec5b1` / #5547 fix — see [`SettledBlockSource`]).
+        match &self.settled_source {
+            Some(source) => match source.settled_block(hash) {
+                Ok(Some(handle)) => Ok(handle),
+                Ok(None) => Err(Error::NotFound),
+                Err(e) => Err(Error::SettledRead(e)),
+            },
+            None => Err(Error::NotFound),
+        }
     }
 
     /// Parses an RLP block, returning a handle that caches the wire bytes (Go
