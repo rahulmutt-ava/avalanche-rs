@@ -2184,6 +2184,8 @@ dependencies = [
  "ava-engine",
  "ava-evm",
  "ava-genesis",
+ "ava-message",
+ "ava-network",
  "ava-node",
  "ava-platformvm",
  "ava-proposervm",

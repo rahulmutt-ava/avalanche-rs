@@ -35,6 +35,11 @@ serde_json = { workspace = true }
 # `TestVm` reused as the inner VM (no production no-op VM exists yet).
 ava-chains = { path = "../ava-chains" }
 ava-engine = { path = "../ava-engine" }
+# Production multi-node `Sender` wire-out (M9.15 STEP-q): `boot_chain_over_network`
+# builds the real ava-network-backed `OutboundSender` (engine `send_*` →
+# `proto/p2p` → `ava_network::network::Network::send`/`gossip`), replacing the
+# in-process `RecordingSender` for the networked case.
+ava-network = { path = "../ava-network" }
 ava-snow = { path = "../ava-snow" }
 ava-types = { path = "../ava-types" }
 ava-utils = { path = "../ava-utils" }
@@ -86,6 +91,13 @@ libc = "0.2"
 [dev-dependencies]
 serde_json = { workspace = true }
 tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macros", "time", "signal" ] }
+# Production `OutboundSender` boot test (M9.15 STEP-q): a recording mock
+# `Network` + an allow-all `Allower` observe the bootstrapper's frontier
+# broadcast carried out through the production sender, decoded back from the
+# `proto/p2p` wire bytes (`ava-network` is also a regular dependency above for
+# the boot entrypoint's signature).
+ava-network = { path = "../ava-network" }
+ava-message = { path = "../ava-message" }
 # The engine-driven-issuance test (M9.15 STEP (m)) builds a funded synthetic
 # P-Chain genesis + a signed CreateSubnetTx spending it, mirroring the
 # `ava-reexecute` P-Chain leg; `ava-secp256k1fx` supplies the fx output/input

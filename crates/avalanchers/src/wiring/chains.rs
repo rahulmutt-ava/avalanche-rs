@@ -37,7 +37,8 @@ use ava_chains::manager::{DynProbe, Factory, ProbeableVm, VmManager};
 use ava_crypto::staking;
 use ava_database::{DynDatabase, MemDb};
 use ava_engine::networking::handler::ChainHandlerSink;
-use ava_engine::networking::router::{ChainMessageSink, ChainRouter, InboundOp};
+use ava_engine::networking::router::{ChainMessageSink, ChainRouter, InboundOp, Router};
+use ava_engine::networking::sender::OutboundSender;
 use ava_engine::networking::timeout::{AdaptiveTimeoutConfig, AdaptiveTimeoutManager};
 use ava_proposervm::{BlockSigner, StakingIdentity};
 use ava_snow::snowball::Parameters;
@@ -998,12 +999,17 @@ struct BootSpec {
     data_dir: Option<tempfile::TempDir>,
 }
 
-/// Generic in-process chain boot: wires the network-facing loopback impls (the
-/// recording sender, no-op app sender, fixed single-validator state, real
-/// router over a clock-injected adaptive-timeout manager), drives `inner_vm`
-/// through the full [`create_snowman_chain`] pipeline under `spec`, starts the
-/// handler, and returns the [`PChainBootHandle`]. Shared by [`boot_pchain`] and
+/// Generic in-process chain boot over the in-process [`RecordingSender`]: wires
+/// the network-facing loopback impls (the recording sender, no-op app sender,
+/// fixed single-validator state, real router over a clock-injected
+/// adaptive-timeout manager), drives `inner_vm` through the full
+/// [`create_snowman_chain`] pipeline under `spec`, starts the handler, and
+/// returns the [`PChainBootHandle`]. Shared by [`boot_pchain`] and
 /// [`boot_xchain`] (M9.15 X/C dispatch); generic over the inner [`ChainVm`].
+///
+/// Delegates the shared assembly to [`boot_chain_with_sender`]; the only
+/// `RecordingSender`-specific step is the opt-in self-loopback install (M9.15
+/// STEP (m)) performed in the sender factory once the handler sink exists.
 async fn boot_chain<V>(
     spec: BootSpec,
     inner_vm: V,
@@ -1013,6 +1019,120 @@ async fn boot_chain<V>(
 ) -> Result<PChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
+{
+    let loopback = spec.loopback;
+    let data_dir = spec.data_dir;
+    let genesis_id = spec.genesis_id;
+    let recording = Arc::new(RecordingSender::default());
+
+    // The real router over a real adaptive-timeout manager (clock-injected;
+    // virtual time — no wall clock).
+    let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
+    let timeouts = Arc::new(AdaptiveTimeoutManager::new(
+        &timeout_config(),
+        Arc::clone(&clock),
+    )?);
+    let router = ChainRouter::new(timeouts);
+
+    let assembled = boot_chain_with_sender(
+        ChainAssemblySpec {
+            network_id: spec.network_id,
+            chain_id: spec.chain_id,
+            subnet_id: spec.subnet_id,
+            primary_alias: spec.primary_alias,
+            avax_asset_id: spec.avax_asset_id,
+            include_self_beacon: spec.include_self_beacon,
+        },
+        Arc::clone(&recording),
+        router,
+        clock,
+        inner_vm,
+        genesis_bytes,
+        base_db,
+        &token,
+        // Opt-in self-loopback: route the engine's own poll path (push/pull
+        // query + chits) back into this chain's handler as inbound ops from the
+        // self node, so a `k=1`/`β=1` poll on a self-built block self-resolves
+        // and the block is accepted through the genuine consensus path (M9.15
+        // STEP (m)). Installed before the handler starts; the startup-boot
+        // paths leave it off.
+        |node_id, sink| {
+            if loopback {
+                recording.install_loopback(node_id, sink.clone());
+            }
+        },
+    )
+    .await?;
+
+    Ok(PChainBootHandle {
+        ctx: assembled.ctx,
+        sender: recording,
+        join: assembled.join,
+        token,
+        genesis_id,
+        last_accepted_height: assembled.last_accepted_height,
+        beacons: assembled.beacons,
+        vm_tx: assembled.vm_tx,
+        _sink: assembled.sink,
+        _data_dir: data_dir,
+    })
+}
+
+/// The chain-identity + boot-mode inputs the [`boot_chain_with_sender`] core
+/// needs (the `Sender`-flavor-specific bits — loopback, on-disk data dir,
+/// genesis id — stay with the per-flavor boot function).
+struct ChainAssemblySpec {
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    primary_alias: &'static str,
+    avax_asset_id: Id,
+    include_self_beacon: bool,
+}
+
+/// The pieces a chain boot yields once the handler is started — shared by both
+/// the in-process [`RecordingSender`] path ([`boot_chain`]) and the production
+/// [`OutboundSender`] path ([`boot_chain_over_network`]).
+struct AssembledChain {
+    ctx: Arc<ava_snow::ConsensusContext>,
+    join: tokio::task::JoinHandle<()>,
+    last_accepted_height: u64,
+    beacons: Vec<NodeId>,
+    vm_tx: mpsc::Sender<ava_vm::vm::VmEvent>,
+    sink: ChainHandlerSink,
+}
+
+/// The shared in-process chain-assembly core, generic over the inner
+/// [`ChainVm`] **and** the [`Sender`](ava_engine::common::sender::Sender):
+/// wires the fixed single-validator state, no-op app sender, and the real
+/// [`ChainRouter`] over a clock-injected [`AdaptiveTimeoutManager`], drives
+/// `inner_vm` through the full [`create_snowman_chain`] pipeline, runs
+/// `after_create` (the loopback-install hook the [`RecordingSender`] path uses;
+/// a no-op for the production path) once the handler sink exists, starts the
+/// handler, and returns the [`AssembledChain`] pieces.
+///
+/// The caller supplies the already-built `sender` (a [`RecordingSender`] for the
+/// in-process path, an [`OutboundSender`] for the production multi-node path)
+/// and the `router`/`clock` (the `OutboundSender` needs the router at
+/// construction, so the caller owns its creation), so the only difference
+/// between the two boot flavors is the `Sender` and the (sender-specific)
+/// `after_create` hook.
+#[allow(clippy::too_many_arguments)]
+async fn boot_chain_with_sender<V, Snd, F>(
+    spec: ChainAssemblySpec,
+    sender: Arc<Snd>,
+    router: Arc<ChainRouter>,
+    clock: Arc<dyn Clock>,
+    inner_vm: V,
+    genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
+    token: &CancellationToken,
+    after_create: F,
+) -> Result<AssembledChain>
+where
+    V: ava_vm::block::ChainVm + 'static,
+    Snd: ava_engine::common::sender::Sender + 'static,
+    F: FnOnce(NodeId, &ChainHandlerSink),
 {
     let reg = Registry::new();
 
@@ -1038,15 +1158,6 @@ where
     );
     let validator_state = FixedState { set };
 
-    // The real router over a real adaptive-timeout manager (clock-injected;
-    // virtual time — no wall clock).
-    let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
-    let timeouts = Arc::new(AdaptiveTimeoutManager::new(
-        &timeout_config(),
-        Arc::clone(&clock),
-    )?);
-    let router = ChainRouter::new(timeouts);
-
     // A per-network ChainContext (network id + fork schedule from the chosen
     // network), so the VM initializes with the production identity surface.
     let chain_ctx = Arc::new(ava_snow::ChainContext {
@@ -1062,7 +1173,6 @@ where
         chain_data_dir: std::path::PathBuf::new(),
     });
 
-    let sender = Arc::new(RecordingSender::default());
     let app_sender: Arc<dyn AppSender> = Arc::new(NoopAppSender);
 
     // Frontier-agreement beacon set: the single self node (weight 1) when
@@ -1074,7 +1184,7 @@ where
     }
 
     let chain = create_snowman_chain(
-        &token,
+        token,
         spec.chain_id,
         spec.subnet_id,
         single_node_params(),
@@ -1104,31 +1214,166 @@ where
     let beacon_nodes: Vec<NodeId> = beacons.keys().copied().collect();
     let vm_tx = chain.vm_tx.clone();
     let last_accepted_height = chain.last_accepted_height;
+    let sink = chain.sink.clone();
 
-    // Opt-in self-loopback: route the engine's own poll path (push/pull query +
-    // chits) back into this chain's handler as inbound ops from the self node, so
-    // a `k=1`/`β=1` poll on a self-built block self-resolves and the block is
-    // accepted through the genuine consensus path (M9.15 STEP (m)). Installed
-    // before the handler starts; the startup-boot paths leave it off.
-    if spec.loopback {
-        sender.install_loopback(node_id, chain.sink.clone());
-    }
+    // Sender-specific post-create hook (the `RecordingSender` self-loopback
+    // install; a no-op for the production `OutboundSender`). Runs before the
+    // handler starts.
+    after_create(node_id, &chain.sink);
 
     // Start the handler task: it activates the initial (`Bootstrapping`) engine,
-    // which flips `ctx.state` and broadcasts `GetAcceptedFrontier`.
+    // which flips `ctx.state` and broadcasts `GetAcceptedFrontier` (through the
+    // supplied `Sender`).
     let join = chain.handler.start();
 
-    Ok(PChainBootHandle {
+    Ok(AssembledChain {
         ctx,
-        sender,
         join,
-        token,
-        genesis_id: spec.genesis_id,
         last_accepted_height,
         beacons: beacon_nodes,
         vm_tx,
-        _sink: chain.sink,
-        _data_dir: spec.data_dir,
+        sink,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Production multi-node chain boot (M9.15 STEP-q — real OutboundSender)
+// ---------------------------------------------------------------------------
+
+/// The handle returned by [`boot_chain_over_network`]: the observability +
+/// teardown surface for a chain booted with the **production** ava-network-backed
+/// [`OutboundSender`].
+///
+/// Unlike [`PChainBootHandle`] it carries **no `sender` field** — outbound
+/// traffic is observed at the caller-held [`ava_network::network::Network`]
+/// (the production seam), not at an in-process recording stand-in.
+pub struct NetworkChainBootHandle {
+    /// The shared consensus context — the observability handle for the engine
+    /// phase (`ctx.state`: `Initializing → Bootstrapping → NormalOp`).
+    pub ctx: Arc<ava_snow::ConsensusContext>,
+    /// The handler task; cancel [`Self::token`] then `await` it for a clean
+    /// (leak-free) shutdown.
+    pub join: tokio::task::JoinHandle<()>,
+    /// The handler's cancellation token (cancel to stop the handler task).
+    pub token: CancellationToken,
+    /// The chain's genesis block id, as supplied by the caller.
+    pub genesis_id: Id,
+    /// The height the consensus core was rooted at when this chain was created
+    /// — `0` for a fresh genesis tip, the persisted height for a node that
+    /// recovered an advanced tip from disk (read from
+    /// `vm.get_block(vm.last_accepted()).height()` at boot; M9.15 STEP (k)).
+    pub last_accepted_height: u64,
+    /// The bootstrap beacon node set (sorted), as addressed by the frontier
+    /// broadcast that the production [`OutboundSender`] carries out to the
+    /// [`ava_network::network::Network`].
+    pub beacons: Vec<NodeId>,
+    /// The VM→engine notification channel. Sending
+    /// [`VmEvent::PendingTxs`](ava_vm::vm::VmEvent::PendingTxs) drives the running
+    /// engine to build + issue a block — the in-process equivalent of a VM
+    /// signalling its `toEngine` channel.
+    pub vm_tx: mpsc::Sender<ava_vm::vm::VmEvent>,
+    /// The handler sink, kept alive for the handler's lifetime (dropping it
+    /// would unregister the chain from the router).
+    pub _sink: ChainHandlerSink,
+    /// The chain's on-disk scratch dir (e.g. a C-Chain Firewood state db), kept
+    /// alive for the booted chain's lifetime; dropping it would delete the state
+    /// db out from under the running VM. `None` for chains with no on-disk state.
+    pub _data_dir: Option<tempfile::TempDir>,
+}
+
+/// Boot one in-process Snowman chain whose [`Sender`](ava_engine::common::sender::Sender)
+/// is the **production** ava-network-backed
+/// [`OutboundSender`](ava_engine::networking::sender::OutboundSender) — the
+/// multi-node replacement for the in-process [`RecordingSender`] (M9.15 STEP-q).
+///
+/// Mirrors the [`boot_chain`] assembly (via the shared
+/// [`boot_chain_with_sender`] core) — fixed single-validator state, no-op app
+/// sender, the real [`ChainRouter`] over a clock-injected
+/// [`AdaptiveTimeoutManager`], the full [`create_snowman_chain`] pipeline — but
+/// the chain's `Sender` translates each engine `send_*` op into a `proto/p2p`
+/// wire message and dispatches it through `network` (`Network::send` / `gossip`),
+/// registering request ops with the router for timeout tracking. There is no
+/// loopback: in the multi-node case outbound ops go to real peers over the
+/// network, and inbound ops arrive through the router from those peers.
+///
+/// With `include_self_beacon: true` the bootstrapper broadcasts
+/// `GetAcceptedFrontier` to the beacon set through this sender right after the
+/// handler starts — the observable proof that the production sender carries the
+/// engine's outbound op out to the network.
+///
+/// # Errors
+/// Propagates a VM-init / consensus-construction / identity / timeout-manager
+/// failure from [`boot_chain_with_sender`].
+#[allow(clippy::too_many_arguments)]
+pub async fn boot_chain_over_network<V>(
+    chain_id: Id,
+    subnet_id: Id,
+    network: Arc<dyn ava_network::network::Network>,
+    allower: Arc<dyn ava_network::network::Allower>,
+    inner_vm: V,
+    genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
+    token: CancellationToken,
+) -> Result<NetworkChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    let genesis_id =
+        Id::from_slice(&ava_crypto::hashing::sha256(genesis_bytes)).unwrap_or(Id::EMPTY);
+
+    // The real router over a real adaptive-timeout manager; held as
+    // `Arc<ChainRouter>` so it can be both handed to the `OutboundSender`
+    // (`Arc<dyn Router>`) and passed to `create_snowman_chain` by reference
+    // (`router.as_ref()`). The request timeout (2s) is the configured initial
+    // adaptive timeout (`timeout_config().initial_timeout`).
+    let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
+    let timeouts = Arc::new(AdaptiveTimeoutManager::new(
+        &timeout_config(),
+        Arc::clone(&clock),
+    )?);
+    let router = ChainRouter::new(timeouts);
+
+    let sender = Arc::new(OutboundSender::new(
+        Arc::clone(&network),
+        allower,
+        Arc::clone(&router) as Arc<dyn Router>,
+        chain_id,
+        subnet_id,
+        timeout_config().initial_timeout,
+    ));
+
+    let assembled = boot_chain_with_sender(
+        ChainAssemblySpec {
+            network_id: ava_types::constants::LOCAL_ID,
+            chain_id,
+            subnet_id,
+            primary_alias: "network",
+            avax_asset_id: Id::EMPTY,
+            include_self_beacon: true,
+        },
+        sender,
+        router,
+        clock,
+        inner_vm,
+        genesis_bytes,
+        base_db,
+        &token,
+        // The production `OutboundSender` needs no post-create hook (no
+        // loopback); inbound ops arrive from real peers through the router.
+        |_node_id, _sink| {},
+    )
+    .await?;
+
+    Ok(NetworkChainBootHandle {
+        ctx: assembled.ctx,
+        join: assembled.join,
+        token,
+        genesis_id,
+        last_accepted_height: assembled.last_accepted_height,
+        beacons: assembled.beacons,
+        vm_tx: assembled.vm_tx,
+        _sink: assembled.sink,
+        _data_dir: None,
     })
 }
 
