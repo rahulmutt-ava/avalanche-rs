@@ -21,8 +21,11 @@ use ava_types::node_id::NodeId;
 use super::timeout::{AdaptiveTimeoutManager, RequestId};
 
 /// Numeric op tags used to synthesize the right `*Failed` op on timeout. These
-/// mirror the request ops that expect a response (Go `message.Op`).
-mod op {
+/// mirror the request ops that expect a response (Go `message.Op`). Public so
+/// the engine `Sender` (`OutboundSender`) can tag each outgoing request when it
+/// registers it with the router (see [`Router::register_request`]).
+pub mod op {
+    #![allow(missing_docs)]
     pub const GET: u8 = 1;
     pub const GET_ANCESTORS: u8 = 2;
     pub const GET_ACCEPTED_FRONTIER: u8 = 3;
@@ -223,8 +226,13 @@ pub trait Router: Send + Sync {
     async fn handle_inbound(&self, msg: InboundMessage);
 
     /// Register an outgoing request; on timeout the matching `*Failed` op is
-    /// synthesized into the handler.
-    async fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8);
+    /// synthesized into the handler. `op_tag` is one of the [`op`] constants.
+    ///
+    /// Synchronous (the timeout manager's lock holds no `.await`), so the
+    /// engine's synchronous `Sender` can register a request happens-before the
+    /// wire send returns — a fast response can never `remove` an entry the
+    /// registration has not yet inserted.
+    fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8);
 
     /// Whether the router is healthy (no chain is unknown / over its limit).
     fn health_check(&self) -> bool;
@@ -272,7 +280,7 @@ impl Router for ChainRouter {
         handler.push(msg.node, msg.op).await;
     }
 
-    async fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
+    fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
         let id = RequestId {
             node,
             chain,
@@ -294,7 +302,7 @@ impl Router for ChainRouter {
             }
         };
 
-        self.timeouts.put(id, true, Box::new(timeout_handler)).await;
+        self.timeouts.put(id, true, Box::new(timeout_handler));
     }
 
     fn health_check(&self) -> bool {
@@ -308,20 +316,19 @@ impl ChainRouter {
     /// Clear the outstanding-request registry entry on a matching response
     /// (engine-side, when a `Put`/`Chits`/etc. arrives). Cancels the timer so the
     /// `*Failed` op is not synthesized.
-    pub async fn on_response(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
-        self.timeouts
-            .remove(RequestId {
-                node,
-                chain,
-                request_id,
-                op: op_tag,
-            })
-            .await;
+    pub fn on_response(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
+        self.timeouts.remove(RequestId {
+            node,
+            chain,
+            request_id,
+            op: op_tag,
+        });
     }
 
     /// The configured request-registration timeout (for callers that want to set
     /// a wire deadline; `clock`-relative). Convenience over the timeout manager.
-    pub async fn current_timeout(&self) -> Duration {
-        self.timeouts.timeout_duration().await
+    #[must_use]
+    pub fn current_timeout(&self) -> Duration {
+        self.timeouts.timeout_duration()
     }
 }

@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ava_engine::common::sender::{SendConfig, Sender};
+use ava_engine::networking::ChainMessageSink;
+use ava_engine::networking::router::{InboundMessage, Router, op};
 use ava_engine::networking::sender::OutboundSender;
 use ava_message::codec::{MsgBuilder, OutboundMessage};
 use ava_message::ops::Op;
@@ -25,6 +27,34 @@ use ava_network::network::{
 };
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+
+/// A `Router` that records every `register_request` call (the only method the
+/// `OutboundSender` drives) and no-ops the rest.
+#[derive(Default)]
+struct RecordingRouter {
+    registered: Mutex<Vec<(NodeId, Id, u32, u8)>>,
+}
+
+#[async_trait::async_trait]
+impl Router for RecordingRouter {
+    fn add_chain(&self, _chain: Id, _handler: Arc<dyn ChainMessageSink>) {}
+    async fn handle_inbound(&self, _msg: InboundMessage) {}
+    fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
+        self.registered
+            .lock()
+            .unwrap()
+            .push((node, chain, request_id, op_tag));
+    }
+    fn health_check(&self) -> bool {
+        true
+    }
+}
+
+impl RecordingRouter {
+    fn registrations(&self) -> Vec<(NodeId, Id, u32, u8)> {
+        self.registered.lock().unwrap().clone()
+    }
+}
 
 /// One recorded outbound dispatch from the mock network.
 #[derive(Clone)]
@@ -123,16 +153,18 @@ fn node(b: u8) -> NodeId {
     NodeId::from_slice(&[b; 20]).unwrap()
 }
 
-fn harness() -> (Arc<MockNetwork>, OutboundSender) {
+fn harness() -> (Arc<MockNetwork>, Arc<RecordingRouter>, OutboundSender) {
     let net = Arc::new(MockNetwork::default());
+    let router = Arc::new(RecordingRouter::default());
     let sender = OutboundSender::new(
         net.clone(),
         Arc::new(AllowAll),
+        router.clone(),
         chain_id(),
         subnet_id(),
         TIMEOUT,
     );
-    (net, sender)
+    (net, router, sender)
 }
 
 /// Decode an outbound message's bytes back into its `p2p` oneof variant.
@@ -145,7 +177,7 @@ fn decode(msg: &OutboundMessage) -> p2p::message::Message {
 
 #[test]
 fn push_query_translates_to_wire_and_targets_all_nodes() {
-    let (net, sender) = harness();
+    let (net, _router, sender) = harness();
     let nodes: HashSet<NodeId> = [node(1), node(2)].into_iter().collect();
 
     sender.send_push_query(&nodes, 7, vec![0xAA, 0xBB], 42);
@@ -172,7 +204,7 @@ fn push_query_translates_to_wire_and_targets_all_nodes() {
 
 #[test]
 fn chits_translates_to_wire_and_targets_single_node() {
-    let (net, sender) = harness();
+    let (net, _router, sender) = harness();
     let preferred = Id::from_slice(&[1u8; 32]).unwrap();
     let preferred_at = Id::from_slice(&[2u8; 32]).unwrap();
     let accepted = Id::from_slice(&[3u8; 32]).unwrap();
@@ -207,7 +239,7 @@ fn chits_translates_to_wire_and_targets_single_node() {
 
 #[test]
 fn get_translates_to_wire() {
-    let (net, sender) = harness();
+    let (net, _router, sender) = harness();
     let container = Id::from_slice(&[4u8; 32]).unwrap();
 
     sender.send_get(node(8), 3, container);
@@ -233,7 +265,7 @@ fn get_translates_to_wire() {
 
 #[test]
 fn accepted_frontier_translates_to_wire() {
-    let (net, sender) = harness();
+    let (net, _router, sender) = harness();
     let container = Id::from_slice(&[6u8; 32]).unwrap();
 
     sender.send_accepted_frontier(node(2), 1, container);
@@ -253,7 +285,7 @@ fn accepted_frontier_translates_to_wire() {
 
 #[tokio::test]
 async fn app_gossip_goes_through_gossip_path() {
-    let (net, sender) = harness();
+    let (net, _router, sender) = harness();
     let cfg = SendConfig {
         validators: 4,
         ..Default::default()
@@ -276,7 +308,7 @@ async fn app_gossip_goes_through_gossip_path() {
 
 #[tokio::test]
 async fn app_request_targets_nodes_and_carries_deadline() {
-    let (net, sender) = harness();
+    let (net, _router, sender) = harness();
     let nodes: HashSet<NodeId> = [node(1)].into_iter().collect();
 
     sender
@@ -294,4 +326,71 @@ async fn app_request_targets_nodes_and_carries_deadline() {
     assert_eq!(r.request_id, 21, "request_id");
     assert_eq!(r.app_bytes.as_ref(), &[9, 9], "app_bytes");
     assert_eq!(r.deadline, TIMEOUT.as_nanos() as u64, "deadline");
+}
+
+#[test]
+fn request_ops_register_for_timeout_but_replies_do_not() {
+    let (_net, router, sender) = harness();
+    let cid = Id::from_slice(&[4u8; 32]).unwrap();
+
+    // Request ops (expect a response) must register.
+    sender.send_get(node(8), 3, cid);
+    sender.send_get_ancestors(node(8), 4, cid);
+    sender.send_get_accepted_frontier(&[node(1)].into_iter().collect(), 5);
+    // A multi-recipient query registers one timeout PER recipient.
+    let query_nodes: HashSet<NodeId> = [node(1), node(2)].into_iter().collect();
+    sender.send_pull_query(&query_nodes, 9, cid, 1);
+
+    // Reply ops (expect no response) must NOT register.
+    sender.send_put(node(8), 3, vec![1]);
+    sender.send_accepted_frontier(node(2), 1, cid);
+    sender.send_chits(node(5), 11, cid, cid, cid, 1);
+
+    let regs = router.registrations();
+    assert_eq!(
+        regs.len(),
+        5,
+        "get + get_ancestors + frontier + 2 query recipients; no replies"
+    );
+    assert!(
+        regs.iter().all(|(_, chain, _, _)| *chain == chain_id()),
+        "every registration is under this chain"
+    );
+    assert!(
+        regs.contains(&(node(8), chain_id(), 3, op::GET)),
+        "send_get registered"
+    );
+    assert!(
+        regs.contains(&(node(8), chain_id(), 4, op::GET_ANCESTORS)),
+        "send_get_ancestors registered"
+    );
+    assert!(
+        regs.contains(&(node(1), chain_id(), 5, op::GET_ACCEPTED_FRONTIER)),
+        "send_get_accepted_frontier registered"
+    );
+    assert!(
+        regs.contains(&(node(1), chain_id(), 9, op::QUERY)),
+        "pull_query registered for node 1"
+    );
+    assert!(
+        regs.contains(&(node(2), chain_id(), 9, op::QUERY)),
+        "pull_query registered for node 2"
+    );
+}
+
+#[tokio::test]
+async fn app_request_registers_for_timeout() {
+    let (_net, router, sender) = harness();
+    let nodes: HashSet<NodeId> = [node(1)].into_iter().collect();
+
+    sender
+        .send_app_request(&nodes, 21, vec![9, 9])
+        .await
+        .expect("send_app_request");
+
+    assert_eq!(
+        router.registrations(),
+        vec![(node(1), chain_id(), 21, op::APP_REQUEST)],
+        "app_request registers exactly one timeout"
+    );
 }

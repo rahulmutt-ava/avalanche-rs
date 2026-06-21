@@ -21,10 +21,10 @@
 #![allow(clippy::float_arithmetic)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -270,17 +270,22 @@ impl AdaptiveTimeoutManager {
     }
 
     /// Returns the current network timeout duration.
-    pub async fn timeout_duration(&self) -> Duration {
-        self.state.lock().await.current_timeout
+    ///
+    /// Synchronous: the critical section holds no `.await`, so the manager uses
+    /// a [`std::sync::Mutex`]. This lets the (synchronous) engine `Sender`
+    /// register requests without an async bridge.
+    #[must_use]
+    pub fn timeout_duration(&self) -> Duration {
+        lock(&self.state).current_timeout
     }
 
     /// Register a timeout for `id`. If it is not [`remove`](Self::remove)d before
     /// the deadline, `handler` is invoked. `measure_latency` controls whether a
     /// response/timeout for this request feeds the latency average.
-    pub async fn put(&self, id: RequestId, measure_latency: bool, handler: TimeoutHandler) {
+    pub fn put(&self, id: RequestId, measure_latency: bool, handler: TimeoutHandler) {
         let now = self.clock.monotonic();
         {
-            let mut st = self.state.lock().await;
+            let mut st = lock(&self.state);
             // Replace any existing timeout with the same id (no latency observed).
             st.pending.remove(&id);
             let duration = st.current_timeout;
@@ -301,10 +306,10 @@ impl AdaptiveTimeoutManager {
 
     /// Remove the timeout associated with `id`; its handler will not fire. If the
     /// request measured latency, the observed response time updates the average.
-    pub async fn remove(&self, id: RequestId) {
+    pub fn remove(&self, id: RequestId) {
         let now = self.clock.monotonic();
         {
-            let mut st = self.state.lock().await;
+            let mut st = lock(&self.state);
             if let Some(t) = st.pending.remove(&id)
                 && t.measure_latency
             {
@@ -318,9 +323,9 @@ impl AdaptiveTimeoutManager {
 
     /// Manually register a response latency (e.g. to pretend a benched validator
     /// timed out without sending it a request). Mirrors Go `ObserveLatency`.
-    pub async fn observe_latency(&self, latency: Duration) {
+    pub fn observe_latency(&self, latency: Duration) {
         let now = self.clock.monotonic();
-        self.state.lock().await.observe_latency(latency, now);
+        lock(&self.state).observe_latency(latency, now);
     }
 
     /// Stop the dispatch task. Idempotent.
@@ -346,7 +351,7 @@ async fn dispatch_loop(
     loop {
         // Compute the next deadline.
         let next = {
-            let st = state.lock().await;
+            let st = lock(&state);
             st.pending.values().map(|t| t.deadline).min()
         };
 
@@ -366,18 +371,25 @@ async fn dispatch_loop(
                 continue;
             }
             () = sleep_fut => {
-                fire_expired(&state, &clock).await;
+                fire_expired(&state, &clock);
             }
         }
     }
 }
 
+/// Lock the manager state, recovering the guard on poison (a panic while a
+/// timeout was registered must not wedge the manager — timeouts affect only
+/// liveness, never safety).
+fn lock(state: &Mutex<ManagerState>) -> MutexGuard<'_, ManagerState> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Pop and fire every timeout whose deadline is at or before `now`.
-async fn fire_expired(state: &Arc<Mutex<ManagerState>>, clock: &Arc<dyn Clock>) {
+fn fire_expired(state: &Arc<Mutex<ManagerState>>, clock: &Arc<dyn Clock>) {
     loop {
         let now = clock.monotonic();
         let fired = {
-            let mut st = state.lock().await;
+            let mut st = lock(state);
             // Find the earliest expired entry.
             let expired = st
                 .pending

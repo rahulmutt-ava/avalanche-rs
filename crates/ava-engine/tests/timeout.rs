@@ -53,10 +53,9 @@ async fn deadline_fires_after_timeout() {
         Box::new(move || {
             fired_cl.fetch_add(1, Ordering::SeqCst);
         }),
-    )
-    .await;
+    );
 
-    let initial = mgr.timeout_duration().await;
+    let initial = mgr.timeout_duration();
     assert_eq!(initial, Duration::from_secs(2));
 
     // Advance both axes past the deadline (2s).
@@ -73,7 +72,7 @@ async fn deadline_fires_after_timeout() {
 
     // After a timeout the manager observes the full duration as latency, so the
     // current timeout should be >= the minimum and reflect the penalty.
-    let after = mgr.timeout_duration().await;
+    let after = mgr.timeout_duration();
     assert!(after >= config.minimum_timeout);
 
     mgr.stop();
@@ -95,13 +94,13 @@ async fn response_shortens_timeout() {
     let mgr = AdaptiveTimeoutManager::new(&config, clock_arc).unwrap();
 
     let id = req(2);
-    mgr.put(id, true, Box::new(|| {})).await;
+    mgr.put(id, true, Box::new(|| {}));
 
     // Respond after only 10ms — well below the 5s initial timeout.
     clock.advance(Duration::from_millis(10));
-    mgr.remove(id).await;
+    mgr.remove(id);
 
-    let after = mgr.timeout_duration().await;
+    let after = mgr.timeout_duration();
     assert!(
         after < config.initial_timeout,
         "fast response should shorten timeout: {after:?}"

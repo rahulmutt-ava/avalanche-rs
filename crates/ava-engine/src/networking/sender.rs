@@ -27,16 +27,21 @@
 //! matching `MsgBuilder::parse_inbound`). [`OutboundSender`] writes the
 //! configured `request_timeout` into every request op.
 //!
-//! ## Deferred (follow-up)
+//! ## Timeout registration
 //!
-//! Registering each outgoing request with the [`crate::networking::timeout`]
-//! `AdaptiveTimeoutManager` (so a `*Failed` handler callback fires when a peer
-//! does not respond) is **not** wired here yet: the engine [`Sender`] request
-//! methods are synchronous (`fn`, fire-and-forget, matching Go), but this
-//! port's timeout manager registration (`put`/`remove`) is `async`. Bridging
-//! the two needs an async seam (e.g. a request-registration channel drained by
-//! the router task) and is a documented follow-up. The on-wire deadline — what
-//! peers use to expire the request — is already correct.
+//! Every outgoing **request** op (the ops that expect a response: `Get`,
+//! `GetAncestors`, the accepted / state-summary frontier fetches, `PushQuery` /
+//! `PullQuery`, and `AppRequest`) is registered with the [`Router`] before the
+//! wire send, so the matching `*Failed` op is synthesized into the chain
+//! handler if no peer responds by the deadline (Go `sender` + `timeout.Manager`).
+//! For multi-recipient requests one timeout is registered **per recipient**
+//! (each `RequestId` carries the node). **Reply** ops (`Put`, `Ancestors`,
+//! `Chits`, `AppResponse`, …) are not registered — they expect no response.
+//!
+//! Registration is synchronous and happens-before the wire send: the timeout
+//! manager uses a [`std::sync::Mutex`] (its critical section holds no `.await`),
+//! so a fast response can never `remove` a pending entry the registration has
+//! not yet inserted.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -52,6 +57,7 @@ use ava_types::node_id::NodeId;
 
 use crate::common::sender::{SendConfig, Sender};
 use crate::error::Result;
+use crate::networking::router::{Router, op};
 
 /// The concrete [`Sender`]: translate engine ops into `proto/p2p` wire
 /// messages and dispatch them through an [`ava_network::network::Network`].
@@ -63,6 +69,9 @@ pub struct OutboundSender {
     /// The subnet membership filter applied on every send (primary network =
     /// allow-all).
     allower: Arc<dyn Allower>,
+    /// The router, used to register each outgoing request for timeout tracking
+    /// (so a `*Failed` op is synthesized on a non-response).
+    router: Arc<dyn Router>,
     /// The proto3 marshaler. Cheap to clone; held by value.
     mb: MsgBuilder,
     /// This chain's id, stamped into every message.
@@ -84,6 +93,7 @@ impl OutboundSender {
     pub fn new(
         network: Arc<dyn Network>,
         allower: Arc<dyn Allower>,
+        router: Arc<dyn Router>,
         chain_id: Id,
         subnet_id: Id,
         request_timeout: Duration,
@@ -91,6 +101,7 @@ impl OutboundSender {
         Self {
             network,
             allower,
+            router,
             mb: MsgBuilder::default(),
             chain_id,
             subnet_id,
@@ -102,6 +113,15 @@ impl OutboundSender {
     /// The request timeout as relative nanoseconds, saturating on overflow.
     fn deadline_nanos(&self) -> u64 {
         u64::try_from(self.request_timeout.as_nanos()).unwrap_or(u64::MAX)
+    }
+
+    /// Register an outgoing `op_tag` request to each of `nodes` for timeout
+    /// tracking (one [`crate::networking::timeout::RequestId`] per recipient).
+    fn register(&self, nodes: &HashSet<NodeId>, request_id: u32, op_tag: u8) {
+        for &node in nodes {
+            self.router
+                .register_request(node, self.chain_id, request_id, op_tag);
+        }
     }
 
     fn chain_bytes(&self) -> bytes::Bytes {
@@ -175,6 +195,7 @@ impl Sender for OutboundSender {
     // --- Frontier / accepted (bootstrap) -----------------------------------
 
     fn send_get_state_summary_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
+        self.register(nodes, req, op::GET_STATE_SUMMARY_FRONTIER);
         self.send_to(
             p2p::message::Message::GetStateSummaryFrontier(p2p::GetStateSummaryFrontier {
                 chain_id: self.chain_bytes(),
@@ -197,6 +218,7 @@ impl Sender for OutboundSender {
     }
 
     fn send_get_accepted_state_summary(&self, nodes: &HashSet<NodeId>, req: u32, heights: &[u64]) {
+        self.register(nodes, req, op::GET_ACCEPTED_STATE_SUMMARY);
         self.send_to(
             p2p::message::Message::GetAcceptedStateSummary(p2p::GetAcceptedStateSummary {
                 chain_id: self.chain_bytes(),
@@ -220,6 +242,7 @@ impl Sender for OutboundSender {
     }
 
     fn send_get_accepted_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
+        self.register(nodes, req, op::GET_ACCEPTED_FRONTIER);
         self.send_to(
             p2p::message::Message::GetAcceptedFrontier(p2p::GetAcceptedFrontier {
                 chain_id: self.chain_bytes(),
@@ -242,6 +265,7 @@ impl Sender for OutboundSender {
     }
 
     fn send_get_accepted(&self, nodes: &HashSet<NodeId>, req: u32, ids: &[Id]) {
+        self.register(nodes, req, op::GET_ACCEPTED);
         self.send_to(
             p2p::message::Message::GetAccepted(p2p::GetAccepted {
                 chain_id: self.chain_bytes(),
@@ -267,6 +291,8 @@ impl Sender for OutboundSender {
     // --- Fetch -------------------------------------------------------------
 
     fn send_get(&self, node: NodeId, req: u32, container_id: Id) {
+        self.router
+            .register_request(node, self.chain_id, req, op::GET);
         self.send_to(
             p2p::message::Message::Get(p2p::Get {
                 chain_id: self.chain_bytes(),
@@ -279,6 +305,8 @@ impl Sender for OutboundSender {
     }
 
     fn send_get_ancestors(&self, node: NodeId, req: u32, container_id: Id) {
+        self.router
+            .register_request(node, self.chain_id, req, op::GET_ANCESTORS);
         self.send_to(
             p2p::message::Message::GetAncestors(p2p::GetAncestors {
                 chain_id: self.chain_bytes(),
@@ -324,6 +352,7 @@ impl Sender for OutboundSender {
         container: Vec<u8>,
         requested_height: u64,
     ) {
+        self.register(nodes, req, op::QUERY);
         self.send_to(
             p2p::message::Message::PushQuery(p2p::PushQuery {
                 chain_id: self.chain_bytes(),
@@ -343,6 +372,7 @@ impl Sender for OutboundSender {
         container_id: Id,
         requested_height: u64,
     ) {
+        self.register(nodes, req, op::QUERY);
         self.send_to(
             p2p::message::Message::PullQuery(p2p::PullQuery {
                 chain_id: self.chain_bytes(),
@@ -385,6 +415,7 @@ impl Sender for OutboundSender {
         req: u32,
         bytes: Vec<u8>,
     ) -> Result<()> {
+        self.register(nodes, req, op::APP_REQUEST);
         let m = p2p::message::Message::AppRequest(p2p::AppRequest {
             chain_id: self.chain_bytes(),
             request_id: req,

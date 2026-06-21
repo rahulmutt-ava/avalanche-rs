@@ -119,9 +119,7 @@ async fn timeout_synthesizes_failed() {
     let node = NodeId::from([2u8; 20]);
 
     // Register an outbound Get; it expects a Put response with request_id 42.
-    router
-        .register_request(node, chain_a(), 42, InboundOp::failed_kind_for_get())
-        .await;
+    router.register_request(node, chain_a(), 42, InboundOp::failed_kind_for_get());
 
     // No response arrives; advance past the deadline.
     clock.advance(Duration::from_secs(3));

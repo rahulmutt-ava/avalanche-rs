@@ -1265,6 +1265,33 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   live node-assembly boot path (replacing the loopback/`RecordingSender`) + the timeout-registration seam + the
 >   two-binary `mixed_network` live arm (nightly/operator-gated).
 
+> **STEP (p) — `OutboundSender` request-timeout registration; STEP (o)'s deferred seam CLOSED (2026-06-21, ralph
+> iteration, TDD; single-track `ava-engine`).** The `OutboundSender` now registers every outgoing **request** op with
+> the `Router` so the matching `*Failed` op is synthesized into the chain handler on a non-response — the recovery
+> signal the bootstrap/query engines depend on (Go `sender` + `timeout.Manager`). STEP (o)'s deferred "async-bridge"
+> note is resolved by removing the async-ness at its source rather than bridging it:
+> - **`ava-engine` (`networking/timeout.rs`):** the `AdaptiveTimeoutManager` held its `state` behind a
+>   `tokio::sync::Mutex`, but **no critical section holds an `.await`** — so it was the wrong tool. Switched to
+>   `std::sync::Mutex`; `put`/`remove`/`timeout_duration`/`observe_latency` are now **synchronous** `fn` (poison-tolerant
+>   `lock()` helper, no `unwrap`/`expect`). `dispatch_loop`/`fire_expired` use the sync lock. **This makes registration
+>   race-free:** a sync `register_request` happens-before the wire send returns, so a fast response can never `remove`
+>   an entry the registration has not yet inserted (the exact bug a fire-and-forget `tokio::spawn(put)` would have had).
+> - **`ava-engine` (`networking/router.rs`):** `Router::register_request` (trait + impl), `ChainRouter::on_response`,
+>   and `current_timeout` drop `async` (they only awaited the now-sync timeout-manager calls). The request op-tag
+>   constants (`mod op`) are now `pub` so the `OutboundSender` can tag each request.
+> - **`ava-engine` (`networking/sender.rs`):** `OutboundSender::new` gains an `Arc<dyn Router>`; each request op
+>   (`Get`, `GetAncestors`, `GetAcceptedFrontier`/`GetAccepted`, `GetStateSummaryFrontier`/`GetAcceptedStateSummary`,
+>   `PushQuery`/`PullQuery`, `AppRequest`) calls `router.register_request(node, chain, request_id, op_tag)` **before**
+>   the wire send — one registration **per recipient** for the multi-node ops. Reply ops register nothing.
+> - **TDD:** two new tests in `tests/outbound_sender.rs` — `request_ops_register_for_timeout_but_replies_do_not` (a
+>   recording `Router` proves exactly the request ops register, multi-recipient queries register per-node, and replies
+>   register nothing) and `app_request_registers_for_timeout`. The existing timeout/router tests stay green after the
+>   sync-ification (dropping `.await`). One cross-crate impl updated (`ava-chains/tests/pipeline.rs` test `Router`).
+>   Verified: `ava-engine` **42/42** (8 outbound_sender), `ava-chains` 7/7, clippy `--all-targets -D warnings` + fmt
+>   clean, full workspace build green. **★ Remaining M9.15 frontier:** wiring `OutboundSender` (with its `Router`) into
+>   the live node-assembly boot path (replace the loopback/`RecordingSender`) + the two-binary `mixed_network` live arm
+>   (nightly/operator-gated). The sender's wire-out + timeout-registration are now both production-complete.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
