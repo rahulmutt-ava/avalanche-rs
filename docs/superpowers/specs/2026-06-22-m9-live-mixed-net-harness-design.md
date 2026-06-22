@@ -163,6 +163,22 @@ uses a fixed interval + deadline; no unbounded loops.
 - Run the live `mixed_network` arm against the real binaries and show it green,
   built up through the rungs.
 
+## As-built gap (2026-06-22)
+
+The substrate (bring-up + RPC driver + observation) was built and exercised
+against the real binaries. The live arm reached: **Go beacon healthy + Rust
+follower boots**, then the follower loops a TLS-1.3 mutual-auth handshake against
+the beacon without completing peer establishment (Go never registers the peer),
+so bootstrap never starts and `await_bootstrapped` times out. Two interop gaps
+were fixed harness-side to get that far — `avalanchers` rejects the RSA local
+staker keys Go uses (only ECDSA-P256 PKCS#8), so the non-validating follower uses
+a generated ECDSA cert; and the release build lacks the optional `rocksdb`
+backend, so both nodes run `--db-type=memdb`. The remaining blocker — a real
+peer handshake + networked bootstrap from a live Go beacon in standalone
+`avalanchers` — is avalanchego-side production work, not a harness task. The arm
+is left correct and nightly-gated; it will pass once that gap closes. Recorded
+per "stop and record the gap honestly rather than faking the assert."
+
 ## Out of scope (documented follow-ups)
 
 - Symmetric mutual-validation topology (Approach C).

@@ -60,6 +60,7 @@ ava-saevm-proxytime = { path = "../../crates/ava-saevm/proxytime" }
 # A synchronous block self-settles, so its gas clock is never read by settlement;
 # the differential genesis uses the default config like the in-tree SAE tests.
 ava-saevm-gastime = { path = "../../crates/ava-saevm/gastime" }
+ava-crypto = { path = "../../crates/ava-crypto" }
 ava-evm-reth = { path = "../../crates/ava-evm-reth" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
@@ -74,7 +75,6 @@ tokio-util = { workspace = true }
 # transcript, so it links the networking stack as dev-deps.
 ava-network = { path = "../../crates/ava-network" }
 ava-message = { path = "../../crates/ava-message" }
-ava-crypto = { path = "../../crates/ava-crypto" }
 # The M5.22 `differential::xchain_issue_tx` determinism gate is a proptest dev
 # consumer of the `xchain` collector; M7.29 `differential::sae_recovery` reuses
 # proptest + pretty_assertions for the recorded Go-oracle recovery replay.
