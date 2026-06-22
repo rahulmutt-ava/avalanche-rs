@@ -132,78 +132,69 @@ mod differential {
     }
 }
 
-/// Live arm: bring up a small mixed Go+Rust network, replay the same seed-derived
-/// program across all nodes, and assert no fork / same tip across every chain.
+/// Live arm: bring up a small mixed Go+Rust network, drive a C-chain transfer,
+/// settle both nodes to the same height, and assert no fork / same tip.
 /// Gated behind the `live` feature + `#[ignore]`; needs `$AVALANCHEGO_PATH` (Go)
 /// and a built `avalanchers`. Never runs in CI / this sandbox.
 #[cfg(feature = "live")]
 #[tokio::test]
-#[ignore = "boots a live mixed Go+Rust tmpnet ($AVALANCHEGO_PATH + avalanchers) — nightly only"]
+#[ignore = "boots a live mixed Go+Rust net ($AVALANCHEGO_PATH + avalanchers) — nightly only"]
 async fn mixed_network() {
     use std::time::Duration;
 
-    use ava_differential::driver::LockstepDriver;
-    use ava_differential::network::{BinaryMix, Network, NetworkConfig};
+    use ava_differential::livenet::{await_same_c_height, drive_c_transfer};
+    use ava_differential::network::Network;
     use ava_differential::observation::Observation;
-    use ava_differential::program::Program;
 
-    // Skip gracefully if the Go oracle binary is not configured.
     if std::env::var("AVALANCHEGO_PATH").is_err() {
         eprintln!("AVALANCHEGO_PATH unset — skipping live mixed_network");
         return;
     }
 
-    // Operator handoff (specs/16 §5(2), specs/02 §11.3):
-    //
-    // 1. Boot a small mixed Go+Rust tmpnet from a seed-derived config so every
-    //    node shares the same genesis/config/identity derivation (§11.4).
-    let seed = 0x5EED_u64;
-    let cfg = NetworkConfig::deterministic(seed, 4);
-    let mix = BinaryMix::from_config(&cfg);
-    let net = Network::start(mix, &cfg)
+    // 1. Boot Go beacon + Rust follower; waits for the Rust node to bootstrap P/X/C from Go.
+    let net = Network::boot_mixed(0x5EED)
         .await
-        .expect("mixed Go+Rust network boots");
+        .expect("mixed Go+Rust net boots + bootstraps");
     net.await_all_connected(Duration::from_secs(60))
         .await
-        .expect("all nodes complete handshakes / exchange PeerLists");
+        .expect("Go and Rust complete the TLS handshake / exchange PeerLists");
 
-    // 2. Replay the same seed-derived program across the live net. Offline the
-    //    driver runs the in-process pipeline; the live replay issues the same
-    //    seed-derived program of Actions (IssueTx / ApiCall / AdvanceTime /
-    //    AwaitFinalization) against every node's RPC and waits for finalization.
-    let program = Program::from_seed(seed);
-    let _driver = LockstepDriver::new(seed);
-    // TODO(operator): drive `program` across `net.nodes()` via their RPC
-    // endpoints, mirroring the offline `replay_recorded` walk. The live driver
-    // wiring (issue tx / advance clock / await finalization over RPC) is the
-    // live-mode follow-up; the offline arm above proves the replay determinism.
+    let go_api = net.nodes().first().expect("go beacon").api_base.clone();
+    let rust_api = net.nodes().get(1).expect("rust follower").api_base.clone();
 
-    // 3. After each AwaitFinalization, collect + normalize an Observation from
-    //    EVERY node and assert all nodes (Go and Rust) agree: same per-chain
-    //    last-accepted id + height + state root + sorted validator set — i.e. no
-    //    fork / same tip across every chain (§11.3/§11.4).
-    let mut snapshots: Vec<Observation> = Vec::new();
-    for node in net.nodes() {
-        let obs = Observation::collect(&node.api_base)
-            .await
-            .expect("collect a normalized observation from a live node")
-            .normalized();
-        assert!(
-            !obs.fields.is_empty(),
-            "each node's observation is non-empty / comparable"
-        );
-        snapshots.push(obs);
-    }
-    // Every node must observe byte-identical finalized state (no fork, same tip).
-    if let Some(first) = snapshots.first() {
-        for (i, obs) in snapshots.iter().enumerate() {
-            assert_eq!(
-                first, obs,
-                "node {i} diverged from node 0 — fork detected across the mixed Go+Rust net"
-            );
-        }
-    }
-    let _ = program;
+    // 2. Record the pre-tx C height, drive one tx on the Go validator, settle.
+    let before = await_same_c_height(&go_api, &rust_api, 0, Duration::from_secs(30))
+        .await
+        .expect("nodes agree on a starting C height");
+    drive_c_transfer(&go_api)
+        .await
+        .expect("issue + mine one C-chain tx on the Go validator");
+    let after = await_same_c_height(
+        &go_api,
+        &rust_api,
+        before.saturating_add(1),
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("both nodes advance to the same C height after the tx");
+    assert!(
+        after > before,
+        "tx must advance the C-chain tip: {before} -> {after}"
+    );
+
+    // 3. No fork / same tip: full normalized observation must match across impls.
+    let go_obs = Observation::collect(&go_api)
+        .await
+        .expect("collect Go observation")
+        .normalized();
+    let rust_obs = Observation::collect(&rust_api)
+        .await
+        .expect("collect Rust observation")
+        .normalized();
+    assert_eq!(
+        go_obs, rust_obs,
+        "Go and Rust diverged — fork across the mixed net"
+    );
 
     net.shutdown().await;
 }
