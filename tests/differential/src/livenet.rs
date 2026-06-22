@@ -103,7 +103,13 @@ pub fn local_staker(idx: u8) -> Result<CertPair, NetworkError> {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{home}/avalanchego")
     });
-    let dir = PathBuf::from(&src).join("staking").join("local");
+    local_staker_in(std::path::Path::new(&src), idx)
+}
+
+/// Resolve staker `idx` under an explicit source root (the testable core of
+/// [`local_staker`]; kept private so the env-reading wrapper is the public API).
+fn local_staker_in(src: &std::path::Path, idx: u8) -> Result<CertPair, NetworkError> {
+    let dir = src.join("staking").join("local");
     let cert = dir.join(format!("staker{idx}.crt"));
     let key = dir.join(format!("staker{idx}.key"));
     if !cert.exists() || !key.exists() {
@@ -188,5 +194,15 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), 4, "ports are distinct");
         assert!(ports.iter().all(|&p| p != 0), "no zero ports");
+    }
+
+    #[test]
+    fn local_staker_missing_dir_errors_with_path() {
+        let err = local_staker_in(std::path::Path::new("/nonexistent-xyz"), 1)
+            .expect_err("missing cert dir must error");
+        assert!(
+            format!("{err}").contains("staker1"),
+            "error names the cert: {err}"
+        );
     }
 }
