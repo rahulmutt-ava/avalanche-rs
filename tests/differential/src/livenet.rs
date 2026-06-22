@@ -66,6 +66,11 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         format!("--data-dir={}", launch.data_dir.display()),
         format!("--staking-tls-cert-file={}", launch.cert_file.display()),
         format!("--staking-tls-key-file={}", launch.key_file.display()),
+        // In-memory DB on both nodes: the ephemeral test net keeps no state
+        // between runs, and the `avalanchers` release build ships without the
+        // optional `rocksdb` backend the default on-disk `leveldb` requires
+        // (M9.15 gap note). Go honors `--db-type=memdb` identically.
+        "--db-type=memdb".to_owned(),
     ];
     if let Some(b) = &launch.bootstrap {
         args.push(format!("--bootstrap-ips={}", b.ip));
@@ -126,6 +131,28 @@ fn local_staker_in(src: &std::path::Path, idx: u8) -> Result<CertPair, NetworkEr
             dir.display()
         )));
     }
+    Ok(CertPair { cert, key })
+}
+
+/// Generate a fresh ECDSA-P256 staking cert/key (the only format `avalanchers`
+/// supports) and write it under `dir` as `<name>.crt` / `<name>.key`.
+///
+/// The Go beacon must present a genesis initial-staker cert (RSA `staker1`), but
+/// the Rust follower is a non-validating bootstrapper, so its node-ID need not be
+/// a genesis staker. `avalanchers`' staking identity only loads ECDSA-P256 keys
+/// (`ava-network`'s `Identity::from_pem` rejects the RSA local staker keys that
+/// Go accepts — see the M9.15 gap note), so the follower gets a freshly generated
+/// ECDSA cert here rather than the RSA `staker2`.
+///
+/// # Errors
+/// Returns [`NetworkError::CertSource`] if cert generation or writing fails.
+pub fn generate_staker(dir: &std::path::Path, name: &str) -> Result<CertPair, NetworkError> {
+    let (cert_pem, key_pem) = ava_crypto::staking::new_cert_and_key_bytes()
+        .map_err(|e| NetworkError::CertSource(format!("generate staker cert: {e}")))?;
+    let cert = dir.join(format!("{name}.crt"));
+    let key = dir.join(format!("{name}.key"));
+    ava_crypto::staking::write_cert_and_key(&cert, &key, &cert_pem, &key_pem)
+        .map_err(|e| NetworkError::CertSource(format!("write staker cert: {e}")))?;
     Ok(CertPair { cert, key })
 }
 

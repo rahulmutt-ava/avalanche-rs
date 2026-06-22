@@ -502,7 +502,29 @@ fn spawn_role_node(
 }
 
 /// Tail the last `n` lines of a node log into a string (for timeout diagnostics).
+///
+/// `path` is the captured stdout/stderr file (`<data_dir>/node.log`), which holds
+/// the early pre-logger boot errors. Once a node initializes its file logger it
+/// writes to `<data_dir>/logs/main.log` instead, so we tail that too — otherwise
+/// a node that fails *after* logger init folds an empty tail into the error.
 fn log_tail(path: &std::path::Path, n: usize) -> String {
+    let mut out = tail_file(path, n);
+    if let Some(data_dir) = path.parent() {
+        let main_log = data_dir.join("logs").join("main.log");
+        let main_tail = tail_file(&main_log, n);
+        if !main_tail.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("--- logs/main.log ---\n");
+            out.push_str(&main_tail);
+        }
+    }
+    out
+}
+
+/// Tail the last `n` lines of a single file, or `""` if it cannot be read.
+fn tail_file(path: &std::path::Path, n: usize) -> String {
     match std::fs::read_to_string(path) {
         Ok(s) => {
             let lines: Vec<&str> = s.lines().collect();
@@ -577,7 +599,11 @@ impl Network {
             .copied()
             .ok_or_else(|| NetworkError::Timeout("free_ports returned < 4 ports".to_owned()))?;
         let go_staker = crate::livenet::local_staker(1)?;
-        let rust_staker = crate::livenet::local_staker(2)?;
+        // The Rust follower is a non-validating bootstrapper, so its node-ID need
+        // not be a genesis staker — and `avalanchers` only loads ECDSA-P256 keys
+        // (it rejects the RSA local staker keys; M9.15 gap). Give it a fresh
+        // ECDSA cert instead of the RSA `staker2`.
+        let rust_staker = crate::livenet::generate_staker(&work_dir, "rust-staker")?;
 
         // 1. Go beacon (no bootstrap peers — it is the genesis validator).
         let go_launch = crate::livenet::NodeLaunch {
