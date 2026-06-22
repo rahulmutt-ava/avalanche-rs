@@ -55,7 +55,6 @@ pub use xchain::run_program;
 // `tokio-util` are genuine lib deps used by `xchain`, so they are NOT listed.)
 #[cfg(test)]
 mod dev_dep_uses {
-    use ava_crypto as _;
     use ava_message as _;
     use ava_network as _;
     // `pretty_assertions` + `proptest` are consumed by the integration-test

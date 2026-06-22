@@ -10,6 +10,13 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 
+use ava_crypto::secp256k1::PrivateKey;
+use ava_evm_reth::{
+    Address, EvmSignature, RlpEncodable, SignableTransaction, TransactionSigned, TxKind, TxLegacy,
+    U256,
+};
+use serde_json::Value;
+
 use crate::network::NetworkError;
 use crate::rpc;
 
@@ -189,6 +196,209 @@ pub async fn await_bootstrapped(
     }
 }
 
+/// Local C-chain ID for the Avalanche `local` network (`--network-id=local`).
+const LOCAL_CHAIN_ID: u64 = 43_112;
+
+/// EIP-155 gas limit for a simple value transfer.
+const TRANSFER_GAS: u64 = 21_000;
+
+/// The well-known "ewoq" pre-funded private key on `local` networks.
+///
+/// Address: `0x8db97C7cEcE249c2b98bDC0226Cc4C2A57BF52FC`
+const EWOQ_KEY_HEX: &str = "56289e99c94b6912bfc12adc093c9b51124f0dc54ac7a766b2bc5ccf558d8027";
+
+/// Decide whether two polled C-chain heights mean "settled at the same tip".
+///
+/// Returns `true` iff both `a` and `b` are `Some(h)` with `h == a` and `h >= min`.
+#[must_use]
+pub fn settled(a: Option<u64>, b: Option<u64>, min: u64) -> bool {
+    matches!((a, b), (Some(x), Some(y)) if x == y && x >= min)
+}
+
+/// Parse an `eth_blockNumber` hex-quantity result (`"0x1a"`) into a height.
+#[must_use]
+pub fn parse_eth_block_number(v: &Value) -> Option<u64> {
+    let s = v.as_str()?.strip_prefix("0x")?;
+    u64::from_str_radix(s, 16).ok()
+}
+
+/// Poll both nodes' C-chain `eth_blockNumber` until equal, `>= min`, and stable
+/// across two consecutive polls (to guard against transient mid-advance reads).
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] if the heights do not converge within
+/// `within`, or if either `api_base` is not a valid `http://host:port` URL.
+pub async fn await_same_c_height(
+    a_api: &str,
+    b_api: &str,
+    min: u64,
+    within: std::time::Duration,
+) -> Result<u64, NetworkError> {
+    let ea = rpc::Endpoint::parse(a_api).map_err(|e| NetworkError::Timeout(format!("{e}")))?;
+    let eb = rpc::Endpoint::parse(b_api).map_err(|e| NetworkError::Timeout(format!("{e}")))?;
+    let deadline = std::time::Instant::now()
+        .checked_add(within)
+        .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+    let mut last_stable: Option<u64> = None;
+    loop {
+        let ha = rpc::call(&ea, "/ext/bc/C/rpc", "eth_blockNumber", "[]")
+            .await
+            .ok()
+            .and_then(|v| parse_eth_block_number(&v));
+        let hb = rpc::call(&eb, "/ext/bc/C/rpc", "eth_blockNumber", "[]")
+            .await
+            .ok()
+            .and_then(|v| parse_eth_block_number(&v));
+        if settled(ha, hb, min) {
+            let h = ha.unwrap_or(0);
+            if last_stable == Some(h) {
+                return Ok(h);
+            }
+            last_stable = Some(h);
+        } else {
+            last_stable = None;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(NetworkError::Timeout(format!(
+                "C-chain heights never settled >= {min} (a={ha:?} b={hb:?})"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Build, sign, and issue one C-chain legacy value transfer from the pre-funded
+/// "ewoq" key to itself against `go_api`'s C-chain RPC endpoint, then poll
+/// `eth_getTransactionReceipt` until the tx is mined.
+///
+/// Vehicle: reth/alloy primitives via `ava-evm-reth` for tx construction +
+/// RLP encoding; `ava-crypto` secp256k1 for EIP-155 signing.  The signing
+/// pattern mirrors `ava-evm/tests/evm_factory.rs::sign_legacy`.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] on any RPC failure, parse error, or if
+/// the receipt is not observed within 60 s.
+pub async fn drive_c_transfer(go_api: &str) -> Result<(), NetworkError> {
+    let ep = rpc::Endpoint::parse(go_api)
+        .map_err(|e| NetworkError::Timeout(format!("drive_c_transfer: bad url: {e}")))?;
+
+    // 1. Fetch the current nonce for the ewoq address.
+    let ewoq_addr = {
+        let key = ewoq_key()?;
+        Address::from(key.public_key().eth_address())
+    };
+    let nonce: u64 = {
+        let addr_hex = format!("{ewoq_addr:?}");
+        let params = format!(r#"["{addr_hex}","latest"]"#);
+        let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionCount", &params)
+            .await
+            .map_err(|e| NetworkError::Timeout(format!("eth_getTransactionCount: {e}")))?;
+        let s = v
+            .as_str()
+            .and_then(|s| s.strip_prefix("0x"))
+            .ok_or_else(|| {
+                NetworkError::Timeout("eth_getTransactionCount: unexpected result shape".to_owned())
+            })?;
+        u64::from_str_radix(s, 16)
+            .map_err(|e| NetworkError::Timeout(format!("nonce parse: {e}")))?
+    };
+
+    // 2. Fetch the current gas price so the tx is priced correctly.
+    let gas_price: u128 = {
+        let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_gasPrice", "[]")
+            .await
+            .map_err(|e| NetworkError::Timeout(format!("eth_gasPrice: {e}")))?;
+        let s = v
+            .as_str()
+            .and_then(|s| s.strip_prefix("0x"))
+            .ok_or_else(|| {
+                NetworkError::Timeout("eth_gasPrice: unexpected result shape".to_owned())
+            })?;
+        // If gas price is zero (pre-AP3 genesis), use a nominal 1 nAVAX.
+        let raw = u128::from_str_radix(s, 16)
+            .map_err(|e| NetworkError::Timeout(format!("gas price parse: {e}")))?;
+        if raw == 0 { 1_000_000_000 } else { raw }
+    };
+
+    // 3. Build and sign a legacy self-transfer (value=0; a no-op that still
+    //    produces a finalized block when mined).
+    let raw_tx = build_signed_raw_tx(nonce, gas_price, ewoq_addr)?;
+
+    // 4. Issue via eth_sendRawTransaction.
+    let tx_hash: String = {
+        let hex = format!("0x{}", hex::encode(&raw_tx));
+        let params = format!(r#"["{hex}"]"#);
+        let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_sendRawTransaction", &params)
+            .await
+            .map_err(|e| NetworkError::Timeout(format!("eth_sendRawTransaction: {e}")))?;
+        v.as_str().map(str::to_owned).ok_or_else(|| {
+            NetworkError::Timeout("eth_sendRawTransaction: expected string tx hash".to_owned())
+        })?
+    };
+
+    // 5. Poll eth_getTransactionReceipt until the tx is mined (up to 60 s).
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(60))
+        .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+    loop {
+        let params = format!(r#"["{tx_hash}"]"#);
+        let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionReceipt", &params)
+            .await
+            .ok();
+        // The result is `null` while pending; any non-null object means mined.
+        if let Some(receipt) = v
+            && !receipt.is_null()
+        {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(NetworkError::Timeout(format!(
+                "tx {tx_hash} not mined within 60 s"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Construct and sign a legacy EIP-155 self-transfer transaction, returning its
+/// raw RLP-encoded bytes ready for `eth_sendRawTransaction`.
+fn build_signed_raw_tx(nonce: u64, gas_price: u128, to: Address) -> Result<Vec<u8>, NetworkError> {
+    let key = ewoq_key()?;
+
+    let tx = TxLegacy {
+        chain_id: Some(LOCAL_CHAIN_ID),
+        nonce,
+        gas_price,
+        gas_limit: TRANSFER_GAS,
+        to: TxKind::Call(to),
+        value: U256::ZERO,
+        input: Default::default(),
+    };
+
+    // EIP-155 signing: signature_hash() includes chainId in the pre-image when
+    // `chain_id` is `Some` (alloy_consensus TxLegacy behavior).
+    let sig_hash = tx.signature_hash();
+    let rsv = key
+        .sign_hash(&sig_hash.0)
+        .map_err(|e| NetworkError::Timeout(format!("sign: {e}")))?;
+    let r = U256::from_be_slice(&rsv[..32]);
+    let s = U256::from_be_slice(&rsv[32..64]);
+    let sig = EvmSignature::new(r, s, rsv[64] == 1);
+    let signed = TransactionSigned::Legacy(tx.into_signed(sig));
+
+    let mut out = Vec::new();
+    signed.encode(&mut out);
+    Ok(out)
+}
+
+/// Load the well-known ewoq private key.
+fn ewoq_key() -> Result<PrivateKey, NetworkError> {
+    let bytes = hex::decode(EWOQ_KEY_HEX)
+        .map_err(|e| NetworkError::Timeout(format!("ewoq key hex: {e}")))?;
+    PrivateKey::from_bytes(&bytes)
+        .map_err(|e| NetworkError::Timeout(format!("ewoq key parse: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +505,17 @@ mod tests {
             Some(false)
         );
         assert_eq!(parse_bootstrapped(&serde_json::json!({})), None);
+    }
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::settled;
+    #[test]
+    fn settled_requires_equal_and_min() {
+        assert!(settled(Some(3), Some(3), 1), "equal and >= min");
+        assert!(!settled(Some(2), Some(3), 1), "unequal heights not settled");
+        assert!(!settled(Some(1), Some(1), 2), "below min not settled");
+        assert!(!settled(None, Some(1), 1), "missing height not settled");
     }
 }
