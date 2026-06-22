@@ -102,6 +102,16 @@ workspace `Cargo.toml` also sets `rust-version` so all crates share one MSRV.
 
 ### 3.1 Design
 
+> **Upstream delta (avalanchego#5551, 2026-06).** avalanchego bumped its nix pin
+> `nixos-25.11 → nixos-26.05` (a release only gets bugfix/security updates for
+> ~7 months). avalanche-rs follows: the live `flake.nix` now pins
+> `nixpkgs/nixos-26.05`. `promtail` was dropped from 26.05, so it is sourced from
+> a separate `nixpkgs-promtail` input still pinned at `nixos-25.11` (pending the
+> upstream switch to Grafana Alloy, ava-labs/avalanchego#5550). `cargo-llvm-cov`
+> is no longer flagged `broken` in 26.05, so `config.allowBroken` was removed. The
+> `nixos-25.11` references in the prose/snippet below are retained for design
+> intent; the locked pin is the source of truth in `flake.lock`.
+
 The Go flake (`flake.nix`) provides one `devShells.default` per supported system,
 built from `nixpkgs/nixos-25.11`, containing: bazelisk (+ a `bazel` symlink),
 `go-task`, the pinned Go, monitoring/kube tools, linters (`shellcheck`,

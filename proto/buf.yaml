@@ -1,0 +1,36 @@
+# buf module config for the avalanche-rs proto tree.
+#
+# The protos are byte-for-byte mirrors of avalanchego's, so the lint config
+# mirrors avalanchego/proto/buf.yaml (same STANDARD set with the same documented
+# exceptions). Two deliberate divergences from upstream:
+#  - No BSR `deps` / `io/prometheus` build-exclude: avalanchego pulls
+#    prometheus's client-model from the Buf Schema Registry, but avalanche-rs
+#    ships io/prometheus/client/metrics.proto locally (the Rust prost/tonic
+#    build.rs needs the file on disk), so it stays in the module and is only
+#    skipped for lint via the `ignore` list below.
+#  - `version: v1` matches upstream; lint is run from this directory by
+#    scripts/protobuf_codegen.sh.
+version: v1
+breaking:
+  use:
+    - FILE
+lint:
+  use:
+    - STANDARD
+  except:
+    - SERVICE_SUFFIX # service requirement of <name>+Service
+    - RPC_REQUEST_STANDARD_NAME # explicit <rpc>+Request naming
+    - RPC_RESPONSE_STANDARD_NAME # explicit <rpc>+Response naming
+    - PACKAGE_VERSION_SUFFIX # versioned naming <service>.v1beta
+  ignore:
+    # Multiple fields are used as the request or response type for multiple
+    # RPCs (mirrors avalanchego's ignore list).
+    - aliasreader/aliasreader.proto
+    # Upstream prometheus client model; vendored locally for Rust codegen and
+    # not held to avalanche lint conventions.
+    - io/prometheus
+  # Allow google.protobuf.Empty request/response messages and reusing one
+  # message type for a single RPC's request and response (mirrors upstream).
+  rpc_allow_google_protobuf_empty_requests: true
+  rpc_allow_google_protobuf_empty_responses: true
+  rpc_allow_same_request_response: true

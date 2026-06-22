@@ -17,10 +17,16 @@ if [ ! -d proto ]; then
   exit 0
 fi
 
-buf lint
-# Guard wire compatibility against the base branch when available.
-if git rev-parse --verify --quiet master >/dev/null; then
-  buf breaking --against '.git#branch=master'
-fi
+# Lint/breaking run from the buf module dir (proto/buf.yaml) so buf scopes to the
+# proto tree and applies the avalanche lint config — running from the repo root
+# would make buf default-scan the whole tree (incl. the bazel symlink).
+(
+  cd proto
+  buf lint
+  # Guard wire compatibility against the base branch when available.
+  if git rev-parse --verify --quiet master >/dev/null; then
+    buf breaking --against '.git#branch=master,subdir=proto'
+  fi
+)
 # Compile every crate that runs a proto build.rs (codegen happens during build).
 cargo check --workspace --all-features

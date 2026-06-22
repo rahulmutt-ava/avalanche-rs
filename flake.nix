@@ -10,7 +10,11 @@
   description = "avalanche-rs development environment";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # promtail is deprecated and is not provided by 26.05. Source promtail from
+    # 25.11 pending a switch to Grafana Alloy. Mirrors avalanchego (ava-labs/
+    # avalanchego#5551, tracking issue ava-labs/avalanchego#5550).
+    nixpkgs-promtail.url = "github:NixOS/nixpkgs/nixos-25.11";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -18,7 +22,7 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils }:
+  outputs = { self, nixpkgs, nixpkgs-promtail, rust-overlay, flake-utils }:
     let
       # Same supported systems as the avalanchego Go flake.
       allSystems = [
@@ -33,11 +37,11 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) ];
-          # cargo-llvm-cov is flagged `broken` in nixos-25.11; allowBroken lets
-          # the dev shell evaluate. The build itself is fixed up below
-          # (doCheck = false). Revisit when the nixpkgs pin is bumped.
-          config.allowBroken = true;
         };
+
+        # promtail is dropped in nixos-26.05, so it is sourced from the 25.11
+        # pin (see the nixpkgs-promtail input above).
+        pkgsPromtail = import nixpkgs-promtail { inherit system; };
 
         # Single source of truth for the Rust version: rust-toolchain.toml.
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -109,7 +113,7 @@
 
             # Monitoring / kube (kept from the Go flake)
             prometheus
-            promtail
+            pkgsPromtail.promtail   # Loki log shipper (sourced from 25.11; see above)
             kubectl
             k9s
             kind
