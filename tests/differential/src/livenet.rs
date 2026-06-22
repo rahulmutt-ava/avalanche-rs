@@ -11,6 +11,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 
 use crate::network::NetworkError;
+use crate::rpc;
 
 /// The role a node plays in the live mixed net.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +122,73 @@ fn local_staker_in(src: &std::path::Path, idx: u8) -> Result<CertPair, NetworkEr
     Ok(CertPair { cert, key })
 }
 
+/// Pull `nodeID` from an `info.getNodeID` result.
+#[must_use]
+pub fn parse_node_id(v: &serde_json::Value) -> Option<String> {
+    v.get("nodeID").and_then(|n| n.as_str()).map(str::to_owned)
+}
+
+/// Pull `isBootstrapped` from an `info.isBootstrapped` result.
+#[must_use]
+pub fn parse_bootstrapped(v: &serde_json::Value) -> Option<bool> {
+    v.get("isBootstrapped").and_then(serde_json::Value::as_bool)
+}
+
+/// Query `info.getNodeID` over the node's API.
+///
+/// # Errors
+/// Returns [`crate::observation::ObsError`] on URL parse failure, transport
+/// error, or a response missing the `nodeID` field.
+pub async fn scrape_node_id(api_base: &str) -> Result<String, crate::observation::ObsError> {
+    let ep = rpc::Endpoint::parse(api_base)?;
+    let res = rpc::call(&ep, "/ext/info", "info.getNodeID", "{}").await?;
+    parse_node_id(&res).ok_or_else(|| {
+        crate::observation::ObsError::Rpc("info.getNodeID: missing nodeID".to_owned())
+    })
+}
+
+/// Poll `info.isBootstrapped` for every chain alias until all report true or
+/// `within` elapses.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] if not all chains bootstrap within
+/// `within`, or if `api_base` is not a valid `http://host:port` URL.
+pub async fn await_bootstrapped(
+    api_base: &str,
+    chains: &[&str],
+    within: std::time::Duration,
+) -> Result<(), NetworkError> {
+    let ep = rpc::Endpoint::parse(api_base)
+        .map_err(|e| NetworkError::Timeout(format!("bad api_base {api_base}: {e}")))?;
+    let deadline = std::time::Instant::now()
+        .checked_add(within)
+        .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+    loop {
+        let mut all = true;
+        for chain in chains {
+            let params = format!(r#"{{"chain":"{chain}"}}"#);
+            let ready = rpc::call(&ep, "/ext/info", "info.isBootstrapped", &params)
+                .await
+                .ok()
+                .and_then(|v| parse_bootstrapped(&v))
+                .unwrap_or(false);
+            if !ready {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(NetworkError::Timeout(format!(
+                "node {api_base} did not bootstrap {chains:?} within {within:?}"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +272,28 @@ mod tests {
             format!("{err}").contains("staker1"),
             "error names the cert: {err}"
         );
+    }
+
+    #[test]
+    fn parse_node_id_extracts_field() {
+        let v = serde_json::json!({ "nodeID": "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg" });
+        assert_eq!(
+            parse_node_id(&v).as_deref(),
+            Some("NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg")
+        );
+        assert_eq!(parse_node_id(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn parse_bootstrapped_extracts_bool() {
+        assert_eq!(
+            parse_bootstrapped(&serde_json::json!({ "isBootstrapped": true })),
+            Some(true)
+        );
+        assert_eq!(
+            parse_bootstrapped(&serde_json::json!({ "isBootstrapped": false })),
+            Some(false)
+        );
+        assert_eq!(parse_bootstrapped(&serde_json::json!({})), None);
     }
 }
