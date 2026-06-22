@@ -24,6 +24,7 @@
 pub mod atomic;
 pub mod crash;
 pub mod driver;
+pub mod livenet;
 pub mod network;
 pub mod observation;
 pub mod plugin;
