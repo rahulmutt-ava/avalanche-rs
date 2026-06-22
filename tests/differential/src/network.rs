@@ -449,3 +449,217 @@ fn locate_rust_binary() -> Result<String, NetworkError> {
         "set $AVALANCHERS_PATH or build `avalanchers`".to_owned(),
     ))
 }
+
+/// Resolve the configured Go `avalanchego` binary path, or [`NetworkError::GoBinaryMissing`].
+fn resolve_go_binary(configured: Option<String>) -> Result<String, NetworkError> {
+    configured.ok_or(NetworkError::GoBinaryMissing)
+}
+
+/// Spawn one node with an explicit role/cert/bootstrap launch spec.
+fn spawn_role_node(
+    bin: &str,
+    binary: Binary,
+    slot: u32,
+    launch: &crate::livenet::NodeLaunch,
+) -> Result<Node, NetworkError> {
+    let _ = std::fs::create_dir_all(&launch.data_dir);
+    let log_path = launch.data_dir.join("node.log");
+    let log = std::fs::File::create(&log_path).map_err(|source| NetworkError::Spawn {
+        slot,
+        binary,
+        source,
+    })?;
+    let log_err = log.try_clone().map_err(|source| NetworkError::Spawn {
+        slot,
+        binary,
+        source,
+    })?;
+    let mut cmd = Command::new(bin);
+    cmd.args(crate::livenet::node_args(launch))
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    let child = cmd.spawn().map_err(|source| NetworkError::Spawn {
+        slot,
+        binary,
+        source,
+    })?;
+    let identity = NodeIdentity {
+        slot,
+        node_seed: String::new(),
+        node_id: String::new(),
+        staking_port: launch.staking_port,
+        http_port: launch.http_port,
+    };
+    Ok(Node {
+        identity,
+        binary,
+        api_base: format!("http://127.0.0.1:{}", launch.http_port),
+        log_path,
+        child,
+    })
+}
+
+/// Tail the last `n` lines of a node log into a string (for timeout diagnostics).
+fn log_tail(path: &std::path::Path, n: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(s) => {
+            let lines: Vec<&str> = s.lines().collect();
+            let start = lines.len().saturating_sub(n);
+            lines.get(start..).unwrap_or(&[]).join("\n")
+        }
+        Err(_) => String::new(),
+    }
+}
+
+impl Network {
+    /// Boot a live Go-beacon + Rust-follower mixed net (M9.15).
+    ///
+    /// The Go node is the sole staked validator (beacon); the Rust node
+    /// bootstraps from it and follows. Returns a [`Network`] whose
+    /// `nodes()[0]` is the Go beacon and `nodes()[1]` is the Rust follower.
+    ///
+    /// Requires `$AVALANCHEGO_PATH` (the Go binary) and a built `avalanchers`
+    /// binary (located via `$AVALANCHERS_PATH` or the conventional target path).
+    /// Also requires the local staker cert/key pairs under
+    /// `$AVALANCHEGO_SRC/staking/local/` (default `~/avalanchego`).
+    ///
+    /// # Errors
+    /// - [`NetworkError::GoBinaryMissing`] if `$AVALANCHEGO_PATH` is unset.
+    /// - [`NetworkError::Timeout`] if the oracle binary pre-gate fails, a
+    ///   node-ID scrape times out, or the Rust node does not bootstrap P/X/C
+    ///   within the allowed window.
+    /// - [`NetworkError::CertSource`] if the local staker certs are missing.
+    /// - [`NetworkError::Spawn`] if a node process fails to start.
+    /// - [`NetworkError::RustBinaryMissing`] if the `avalanchers` binary is
+    ///   not found.
+    pub async fn boot_mixed(seed: u64) -> Result<Network, NetworkError> {
+        let go_path = resolve_go_binary(std::env::var("AVALANCHEGO_PATH").ok())?;
+        let rust_path = locate_rust_binary()?;
+
+        // Pre-gate: binary commit must match the ~/avalanchego checkout (rpcchainvm=45).
+        let status = std::process::Command::new("scripts/check_oracle_binary.sh").status();
+        if let Ok(s) = status
+            && !s.success()
+        {
+            return Err(NetworkError::Timeout(
+                "check_oracle_binary.sh failed — rebuild ~/avalanchego (stale binary)".to_owned(),
+            ));
+        }
+
+        let work_dir = std::env::temp_dir().join(format!("mixed-net-{seed}"));
+        let _ = std::fs::create_dir_all(&work_dir);
+        let ports = crate::livenet::free_ports(4)
+            .map_err(|e| NetworkError::Timeout(format!("free_ports: {e}")))?;
+        // Extract the four ports by position — free_ports(4) always returns exactly 4.
+        let go_http = ports
+            .first()
+            .copied()
+            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 1 port".to_owned()))?;
+        let go_staking = ports
+            .get(1)
+            .copied()
+            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 2 ports".to_owned()))?;
+        let rust_http = ports
+            .get(2)
+            .copied()
+            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 3 ports".to_owned()))?;
+        let rust_staking = ports
+            .get(3)
+            .copied()
+            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 4 ports".to_owned()))?;
+        let go_staker = crate::livenet::local_staker(1)?;
+        let rust_staker = crate::livenet::local_staker(2)?;
+
+        // 1. Go beacon (no bootstrap peers — it is the genesis validator).
+        let go_launch = crate::livenet::NodeLaunch {
+            http_port: go_http,
+            staking_port: go_staking,
+            data_dir: work_dir.join("go"),
+            cert_file: go_staker.cert,
+            key_file: go_staker.key,
+            bootstrap: None,
+        };
+        let go_node = spawn_role_node(&go_path, Binary::Go, 0, &go_launch)?;
+
+        // 2. Scrape the Go node-ID (it must answer info.getNodeID before we wire bootstrap).
+        let go_id = {
+            let deadline = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_secs(60))
+                .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+            loop {
+                if let Ok(id) = crate::livenet::scrape_node_id(&go_node.api_base).await {
+                    break id;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(NetworkError::Timeout(format!(
+                        "Go beacon never answered info.getNodeID:\n{}",
+                        log_tail(&go_node.log_path, 40)
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        };
+
+        // 3. Rust follower, bootstrapped from the Go beacon.
+        let rust_launch = crate::livenet::NodeLaunch {
+            http_port: rust_http,
+            staking_port: rust_staking,
+            data_dir: work_dir.join("rust"),
+            cert_file: rust_staker.cert,
+            key_file: rust_staker.key,
+            bootstrap: Some(crate::livenet::Bootstrap {
+                ip: format!("127.0.0.1:{go_staking}"),
+                id: go_id,
+            }),
+        };
+        let rust_node = spawn_role_node(&rust_path, Binary::Rust, 1, &rust_launch)?;
+
+        let net = Network {
+            nodes: vec![go_node, rust_node],
+            work_dir,
+        };
+
+        // 4. Wait for the Rust follower to bootstrap P/X/C from Go.
+        // nodes[1] is the Rust follower — we just pushed it at index 1 above.
+        let rust_api = net
+            .nodes
+            .get(1)
+            .map(|n| n.api_base.clone())
+            .ok_or_else(|| NetworkError::Timeout("rust node not in net.nodes".to_owned()))?;
+        let rust_log = net
+            .nodes
+            .get(1)
+            .map(|n| n.log_path.clone())
+            .ok_or_else(|| NetworkError::Timeout("rust node not in net.nodes".to_owned()))?;
+        crate::livenet::await_bootstrapped(
+            &rust_api,
+            &["P", "X", "C"],
+            std::time::Duration::from_secs(180),
+        )
+        .await
+        .map_err(|e| {
+            NetworkError::Timeout(format!("{e}\nrust log:\n{}", log_tail(&rust_log, 60)))
+        })?;
+
+        Ok(net)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_go_binary_missing_is_go_binary_missing() {
+        assert!(
+            matches!(resolve_go_binary(None), Err(NetworkError::GoBinaryMissing)),
+            "no configured Go binary must yield GoBinaryMissing"
+        );
+        assert!(
+            resolve_go_binary(Some("/bin/x".to_owned())).is_ok(),
+            "a configured path resolves"
+        );
+    }
+}
