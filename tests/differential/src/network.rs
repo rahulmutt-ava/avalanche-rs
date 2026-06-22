@@ -539,10 +539,17 @@ impl Network {
         let rust_path = locate_rust_binary()?;
 
         // Pre-gate: binary commit must match the ~/avalanchego checkout (rpcchainvm=45).
-        let status = std::process::Command::new("scripts/check_oracle_binary.sh").status();
-        if let Ok(s) = status
-            && !s.success()
-        {
+        // Resolve the script absolutely — cargo runs tests with CWD at the package dir,
+        // not the workspace root, so a relative path would silently miss.
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/check_oracle_binary.sh");
+        let status = std::process::Command::new(&script).status().map_err(|e| {
+            NetworkError::Timeout(format!(
+                "check_oracle_binary.sh not runnable ({}): {e}",
+                script.display()
+            ))
+        })?;
+        if !status.success() {
             return Err(NetworkError::Timeout(
                 "check_oracle_binary.sh failed — rebuild ~/avalanchego (stale binary)".to_owned(),
             ));
@@ -623,16 +630,12 @@ impl Network {
 
         // 4. Wait for the Rust follower to bootstrap P/X/C from Go.
         // nodes[1] is the Rust follower — we just pushed it at index 1 above.
-        let rust_api = net
+        let rust_node_ref = net
             .nodes
             .get(1)
-            .map(|n| n.api_base.clone())
-            .ok_or_else(|| NetworkError::Timeout("rust node not in net.nodes".to_owned()))?;
-        let rust_log = net
-            .nodes
-            .get(1)
-            .map(|n| n.log_path.clone())
-            .ok_or_else(|| NetworkError::Timeout("rust node not in net.nodes".to_owned()))?;
+            .ok_or_else(|| NetworkError::Timeout("rust follower missing".to_owned()))?;
+        let rust_api = rust_node_ref.api_base.clone();
+        let rust_log = rust_node_ref.log_path.clone();
         crate::livenet::await_bootstrapped(
             &rust_api,
             &["P", "X", "C"],
