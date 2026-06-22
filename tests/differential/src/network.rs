@@ -209,6 +209,9 @@ pub enum NetworkError {
     /// A timeout elapsed waiting for the network to converge.
     #[error("timed out waiting for the network: {0}")]
     Timeout(String),
+    /// The local staker cert/key source could not be resolved.
+    #[error("local staker cert source: {0}")]
+    CertSource(String),
 }
 
 /// A single running node in the mixed network.

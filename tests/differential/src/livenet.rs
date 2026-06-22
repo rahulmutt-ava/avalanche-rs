@@ -7,6 +7,11 @@
 //! `avalanchers` (Rust) with identical topology flags so they form a single
 //! local network.
 
+use std::net::TcpListener;
+use std::path::PathBuf;
+
+use crate::network::NetworkError;
+
 /// The role a node plays in the live mixed net.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -33,11 +38,11 @@ pub struct NodeLaunch {
     /// Staking (P2P) port.
     pub staking_port: u16,
     /// Data directory for this node instance.
-    pub data_dir: std::path::PathBuf,
+    pub data_dir: PathBuf,
     /// Path to the TLS staking certificate.
-    pub cert_file: std::path::PathBuf,
+    pub cert_file: PathBuf,
     /// Path to the TLS staking key.
-    pub key_file: std::path::PathBuf,
+    pub key_file: PathBuf,
     /// `None` for a beacon; `Some` for a follower.
     pub bootstrap: Option<Bootstrap>,
 }
@@ -59,6 +64,55 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         args.push(format!("--bootstrap-ids={}", b.id));
     }
     args
+}
+
+/// `n` distinct currently-free localhost TCP ports. Binds `:0`, reads the OS
+/// assignment, and drops the listener (a brief TOCTOU window the live arm
+/// tolerates — nodes bind immediately after).
+///
+/// # Errors
+/// Returns an `io::Error` if any listener fails to bind or its address cannot
+/// be read.
+pub fn free_ports(n: usize) -> std::io::Result<Vec<u16>> {
+    let mut held = Vec::with_capacity(n);
+    let mut ports = Vec::with_capacity(n);
+    for _ in 0..n {
+        let l = TcpListener::bind(("127.0.0.1", 0))?;
+        ports.push(l.local_addr()?.port());
+        held.push(l); // hold all until done so we never hand out a duplicate
+    }
+    Ok(ports)
+}
+
+/// A resolved staker cert/key pair.
+#[derive(Debug, Clone)]
+pub struct CertPair {
+    /// Path to the TLS staking certificate file.
+    pub cert: PathBuf,
+    /// Path to the TLS staking key file.
+    pub key: PathBuf,
+}
+
+/// Resolve the well-known local staker `idx` (1 or 2) from
+/// `$AVALANCHEGO_SRC/staking/local/` (default `~/avalanchego`).
+///
+/// # Errors
+/// Returns [`NetworkError::CertSource`] if the cert or key file is not found.
+pub fn local_staker(idx: u8) -> Result<CertPair, NetworkError> {
+    let src = std::env::var("AVALANCHEGO_SRC").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/avalanchego")
+    });
+    let dir = PathBuf::from(&src).join("staking").join("local");
+    let cert = dir.join(format!("staker{idx}.crt"));
+    let key = dir.join(format!("staker{idx}.key"));
+    if !cert.exists() || !key.exists() {
+        return Err(NetworkError::CertSource(format!(
+            "staker{idx} cert/key not found under {} (set $AVALANCHEGO_SRC)",
+            dir.display()
+        )));
+    }
+    Ok(CertPair { cert, key })
 }
 
 #[cfg(test)]
@@ -123,5 +177,16 @@ mod tests {
             args.iter().any(|a| a == "--bootstrap-ids=NodeID-abc"),
             "bootstrap-ids"
         );
+    }
+
+    #[test]
+    fn free_ports_are_distinct_and_nonzero() {
+        let ports = free_ports(4).expect("free_ports");
+        assert_eq!(ports.len(), 4, "asked for 4 ports");
+        let mut sorted = ports.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 4, "ports are distinct");
+        assert!(ports.iter().all(|&p| p != 0), "no zero ports");
     }
 }
