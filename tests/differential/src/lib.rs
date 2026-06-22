@@ -28,6 +28,7 @@ pub mod network;
 pub mod observation;
 pub mod plugin;
 pub mod program;
+pub mod rpc;
 pub mod saevm;
 pub mod xchain;
 
