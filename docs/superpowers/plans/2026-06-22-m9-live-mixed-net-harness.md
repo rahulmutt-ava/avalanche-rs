@@ -924,3 +924,67 @@ Then update the M9 plan banner (`plan/M9-interop-hardening.md`) and the memory f
 **Placeholder scan:** One intentional `todo!()` in Task 6 Step 3, explicitly flagged as an executor marker that MUST be replaced before Step 4 (clippy bans `todo!`). All other steps carry complete code. No "TBD"/"handle edge cases"/"similar to Task N".
 
 **Type consistency:** `NodeLaunch`/`Bootstrap`/`Role`/`CertPair` defined in Task 2-3 and consumed verbatim in Task 5. `rpc::{Endpoint,call}` from Task 1 used in Tasks 4, 6. `NetworkError::{GoBinaryMissing, CertSource, Timeout, Spawn}` consistent across Tasks 3, 5. `Observation`/`Network::{nodes,shutdown,await_all_connected,boot_mixed}` match existing signatures + Task 5's addition. `settled`/`parse_eth_block_number`/`await_same_c_height`/`drive_c_transfer` from Task 6 used in Task 7.
+
+---
+
+## As-built (2026-06-22)
+
+**Tasks 1–7 (substrate): DONE.** All implemented TDD-first, reviewed clean, committed
+on branch `m9.15-live-mixed-net`. Two authorized deviations from the brief, both
+forced by the crate's `#![forbid(unsafe_code)]` (edition-2024 `std::env::set_var`/
+`remove_var` are `unsafe fn`): the `local_staker` and `boot_mixed` guard tests use
+private path/option-injected helpers (`local_staker_in`, `resolve_go_binary`)
+instead of env mutation — hermetic, same intent, public APIs unchanged. Task 6
+vehicle = reth/alloy `TxLegacy` + `ava-crypto` secp256k1 (mirrors
+`ava-evm/tests/evm_factory.rs::sign_legacy`); `ava-crypto` moved dev→normal dep.
+
+**Task 8 (live proof): drove the REAL two-binary net rung by rung; reached the
+documented hard gap and recorded it honestly rather than faking the assert.**
+
+Prereqs cleared: rebuilt `avalanchers` release; rebuilt the Go oracle (was stale —
+`~/avalanchego` had been pulled to `d295aca`; pre-gate now `OK`, rpcchainvm=45).
+Toolchain gotcha: the on-PATH `go` was nix 1.26.3 while `GOROOT` pointed at mise
+1.25.10 → `build.sh` failed "version mismatch"; fixed by building with mise's
+go 1.25.10 on PATH.
+
+Rungs reached:
+- **Go beacon: healthy.** Boots, initializes P/X/C, serves `info.*` (node
+  `NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg`, staker1, a genesis validator).
+- **Rust follower: boots** (after two harness gap-fixes below) — creates
+  `process.json`, generates its BLS signer, starts its API server.
+- **Peer handshake: does NOT complete.** The follower repeatedly dials the beacon
+  and starts a TLS 1.3 mutual-auth handshake (ClientHello → CertificateRequest →
+  "Attempting client auth") but loops reconnecting ~every 250 ms; Go never logs
+  the peer. So bootstrap never starts → `boot_mixed`'s `await_bootstrapped` times
+  out at 180s → `mixed_network` FAILS (no fake green).
+
+Harness gap-fixes committed (`d0ed34c`), correct and reviewed-worthy regardless of
+the blocker — they advance the harness to the exact edge of the gap:
+1. **ECDSA follower cert** (`livenet::generate_staker`): `avalanchers`'
+   `Identity::from_pem` (`ava-network/identity.rs`) only loads ECDSA-P256 PKCS#8
+   keys and rejects the **RSA** local staker keys that Go reads fine
+   (`stakingKeyType: RSA`). The follower is a non-validator, so it gets a fresh
+   ECDSA cert; the Go beacon keeps RSA `staker1`.
+2. **`--db-type=memdb`** (both nodes): the `avalanchers` release build ships
+   without the optional `rocksdb` feature the default on-disk `leveldb` requires
+   (the official `cargo build -p avalanchers --release` enables no features).
+3. **`log_tail` reads `logs/main.log`**: avalanchego logs there after logger init,
+   not stdout, so the timeout diagnostic was empty.
+
+**BLOCKER (out of scope for this *harness* plan):** the live arm cannot go green
+until `avalanchers` completes a real peer handshake + networked bootstrap against
+a live Go beacon. Its live chain-readiness to date was wired in-process /
+beaconless (`drive_startup_chains`); the standalone networked-bootstrap-from-a-
+remote-peer path is not yet operational. This is avalanchego-side production work
+(peer-layer + bootstrap engine), not a `differential`-harness task.
+
+**Follow-ups recorded:**
+- avalanchers cannot load RSA staking keys (only ECDSA-P256) — a real drop-in gap
+  if the standard local staker certs must be usable directly.
+- avalanchers release build has no on-disk DB backend (no `rocksdb` feature).
+- avalanchers peer handshake against a live Go node does not complete — the
+  primary blocker for the live mixed-net arm; needs production work + better
+  application-level (non-`rustls`) handshake/peer diagnostics.
+- The live `mixed_network` arm + `boot_mixed` substrate are correct and stay
+  wired (`#[cfg(feature="live")] #[ignore]`, nightly-gated); they will pass once
+  the peer/bootstrap gap closes. CI is unaffected (offline arms green: 38/38).
