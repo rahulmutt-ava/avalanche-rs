@@ -88,7 +88,10 @@ mod tests {
         let args = node_args(&launch(Role::Beacon));
         assert!(args.iter().any(|a| a == "--network-id=local"), "network-id");
         assert!(args.iter().any(|a| a == "--http-port=9650"), "http-port");
-        assert!(args.iter().any(|a| a == "--staking-port=9651"), "staking-port");
+        assert!(
+            args.iter().any(|a| a == "--staking-port=9651"),
+            "staking-port"
+        );
         assert!(
             args.iter()
                 .any(|a| a == "--staking-tls-cert-file=/certs/staker1.crt"),

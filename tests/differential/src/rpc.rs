@@ -114,7 +114,13 @@ mod tests {
 
     #[test]
     fn rejects_non_http_scheme() {
-        assert!(Endpoint::parse("https://x:1").is_err(), "https must be rejected");
-        assert!(Endpoint::parse("127.0.0.1:9650").is_err(), "missing scheme rejected");
+        assert!(
+            Endpoint::parse("https://x:1").is_err(),
+            "https must be rejected"
+        );
+        assert!(
+            Endpoint::parse("127.0.0.1:9650").is_err(),
+            "missing scheme rejected"
+        );
     }
 }
