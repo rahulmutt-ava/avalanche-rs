@@ -263,6 +263,7 @@ where
                 }
                 return;
             }
+            // non-Get* ops fall through to the consensus dispatch match below
             _ => {}
         }
 

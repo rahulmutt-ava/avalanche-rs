@@ -80,6 +80,8 @@ pub fn decode_inbound(node: NodeId, msg: &InboundMessage) -> Option<EngineInboun
         M::GetAncestors(m) => {
             let chain = parse_id(m.chain_id.as_ref())?;
             let container_id = parse_id(m.container_id.as_ref())?;
+            // `engine_type` (set to `ENGINE_TYPE_CHAIN` by `OutboundSender::send_get_ancestors`)
+            // is intentionally dropped: only linear Chain engine routing is supported.
             let op = InboundOp::GetAncestors {
                 request_id: m.request_id,
                 container_id,

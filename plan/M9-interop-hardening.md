@@ -1327,6 +1327,21 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `OutboundSender`'s wire-out + timeout-registration AND its node-assembly wire-up are now all production-complete; what
 >   is left is purely the live two-binary *execution*.
 
+> **FOLLOW-UP — production network→consensus wiring not yet called from the live boot path (M9.15 deferral).** The
+> network→consensus seam (decode inbound p2p → engine `Router`) is proven end-to-end by the two-Rust-node test
+> `crates/avalanchers/tests/networked_bootstrap.rs`: it calls `boot_chain_over_network` and wires the returned engine
+> `Router` into a `RouterBridge` via `set_engine_router`, so inbound peer messages are decoded and routed to the engine.
+> The **production node-assembly boot path does not yet do this**: `init_networking` creates a `RouterBridge` whose
+> engine-router slot remains empty (the `init_chain_manager` call that fills it via `set_engine_router` with a
+> `ChainRouter` is wired, but `init_chain_manager` / `drive_startup_chains` do not call `boot_chain_over_network` — they
+> use the in-process `RecordingSender` loopback instead). As a result, a live node with real peers would have inbound
+> messages decoded and forwarded to the `ChainRouter`, but the chain-boot path sends outbound via the real
+> `OutboundSender` / receives nothing via the `ChainRouter`'s per-chain handlers (they were booted with the loopback
+> path). The next M9.15 production step is to replace the loopback-boot call in `drive_startup_chains` with
+> `boot_chain_over_network`, thread the live `NetworkImpl` + `Allower` through, and confirm the returned `router` is
+> already the one installed into `RouterBridge` by `init_chain_manager` — closing the loop so the live node routes
+> inbound p2p ops into the running chain engines.
+
 **Files:** `tests/differential/tests/mixed_network.rs`, `tests/differential/src/network.rs` (live spawner rewrite — items (b)/(c) above)
 - [ ] **Step 1 — Red:** Write `differential::mixed_network`: boot the mixed Go+Rust network (M9.14); replay a proptest-generated input program (`IssueTx`/`ApiCall`/`AdvanceTime`/`AwaitFinalization`) against the whole network; after each `AwaitFinalization`, collect+normalize `Observation` from every node and assert all nodes (Go and Rust) agree on LA block ID+height, state/merkle root, and sorted validator set for **every** chain (P/X/C/SAE) — no fork, same tip. Failure prints `DIFFERENTIAL_SEED=<n>`.
 - [ ] **Step 2 — Confirm red:** `cargo nextest run -p ava-differential mixed_network` → fails.
