@@ -384,6 +384,298 @@ async fn bootstrap_adapter_answers_get_accepted_frontier_via_getter() {
     assert!(found, "getter served frontier: got {:?}", sent);
 }
 
+/// `snowman_adapter_answers_get_accepted_frontier_via_getter` — the
+/// `SnowmanEngineAdapter` routes `GetAcceptedFrontier` to the `Getter`, which
+/// replies with the VM's last-accepted id via `send_accepted_frontier`.
+///
+/// This guards the double-match + `return` pattern in `SnowmanEngineAdapter::handle`:
+/// a refactor that drops the `return` would let the op fall through to `_ => Ok(())`
+/// in the inner consensus match, silently dropping the reply.
+#[tokio::test]
+async fn snowman_adapter_answers_get_accepted_frontier_via_getter() {
+    let token = CancellationToken::new();
+
+    let snow_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let known_id = snow_vm.last_accepted(&token).await.expect("last accepted");
+
+    let vm = Arc::new(AsyncMutex::new(snow_vm));
+    let sender = RecordingSender::new();
+
+    let getter = Arc::new(ava_engine::snowman::Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let (vmgr, _) = validators(1);
+    let mut params = DEFAULT_PARAMETERS;
+    params.k = 1;
+    params.alpha_preference = 1;
+    params.alpha_confidence = 1;
+    params.beta = 1;
+    params.concurrent_repolls = 1;
+    let consensus = Topological::new_default(SnowballFactory, params, known_id, 0).expect("topo");
+    let snow_engine = ava_engine::snowman::engine::SnowmanEngine::new(
+        ava_engine::snowman::engine::Config {
+            subnet_id: Id::EMPTY,
+            params,
+            vm: Arc::clone(&vm),
+            sender: Arc::clone(&sender),
+            validators: vmgr,
+            token: token.clone(),
+        },
+        Box::new(consensus),
+    );
+
+    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter);
+
+    let node = NodeId::from([99u8; 20]);
+    adapter
+        .handle(node, InboundOp::GetAcceptedFrontier { request_id: 42 })
+        .await;
+
+    let sent = sender.snapshot();
+    let found = sent.iter().any(|s| {
+        matches!(s,
+            Sent::AcceptedFrontier { node: n, req, id }
+            if *n == node && *req == 42 && *id == known_id
+        )
+    });
+    assert!(
+        found,
+        "SnowmanEngineAdapter must route GetAcceptedFrontier to Getter: got {:?}",
+        sent
+    );
+}
+
+/// `snowman_adapter_get_ops_routed_to_getter` — a table test covering all four
+/// inbound `Get*` ops on the `SnowmanEngineAdapter`, each of which must reach
+/// the `Getter` and produce the expected outbound reply.  The genesis block is
+/// used as the known block-id since `TestVm` always has it accepted at height 0.
+#[tokio::test]
+async fn snowman_adapter_get_ops_routed_to_getter() {
+    let token = CancellationToken::new();
+
+    let snow_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let genesis_id = snow_vm.last_accepted(&token).await.expect("genesis");
+
+    let vm = Arc::new(AsyncMutex::new(snow_vm));
+    let sender = RecordingSender::new();
+
+    let getter = Arc::new(ava_engine::snowman::Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let (vmgr, _) = validators(1);
+    let mut params = DEFAULT_PARAMETERS;
+    params.k = 1;
+    params.alpha_preference = 1;
+    params.alpha_confidence = 1;
+    params.beta = 1;
+    params.concurrent_repolls = 1;
+    let consensus = Topological::new_default(SnowballFactory, params, genesis_id, 0).expect("topo");
+    let snow_engine = ava_engine::snowman::engine::SnowmanEngine::new(
+        ava_engine::snowman::engine::Config {
+            subnet_id: Id::EMPTY,
+            params,
+            vm: Arc::clone(&vm),
+            sender: Arc::clone(&sender),
+            validators: vmgr,
+            token: token.clone(),
+        },
+        Box::new(consensus),
+    );
+
+    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter);
+    let node = NodeId::from([77u8; 20]);
+
+    // GetAcceptedFrontier → AcceptedFrontier(genesis_id)
+    adapter
+        .handle(node, InboundOp::GetAcceptedFrontier { request_id: 1 })
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s,
+            Sent::AcceptedFrontier { node: n, req: 1, id }
+            if *n == node && *id == genesis_id
+        )),
+        "GetAcceptedFrontier: expected AcceptedFrontier, got {:?}",
+        sent
+    );
+
+    // Get(genesis_id) → Put (the genesis bytes are always present)
+    adapter
+        .handle(
+            node,
+            InboundOp::Get {
+                request_id: 2,
+                container_id: genesis_id,
+            },
+        )
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter()
+            .any(|s| matches!(s, Sent::Put { node: n, req: 2 } if *n == node)),
+        "Get: expected Put reply, got {:?}",
+        sent
+    );
+
+    // GetAccepted([genesis_id]) → Accepted([genesis_id])
+    // (genesis height 0 ≤ last_accepted height 0 and get_block_id_at_height(0) == genesis_id)
+    adapter
+        .handle(
+            node,
+            InboundOp::GetAccepted {
+                request_id: 3,
+                container_ids: vec![genesis_id],
+            },
+        )
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s,
+            Sent::Accepted { node: n, req: 3, ids }
+            if *n == node && ids.contains(&genesis_id)
+        )),
+        "GetAccepted: expected Accepted reply containing genesis_id, got {:?}",
+        sent
+    );
+
+    // GetAncestors(genesis_id) → Ancestors (at least 1 container: the genesis itself)
+    adapter
+        .handle(
+            node,
+            InboundOp::GetAncestors {
+                request_id: 4,
+                container_id: genesis_id,
+            },
+        )
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(
+            |s| matches!(s, Sent::Ancestors { node: n, req: 4, n: cnt } if *n == node && *cnt >= 1)
+        ),
+        "GetAncestors: expected Ancestors reply, got {:?}",
+        sent
+    );
+}
+
+/// `bootstrap_adapter_get_ops_routed_to_getter` — the four inbound `Get*` ops
+/// on the `BootstrapperEngineAdapter` also reach the `Getter` and produce replies.
+/// Mirrors `snowman_adapter_get_ops_routed_to_getter` for the bootstrapping phase.
+#[tokio::test]
+async fn bootstrap_adapter_get_ops_routed_to_getter() {
+    use ava_engine::snowman::Getter;
+
+    let token = CancellationToken::new();
+
+    let boot_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let genesis_id = boot_vm.last_accepted(&token).await.expect("genesis");
+
+    let vm = Arc::new(AsyncMutex::new(boot_vm));
+    let sender = RecordingSender::new();
+
+    let getter = Arc::new(Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let ctx = Arc::new(ConsensusContext::new(
+        test_chain_context(),
+        "C".to_string(),
+        Arc::new(NoOpAcceptor),
+        Arc::new(NoOpAcceptor),
+    ));
+    let boot = Bootstrapper::new(BootConfig {
+        subnet_id: Id::EMPTY,
+        ctx,
+        vm: Arc::clone(&vm),
+        sender: Arc::clone(&sender),
+        beacons: BTreeMap::new(),
+        token: token.clone(),
+    });
+
+    let (transition_tx, _transition_rx) = transition_channel(8);
+    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+    let node = NodeId::from([55u8; 20]);
+
+    // GetAcceptedFrontier → AcceptedFrontier(genesis_id)
+    adapter
+        .handle(node, InboundOp::GetAcceptedFrontier { request_id: 1 })
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s,
+            Sent::AcceptedFrontier { node: n, req: 1, id }
+            if *n == node && *id == genesis_id
+        )),
+        "Bootstrap GetAcceptedFrontier: expected AcceptedFrontier, got {:?}",
+        sent
+    );
+
+    // Get(genesis_id) → Put
+    adapter
+        .handle(
+            node,
+            InboundOp::Get {
+                request_id: 2,
+                container_id: genesis_id,
+            },
+        )
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter()
+            .any(|s| matches!(s, Sent::Put { node: n, req: 2 } if *n == node)),
+        "Bootstrap Get: expected Put reply, got {:?}",
+        sent
+    );
+
+    // GetAccepted([genesis_id]) → Accepted([genesis_id])
+    adapter
+        .handle(
+            node,
+            InboundOp::GetAccepted {
+                request_id: 3,
+                container_ids: vec![genesis_id],
+            },
+        )
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s,
+            Sent::Accepted { node: n, req: 3, ids }
+            if *n == node && ids.contains(&genesis_id)
+        )),
+        "Bootstrap GetAccepted: expected Accepted reply containing genesis_id, got {:?}",
+        sent
+    );
+
+    // GetAncestors(genesis_id) → Ancestors (at least 1 container)
+    adapter
+        .handle(
+            node,
+            InboundOp::GetAncestors {
+                request_id: 4,
+                container_id: genesis_id,
+            },
+        )
+        .await;
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(
+            |s| matches!(s, Sent::Ancestors { node: n, req: 4, n: cnt } if *n == node && *cnt >= 1)
+        ),
+        "Bootstrap GetAncestors: expected Ancestors reply, got {:?}",
+        sent
+    );
+}
+
 /// Yield enough times for the single-task select loop to drain queued work.
 async fn pump() {
     for _ in 0..32 {
