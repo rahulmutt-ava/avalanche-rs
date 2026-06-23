@@ -74,6 +74,7 @@ fn metric_names_match_go() {
         "accept_failed",
         "inbound_conn_throttler_allowed",
         "tls_conn_rejected",
+        "outbound_tls_conn_upgrade_failed",
         "num_useless_peerlist_bytes",
         "inbound_conn_throttler_rate_limited",
         "node_uptime_weighted_average",

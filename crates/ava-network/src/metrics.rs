@@ -82,6 +82,10 @@ pub struct Metrics {
     pub inbound_conn_throttler_allowed: Counter,
     /// Connections rejected for an unsupported TLS certificate (`tls_conn_rejected`).
     pub tls_conn_rejected: Counter,
+    /// Outbound TLS upgrade failures — distinct from the inbound `tls_conn_rejected`
+    /// so operators can tell apart "a peer refusing us" from "we failed to upgrade to
+    /// a peer" (`outbound_tls_conn_upgrade_failed`).
+    pub outbound_tls_conn_upgrade_failed: Counter,
     /// Useless bytes received in `PeerList` messages (`num_useless_peerlist_bytes`).
     pub num_useless_peerlist_bytes: Counter,
     /// Inbound connections rejected by the rate-limiter (`inbound_conn_throttler_rate_limited`).
@@ -176,6 +180,11 @@ impl Metrics {
         let tls_conn_rejected = Counter::new(
             "tls_conn_rejected",
             "times this node rejected a connection due to an unsupported TLS certificate",
+        )
+        .map_err(to_metrics_err)?;
+        let outbound_tls_conn_upgrade_failed = Counter::new(
+            "outbound_tls_conn_upgrade_failed",
+            "times this node failed to complete an outbound TLS upgrade (distinct from inbound tls_conn_rejected)",
         )
         .map_err(to_metrics_err)?;
         let num_useless_peerlist_bytes = Counter::new(
@@ -288,6 +297,7 @@ impl Metrics {
             accept_failed,
             inbound_conn_throttler_allowed,
             tls_conn_rejected,
+            outbound_tls_conn_upgrade_failed,
             num_useless_peerlist_bytes,
             inbound_conn_throttler_rate_limited,
             node_uptime_weighted_average,
@@ -332,6 +342,7 @@ impl Metrics {
         reg!(self.accept_failed);
         reg!(self.inbound_conn_throttler_allowed);
         reg!(self.tls_conn_rejected);
+        reg!(self.outbound_tls_conn_upgrade_failed);
         reg!(self.num_useless_peerlist_bytes);
         reg!(self.inbound_conn_throttler_rate_limited);
         reg!(self.node_uptime_weighted_average);
@@ -377,6 +388,17 @@ impl Metrics {
     /// reject is metered at the accept-path `Err` arm where it surfaces.
     pub fn observe_tls_conn_rejected(&self) {
         self.tls_conn_rejected.inc();
+    }
+
+    /// Records an outbound TLS upgrade failure.
+    ///
+    /// Distinct from the inbound `observe_tls_conn_rejected` so operators can
+    /// tell apart a peer refusing an inbound connection from this node failing
+    /// to complete an outbound TLS upgrade (e.g. a rustls↔Go mutual-auth stall,
+    /// a rejected leaf cert, or a closed connection). Called from
+    /// `NetworkImpl::handle_dial` at the `client_upgrader.upgrade` `Err` arm.
+    pub fn observe_outbound_tls_conn_upgrade_failed(&self) {
+        self.outbound_tls_conn_upgrade_failed.inc();
     }
 
     /// Adds `bytes` useless `PeerList` bytes (Go `numUselessPeerListBytes.Add`).

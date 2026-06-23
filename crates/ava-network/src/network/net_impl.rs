@@ -253,7 +253,7 @@ impl NetworkImpl {
                     // handshake root-cause work depends on seeing it (D3).
                     tracing::debug!(%addr, error = %e, "outbound TLS upgrade failed");
                     if let Some(m) = &this.metrics {
-                        m.observe_tls_conn_rejected();
+                        m.observe_outbound_tls_conn_upgrade_failed();
                     }
                 }
             }
