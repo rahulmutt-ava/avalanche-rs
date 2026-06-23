@@ -135,6 +135,17 @@ impl Upgrader {
         let cert = parse_certificate(leaf.as_ref())?;
         let node_id = node_id_from_cert(&cert);
 
+        let key_type = match &cert.public_key {
+            ava_crypto::staking::CertPublicKey::EcdsaP256(_) => "ecdsa-p256",
+            ava_crypto::staking::CertPublicKey::Rsa { .. } => "rsa",
+        };
+        tracing::debug!(
+            %node_id,
+            side = ?self.side,
+            key_type,
+            "TLS upgrade complete: derived peer NodeID"
+        );
+
         Ok((node_id, tls, cert))
     }
 }

@@ -1533,6 +1533,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "tracing",
  "x509-parser",
 ]
 

@@ -23,6 +23,7 @@ ava-version = { path = "../ava-version" }
 
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+tracing = { workspace = true }
 # CancellationToken for the inbound byte throttler acquire-cancel path (M2.13).
 tokio-util = { workspace = true }
 x509-parser = { workspace = true }

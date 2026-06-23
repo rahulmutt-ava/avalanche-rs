@@ -29,11 +29,21 @@ impl Peer {
     pub(crate) fn handle_handshake(self: &Arc<Self>, h: p2p::Handshake) -> crate::Result<()> {
         // Reject a duplicate Handshake first (Go: a second Handshake is fatal).
         if self.got_handshake.swap(true, Ordering::AcqRel) {
+            tracing::info!(
+                peer_id = %self.id,
+                "handshake rejected: duplicate handshake"
+            );
             return Err(Error::DuplicateHandshake);
         }
 
         // 1. network_id match.
         if h.network_id != self.cfg.network_id {
+            tracing::info!(
+                peer_id = %self.id,
+                peer_network_id = h.network_id,
+                our_network_id = self.cfg.network_id,
+                "handshake rejected: network ID mismatch"
+            );
             return Err(Error::NetworkIdMismatch {
                 peer: h.network_id,
                 ours: self.cfg.network_id,
@@ -44,6 +54,13 @@ impl Peer {
         let our_time = self.cfg.clock.unix();
         let skew = our_time.abs_diff(h.my_time);
         if skew > crate::config::MAX_CLOCK_DIFFERENCE.as_secs() {
+            tracing::info!(
+                peer_id = %self.id,
+                peer_time = h.my_time,
+                our_time,
+                skew_secs = skew,
+                "handshake rejected: clock skew too large"
+            );
             return Err(Error::ClockSkew {
                 peer: h.my_time,
                 ours: our_time,
@@ -51,43 +68,91 @@ impl Peer {
         }
 
         // 3. parse Client → version; check compatibility (`specs/26` §3.1).
-        let client = h
-            .client
-            .ok_or_else(|| Error::MalformedHandshake("missing client".into()))?;
+        let client = h.client.ok_or_else(|| {
+            tracing::info!(
+                peer_id = %self.id,
+                "handshake rejected: missing client field"
+            );
+            Error::MalformedHandshake("missing client".into())
+        })?;
         let version =
             ava_version::Application::new(client.name, client.major, client.minor, client.patch);
         if !self.is_compatible(&version) {
+            tracing::info!(
+                peer_id = %self.id,
+                peer_version = %version.display(),
+                "handshake rejected: incompatible version"
+            );
             return Err(Error::IncompatibleVersion(version.display()));
         }
 
         // 4. ≤ maxNumTrackedSubnets tracked subnets.
         if h.tracked_subnets.len() > crate::config::MAX_NUM_TRACKED_SUBNETS {
+            tracing::info!(
+                peer_id = %self.id,
+                count = h.tracked_subnets.len(),
+                max = crate::config::MAX_NUM_TRACKED_SUBNETS,
+                "handshake rejected: too many tracked subnets"
+            );
             return Err(Error::TooManyTrackedSubnets(h.tracked_subnets.len()));
         }
         let mut tracked_subnets = Vec::with_capacity(h.tracked_subnets.len());
         for raw in &h.tracked_subnets {
-            let id = ava_types::id::Id::from_slice(raw)
-                .map_err(|e| Error::MalformedHandshake(format!("tracked subnet: {e}")))?;
+            let id = ava_types::id::Id::from_slice(raw).map_err(|e| {
+                tracing::info!(
+                    peer_id = %self.id,
+                    error = %e,
+                    "handshake rejected: malformed tracked subnet ID"
+                );
+                Error::MalformedHandshake(format!("tracked subnet: {e}"))
+            })?;
             tracked_subnets.push(id);
         }
 
         // 5. supported ∩ objected == ∅.
         let supported: std::collections::BTreeSet<u32> = h.supported_acps.iter().copied().collect();
         if h.objected_acps.iter().any(|a| supported.contains(a)) {
+            tracing::info!(
+                peer_id = %self.id,
+                "handshake rejected: supported and objected ACP sets overlap"
+            );
             return Err(Error::AcpConflict);
         }
 
         // 6. valid IP / non-zero port.
-        let port = u16::try_from(h.ip_port).map_err(|_| Error::InvalidPeerIp)?;
+        let port = u16::try_from(h.ip_port).map_err(|_| {
+            tracing::info!(
+                peer_id = %self.id,
+                raw_port = h.ip_port,
+                "handshake rejected: IP port out of u16 range"
+            );
+            Error::InvalidPeerIp
+        })?;
         if port == 0 {
+            tracing::info!(
+                peer_id = %self.id,
+                "handshake rejected: zero IP port"
+            );
             return Err(Error::InvalidPeerIp);
         }
-        let ip = ip_from_bytes(&h.ip_addr).ok_or(Error::InvalidPeerIp)?;
+        let ip = ip_from_bytes(&h.ip_addr).ok_or_else(|| {
+            tracing::info!(
+                peer_id = %self.id,
+                "handshake rejected: invalid IP address bytes"
+            );
+            Error::InvalidPeerIp
+        })?;
 
         // 9. bloom salt ≤ maxBloomSaltLen.
         if let Some(bf) = &h.known_peers
             && bf.salt.len() > crate::config::MAX_BLOOM_SALT_LEN
         {
+            tracing::info!(
+                peer_id = %self.id,
+                salt_len = bf.salt.len(),
+                max = crate::config::MAX_BLOOM_SALT_LEN,
+                "handshake rejected: bloom salt too long"
+            );
             return Err(Error::BloomSaltTooLong(bf.salt.len()));
         }
 
@@ -99,7 +164,14 @@ impl Peer {
             bls_signature_bytes: h.ip_bls_sig.to_vec(),
         };
         let max_ts = our_time.saturating_add(crate::config::MAX_CLOCK_DIFFERENCE.as_secs());
-        signed.verify(&self.cert, max_ts)?;
+        signed.verify(&self.cert, max_ts).inspect_err(|_| {
+            tracing::info!(
+                peer_id = %self.id,
+                claimed_ip = %ip,
+                claimed_port = port,
+                "handshake rejected: signed-IP verification failed"
+            );
+        })?;
 
         // Record the peer's handshake state.
         {
@@ -111,6 +183,10 @@ impl Peer {
 
         // Reply with our PeerList (completes the peer's half of the handshake).
         self.reply_peer_list()?;
+        tracing::debug!(
+            peer_id = %self.id,
+            "handshake accepted: replied with PeerList"
+        );
         Ok(())
     }
 
@@ -124,6 +200,12 @@ impl Peer {
             // Track only verified claims; ignore (don't disconnect on) a bad one.
             let _ = self.cfg.ip_tracker.add_claimed_ip_port(claimed, now);
         }
+
+        tracing::debug!(
+            peer_id = %self.id,
+            claimed_count = pl.claimed_ip_ports.len(),
+            "received PeerList"
+        );
 
         if self.got_handshake.load(Ordering::Acquire) && !self.finished_handshake.is_cancelled() {
             self.finish_handshake();
@@ -222,6 +304,12 @@ impl Peer {
             .version
             .clone()
             .unwrap_or_else(|| self.cfg.my_version.clone());
+
+        tracing::debug!(
+            peer_id = %self.id,
+            peer_version = %version.display(),
+            "handshake finished: notifying router"
+        );
 
         // Notify for the intersection of our and the peer's tracked subnets,
         // always including the primary network. M2.17 refines the subnet set;
