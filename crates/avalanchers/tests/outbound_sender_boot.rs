@@ -134,6 +134,8 @@ async fn boot_over_network_carries_frontier_broadcast_out_to_the_network() {
     // Boot a chain with a self-beacon over the mock network. The bootstrapper
     // broadcasts `GetAcceptedFrontier` to the beacon set through the production
     // `OutboundSender`, which marshals it and hands it to `Network::send`.
+    // Pass `None` for the connectivity gate: this test probes the existing
+    // immediate-start behavior (no beacon-connectivity constraint).
     let handle = boot_chain_over_network(
         chain_id,
         subnet_id,
@@ -143,6 +145,7 @@ async fn boot_over_network_carries_frontier_broadcast_out_to_the_network() {
         b"genesis",
         Arc::new(MemDb::new()),
         token.clone(),
+        None,
     )
     .await
     .expect("boot_chain_over_network");

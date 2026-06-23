@@ -29,7 +29,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use ava_chains::create_snowman_chain;
@@ -1061,6 +1061,9 @@ where
                 recording.install_loopback(node_id, sink.clone());
             }
         },
+        // In-process boot paths (RecordingSender) always start immediately:
+        // no live network ⇒ no beacon-connectivity gate needed.
+        None,
     )
     .await?;
 
@@ -1117,6 +1120,12 @@ struct AssembledChain {
 /// construction, so the caller owns its creation), so the only difference
 /// between the two boot flavors is the `Sender` and the (sender-specific)
 /// `after_create` hook.
+///
+/// When `start_gate` is `Some`, the handler's `start()` is deferred until the
+/// watch observes `true` — the beacon-connectivity gate (M9.15 G2). This
+/// prevents the bootstrapper from broadcasting `GetAcceptedFrontier` before
+/// sufficient beacons are connected. The `None` case (all in-process / solo
+/// paths) starts immediately.
 #[allow(clippy::too_many_arguments)]
 async fn boot_chain_with_sender<V, Snd, F>(
     spec: ChainAssemblySpec,
@@ -1128,6 +1137,7 @@ async fn boot_chain_with_sender<V, Snd, F>(
     base_db: Arc<dyn DynDatabase>,
     token: &CancellationToken,
     after_create: F,
+    start_gate: Option<watch::Receiver<bool>>,
 ) -> Result<AssembledChain>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1224,7 +1234,27 @@ where
     // Start the handler task: it activates the initial (`Bootstrapping`) engine,
     // which flips `ctx.state` and broadcasts `GetAcceptedFrontier` (through the
     // supplied `Sender`).
-    let join = chain.handler.start();
+    //
+    // When a `start_gate` is present, defer the handler start until the watch
+    // resolves to `true` (beacon-connectivity gate, M9.15 G2): the bootstrapper
+    // must not broadcast `GetAcceptedFrontier` before sufficient beacons have
+    // completed the handshake. The gate fires immediately for the no-beacon case
+    // (`required_conns == 0` → `BeaconManager` sends `true` up-front in
+    // `init_networking`) so a solo node is never blocked.
+    let join = if let Some(mut gate) = start_gate {
+        let handler = chain.handler;
+        tokio::spawn(async move {
+            // Block until on_sufficiently_connected is true.  `wait_for`
+            // returns `Err` only when the sender is dropped; treat that as
+            // "gate closed / node shutting down" and skip the start.
+            if gate.wait_for(|&v| v).await.is_ok() {
+                let inner = handler.start();
+                let _ = inner.await;
+            }
+        })
+    } else {
+        chain.handler.start()
+    };
 
     Ok(AssembledChain {
         ctx,
@@ -1301,6 +1331,14 @@ pub struct NetworkChainBootHandle {
 /// handler starts — the observable proof that the production sender carries the
 /// engine's outbound op out to the network.
 ///
+/// When `connectivity_gate` is `Some`, the bootstrapper's `start()` — and thus
+/// the `GetAcceptedFrontier` broadcast — is deferred until the watch fires
+/// `true`. This is the M9.15 G2 beacon-connectivity gate: pass
+/// [`Networking::on_sufficiently_connected`](ava_node::init::networking::Networking::on_sufficiently_connected)
+/// here so bootstrapping does not begin before the threshold number of beacons
+/// have completed the handshake. Pass `None` (or a pre-fired `true` watch) to
+/// start immediately.
+///
 /// # Errors
 /// Propagates a VM-init / consensus-construction / identity / timeout-manager
 /// failure from [`boot_chain_with_sender`].
@@ -1314,6 +1352,7 @@ pub async fn boot_chain_over_network<V>(
     genesis_bytes: &[u8],
     base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
+    connectivity_gate: Option<watch::Receiver<bool>>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1361,6 +1400,9 @@ where
         // The production `OutboundSender` needs no post-create hook (no
         // loopback); inbound ops arrive from real peers through the router.
         |_node_id, _sink| {},
+        // The beacon-connectivity gate: defer handler start until
+        // `on_sufficiently_connected` fires (M9.15 G2). `None` starts immediately.
+        connectivity_gate,
     )
     .await?;
 

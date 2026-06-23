@@ -94,11 +94,11 @@ impl InboundHandler for RouterBridge {
 #[async_trait::async_trait]
 impl ExternalHandler for RouterBridge {
     fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
-        tracing::debug!(%node_id, %version, %subnet_id, "peer connected");
+        tracing::info!(%node_id, %version, %subnet_id, "peer connected");
     }
 
     fn disconnected(&self, node_id: NodeId) {
-        tracing::debug!(%node_id, "peer disconnected");
+        tracing::info!(%node_id, "peer disconnected");
     }
 }
 
