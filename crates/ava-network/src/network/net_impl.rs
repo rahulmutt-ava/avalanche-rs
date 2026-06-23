@@ -220,24 +220,42 @@ impl NetworkImpl {
         self.tasks.spawn(async move {
             let stream = match this.dialer.dial(addr).await {
                 Ok(s) => s,
-                Err(_) => return,
-            };
-            let upgraded = this.client_upgrader.upgrade(stream).await;
-            if let Ok((node_id, tls, cert)) = upgraded {
-                // Avoid a duplicate if already connected/connecting.
-                if this.connected.contains(&node_id) || this.connecting.contains(&node_id) {
+                Err(e) => {
+                    // Surface the dial failure (TCP refused / unreachable) — Go
+                    // logs the dialer error at debug. Previously swallowed, which
+                    // hid live-interop bring-up failures (M9.15 D3).
+                    tracing::debug!(%addr, error = %e, "outbound dial failed");
                     return;
                 }
-                let handle = Peer::spawn(
-                    Arc::clone(&this.peer_config),
-                    node_id,
-                    cert,
-                    Direction::Outbound,
-                    tls,
-                    &this.net_token,
-                    &this.tasks,
-                );
-                this.watch_peer(handle);
+            };
+            match this.client_upgrader.upgrade(stream).await {
+                Ok((node_id, tls, cert)) => {
+                    // Avoid a duplicate if already connected/connecting.
+                    if this.connected.contains(&node_id) || this.connecting.contains(&node_id) {
+                        return;
+                    }
+                    let handle = Peer::spawn(
+                        Arc::clone(&this.peer_config),
+                        node_id,
+                        cert,
+                        Direction::Outbound,
+                        tls,
+                        &this.net_token,
+                        &this.tasks,
+                    );
+                    this.watch_peer(handle);
+                }
+                Err(e) => {
+                    // The outbound TLS upgrade failed (e.g. a rustls↔Go TLS 1.3
+                    // mutual-auth stall, a rejected leaf cert, or a closed
+                    // connection). Previously this `Err` was swallowed, so the
+                    // exact failing rung was invisible — the M9.15 live mixed-net
+                    // handshake root-cause work depends on seeing it (D3).
+                    tracing::debug!(%addr, error = %e, "outbound TLS upgrade failed");
+                    if let Some(m) = &this.metrics {
+                        m.observe_tls_conn_rejected();
+                    }
+                }
             }
         });
     }

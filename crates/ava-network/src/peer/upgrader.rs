@@ -149,3 +149,35 @@ impl Upgrader {
         Ok((node_id, tls, cert))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::Identity;
+    use crate::peer::tls_config;
+
+    /// Regression (M9.15 D3): an outbound client TLS upgrade over a peer that
+    /// never speaks TLS (the remote half is dropped immediately) resolves to an
+    /// `Err`, not a hang or panic. This is exactly the result arm
+    /// `network::net_impl::handle_dial` now matches on and logs ("outbound TLS
+    /// upgrade failed") — the live mixed-net handshake investigation depends on
+    /// that `Err` surfacing rather than being swallowed.
+    #[tokio::test]
+    async fn client_upgrade_over_a_silent_peer_is_err_not_a_hang() {
+        let identity = Identity::generate().expect("generate identity");
+        let client_cfg = tls_config::client_config(&identity).expect("client config");
+        let upgrader = Upgrader::client(client_cfg);
+
+        // `local` is the upgrader's stream; dropping `remote` closes the peer
+        // end so the TLS ClientHello is met with EOF.
+        let (local, remote) = tokio::io::duplex(1 << 16);
+        drop(remote);
+
+        let result = upgrader.upgrade(local).await;
+        assert!(
+            result.is_err(),
+            "client upgrade over a peer that closes without a TLS response must \
+             return Err (the arm handle_dial logs), got Ok"
+        );
+    }
+}
