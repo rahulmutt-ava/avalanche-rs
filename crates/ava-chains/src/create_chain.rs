@@ -719,9 +719,17 @@ where
     //    The handler owns the receiver end of the transition channel; the
     //    bootstrapper adapter holds the sender and requests `NormalOp` once the
     //    bootstrapper hands off.
+    //    The Getter is shared between both adapters (same Arc<Mutex<V>> + Arc<S>)
+    //    and answers inbound Get* requests regardless of engine phase.
+    let getter = Arc::new(ava_engine::snowman::Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
     let (transition_tx, transition_rx) = transition_channel(8);
-    let boot_adapter = BootstrapperEngineAdapter::new(bootstrapper, transition_tx, 0);
-    let snowman_adapter = SnowmanEngineAdapter::new(engine);
+    let boot_adapter =
+        BootstrapperEngineAdapter::new(bootstrapper, transition_tx, 0, Arc::clone(&getter));
+    let snowman_adapter = SnowmanEngineAdapter::new(engine, getter);
 
     let mut engines = EngineManager::new(EngineType::Snowman);
     engines.register(EngineState::Bootstrapping, Box::new(boot_adapter));

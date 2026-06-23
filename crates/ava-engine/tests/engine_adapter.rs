@@ -83,10 +83,11 @@ async fn handler_drives_bootstrap_then_normal_op() {
     beacons.insert(beacon_a, 1u64);
     beacons.insert(beacon_b, 1u64);
 
+    let boot_vm_arc = Arc::new(AsyncMutex::new(boot_vm));
     let boot = Bootstrapper::new(BootConfig {
         subnet_id: Id::EMPTY,
         ctx: ctx.clone(),
-        vm: Arc::new(AsyncMutex::new(boot_vm)),
+        vm: Arc::clone(&boot_vm_arc),
         sender: boot_sender.clone(),
         beacons,
         token: token.clone(),
@@ -105,11 +106,12 @@ async fn handler_drives_bootstrap_then_normal_op() {
     snow_params.concurrent_repolls = 1;
     let consensus =
         Topological::new_default(SnowballFactory, snow_params, genesis, 0).expect("topo");
+    let snow_vm_arc = Arc::new(AsyncMutex::new(snow_vm));
     let snow_engine = ava_engine::snowman::engine::SnowmanEngine::new(
         ava_engine::snowman::engine::Config {
             subnet_id: Id::EMPTY,
             params: snow_params,
-            vm: Arc::new(AsyncMutex::new(snow_vm)),
+            vm: Arc::clone(&snow_vm_arc),
             sender: snow_sender.clone(),
             validators: vmgr,
             token: token.clone(),
@@ -117,10 +119,20 @@ async fn handler_drives_bootstrap_then_normal_op() {
         Box::new(consensus),
     );
 
-    // ---- Transition channel + adapters ----
+    // ---- Transition channel + adapters (each with a Getter sharing its Arcs) ----
+    let boot_getter = Arc::new(ava_engine::snowman::Getter::new(
+        boot_vm_arc,
+        Arc::clone(&boot_sender),
+        token.clone(),
+    ));
+    let snow_getter = Arc::new(ava_engine::snowman::Getter::new(
+        snow_vm_arc,
+        Arc::clone(&snow_sender),
+        token.clone(),
+    ));
     let (transition_tx, transition_rx) = transition_channel(8);
-    let boot_adapter = BootstrapperEngineAdapter::new(boot, transition_tx.clone(), 0);
-    let snow_adapter = SnowmanEngineAdapter::new(snow_engine);
+    let boot_adapter = BootstrapperEngineAdapter::new(boot, transition_tx.clone(), 0, boot_getter);
+    let snow_adapter = SnowmanEngineAdapter::new(snow_engine, snow_getter);
 
     let mut mgr = EngineManager::new(EngineType::Snowman);
     mgr.register(EngineState::Bootstrapping, Box::new(boot_adapter));
@@ -308,6 +320,68 @@ async fn transition_switches_active_engine_and_calls_start() {
 
     halt.cancel();
     join.await.expect("join");
+}
+
+/// `bootstrap_adapter_answers_get_accepted_frontier_via_getter` — the
+/// `BootstrapperEngineAdapter` routes a `GetAcceptedFrontier` request op to the
+/// `Getter`, which replies with the VM's last-accepted id via `send_accepted_frontier`.
+#[tokio::test]
+async fn bootstrap_adapter_answers_get_accepted_frontier_via_getter() {
+    use ava_engine::snowman::Getter;
+
+    let token = CancellationToken::new();
+
+    // Build a test VM seeded with a known last-accepted id.
+    let boot_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let known_id = boot_vm.last_accepted(&token).await.expect("last accepted");
+
+    let vm = Arc::new(AsyncMutex::new(boot_vm));
+    let sender = RecordingSender::new();
+
+    // Getter sharing the same Arc<Mutex<V>> and Arc<S>.
+    let getter = Arc::new(Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    // Build the Bootstrapper (needs a ConsensusContext + beacons).
+    let ctx = Arc::new(ConsensusContext::new(
+        test_chain_context(),
+        "C".to_string(),
+        Arc::new(NoOpAcceptor),
+        Arc::new(NoOpAcceptor),
+    ));
+    let boot = Bootstrapper::new(BootConfig {
+        subnet_id: Id::EMPTY,
+        ctx,
+        vm: Arc::clone(&vm),
+        sender: Arc::clone(&sender),
+        beacons: BTreeMap::new(),
+        token: token.clone(),
+    });
+
+    // Build the adapter under test.
+    let (transition_tx, _transition_rx) = transition_channel(8);
+    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+
+    // The node that sends the inbound GetAcceptedFrontier request.
+    let node = NodeId::from([42u8; 20]);
+
+    // Deliver the request.
+    adapter
+        .handle(node, InboundOp::GetAcceptedFrontier { request_id: 7 })
+        .await;
+
+    // The getter must have called send_accepted_frontier(node, 7, known_id).
+    let sent = sender.snapshot();
+    let found = sent.iter().any(|s| {
+        matches!(s,
+            Sent::AcceptedFrontier { node: n, req, id }
+            if *n == node && *req == 7 && *id == known_id
+        )
+    });
+    assert!(found, "getter served frontier: got {:?}", sent);
 }
 
 /// Yield enough times for the single-task select loop to drain queued work.

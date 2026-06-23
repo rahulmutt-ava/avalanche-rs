@@ -49,6 +49,25 @@ pub enum InboundOp {
         /// Requested container.
         container_id: Id,
     },
+    /// `GetAcceptedFrontier` request — reply with our last-accepted frontier.
+    GetAcceptedFrontier {
+        /// Wire request ID.
+        request_id: u32,
+    },
+    /// `GetAccepted` request — reply with the accepted subset of `container_ids`.
+    GetAccepted {
+        /// Wire request ID.
+        request_id: u32,
+        /// The queried container ids.
+        container_ids: Vec<Id>,
+    },
+    /// `GetAncestors` request — reply with the block + best-effort ancestry.
+    GetAncestors {
+        /// Wire request ID.
+        request_id: u32,
+        /// The requested container id.
+        container_id: Id,
+    },
     /// `Put` response / unsolicited container.
     Put {
         /// Wire request ID (`u32::MAX` ⇒ unsolicited).
