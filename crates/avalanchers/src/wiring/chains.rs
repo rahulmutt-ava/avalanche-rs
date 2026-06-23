@@ -1042,6 +1042,9 @@ where
             primary_alias: spec.primary_alias,
             avax_asset_id: spec.avax_asset_id,
             include_self_beacon: spec.include_self_beacon,
+            // The in-process `RecordingSender` paths frontier only from the self
+            // beacon (or no beacon); no remote bootstrap peers.
+            extra_beacons: BTreeMap::new(),
         },
         Arc::clone(&recording),
         router,
@@ -1091,6 +1094,12 @@ struct ChainAssemblySpec {
     primary_alias: &'static str,
     avax_asset_id: Id,
     include_self_beacon: bool,
+    /// Explicit (non-self) bootstrap beacons: the peers this chain frontiers
+    /// from over the network. Each is registered as a primary-network validator
+    /// (so the validator state knows it) and added to the bootstrap beacon set
+    /// the [`Bootstrapper`] queries. Empty for the solo / self-beacon paths
+    /// (M9.15 G5 — real follower bootstrap from a remote beacon).
+    extra_beacons: BTreeMap<NodeId, u64>,
 }
 
 /// The pieces a chain boot yields once the handler is started — shared by both
@@ -1166,6 +1175,26 @@ where
             weight: 1,
         },
     );
+    // Register each explicit bootstrap beacon as a primary-network validator too
+    // (Go lists beacons in the validator set), so the validator state / manager
+    // know the peers this chain frontiers from (M9.15 G5).
+    for (&beacon_id, &weight) in &spec.extra_beacons {
+        validators.add_staker(
+            ava_types::constants::PRIMARY_NETWORK_ID,
+            beacon_id,
+            None,
+            Id::EMPTY,
+            weight,
+        )?;
+        set.insert(
+            beacon_id,
+            GetValidatorOutput {
+                node_id: beacon_id,
+                public_key: None,
+                weight,
+            },
+        );
+    }
     let validator_state = FixedState { set };
 
     // A per-network ChainContext (network id + fork schedule from the chosen
@@ -1192,6 +1221,7 @@ where
     if spec.include_self_beacon {
         beacons.insert(node_id, 1u64);
     }
+    beacons.extend(spec.extra_beacons.iter().map(|(&id, &w)| (id, w)));
 
     let chain = create_snowman_chain(
         token,
@@ -1297,6 +1327,14 @@ pub struct NetworkChainBootHandle {
     /// broadcast that the production [`OutboundSender`] carries out to the
     /// [`ava_network::network::Network`].
     pub beacons: Vec<NodeId>,
+    /// The chain's engine [`Router`] (the `ChainRouter` over the adaptive-timeout
+    /// manager). The chain's handler sink is registered on it under `chain_id` by
+    /// [`create_snowman_chain`], so inbound consensus ops decoded from the wire
+    /// must be delivered here to reach the engine. Wire it into the node's
+    /// network→consensus bridge (`RouterBridge::set_engine_router`) so peer
+    /// messages arriving over the [`ava_network::network::Network`] reach this
+    /// chain's engine (M9.15 G5).
+    pub router: Arc<dyn Router>,
     /// The VM→engine notification channel. Sending
     /// [`VmEvent::PendingTxs`](ava_vm::vm::VmEvent::PendingTxs) drives the running
     /// engine to build + issue a block — the in-process equivalent of a VM
@@ -1339,6 +1377,20 @@ pub struct NetworkChainBootHandle {
 /// have completed the handshake. Pass `None` (or a pre-fired `true` watch) to
 /// start immediately.
 ///
+/// `beacons` selects the chain's bootstrap beacon set (node id → weight):
+/// * `None` — fall back to a single **self-beacon** (the in-process
+///   frontier-broadcast probe used by `outbound_sender_boot` /
+///   `beacon_connectivity_gate`): the chain frontiers from its own node id.
+/// * `Some(map)` **empty** — **beaconless**: the bootstrapper short-circuits
+///   `Bootstrapping → NormalOp` (the solo-node / beacon-set-empty path), so the
+///   chain's `Getter` immediately answers inbound `Get*` from peers (the beacon
+///   role).
+/// * `Some(map)` **non-empty** — frontier from those **remote** peers: each is
+///   registered as a primary-network validator and the chain does **not**
+///   self-beacon, so its [`OutboundSender`] addresses `GetAcceptedFrontier` to
+///   those peers over the [`ava_network::network::Network`] (M9.15 G5 — real
+///   follower bootstrap from a remote beacon).
+///
 /// # Errors
 /// Propagates a VM-init / consensus-construction / identity / timeout-manager
 /// failure from [`boot_chain_with_sender`].
@@ -1353,6 +1405,7 @@ pub async fn boot_chain_over_network<V>(
     base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
     connectivity_gate: Option<watch::Receiver<bool>>,
+    beacons: Option<BTreeMap<NodeId, u64>>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1381,6 +1434,19 @@ where
         timeout_config().initial_timeout,
     ));
 
+    // Keep a clone of the chain's router so the boot handle can expose it: the
+    // node's network→consensus bridge needs it to deliver inbound peer ops to
+    // this chain's engine (M9.15 G5).
+    let router_handle: Arc<dyn Router> = Arc::clone(&router) as Arc<dyn Router>;
+
+    // `None` ⇒ self-beacon (the single-node frontier-broadcast probe used by the
+    // existing `outbound_sender_boot` / `beacon_connectivity_gate` tests).
+    // `Some(map)` ⇒ frontier from `map` (empty ⇒ beaconless solo → NormalOp; the
+    // beacon role) and do not self-beacon — the real follower-bootstrap case
+    // (M9.15 G5).
+    let include_self_beacon = beacons.is_none();
+    let extra_beacons = beacons.unwrap_or_default();
+
     let assembled = boot_chain_with_sender(
         ChainAssemblySpec {
             network_id: ava_types::constants::LOCAL_ID,
@@ -1388,7 +1454,8 @@ where
             subnet_id,
             primary_alias: "network",
             avax_asset_id: Id::EMPTY,
-            include_self_beacon: true,
+            include_self_beacon,
+            extra_beacons,
         },
         sender,
         router,
@@ -1413,6 +1480,7 @@ where
         genesis_id,
         last_accepted_height: assembled.last_accepted_height,
         beacons: assembled.beacons,
+        router: router_handle,
         vm_tx: assembled.vm_tx,
         _sink: assembled.sink,
         _data_dir: None,

@@ -146,6 +146,7 @@ async fn boot_over_network_carries_frontier_broadcast_out_to_the_network() {
         Arc::new(MemDb::new()),
         token.clone(),
         None,
+        None,
     )
     .await
     .expect("boot_chain_over_network");

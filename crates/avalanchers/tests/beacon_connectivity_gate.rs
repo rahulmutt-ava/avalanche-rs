@@ -111,6 +111,7 @@ async fn bootstrap_waits_for_sufficient_beacons_before_frontier() {
         Arc::new(MemDb::new()),
         token.clone(),
         Some(connected_rx),
+        None,
     )
     .await
     .expect("boot_chain_over_network");
