@@ -20,7 +20,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ava_types::node_id::NodeId;
 use parking_lot::Mutex;
@@ -36,7 +36,7 @@ use crate::network::ip_tracker::{
     IpTracker, PEER_LIST_BLOOM_RESET_FREQ, PEER_LIST_PULL_GOSSIP_FREQ,
 };
 use crate::network::peer_set::PeerSet;
-use crate::network::tracked_ip::{INITIAL_RECONNECT_DELAY, TrackedIp};
+use crate::network::tracked_ip::TrackedIp;
 use crate::peer::peer::{Direction, Peer};
 use crate::peer::upgrader::Upgrader;
 
@@ -153,6 +153,11 @@ impl NetworkImpl {
                 () = handle.finished_handshake() => {
                     this.connecting.remove(&node);
                     this.connected.insert(handle.clone());
+                    // Reconnect-backoff: reset the backoff for this peer so the
+                    // next outbound dial (after disconnect) starts fresh.
+                    if let Some(t) = this.tracked_ips.lock().get_mut(&node) {
+                        t.record_success(Instant::now());
+                    }
                     // metrics: a completed handshake (`times_connected`,
                     // `specs/18` §2.1).
                     if let Some(m) = &this.metrics {
@@ -268,14 +273,24 @@ impl NetworkImpl {
                 biased;
                 () = self.net_token.cancelled() => return,
                 _ = ticker.tick() => {
+                    let now = Instant::now();
                     let targets: Vec<(NodeId, SocketAddr)> = {
-                        let tracked = self.tracked_ips.lock();
-                        tracked.iter().map(|(n, t)| (*n, t.addr)).collect()
+                        let mut tracked = self.tracked_ips.lock();
+                        let mut out = Vec::new();
+                        for (n, t) in tracked.iter_mut() {
+                            if self.connected.contains(n) || self.connecting.contains(n) {
+                                continue;
+                            }
+                            if !t.should_dial(now) {
+                                continue;
+                            }
+                            t.record_attempt(now);
+                            out.push((*n, t.addr));
+                        }
+                        out
                     };
                     for (node, addr) in targets {
-                        if self.connected.contains(&node) || self.connecting.contains(&node) {
-                            continue;
-                        }
+                        let _ = node;
                         self.handle_dial(addr);
                     }
                 }
@@ -354,13 +369,7 @@ impl super::Network for NetworkImpl {
 
     fn manually_track(&self, node_id: NodeId, ip: SocketAddr) {
         self.ip_tracker.manually_track(node_id, ip);
-        self.tracked_ips.lock().insert(
-            node_id,
-            TrackedIp {
-                addr: ip,
-                delay: INITIAL_RECONNECT_DELAY,
-            },
-        );
+        self.tracked_ips.lock().insert(node_id, TrackedIp::new(ip));
     }
 
     fn peer_info(&self, node_ids: &[NodeId]) -> Vec<super::PeerInfo> {
