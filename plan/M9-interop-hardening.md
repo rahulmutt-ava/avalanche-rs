@@ -1489,6 +1489,52 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >
 > **AS-BUILT — CI cadence wiring (merge 2026-06-16e).** The nightly cadence is now wired: a new scheduled workflow **`.github/workflows/nightly.yml`** (`on: schedule: cron '13 7 * * *'` + `workflow_dispatch:`, `permissions: contents: read`, mirrored `concurrency`/nix-dev-shell style from `ci.yml`) runs a single `live-interop` job that invokes a new **`Taskfile.yml` `test-live`** task: `cargo build -p avalanchers --release` → `cargo nextest run -p ava-differential -p ava-load -p ava-upgrade --features live --run-ignored all` → `cargo xtask acceptance` → `cargo xtask porting-report`. `$AVALANCHEGO_PATH` is plumbed job-level via `env: AVALANCHEGO_PATH: ${{ vars.AVALANCHEGO_PATH }}` (a repo variable; without it the `#[cfg(feature="live")] #[ignore]` arms early-return so the job still runs the build + acceptance gate safely). The per-PR `ci.yml` is unchanged except a 1-line pointer comment. Validated: `actionlint` clean on both workflows, `yamlfmt` no-change, `task --list` shows `test-live`. The arms are not *executed* here (no Go node / nightly-only by design) — this lands the cadence so an operator supplying the repo variable gets the live two-binary run automatically.
 
+> **AS-BUILT — M9.15 live `mixed_network` handshake root-cause (D2/D3, 2026-06-23).** Ran the live two-binary arm
+> (`AVALANCHEGO_PATH=~/avalanchego/build/avalanchego … cargo test -p ava-differential --features live mixed_network -- --ignored`)
+> with the Task-6 (`4744c25`) handshake-rung logging and a new `--log-level=debug` on both nodes (harness
+> `tests/differential/src/livenet.rs::node_args`, diagnostic-only — Go honors it identically, widens `logs/main.log`).
+> **Outcome: the live arm correctly FAILS (stays `#[ignore]`); the blocker is pinned at the TLS layer, BELOW the
+> app-level Avalanche handshake.** Evidence (captured `<workdir>/rust/{node.log,logs/main.log}` + `go/node.log`):
+> - The Rust follower dials the Go beacon as the **TLS client** and loops on a backoff-paced redial. Every attempt
+>   logs (rustls `0.23.40`): `No cached session` → `Using ciphersuite TLS13_AES_128_GCM_SHA256` → `TLS1.3 encrypted
+>   extensions` → `Got CertificateRequest … signature_algorithms: [RSA_PSS_SHA256, ECDSA_NISTP256_SHA256, …]` →
+>   **`Attempting client auth`** (`rustls/client/common.rs:106`) — and then **stops**. The next line is a fresh
+>   `No cached session` ClientHello on the next redial. The **last successful rung is the client-auth attempt**; the
+>   TLS handshake **never completes**. The upgrader's `tracing::debug!("TLS upgrade complete: derived peer NodeID")`
+>   (`crates/ava-network/src/peer/upgrader.rs:142`) **never fires**, so no app-level `Handshake`/`PeerList`/signed-IP
+>   rung is ever reached.
+> - The **Go beacon never registers, upgrades, or rejects the inbound connection**: its `go/node.log` (at
+>   `--log-level=debug`) shows only `node/node.go:158 initializing node` (`stakingKeyType: "RSA"`,
+>   `NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg`) and three periodic `network/network.go:1241 reset ip tracker bloom
+>   filter` lines — **zero** `peer`/`upgradeConn`/inbound-conn/TLS-handshake events. The two `handler.go:459 …
+>   "connected"` lines are the Go node connecting to *itself*. So Go's server-side TLS handshake reaches sending
+>   `CertificateRequest` but the connection is dropped before Go hands off to its peer upgrader.
+> - **Root cause:** a `rustls`-client ↔ Go `crypto/tls`-server **TLS 1.3 mutual-auth interop stall** — the Rust
+>   client selects/attempts its (ECDSA-P256) client certificate after Go's `CertificateRequest`, but the handshake
+>   does not complete and neither side surfaces a TLS alert. The leading-hypothesis (signed-IP signature mismatch)
+>   and the `Handshake`-wire/client-version hypotheses are **ruled out**: the failure is strictly *before* any
+>   Avalanche app-level message — no `ip_signer`/`handshake.rs` code path is reached. The prior "loops at ~250ms"
+>   observation was the `DIAL_SCAN_INTERVAL` redial with Task-4 backoff (1s→2s→4s spacing visible in the log).
+> - **Secondary AS-BUILT defect found (logging, not behavior):** the avalanchers node's **native `tracing` events do
+>   not reach the `LogFactory` file/stderr sinks** in this build — the follower's `node.log` *and* `logs/main.log`
+>   contain ONLY 64 `log`-crate-bridged `rustls::*` records and **zero** native node events (not even
+>   `initializing node`). So the Task-6 handshake rungs would not have been observable even on a *successful* path
+>   via these sinks; the rustls `log`→`tracing` bridge is the only thing currently landing. This is a separate
+>   wiring gap (LogFactory subscriber not capturing native `ava_*` targets) and is part of the **precise next step**
+>   for surfacing app-level rungs. Additionally, `net_impl::handle_dial` swallows the client-side upgrade `Err`
+>   silently (`if let Ok(..) = upgraded`), so the TLS-stall error itself is never logged — adding a
+>   `tracing::debug!` on that `Err` arm (with the `rustls` error string) is the cheapest way to capture the exact
+>   alert/EOF on the next run.
+> - **Why a fix is out of scope this session:** isolating *which* TLS 1.3 mutual-auth detail Go rejects (client-cert
+>   signature-scheme selection, the ECDSA leaf's `SerialNumber=0`/validity structure under Go's `crypto/tls`
+>   acceptance, or a `tokio-rustls` read-half timing/close) requires a **TLS keylog / pcap capture** correlated
+>   across both stacks, plus the two logging-wiring fixes above to even see the Rust-side error — a multi-step
+>   networking change, not a minimal one. The live arm stays `#[cfg(feature="live")] #[ignore]` (red-under-live,
+>   not weakened). Next steps, in order: (1) wire native `ava_network`/node `tracing` into the LogFactory sink (or
+>   set `tlsKeyLogFile` + run with `SSLKEYLOGFILE`); (2) log the `handle_dial` upgrade `Err`; (3) capture the
+>   rustls↔Go TLS alert/EOF and compare the Rust client cert/signature-scheme against Go `staking.ParseCertificate`
+>   + `crypto/tls` server acceptance.
+
 ---
 
 ## Spec coverage check

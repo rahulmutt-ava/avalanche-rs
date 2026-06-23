@@ -71,6 +71,11 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         // optional `rocksdb` backend the default on-disk `leveldb` requires
         // (M9.15 gap note). Go honors `--db-type=memdb` identically.
         "--db-type=memdb".to_owned(),
+        // Surface the full handshake ladder (the post-TLS upgrader + finish
+        // rungs log at debug; Task-6/M9.15 D1). Go honors `--log-level=debug`
+        // identically — this only widens the captured `logs/main.log`, it does
+        // not change node behavior.
+        "--log-level=debug".to_owned(),
     ];
     if let Some(b) = &launch.bootstrap {
         args.push(format!("--bootstrap-ips={}", b.ip));

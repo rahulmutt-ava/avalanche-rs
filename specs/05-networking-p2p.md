@@ -265,6 +265,21 @@ Key invariants (must reproduce):
 > `danger::ServerCertVerifier` (client side) and `danger::ClientCertVerifier` (server
 > side) that run `ValidateCertificate` then return `…Verified::assertion()`. See §4.5.
 
+> **AS-BUILT (M9.15 live mixed-net, 2026-06-23).** The Rust↔Rust localhost TLS handshake completes (M9.15 Task 5,
+> `mixed_network_smoke` Rust-only path), but the **live `rustls`-client ↔ Go `crypto/tls`-server TLS 1.3 mutual
+> handshake stalls** and blocks the live two-binary `differential::mixed_network` arm. Pinned with `--log-level=debug`
+> on both nodes (captured logs; see `plan/M9-interop-hardening.md` M9.15 D2/D3 callout for the full evidence): the
+> Rust follower (TLS client) reaches Go's `CertificateRequest`, logs `rustls/client/common.rs:106 "Attempting client
+> auth"`, then the handshake never completes — `peer/upgrader.rs::upgrade`'s post-handshake `"TLS upgrade complete"`
+> debug never fires, so **no app-level rung (`Handshake`/signed-IP/`PeerList`) is ever reached**. The Go beacon never
+> logs an inbound peer/upgrade/reject event. The failure is therefore strictly in this §1.6 TLS layer, *below* the
+> §1.4 application handshake — the signed-IP (§1.4/§1.6 "IP signing") and `Handshake`-wire hypotheses are ruled out.
+> Two AS-BUILT defects support the next investigation step: (a) the avalanchers node's native `tracing` events are
+> not currently captured by the `LogFactory` sink (only the `log`→`tracing` rustls bridge lands), and (b)
+> `network::net_impl::handle_dial` swallows the outbound TLS upgrade `Err` without logging it. The live arm remains
+> `#[cfg(feature="live")] #[ignore]`. Open item: capture the rustls↔Go TLS alert (keylog/pcap) and reconcile the
+> Rust client-cert signature-scheme + ECDSA leaf structure against Go's `crypto/tls` server-side acceptance.
+
 ---
 
 ## 2. `ava-message` design
