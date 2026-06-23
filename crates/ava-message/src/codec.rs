@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use prost::Message as _;
 
+use ava_types::node_id::NodeId;
+
 use crate::error::{Error, Result};
 use crate::frame::MAX_MESSAGE_SIZE;
 use crate::ops::Op;
@@ -46,8 +48,15 @@ pub enum Compression {
 ///
 /// `expiration` is `min(deadline, max_message_timeout)` from now for ops that
 /// carry a deadline; `None` means "no deadline" (Go's `mockable.MaxTime`).
+///
+/// `sender` is the NodeId of the peer this message arrived from. The
+/// [`MsgBuilder`] sets it to `NodeId::default()`; the peer actor overwrites it
+/// with `self.id` before forwarding to the router (the codec cannot know the
+/// sender — only the peer actor does).
 #[derive(Debug)]
 pub struct InboundMessage {
+    /// The NodeId of the peer this message arrived from.
+    pub sender: NodeId,
     /// The opcode of the unwrapped message.
     pub op: Op,
     /// The unwrapped oneof variant.
@@ -215,6 +224,7 @@ impl MsgBuilder {
             .map(|d| d.min(self.max_message_timeout))
             .and_then(|clamped| Instant::now().checked_add(clamped));
         Ok(InboundMessage {
+            sender: NodeId::default(),
             op,
             message,
             expiration,

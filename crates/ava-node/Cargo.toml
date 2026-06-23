@@ -73,6 +73,7 @@ tracing-opentelemetry = "0.28"
 rocksdb = [ "ava-database/rocksdb" ]
 
 [dev-dependencies]
+bytes = { workspace = true }
 tempfile = "3"
 
 [lints]

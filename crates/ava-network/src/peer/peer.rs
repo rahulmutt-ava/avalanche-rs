@@ -502,6 +502,7 @@ impl Peer {
                 // handshake has finished; drop (ignore) otherwise.
                 if self.finished_handshake.is_cancelled() {
                     let forwarded = ava_message::codec::InboundMessage {
+                        sender: self.id,
                         op: inbound.op,
                         message: other,
                         expiration: inbound.expiration,

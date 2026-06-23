@@ -80,10 +80,14 @@ impl RouterBridge {
 #[async_trait::async_trait]
 impl InboundHandler for RouterBridge {
     async fn handle_inbound(&self, _ctx: &CancellationToken, msg: InboundMessage) {
-        // Wire-op → engine-op conversion lands with dispatch (M8.30); until
-        // then inbound consensus traffic is dropped here, exactly like Go's
-        // router would drop messages for unknown chains (no chains exist yet).
-        tracing::debug!(op = ?msg.op, "dropping inbound message (chain dispatch lands in M8.30)");
+        let Some(router) = self.engine_router() else {
+            tracing::debug!(op = ?msg.op, "no engine router yet; dropping inbound");
+            return;
+        };
+        match crate::init::inbound_decode::decode_inbound(msg.sender, &msg) {
+            Some(engine_msg) => router.handle_inbound(engine_msg).await,
+            None => tracing::trace!(op = ?msg.op, "non-consensus inbound; ignored"),
+        }
     }
 }
 
@@ -475,5 +479,135 @@ fn chrono_to_system_time(t: chrono::DateTime<chrono::Utc>) -> std::time::SystemT
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
     } else {
         std::time::SystemTime::UNIX_EPOCH
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use ava_engine::networking::router::{
+        InboundMessage as EngineInboundMessage, InboundOp, Router as EngineRouter,
+    };
+    use ava_message::codec::{Compression, MsgBuilder};
+    use ava_message::proto::p2p;
+    use ava_types::id::Id;
+    use ava_types::node_id::NodeId;
+    use bytes::Bytes;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{InboundHandler, RouterBridge};
+
+    /// A recording stub that captures every [`EngineInboundMessage`] it receives.
+    struct RecordingRouter {
+        received: Arc<Mutex<Vec<EngineInboundMessage>>>,
+    }
+
+    impl RecordingRouter {
+        fn new() -> (Self, Arc<Mutex<Vec<EngineInboundMessage>>>) {
+            let store = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    received: Arc::clone(&store),
+                },
+                store,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl EngineRouter for RecordingRouter {
+        fn add_chain(
+            &self,
+            _chain: ava_types::id::Id,
+            _handler: Arc<dyn ava_engine::networking::router::ChainMessageSink>,
+        ) {
+        }
+
+        async fn handle_inbound(&self, msg: EngineInboundMessage) {
+            self.received.lock().unwrap().push(msg);
+        }
+
+        fn register_request(&self, _node: NodeId, _chain: Id, _request_id: u32, _op_tag: u8) {}
+
+        fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    fn make_get_accepted_frontier_msg(
+        chain: Id,
+        request_id: u32,
+        sender: NodeId,
+    ) -> ava_message::codec::InboundMessage {
+        let inner = p2p::message::Message::GetAcceptedFrontier(p2p::GetAcceptedFrontier {
+            chain_id: Bytes::copy_from_slice(chain.as_bytes()),
+            request_id,
+            deadline: 1_000_000_000,
+        });
+        let m = p2p::Message {
+            message: Some(inner),
+        };
+        let mb = MsgBuilder::default();
+        let (bytes, _, _) = mb.marshal(&m, Compression::None).expect("marshal");
+        let mut msg = mb.parse_inbound(&bytes).expect("parse_inbound");
+        msg.sender = sender;
+        msg
+    }
+
+    /// Verify that `RouterBridge::handle_inbound` decodes a decodable inbound
+    /// message and forwards the resulting [`EngineInboundMessage`] to the engine
+    /// router.
+    #[tokio::test]
+    async fn router_bridge_routes_decoded_message_to_engine_router() {
+        let chain = Id::from([0xABu8; 32]);
+        let sender = NodeId::from([0x01u8; 20]);
+
+        let bridge = Arc::new(RouterBridge::new());
+        let (recording, store) = RecordingRouter::new();
+        bridge.set_engine_router(Arc::new(recording));
+
+        let msg = make_get_accepted_frontier_msg(chain, 42, sender);
+        let ctx = CancellationToken::new();
+        bridge.handle_inbound(&ctx, msg).await;
+
+        let received = store.lock().unwrap();
+        assert_eq!(
+            received.len(),
+            1,
+            "engine router should receive exactly one message"
+        );
+        let got = received.first().expect("one message");
+        assert_eq!(got.chain, chain);
+        assert_eq!(got.node, sender);
+        assert_eq!(got.op, InboundOp::GetAcceptedFrontier { request_id: 42 });
+    }
+
+    /// Verify that a non-consensus message (Ping) is silently dropped and
+    /// the engine router receives nothing.
+    #[tokio::test]
+    async fn router_bridge_drops_non_consensus_message() {
+        let bridge = Arc::new(RouterBridge::new());
+        let (recording, store) = RecordingRouter::new();
+        bridge.set_engine_router(Arc::new(recording));
+
+        let inner = p2p::message::Message::Ping(p2p::Ping { uptime: 0 });
+        let m = p2p::Message {
+            message: Some(inner),
+        };
+        let mb = MsgBuilder::default();
+        let (bytes, _, _) = mb.marshal(&m, Compression::None).expect("marshal");
+        let msg = mb.parse_inbound(&bytes).expect("parse_inbound");
+        let ctx = CancellationToken::new();
+        bridge.handle_inbound(&ctx, msg).await;
+
+        let received = store.lock().unwrap();
+        assert!(
+            received.is_empty(),
+            "engine router should receive nothing for a Ping"
+        );
     }
 }

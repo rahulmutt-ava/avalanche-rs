@@ -23,6 +23,7 @@ pub mod db_init;
 pub mod dispatchers;
 pub mod health;
 pub mod identity;
+pub mod inbound_decode;
 pub mod message;
 pub mod metrics;
 pub mod nat;
