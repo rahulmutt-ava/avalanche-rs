@@ -1102,6 +1102,20 @@ struct ChainAssemblySpec {
     extra_beacons: BTreeMap<NodeId, u64>,
 }
 
+/// The full chain identity a production network boot needs (the analogue of the
+/// loopback [`BootSpec`], for the [`OutboundSender`] path). Unlike the
+/// test-facing [`boot_chain_over_network`] — which uses a synthetic identity —
+/// production P/X/C chains carry their real network id, primary alias, AVAX
+/// asset id, and genesis id.
+struct NetBootSpec {
+    network_id: u32,
+    chain_id: Id,
+    subnet_id: Id,
+    primary_alias: &'static str,
+    avax_asset_id: Id,
+    genesis_id: Id,
+}
+
 /// The pieces a chain boot yields once the handler is started — shared by both
 /// the in-process [`RecordingSender`] path ([`boot_chain`]) and the production
 /// [`OutboundSender`] path ([`boot_chain_over_network`]).
@@ -1349,6 +1363,85 @@ pub struct NetworkChainBootHandle {
     pub _data_dir: Option<tempfile::TempDir>,
 }
 
+/// The production network-boot core: assemble one chain whose `Sender` is a real
+/// [`OutboundSender`] over `network`, registering its handler into the
+/// caller-supplied **shared** [`ChainRouter`] (the one node-assembly installs into
+/// the `RouterBridge`, so inbound peer ops route to this chain's engine) and
+/// using the caller-supplied `clock` (production: `RealClock`).
+///
+/// `beacons`: `None` ⇒ self-beacon (single-node frontier probe); `Some(empty)` ⇒
+/// beaconless short-circuit `Bootstrapping → NormalOp` (solo / beacon role);
+/// `Some(map)` non-empty ⇒ frontier from those remote peers.
+///
+/// # Errors
+/// Propagates a VM-init / consensus-construction / identity / timeout failure.
+#[allow(clippy::too_many_arguments)]
+async fn boot_chain_over_network_core<V>(
+    spec: NetBootSpec,
+    router: Arc<ChainRouter>,
+    clock: Arc<dyn Clock>,
+    network: Arc<dyn ava_network::network::Network>,
+    allower: Arc<dyn ava_network::network::Allower>,
+    inner_vm: V,
+    genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
+    token: CancellationToken,
+    connectivity_gate: Option<watch::Receiver<bool>>,
+    beacons: Option<BTreeMap<NodeId, u64>>,
+) -> Result<NetworkChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    let sender = Arc::new(OutboundSender::new(
+        Arc::clone(&network),
+        allower,
+        Arc::clone(&router) as Arc<dyn Router>,
+        spec.chain_id,
+        spec.subnet_id,
+        router.current_timeout(),
+    ));
+
+    let router_handle: Arc<dyn Router> = Arc::clone(&router) as Arc<dyn Router>;
+
+    let include_self_beacon = beacons.is_none();
+    let extra_beacons = beacons.unwrap_or_default();
+
+    let assembled = boot_chain_with_sender(
+        ChainAssemblySpec {
+            network_id: spec.network_id,
+            chain_id: spec.chain_id,
+            subnet_id: spec.subnet_id,
+            primary_alias: spec.primary_alias,
+            avax_asset_id: spec.avax_asset_id,
+            include_self_beacon,
+            extra_beacons,
+        },
+        sender,
+        router,
+        clock,
+        inner_vm,
+        genesis_bytes,
+        base_db,
+        &token,
+        |_node_id, _sink| {},
+        connectivity_gate,
+    )
+    .await?;
+
+    Ok(NetworkChainBootHandle {
+        ctx: assembled.ctx,
+        join: assembled.join,
+        token,
+        genesis_id: spec.genesis_id,
+        last_accepted_height: assembled.last_accepted_height,
+        beacons: assembled.beacons,
+        router: router_handle,
+        vm_tx: assembled.vm_tx,
+        _sink: assembled.sink,
+        _data_dir: None,
+    })
+}
+
 /// Boot one in-process Snowman chain whose [`Sender`](ava_engine::common::sender::Sender)
 /// is the **production** ava-network-backed
 /// [`OutboundSender`](ava_engine::networking::sender::OutboundSender) — the
@@ -1413,11 +1506,9 @@ where
     let genesis_id =
         Id::from_slice(&ava_crypto::hashing::sha256(genesis_bytes)).unwrap_or(Id::EMPTY);
 
-    // The real router over a real adaptive-timeout manager; held as
-    // `Arc<ChainRouter>` so it can be both handed to the `OutboundSender`
-    // (`Arc<dyn Router>`) and passed to `create_snowman_chain` by reference
-    // (`router.as_ref()`). The request timeout (2s) is the configured initial
-    // adaptive timeout (`timeout_config().initial_timeout`).
+    // Self-contained router + virtual clock for the single-chain test nodes that
+    // call this directly. The production multi-chain path uses the shared
+    // `node.chain_router` via `boot_chain_over_network_core`.
     let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
     let timeouts = Arc::new(AdaptiveTimeoutManager::new(
         &timeout_config(),
@@ -1425,66 +1516,27 @@ where
     )?);
     let router = ChainRouter::new(timeouts);
 
-    let sender = Arc::new(OutboundSender::new(
-        Arc::clone(&network),
-        allower,
-        Arc::clone(&router) as Arc<dyn Router>,
-        chain_id,
-        subnet_id,
-        timeout_config().initial_timeout,
-    ));
-
-    // Keep a clone of the chain's router so the boot handle can expose it: the
-    // node's network→consensus bridge needs it to deliver inbound peer ops to
-    // this chain's engine (M9.15 G5).
-    let router_handle: Arc<dyn Router> = Arc::clone(&router) as Arc<dyn Router>;
-
-    // `None` ⇒ self-beacon (the single-node frontier-broadcast probe used by the
-    // existing `outbound_sender_boot` / `beacon_connectivity_gate` tests).
-    // `Some(map)` ⇒ frontier from `map` (empty ⇒ beaconless solo → NormalOp; the
-    // beacon role) and do not self-beacon — the real follower-bootstrap case
-    // (M9.15 G5).
-    let include_self_beacon = beacons.is_none();
-    let extra_beacons = beacons.unwrap_or_default();
-
-    let assembled = boot_chain_with_sender(
-        ChainAssemblySpec {
+    boot_chain_over_network_core(
+        NetBootSpec {
             network_id: ava_types::constants::LOCAL_ID,
             chain_id,
             subnet_id,
             primary_alias: "network",
             avax_asset_id: Id::EMPTY,
-            include_self_beacon,
-            extra_beacons,
+            genesis_id,
         },
-        sender,
         router,
         clock,
+        network,
+        allower,
         inner_vm,
         genesis_bytes,
         base_db,
-        &token,
-        // The production `OutboundSender` needs no post-create hook (no
-        // loopback); inbound ops arrive from real peers through the router.
-        |_node_id, _sink| {},
-        // The beacon-connectivity gate: defer handler start until
-        // `on_sufficiently_connected` fires (M9.15 G2). `None` starts immediately.
-        connectivity_gate,
-    )
-    .await?;
-
-    Ok(NetworkChainBootHandle {
-        ctx: assembled.ctx,
-        join: assembled.join,
         token,
-        genesis_id,
-        last_accepted_height: assembled.last_accepted_height,
-        beacons: assembled.beacons,
-        router: router_handle,
-        vm_tx: assembled.vm_tx,
-        _sink: assembled.sink,
-        _data_dir: None,
-    })
+        connectivity_gate,
+        beacons,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
