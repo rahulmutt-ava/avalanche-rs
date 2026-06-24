@@ -31,6 +31,7 @@ pub mod plugin;
 pub mod program;
 pub mod rpc;
 pub mod saevm;
+pub mod tls_repro;
 pub mod xchain;
 
 pub use atomic::exported_utxo_observation;
@@ -52,11 +53,11 @@ pub use xchain::run_program;
 //
 // (`ava-avm` / `ava-vm` / `ava-secp256k1fx` / `ava-snow` / `ava-database` /
 // `ava-types` / `ava-version` / `async-trait` / `serde_json` / `tokio` /
-// `tokio-util` are genuine lib deps used by `xchain`, so they are NOT listed.)
+// `tokio-util` / `ava-network` / `rustls` / `serde` are genuine lib deps, so
+// they are NOT listed here.)
 #[cfg(test)]
 mod dev_dep_uses {
     use ava_message as _;
-    use ava_network as _;
     // `pretty_assertions` + `proptest` are consumed by the integration-test
     // targets (`sae_recovery`, `xchain_issue_tx`); reference them here so the
     // lib-test build does not trip `unused_crate_dependencies`.
