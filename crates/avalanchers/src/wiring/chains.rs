@@ -44,7 +44,7 @@ use ava_proposervm::{BlockSigner, StakingIdentity};
 use ava_snow::snowball::Parameters;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
-use ava_utils::clock::{Clock, MockClock};
+use ava_utils::clock::{Clock, MockClock, RealClock};
 use ava_validators::state::{GetCurrentValidatorOutput, ValidatorState, WarpSet};
 use ava_validators::validator::GetValidatorOutput;
 use ava_validators::{DefaultManager, ValidatorManager};
@@ -724,6 +724,16 @@ pub async fn boot_in_process_pchain(network_id: u32) -> Result<PChainBootHandle>
 /// (the assembled `Node`'s persistent backend) through the `*_with_db` path.
 fn fresh_mem_db() -> Arc<dyn DynDatabase> {
     Arc::new(MemDb::new())
+}
+
+/// The primary-network send filter: admit every connected peer. P/X/C are all
+/// primary-network chains; a subnet-membership allower is out of scope (M9.15).
+struct AllowAllPrimary;
+
+impl ava_network::network::Allower for AllowAllPrimary {
+    fn is_allowed(&self, _node_id: &NodeId) -> bool {
+        true
+    }
 }
 
 /// Like [`boot_in_process_pchain`], but boots as a **solo node with an empty
@@ -1793,4 +1803,136 @@ pub async fn drive_startup_chains_with_db(
         return Ok(Vec::new());
     }
     run_queued_chains_with_db(manager, network_id, base_db).await
+}
+
+/// Production multi-node analogue of [`run_queued_chains_with_db`]: drive every
+/// queued P/X/C chain over the node's **shared** [`ChainRouter`] + a real
+/// [`OutboundSender`] over `network`, so inbound peer ops route to each chain's
+/// engine (`RouterBridge` already points at `router`) and outbound ops reach real
+/// peers. Uses `RealClock`. `beacons` is the bootstrap beacon set applied to every
+/// critical chain — **empty** ⇒ beaconless short-circuit `Bootstrapping →
+/// NormalOp` (solo / beacon role); **non-empty** ⇒ frontier from those peers.
+///
+/// # Errors
+/// Propagates a chain boot failure (genesis / DB / VM-init / consensus / identity
+/// / timeout).
+#[allow(clippy::too_many_arguments)]
+pub async fn run_queued_chains_over_network(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    base_db: Arc<dyn DynDatabase>,
+    network: Arc<dyn ava_network::network::Network>,
+    router: Arc<ChainRouter>,
+    gate: watch::Receiver<bool>,
+    beacons: BTreeMap<NodeId, u64>,
+) -> Result<Vec<NetworkChainBootHandle>> {
+    use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
+    use ava_snow::EngineState;
+
+    let root_subnet_token = CancellationToken::new();
+    let allower: Arc<dyn ava_network::network::Allower> = Arc::new(AllowAllPrimary);
+    let clock: Arc<dyn Clock> = Arc::new(RealClock);
+    let mut handles = Vec::new();
+
+    for params in manager.queued_chains() {
+        let handle = if params.vm_id == platform_vm_id() {
+            let (chain_token, _tasks) =
+                manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+            let (vm, genesis_bytes, avax_asset_id, genesis_id) = resolve_pchain_vm(network_id)?;
+            boot_chain_over_network_core(
+                NetBootSpec {
+                    network_id,
+                    chain_id: ava_node::init::chain_manager::PLATFORM_CHAIN_ID,
+                    subnet_id: ava_types::constants::PRIMARY_NETWORK_ID,
+                    primary_alias: "P",
+                    avax_asset_id,
+                    genesis_id,
+                },
+                Arc::clone(&router),
+                Arc::clone(&clock),
+                Arc::clone(&network),
+                Arc::clone(&allower),
+                vm,
+                &genesis_bytes,
+                Arc::clone(&base_db),
+                chain_token,
+                Some(gate.clone()),
+                Some(beacons.clone()),
+            )
+            .await?
+        } else if params.vm_id == avm_id() {
+            let (chain_token, _tasks) =
+                manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+            let (vm, avax_asset_id, genesis_id) =
+                resolve_xchain_vm(network_id, &params.genesis_data)?;
+            boot_chain_over_network_core(
+                NetBootSpec {
+                    network_id,
+                    chain_id: params.id,
+                    subnet_id: params.subnet_id,
+                    primary_alias: "X",
+                    avax_asset_id,
+                    genesis_id,
+                },
+                Arc::clone(&router),
+                Arc::clone(&clock),
+                Arc::clone(&network),
+                Arc::clone(&allower),
+                vm,
+                &params.genesis_data,
+                Arc::clone(&base_db),
+                chain_token,
+                Some(gate.clone()),
+                Some(beacons.clone()),
+            )
+            .await?
+        } else if params.vm_id == evm_id() {
+            let (chain_token, _tasks) =
+                manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
+            let (vm, genesis_id, data_dir) = resolve_cchain_vm(network_id, &params.genesis_data)?;
+            let mut handle = boot_chain_over_network_core(
+                NetBootSpec {
+                    network_id,
+                    chain_id: params.id,
+                    subnet_id: params.subnet_id,
+                    primary_alias: "C",
+                    avax_asset_id: Id::EMPTY,
+                    genesis_id,
+                },
+                Arc::clone(&router),
+                Arc::clone(&clock),
+                Arc::clone(&network),
+                Arc::clone(&allower),
+                vm,
+                &params.genesis_data,
+                Arc::clone(&base_db),
+                chain_token,
+                Some(gate.clone()),
+                Some(beacons.clone()),
+            )
+            .await?;
+            // The Firewood scratch dir must outlive the running VM (the handle
+            // owns it, exactly as the loopback `boot_cchain` does).
+            handle._data_dir = Some(data_dir);
+            handle
+        } else {
+            tracing::warn!(
+                chain_id = %params.id,
+                vm_id = %params.vm_id,
+                "skipping queued chain over network: SAE / unknown VM production dispatch \
+                 not yet wired (SAE seams M7.21/M7.26 + genesis materialization pending)"
+            );
+            continue;
+        };
+
+        let ctx = Arc::clone(&handle.ctx);
+        manager.set_bootstrapped_reporter(
+            params.id,
+            Box::new(move || matches!(**ctx.state.load(), EngineState::NormalOp)),
+        );
+
+        handles.push(handle);
+    }
+
+    Ok(handles)
 }
