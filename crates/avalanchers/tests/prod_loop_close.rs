@@ -114,6 +114,7 @@ async fn inbound_frontier_request_routes_to_a_production_booted_chain() {
     let clock: Arc<dyn Clock> = Arc::new(RealClock);
     let timeouts = Arc::new(
         AdaptiveTimeoutManager::new(
+            // Values mirror timeout_config() in chains.rs (kept in sync manually).
             &AdaptiveTimeoutConfig {
                 initial_timeout: Duration::from_secs(2),
                 minimum_timeout: Duration::from_secs(2),
@@ -194,6 +195,7 @@ async fn beaconed_boot_broadcasts_frontier_request_to_the_configured_beacon() {
     let clock: Arc<dyn Clock> = Arc::new(RealClock);
     let timeouts = Arc::new(
         AdaptiveTimeoutManager::new(
+            // Values mirror timeout_config() in chains.rs (kept in sync manually).
             &AdaptiveTimeoutConfig {
                 initial_timeout: Duration::from_secs(2),
                 minimum_timeout: Duration::from_secs(2),
@@ -208,8 +210,7 @@ async fn beaconed_boot_broadcasts_frontier_request_to_the_configured_beacon() {
     let router = ChainRouter::new(timeouts);
 
     // A pre-fired connectivity gate (the beacon is "connected").
-    let (tx, rx) = tokio::sync::watch::channel(true);
-    let _ = tx;
+    let (_tx, rx) = tokio::sync::watch::channel(true);
 
     let beacon = NodeId::from_slice(&[9u8; 20]).expect("beacon node id");
     let mut beacons = BTreeMap::new();

@@ -1928,6 +1928,7 @@ pub async fn run_queued_chains_over_network(
 
     for params in manager.queued_chains() {
         let handle = if params.vm_id == platform_vm_id() {
+            // The task tracker is unused in-process (the handler joins via its JoinHandle).
             let (chain_token, _tasks) =
                 manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
             let (vm, genesis_bytes, avax_asset_id, genesis_id) = resolve_pchain_vm(network_id)?;
