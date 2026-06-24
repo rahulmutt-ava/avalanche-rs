@@ -31,7 +31,9 @@ use ava_utils::clock::{Clock, RealClock};
 use ava_vm::testutil::TestVm;
 use tokio_util::sync::CancellationToken;
 
-use avalanchers::wiring::chains::boot_chain_over_network_core_for_test;
+use avalanchers::wiring::chains::{
+    boot_chain_over_network_core_for_test, boot_chain_over_network_core_for_test_gated,
+};
 
 #[derive(Clone)]
 struct Recorded {
@@ -175,6 +177,80 @@ async fn inbound_frontier_request_routes_to_a_production_booted_chain() {
         reply.recipients.contains(&peer),
         "reply addressed back to the requesting peer"
     );
+
+    token.cancel();
+    let _ = handle.join.await;
+}
+
+#[tokio::test]
+async fn beaconed_boot_broadcasts_frontier_request_to_the_configured_beacon() {
+    use ava_message::ops::Op;
+
+    let chain_id = Id::EMPTY;
+    let subnet_id = ava_types::constants::PRIMARY_NETWORK_ID;
+    let network = Arc::new(MockNetwork::default());
+    let allower: Arc<dyn Allower> = Arc::new(AllowAll);
+    let token = CancellationToken::new();
+    let clock: Arc<dyn Clock> = Arc::new(RealClock);
+    let timeouts = Arc::new(
+        AdaptiveTimeoutManager::new(
+            &AdaptiveTimeoutConfig {
+                initial_timeout: Duration::from_secs(2),
+                minimum_timeout: Duration::from_secs(2),
+                maximum_timeout: Duration::from_secs(10),
+                timeout_coefficient: 1.0,
+                timeout_halflife: Duration::from_secs(5),
+            },
+            Arc::clone(&clock),
+        )
+        .unwrap(),
+    );
+    let router = ChainRouter::new(timeouts);
+
+    // A pre-fired connectivity gate (the beacon is "connected").
+    let (tx, rx) = tokio::sync::watch::channel(true);
+    let _ = tx;
+
+    let beacon = NodeId::from_slice(&[9u8; 20]).expect("beacon node id");
+    let mut beacons = BTreeMap::new();
+    beacons.insert(beacon, 1u64);
+
+    // Boot a fresh follower chain with the beacon as its sole bootstrap beacon.
+    // The gated shim accepts an explicit connectivity_gate + beacon set, routing
+    // into the same boot_chain_over_network_core the production path uses.
+    let handle = boot_chain_over_network_core_for_test_gated(
+        chain_id,
+        subnet_id,
+        Arc::clone(&router),
+        Arc::clone(&clock),
+        Arc::clone(&network) as Arc<dyn Network>,
+        Arc::clone(&allower),
+        TestVm::new(),
+        b"genesis",
+        Arc::new(MemDb::new()),
+        token.clone(),
+        Some(rx),
+        Some(beacons.clone()),
+    )
+    .await
+    .expect("boot follower");
+
+    let got = {
+        let mut found = None;
+        for _ in 0..300 {
+            if let Some(r) = network
+                .sends()
+                .into_iter()
+                .find(|r| r.op == Op::GetAcceptedFrontier && r.recipients.contains(&beacon))
+            {
+                found = Some(r);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        found.expect("a GetAcceptedFrontier to the configured beacon")
+    };
+    assert!(got.recipients.contains(&beacon), "frontier request to beacon");
 
     token.cancel();
     let _ = handle.join.await;

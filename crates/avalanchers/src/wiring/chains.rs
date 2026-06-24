@@ -1636,6 +1636,53 @@ where
     .await
 }
 
+/// Test-only entry to [`boot_chain_over_network_core`] with a synthetic identity
+/// **and** an explicit connectivity gate + beacon set — for the beaconed-follower
+/// path. See [`boot_chain_over_network_core_for_test`].
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn boot_chain_over_network_core_for_test_gated<V>(
+    chain_id: Id,
+    subnet_id: Id,
+    router: Arc<ChainRouter>,
+    clock: Arc<dyn Clock>,
+    network: Arc<dyn ava_network::network::Network>,
+    allower: Arc<dyn ava_network::network::Allower>,
+    inner_vm: V,
+    genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
+    token: CancellationToken,
+    connectivity_gate: Option<watch::Receiver<bool>>,
+    beacons: Option<BTreeMap<NodeId, u64>>,
+) -> Result<NetworkChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    let genesis_id =
+        Id::from_slice(&ava_crypto::hashing::sha256(genesis_bytes)).unwrap_or(Id::EMPTY);
+    boot_chain_over_network_core(
+        NetBootSpec {
+            network_id: ava_types::constants::LOCAL_ID,
+            chain_id,
+            subnet_id,
+            primary_alias: "network",
+            avax_asset_id: Id::EMPTY,
+            genesis_id,
+        },
+        router,
+        clock,
+        network,
+        allower,
+        inner_vm,
+        genesis_bytes,
+        base_db,
+        token,
+        connectivity_gate,
+        beacons,
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Production chain creator (M9.15 step (a) — drive the queued chains)
 // ---------------------------------------------------------------------------
