@@ -28,8 +28,8 @@ use ava_message::codec::InboundMessage;
 use ava_network::config::PeerConfig;
 use ava_network::identity::Identity;
 use ava_network::metrics::Metrics as NetworkMetrics;
-use ava_network::network::{Network, NetworkImpl};
 use ava_network::network::ip_tracker::IpTracker;
+use ava_network::network::{Network, NetworkImpl};
 use ava_network::peer::ip_signer::{Clock as PeerClock, IpSigner, SystemClock};
 use ava_network::peer::metrics::PeerMetrics;
 use ava_network::router::{AppVersion, ExternalHandler, InboundHandler};
@@ -648,14 +648,18 @@ mod tests {
 
         let tracked = recorder.tracked.lock().unwrap().clone();
         assert_eq!(tracked.len(), 2, "both configured beacons tracked");
+        let (b0, b1) = (
+            beacons.first().expect("beacon 0 exists"),
+            beacons.get(1).expect("beacon 1 exists"),
+        );
         assert_eq!(
-            tracked[0],
-            (beacons[0].id, beacons[0].ip),
+            tracked.first().copied(),
+            Some((b0.id, b0.ip)),
             "first beacon tracked in order with exact ip"
         );
         assert_eq!(
-            tracked[1],
-            (beacons[1].id, beacons[1].ip),
+            tracked.get(1).copied(),
+            Some((b1.id, b1.ip)),
             "second beacon tracked in order with exact ip"
         );
     }

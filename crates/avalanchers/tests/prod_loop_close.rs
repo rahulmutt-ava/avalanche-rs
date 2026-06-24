@@ -250,7 +250,10 @@ async fn beaconed_boot_broadcasts_frontier_request_to_the_configured_beacon() {
         }
         found.expect("a GetAcceptedFrontier to the configured beacon")
     };
-    assert!(got.recipients.contains(&beacon), "frontier request to beacon");
+    assert!(
+        got.recipients.contains(&beacon),
+        "frontier request to beacon"
+    );
 
     token.cancel();
     let _ = handle.join.await;

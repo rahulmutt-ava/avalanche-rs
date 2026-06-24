@@ -64,8 +64,11 @@ pub fn logging_test_factory(cfg: &ava_config::node::Config) -> std::sync::Arc<lo
     use std::sync::OnceLock;
     static FACTORY: OnceLock<std::sync::Arc<logging::LogFactory>> = OnceLock::new();
     std::sync::Arc::clone(FACTORY.get_or_init(|| {
-        let handles = logging::init(&cfg.logging_config)
-            .unwrap_or_else(|e| panic!("logging::init(): {e}"));
-        std::sync::Arc::new(logging::LogFactory::new(cfg.logging_config.clone(), handles))
+        let handles =
+            logging::init(&cfg.logging_config).unwrap_or_else(|e| panic!("logging::init(): {e}"));
+        std::sync::Arc::new(logging::LogFactory::new(
+            cfg.logging_config.clone(),
+            handles,
+        ))
     }))
 }

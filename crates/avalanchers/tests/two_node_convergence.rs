@@ -29,7 +29,10 @@ use avalanchers::wiring::chains::{NetworkChainBootHandle, drive_startup_chains_o
 
 /// Build a local-network, memdb, ephemeral-identity node config under `dir`,
 /// with optional `--bootstrap-ids/-ips` (mirror of `ava_node::testutil::test_config`).
-fn build_config(dir: &std::path::Path, bootstrap: Option<(NodeId, std::net::SocketAddr)>) -> Config {
+fn build_config(
+    dir: &std::path::Path,
+    bootstrap: Option<(NodeId, std::net::SocketAddr)>,
+) -> Config {
     let mut args: Vec<String> = [
         "avalanchers",
         "--network-id=local",

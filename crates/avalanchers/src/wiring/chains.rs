@@ -891,9 +891,7 @@ pub async fn boot_cchain(
 /// Resolve the production P-Chain VM + genesis identity (the same resolution
 /// `boot_pchain` performs inline). Returns `(vm, genesis_bytes, avax_asset_id,
 /// genesis_id)`.
-fn resolve_pchain_vm(
-    network_id: u32,
-) -> Result<(ava_platformvm::vm::PlatformVm, Vec<u8>, Id, Id)> {
+fn resolve_pchain_vm(network_id: u32) -> Result<(ava_platformvm::vm::PlatformVm, Vec<u8>, Id, Id)> {
     let (genesis_bytes, avax_asset_id) = ava_genesis::genesis_bytes(network_id, None)?;
     let genesis_id = ava_platformvm::genesis::genesis_id(&genesis_bytes);
     Ok((
