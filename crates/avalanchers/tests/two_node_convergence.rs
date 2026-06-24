@@ -137,6 +137,31 @@ async fn follower_node_bootstraps_from_beacon_node_to_normalop() {
     let bd = tokio::spawn(async move { beacon_net.dispatch().await });
     let fd = tokio::spawn(async move { follower_net.dispatch().await });
 
+    // ---- Rung 1: TLS peer connection. ----
+    // The follower must actually establish a TLS peer connection to the beacon —
+    // the connectivity gate (on_sufficiently_connected) fires only on this
+    // handshake, so this is the load-bearing precondition for the bootstrapper
+    // to send GetAcceptedFrontier and ultimately reach NormalOp.
+    let connected = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if follower
+                .networking
+                .net
+                .connected_peers()
+                .contains(&beacon_id)
+            {
+                break true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        connected,
+        "follower established a TLS peer connection to the beacon"
+    );
+
     // ---- Follower P-Chain reaches NormalOp (bootstrapped). ----
     let fp = pchain_handle(&follower_handles);
     let bp = pchain_handle(&beacon_handles);
@@ -153,6 +178,10 @@ async fn follower_node_bootstraps_from_beacon_node_to_normalop() {
     assert!(finished, "follower P-Chain reached NormalOp via the beacon");
 
     // ---- Convergence: same last-accepted height. ----
+    // For a fresh `local` genesis both P-Chains are at height 0 — the height
+    // equality is structural. The load-bearing proof is the gated NormalOp
+    // transition (the connectivity gate fires only on a real TLS handshake)
+    // and the connection assertion above.
     assert_eq!(
         fp.last_accepted_height, bp.last_accepted_height,
         "follower converged on the beacon's P-Chain tip height"
