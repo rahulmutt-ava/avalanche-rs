@@ -58,6 +58,14 @@ async fn tls_handshake_matrix_live() {
     let go_bin = tls_repro::build_go_harness().expect("build go harness");
     let id = ava_network::Identity::generate().expect("rust identity");
 
+    // This matrix exists to diagnose a TLS *stall*, so an unbounded harness hang
+    // is indistinguishable from the bug. Both the Rust client upgrade and the Go
+    // process wait are wrapped in a `tokio::time::timeout` comfortably longer
+    // than the Go side's 10s handshake deadline; on timeout we kill the child if
+    // still running and surface a structured string so the cell still prints
+    // capturable evidence (Task 4) instead of hanging.
+    const CELL_TIMEOUT: Duration = Duration::from_secs(15);
+
     // Helper: spawn the Go harness as server, read its LISTENING addr from
     // stderr, drive the Rust client against it, then collect the Go outcome.
     async fn rust_client_vs_go_server(
@@ -69,7 +77,7 @@ async fn tls_handshake_matrix_live() {
         let ports = ava_differential::livenet::free_ports(1).expect("free_ports");
         let port = ports.into_iter().next().expect("one port");
         let addr = format!("127.0.0.1:{port}");
-        let child = tokio::process::Command::new(go_bin)
+        let mut child = tokio::process::Command::new(go_bin)
             .args([
                 "--role=server",
                 &format!("--addr={addr}"),
@@ -81,10 +89,47 @@ async fn tls_handshake_matrix_live() {
             .spawn()
             .expect("spawn go server");
         tokio::time::sleep(Duration::from_millis(500)).await; // let it bind
-        let rust_result =
-            tls_repro::rust_client_upgrade(addr.parse().unwrap(), id).await;
-        let out = child.wait_with_output().await.expect("go output");
-        let go_stdout = String::from_utf8_lossy(&out.stdout).to_string();
+
+        // Bound the Rust-client upgrade so a stalled handshake yields a captured
+        // error string rather than hanging the harness.
+        let rust_result = match tokio::time::timeout(
+            CELL_TIMEOUT,
+            tls_repro::rust_client_upgrade(addr.parse().unwrap(), id),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(format!("timed out after {}s", CELL_TIMEOUT.as_secs())),
+        };
+
+        // Bound the Go-process wait the same way. We hold `child` mutably and
+        // wait on it directly (rather than the consuming `wait_with_output`) so
+        // that on timeout we can `start_kill()` the still-running child and then
+        // surface a structured outcome string (still parseable as "not ok"
+        // evidence) instead of leaking the process or blocking forever.
+        let go_stdout = match tokio::time::timeout(CELL_TIMEOUT, child.wait()).await {
+            Ok(Ok(_status)) => {
+                // Drain whatever the Go side wrote to stdout before exiting.
+                let mut buf = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    use tokio::io::AsyncReadExt;
+                    let _ = out.read_to_end(&mut buf).await;
+                }
+                String::from_utf8_lossy(&buf).to_string()
+            }
+            Ok(Err(e)) => format!(r#"{{"ok":false,"error":"go wait failed: {e}"}}"#),
+            Err(_) => {
+                // Still running past the deadline: kill it so it cannot leak past
+                // the test, then surface a structured timeout outcome line that
+                // `parse_go_outcome` can still read as evidence.
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                format!(
+                    r#"{{"ok":false,"error":"go timed out after {}s"}}"#,
+                    CELL_TIMEOUT.as_secs()
+                )
+            }
+        };
         (rust_result, go_stdout)
     }
 
@@ -104,6 +149,12 @@ async fn tls_handshake_matrix_live() {
     // fault. If cell 2 succeeds while cell 1 fails, the root cause is Go's
     // ValidateCertificate rejecting our cert. If cell 2 also fails, it is a
     // pure-TLS interop issue. Either way, capture — do not silently pass.
+    //
+    // The cell helper guarantees `g2` is always a structured JSON line: a real
+    // Go outcome on success, or a synthesized `{"ok":false,...}` line on the
+    // timeout / wait-failure path. So `parse_go_outcome` succeeds even when the
+    // handshake stalled — a timeout is *recorded as evidence* rather than
+    // hanging or panicking the harness mid-diagnosis.
     let go2 = tls_repro::parse_go_outcome(&g2);
     assert!(
         go2.is_ok(),
