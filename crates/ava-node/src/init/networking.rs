@@ -22,12 +22,13 @@ use tokio_util::sync::CancellationToken;
 use ava_config::node::Config;
 use ava_crypto::bls::Signer;
 use ava_engine::networking::router::Router as EngineRouter;
+use ava_genesis::Bootstrapper;
 use ava_message::builder::Creator;
 use ava_message::codec::InboundMessage;
 use ava_network::config::PeerConfig;
 use ava_network::identity::Identity;
 use ava_network::metrics::Metrics as NetworkMetrics;
-use ava_network::network::NetworkImpl;
+use ava_network::network::{Network, NetworkImpl};
 use ava_network::network::ip_tracker::IpTracker;
 use ava_network::peer::ip_signer::{Clock as PeerClock, IpSigner, SystemClock};
 use ava_network::peer::metrics::PeerMetrics;
@@ -263,6 +264,27 @@ fn is_public(ip: IpAddr) -> bool {
     super::api_server::ip_is_public(ip)
 }
 
+/// Narrow seam over the one `Network` method the beacon-tracking loop needs,
+/// so the loop is unit-testable without assembling a full [`NetworkImpl`].
+trait BeaconTracker {
+    fn track_beacon(&self, node_id: NodeId, ip: SocketAddr);
+}
+
+impl BeaconTracker for NetworkImpl {
+    fn track_beacon(&self, node_id: NodeId, ip: SocketAddr) {
+        self.manually_track(node_id, ip);
+    }
+}
+
+/// Pin each configured bootstrap beacon so the backoff dialer keeps
+/// reconnecting to it (Go `initNetworking` tracks the beacon IPs). Without
+/// this a beaconed node never dials its beacons and cannot bootstrap.
+fn track_bootstrappers(tracker: &dyn BeaconTracker, bootstrappers: &[Bootstrapper]) {
+    for b in bootstrappers {
+        tracker.track_beacon(b.id, b.ip);
+    }
+}
+
 /// Step 16: bind the staking listener, resolve the advertised public IP,
 /// assemble the peer config, and build the network (mirror Go
 /// `initNetworking`). Assumes validators, CPU/disk targeters, the message
@@ -458,6 +480,11 @@ pub async fn init_networking(
     let net = NetworkImpl::new_with_metrics(Arc::new(peer_config), listener, net_metrics)
         .map_err(|e| Error::Networking(e.to_string()))?;
 
+    // Pin each configured bootstrap beacon so the backoff dialer keeps
+    // reconnecting to it (Go `initNetworking` tracks the beacon IPs). Without
+    // this a beaconed node never dials its beacons and cannot bootstrap.
+    track_bootstrappers(net.as_ref(), &config.bootstrap_config.bootstrappers);
+
     Ok(Networking {
         net,
         staking_address,
@@ -486,12 +513,14 @@ fn chrono_to_system_time(t: chrono::DateTime<chrono::Utc>) -> std::time::SystemT
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use ava_engine::networking::router::{
         InboundMessage as EngineInboundMessage, InboundOp, Router as EngineRouter,
     };
+    use ava_genesis::Bootstrapper;
     use ava_message::codec::{Compression, MsgBuilder};
     use ava_message::proto::p2p;
     use ava_types::id::Id;
@@ -499,7 +528,7 @@ mod tests {
     use bytes::Bytes;
     use tokio_util::sync::CancellationToken;
 
-    use super::{InboundHandler, RouterBridge};
+    use super::{BeaconTracker, InboundHandler, RouterBridge, track_bootstrappers};
 
     /// A recording stub that captures every [`EngineInboundMessage`] it receives.
     struct RecordingRouter {
@@ -584,6 +613,51 @@ mod tests {
         assert_eq!(got.chain, chain);
         assert_eq!(got.node, sender);
         assert_eq!(got.op, InboundOp::GetAcceptedFrontier { request_id: 42 });
+    }
+
+    /// Verify that `track_bootstrappers` calls `track_beacon` for every
+    /// configured beacon, in config order, with the exact ip — exercising the
+    /// production helper that `init_networking` calls on the real
+    /// [`NetworkImpl`].
+    #[test]
+    fn track_bootstrappers_records_each_beacon_in_order() {
+        // A recording double that implements the narrow seam.
+        #[derive(Default)]
+        struct TrackRecorder {
+            tracked: Mutex<Vec<(NodeId, SocketAddr)>>,
+        }
+        impl BeaconTracker for TrackRecorder {
+            fn track_beacon(&self, node_id: NodeId, ip: SocketAddr) {
+                self.tracked.lock().unwrap().push((node_id, ip));
+            }
+        }
+
+        let beacons = vec![
+            Bootstrapper {
+                id: NodeId::from([1u8; 20]),
+                ip: "127.0.0.1:9651".parse::<SocketAddr>().unwrap(),
+            },
+            Bootstrapper {
+                id: NodeId::from([2u8; 20]),
+                ip: "127.0.0.1:9652".parse::<SocketAddr>().unwrap(),
+            },
+        ];
+
+        let recorder = TrackRecorder::default();
+        track_bootstrappers(&recorder, &beacons);
+
+        let tracked = recorder.tracked.lock().unwrap().clone();
+        assert_eq!(tracked.len(), 2, "both configured beacons tracked");
+        assert_eq!(
+            tracked[0],
+            (beacons[0].id, beacons[0].ip),
+            "first beacon tracked in order with exact ip"
+        );
+        assert_eq!(
+            tracked[1],
+            (beacons[1].id, beacons[1].ip),
+            "second beacon tracked in order with exact ip"
+        );
     }
 
     /// Verify that a non-consensus message (Ping) is silently dropped and
