@@ -878,6 +878,46 @@ pub async fn boot_cchain(
     .await
 }
 
+/// Resolve the production P-Chain VM + genesis identity (the same resolution
+/// `boot_pchain` performs inline). Returns `(vm, genesis_bytes, avax_asset_id,
+/// genesis_id)`.
+fn resolve_pchain_vm(
+    network_id: u32,
+) -> Result<(ava_platformvm::vm::PlatformVm, Vec<u8>, Id, Id)> {
+    let (genesis_bytes, avax_asset_id) = ava_genesis::genesis_bytes(network_id, None)?;
+    let genesis_id = ava_platformvm::genesis::genesis_id(&genesis_bytes);
+    Ok((
+        ava_platformvm::vm::PlatformVm::new(),
+        genesis_bytes,
+        avax_asset_id,
+        genesis_id,
+    ))
+}
+
+/// Resolve the production X-Chain VM + genesis identity (mirrors `boot_xchain`).
+/// Returns `(vm, avax_asset_id, genesis_id)`.
+fn resolve_xchain_vm(
+    network_id: u32,
+    genesis_bytes: &[u8],
+) -> Result<(ava_avm::vm::AvmVm, Id, Id)> {
+    let avax_asset_id = ava_genesis::avax_asset_id(genesis_bytes)?;
+    let genesis_id = ava_version::upgrade::get_config(network_id).cortina_x_chain_stop_vertex_id;
+    Ok((ava_avm::vm::AvmVm::new(), avax_asset_id, genesis_id))
+}
+
+/// Resolve the production C-Chain VM + genesis identity (mirrors `boot_cchain`).
+/// Returns `(vm, genesis_id, data_dir)` — the owned Firewood scratch dir must be
+/// kept alive for the VM's lifetime.
+fn resolve_cchain_vm(
+    network_id: u32,
+    genesis_bytes: &[u8],
+) -> Result<(ava_evm::vm::EvmVm, Id, tempfile::TempDir)> {
+    let data_dir = tempfile::tempdir()?;
+    let (vm, genesis_id) =
+        ava_evm::vm::EvmVm::from_genesis(network_id, data_dir.path(), genesis_bytes)?;
+    Ok((vm, genesis_id, data_dir))
+}
+
 /// **Test seam (M9.15 STEP (m) — engine-driven block issuance).** Boot a single
 /// in-process Snowman chain around a caller-supplied inner VM, over a
 /// caller-supplied base db, **with the self-loopback installed**. The returned
