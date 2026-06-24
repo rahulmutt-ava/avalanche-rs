@@ -443,6 +443,23 @@ recording the settled block's gas-clock so recovery/state-sync can rebuild it.
 **`canoto`** is used for the *persisted* execution-results blob
 (`blocks/execution.canoto.go`, §7), **not** for the block on the wire.
 
+> **Upstream delta (avalanchego `dbf0f71dc1`, #5573 — folded 2026-06-24).** The
+> "block-extras mechanism" above is now concrete for the SAE C-Chain: the
+> `hook.Settled {Height, GasUnix, GasNumerator, Excess}` quad is carried as **four
+> new optional coreth header fields** — `SettledHeight`, `SettledGasUnix`,
+> `SettledGasNumerator`, `SettledExcess` (all `*uint64`, RLP-`optional` tail +
+> JSON, see the header-tail callout in `10`). `cchain.builder.BuildBlock` writes
+> them from the chosen `settled` (replacing the prior `_ = settled` TODO), and
+> `cchain.hooks.SettledBy(h)` reconstructs the quad by reading them back (returning
+> the zero `hook.Settled{}` if **any** of the four is absent). Pure coreth blocks
+> must *not* carry the marker — coreth's `customheader.VerifySettled` rejects a
+> coreth header with any `Settled*` field set, since `semanticVerify` only runs on
+> coreth's own `block.Verify` and the fields belong to SAE. In the Rust port these
+> are the reth header-extension fields backing the side `hook.Settled` (the
+> `[seconds, fraction, hertz]` proxy-clock quad of the M7.8 AS-BUILT note); landing
+> the encode/decode is `plan/M7` M7.45. **Non-gating** (Helicon-dormant SAE
+> C-Chain), but a wire/format parity constraint worth matching now.
+
 > **AS-BUILT (M7.8).** There is no canoto codec in the Rust workspace, so
 > `ava-saevm-types::ExecutionResults` persists via a deterministic **fixed-layout
 > 96-byte big-endian encoding** (`gas_time` 24 ++ `base_fee` 8 ++ `receipt_root`
@@ -932,6 +949,25 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > This extends (does not fork) M7.37's one-item carrier and stays dormant on the
 > empty build path. Done in `plan/M7` M7.39. Non-gating (Helicon unscheduled;
 > same dormancy as M7.37).
+
+> **Upstream delta (avalanchego `08ae32b741`, #5565 — folded 2026-06-24).**
+> `cchain.VM.ParseBlock` now **handles genesis and pre-ApricotPhase1 blocks**,
+> resolving the `TODO` the M7.37 delta above flagged (those blocks incorrectly
+> left `ExtDataHash` unset). The extData-hash check splits: for `height == 0` **or**
+> a block whose `Time` predates `IsApricotPhase1`, the *expected* hash is
+> `EmptyExtDataHash` **unless** the `(networkID, height)` pair is listed in a
+> hardcoded table (`errExtDataUnexpectedHash` on mismatch); otherwise the hash must
+> equal the header's committed `ExtDataHash` (`errExtDataHashMismatch`, the existing
+> path). The tables are embedded JSON corpora (`extdata-fuji.json`,
+> `extdata-mainnet.json` — the mainnet file is ~63 k entries) decoded at `init()`
+> into `map[uint32]map[uint64]ethcommon.Hash` keyed by network then height. `VM`
+> now also retains the parsed `chainConfig` (`*ethparams.ChainConfig`) so
+> `IsApricotPhase1(time)` is available at parse. This is the work needed to fully
+> retire coreth (replay historical chain history through the SAE C-Chain). In the
+> Rust port it rides on first landing extData marshaling (M7.37/M7.43); tracked as
+> `plan/M7` M7.47. Carrying the mainnet/fuji extData-hash corpora into the Rust tree
+> is the bulk of the work. **Non-gating** beyond historical replay, but a
+> consensus-parse parity constraint. See `10` §9 header-tail callout.
 
 > **Upstream delta (avalanchego `9b48abd852`, #5523 — folded 2026-06-17).**
 > SAE C-Chain gains a dedicated **`cchain/warp` package** consolidating the

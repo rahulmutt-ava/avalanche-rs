@@ -865,6 +865,13 @@ impl GasTime {
 > Go ships table-driven tests per type (decode / `Toward` clamp both directions /
 > `Desired*` round-trip) — mirror them, plus a `prop::desired_exponent_inverts_reader`.
 
+> **Upstream delta (avalanchego `cec35390e0`, #5437 — folded 2026-06-24).** The
+> `PriceExponent` integrator above now has a **wire home**: a Helicon-gated coreth
+> header field **`MinPriceExponent`** (`*dynamic.PriceExponent`). This is the
+> header-format materialization of the row above, documented as a wire delta in
+> `10` §9 (header-tail callout) and ported as `plan/M7` M7.46. No formula change
+> here — the integrator math is unchanged; only the place it is serialized is new.
+
 ## 7. Mechanism → fork → crate
 
 Fork gating uses the shared `Fork`/`UpgradeConfig` model in §03 / §11.

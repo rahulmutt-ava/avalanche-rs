@@ -10,10 +10,10 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `331bcfb106` (2026-06-19) have been reviewed and folded in as **"Upstream
+> `dbf0f71dc1` (2026-06-24) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
 > `18`, `21`, `27`) and plan files (`plan/M4`, `plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `331bcfb106`.
+> against newer avalanchego, start the review from `dbf0f71dc1`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -77,6 +77,31 @@ from these documents.
 > (enumerates the already-registered stateful RPCs), the rest is tests — and the
 > flaky-bloom-inclusion-check removal (`331bcfb106`, #5562) — `cchain/gossip_test.go`
 > only. No irrelevant commits in this range.
+>
+> The `331bcfb106 → dbf0f71dc1` sync (reviewed 2026-06-24) folded five SAE
+> C-Chain commits. **Wire/header-format (Helicon-dormant, non-gating):**
+> (1) **settled-block marker** (`dbf0f71dc1`, #5573) — the `hook.Settled` quad is
+> now four optional coreth header fields (`SettledHeight`/`SettledGasUnix`/
+> `SettledGasNumerator`/`SettledExcess`); `BuildBlock` writes, `SettledBy` reads →
+> `11` §1.3 + `10` §header-tail upstream-deltas + `plan/M7` **M7.45**.
+> (2) **`MinPriceExponent` header field** (`cec35390e0`, #5437) — the ACP-283
+> dynamic-min-gas-price exponent (already specced as the M7.34 `PriceExponent`
+> integrator) gets its wire home → `10` §header-tail + `21` §6.x upstream-deltas +
+> `plan/M7` **M7.46**. (3) **pre-AP1 / genesis `ParseBlock`** (`08ae32b741`, #5565)
+> — resolves the M7.37 `TODO`: genesis & pre-`ApricotPhase1` blocks expect an empty
+> `ExtDataHash` (or a hardcoded mainnet/fuji corpus value) → `11` §8 + `10`
+> §header-tail upstream-deltas + `plan/M7` **M7.47** (needed for full coreth
+> retirement). **Live (not Helicon-gated):** (4) **deprecated `avax.getAtomicTxStatus`**
+> (`03cdf8e97c`, #5564) → `10` §9.2 upstream-delta + `plan/M7` **M7.48**;
+> (5) **libevm bump + `PostRPCMarshal` extras + `ShouldRefundGas`** (`2471172fe1`,
+> #5572) — custom header/block fields now surface in eth-RPC JSON → `10` §9.1
+> upstream-delta + `plan/M7` **M7.49** (flagged: verify reth already suppresses
+> post-AP1 gas refunds). **Irrelevant:** `lint-all` Taskfile safety (`17ba2b3f0d`,
+> #5552) and e2e API-ordering test cleanup (`d295aca97b`, #5566) — tooling/test-infra,
+> no spec surface. **Non-gating (reference input):** `sync/code` to-fetch-marker
+> cleanup fix (`bda4f299dd`, #5356) — a `graft/evm` state-sync bug fix; the Rust
+> EVM is reth (not a coreth transliteration target), so this is a reference input,
+> not a port obligation.
 
 ## Read this first
 

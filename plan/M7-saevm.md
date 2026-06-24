@@ -762,6 +762,46 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.45: `cchain` encodes/decodes the settled-block marker in the header **[UPSTREAM DELTA — added 2026-06-24]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (builder + `settled_by` hook) · ava-saevm-types/blocks (header-extension fields) · **Depends on:** M7.21 (C-Chain hooks), M7.37/M7.39 (extData carrier) · **Spec:** `11` §1.3 + `10` §9 header-tail upstream-delta (Go `dbf0f71dc1` #5573)
+> **Upstream parity (Go `dbf0f71dc1`, #5573).** The side `hook.Settled {Height, GasUnix, GasNumerator, Excess}` is now carried as four optional coreth header fields — `SettledHeight`, `SettledGasUnix`, `SettledGasNumerator`, `SettledExcess` (all `*uint64`, RLP-`optional` tail + JSON + `RPCMarshalHeader`). `cchain.builder.BuildBlock` writes them from the chosen `settled`; `cchain.hooks.SettledBy(h)` reconstructs the quad, returning the zero `hook.Settled{}` if **any** of the four is absent. coreth's `customheader.VerifySettled` rejects a coreth header carrying any of them (the fields belong to SAE).
+> **Rust task:** add the four fields to the reth header-extension backing the SAE block (the `[seconds, fraction, hertz]` proxy-clock quad of the M7.8 AS-BUILT note maps to `GasUnix`/`GasNumerator`/`Excess` + `Height`). `build_block` writes them; the `settled_by` hook reads them back, yielding the zero marker if any is missing. Add a build→parse→`settled_by` round-trip test and an "any field missing ⇒ zero marker" regression. **Non-gating** (Helicon-dormant SAE C-Chain), but a wire/format parity constraint.
+**Files (anticipated):** header-extension type + RLP/JSON in `crates/ava-saevm/blocks` (or types), `crates/ava-saevm/cchain/src/{builder,hooks}.rs`, `crates/ava-saevm/cchain/tests/`.
+
+---
+
+### Task M7.46: `cchain` `MinPriceExponent` (ACP-283) header field **[UPSTREAM DELTA — added 2026-06-24]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (header-extension) · **Depends on:** M7.34 (`dynamic::PriceExponent` integrator) · **Spec:** `10` §9 header-tail + `21` §6.x upstream-delta (Go `cec35390e0` #5437)
+> **Upstream parity (Go `cec35390e0`, #5437).** A new optional header-tail field `MinPriceExponent` (`*dynamic.PriceExponent`, Helicon/ACP-283) is threaded through `HeaderExtra`, RLP (`_tmp9`), JSON (`"minPriceExponent"`), and `RPCMarshalHeader`. coreth rejects a coreth block carrying it (`customheader.VerifyMinPriceExponent`).
+> **Rust task:** add `MinPriceExponent` to the reth header-extension as the wire home of the M7.34 `PriceExponent` integrator; round-trip RLP/JSON; reject a non-SAE coreth header that sets it. **Non-gating** (Helicon unscheduled). No formula change — only serialization (see `21` §6.x).
+**Files (anticipated):** header-extension type + RLP/JSON, `crates/ava-saevm/cchain/`, tests.
+
+---
+
+### Task M7.47: `cchain` `ParseBlock` handles genesis + pre-ApricotPhase1 blocks **[UPSTREAM DELTA — added 2026-06-24]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`parse_block`) · **Depends on:** M7.37 (extData-hash verify), M7.43 (coreth-compatible genesis) · **Spec:** `11` §8 + `10` §9 header-tail upstream-delta (Go `08ae32b741` #5565)
+> **Upstream parity (Go `08ae32b741`, #5565).** Resolves the M7.37 `TODO`: genesis (`height == 0`) and pre-`IsApricotPhase1` blocks legitimately leave `ExtDataHash` unset. `ParseBlock` now branches — for those blocks the expected hash is `EmptyExtDataHash` **unless** the `(networkID, height)` pair is in a hardcoded table (`errExtDataUnexpectedHash` on mismatch); otherwise the header's committed `ExtDataHash` must match (`errExtDataHashMismatch`). The tables are embedded JSON corpora (`extdata-fuji.json`, `extdata-mainnet.json` ≈ 63 k entries) decoded at startup into `map[networkID]map[height]Hash`. `VM` retains the parsed `chainConfig` so `IsApricotPhase1(time)` is available at parse.
+> **Rust task:** in `parse_block`, branch on `height == 0 || !is_apricot_phase1(time)` to expect `EmptyExtDataHash` (or the corpus override) instead of the header value; carry the mainnet/fuji extData-hash corpora into the Rust tree (the bulk of the work) and decode them once at init; thread the parsed chain config so the AP1 timestamp check is available. **Non-gating** beyond full coreth-retirement / historical replay, but a consensus-parse parity constraint.
+**Files (anticipated):** `crates/ava-saevm/cchain/src/vm.rs` (`parse_block` + chain-config retention + corpus embed), corpus JSON under `crates/ava-saevm/cchain/`, `crates/ava-saevm/cchain/tests/`.
+
+---
+
+### Task M7.48: `cchain` implements deprecated `avax.getAtomicTxStatus` **[UPSTREAM DELTA — added 2026-06-24]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`avax` service) · **Depends on:** M7.33 (cross-chain/atomic + `avax` namespace surface) · **Spec:** `10` §9.2 + `14` §avax upstream-delta (Go `03cdf8e97c` #5564)
+> **Upstream parity (Go `03cdf8e97c`, #5564).** Implements the (deprecated) `avax.getAtomicTxStatus`: looks up `state.GetTx(txID)`, returns `TxStatus{Status: choices.Status, Height *Uint64}` — `Unknown` (no height) on `database.ErrNotFound`, else `Accepted` with the accepting height. Deprecated in favor of `getAtomicTx`; status reflects state-write, which can briefly precede full execution (settled-vs-executed).
+> **Rust task:** add the `getAtomicTxStatus` method to the `avax` service returning `{status, blockHeight?}` matching `14` §avax (status = `snow/choices.Status`). Live API (not Helicon-gated) but deprecated — low priority.
+**Files (anticipated):** `crates/ava-saevm/cchain/src/api.rs` (or the `avax` service module), `crates/ava-saevm/cchain/tests/`.
+
+---
+
+### Task M7.49: `cchain` RPC surfaces custom header/block extras (`PostRPCMarshal` parity) **[UPSTREAM DELTA — added 2026-06-24]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain / ava-evm-reth (eth-RPC marshalling override) · **Depends on:** M6.23/M6.24 (eth + avax RPC), M7.45/M7.46 (the new header fields) · **Spec:** `10` §9.1 upstream-delta (Go `2471172fe1` #5572)
+> **Upstream parity (Go `2471172fe1`, #5572).** A libevm bump adds a `PostRPCMarshal` extras hook so `eth_getBlockBy*` JSON includes coreth's custom fields: header → `extDataHash`, `extDataGasUsed`, `blockGasCost`, `timestampMilliseconds`, `minDelayExcess`, `minPriceExponent`; body → `blockExtraData`. The same bump adds `RulesExtra.ShouldRefundGas()` (coreth `!IsApricotPhase1`, subnet-evm `!IsSubnetEVM`).
+> **Rust task:** extend the reth `EthApi` block/header JSON override to surface these extra fields for C-Chain parity. **Verify (judgment call):** confirm reth's Avalanche-configured EVM already disables gas refunds post-AP1 on the C-Chain; if it relies on a libevm-style hook, the `ShouldRefundGas` parity is a real gas-execution item (open a separate task), not just RPC cosmetics. Live (not Helicon-gated).
+**Files (anticipated):** reth `EthApi` block/header marshalling override in `crates/ava-evm*`/`crates/ava-saevm/cchain/`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -781,7 +821,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §6 / §6.1 | saexec streaming engine; pure execute step | M7.14, M7.15 |
 | `11` §6.2 | Backpressure, ordering, recovery | M7.26, M7.24 |
 | `11` §7 | saedb: consensus-vs-execution state, Firewood-revision Tracker | M7.12 |
-| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta), **M7.38** (warp/ICM lifecycle package delta) |
+| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta), **M7.38** (warp/ICM lifecycle package delta), **M7.45** (settled-marker header fields), **M7.47** (pre-AP1/genesis parse), **M7.48** (`getAtomicTxStatus`), **M7.49** (RPC header/block extras) |
 | `11` §9.1 | Hooks (`Points`/`PointsG`, `Op`, `Settled`, `BlockBuilder`) | M7.9 |
 | `11` §9.2 | txgossip (mempool + push/pull + priority) | M7.20 |
 | `11` §9.3 | worst-case analysis + assertions | M7.13, M7.27 |
@@ -790,7 +830,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §12 | Test plan (determinism, recovery, worst-case, differential) | M7.16, M7.24, M7.27, M7.29, M7.30 |
 | `11` §13 | Perf (pipelining, rayon, lock-free frontiers) — observably-neutral | M7.12/M7.14 (pipelining), M7.13/M7.27 (rayon), M7.17 (lock-free), gated by M7.30 |
 | `21` §0 | `CalculatePrice` exponential (reused from fee crates) | M7.6 (golden table routed through `price()`) |
-| `21` §6 | SAE gas-as-time formulas + worked vectors | M7.5, M7.6, M7.3 (mul_div), **M7.36** (`new(base fee)` delta) |
+| `21` §6 | SAE gas-as-time formulas + worked vectors | M7.5, M7.6, M7.3 (mul_div), **M7.36** (`new(base fee)` delta), **M7.46** (`MinPriceExponent` header field, ACP-283) |
 | `27` §2.4 | CC-ORDER (state durable before pointer) | M7.12, M7.14 |
 | `27` §3 | Crash points C6 (mid-execute) | M7.24, M7.29 |
 | `27` §3.1 | Shared-memory two-sided consistency (ATOMIC-1) | M7.22 |
@@ -804,6 +844,11 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §4 upstream-delta | `VM.GetBlock` propagates unexpected lookup errors (`return b, err`) + `RestoreSettledBlock` `%v`→`%w` (Go `84533ec5b1` #5547) | **M7.42** (correctness fix, not Helicon-gated) |
 | `11` §8 upstream-delta | `cchain` coreth-compatible genesis path (`parseGenesis` + `setup`, per-chainID Berlin/London pins, `ChainConfig`-from-`NetworkUpgrades`) (Go `ff8f0e5020` #5536) | **M7.43** (non-gating, Helicon; genesis-hash parity) |
 | `11` §8 + `10` §header-tail upstream-delta | `cchain` preserves millisecond block timestamps (`BuildHeader` fills `TimeMilliseconds`, `BlockTime` anchors seconds to `h.Time`, injected clock) (Go `484daf4593` #5524) | **M7.44** (non-gating, Helicon; wire/format parity) |
+| `11` §1.3 + `10` §header-tail upstream-delta | `cchain` settled-block marker as 4 header fields (`Settled{Height,GasUnix,GasNumerator,Excess}`; `BuildBlock` writes, `SettledBy` reads) (Go `dbf0f71dc1` #5573) | **M7.45** (non-gating, Helicon; wire/format parity) |
+| `10` §header-tail + `21` §6.x upstream-delta | `cchain` `MinPriceExponent` (ACP-283) header field — wire home of the `PriceExponent` integrator (Go `cec35390e0` #5437) | **M7.46** (non-gating, Helicon; wire/format parity) |
+| `11` §8 + `10` §header-tail upstream-delta | `cchain` `ParseBlock` handles genesis + pre-AP1 blocks (empty-`ExtDataHash` branch + embedded mainnet/fuji corpora) (Go `08ae32b741` #5565) | **M7.47** (non-gating beyond coreth-retirement; consensus-parse parity) |
+| `10` §9.2 + `14` §avax upstream-delta | `cchain` implements deprecated `avax.getAtomicTxStatus` (`{status, blockHeight?}`) (Go `03cdf8e97c` #5564) | **M7.48** (live API, deprecated) |
+| `10` §9.1 upstream-delta | `cchain` RPC surfaces custom header/block extras (`PostRPCMarshal`) + `ShouldRefundGas` verify (Go `2471172fe1` #5572) | **M7.49** (live; RPC parity + gas-refund verify) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |

@@ -754,6 +754,24 @@ and use Avalanche fee rules. Override the fee-related helpers
 tracing stack) — reproduce coreth's tracer outputs (incl. the prestate tracer,
 `prestate_tracer_test.go`) for parity.
 
+> **Upstream delta (avalanchego `2471172fe1`, #5572 — folded 2026-06-24).** A
+> libevm bump (`v1.13.15-…c891ff86e981` → `…097921408ecf`) introduces a
+> **`PostRPCMarshal` extras hook** that lets coreth/subnet-evm inject their
+> custom header/block fields into the standard eth-RPC JSON. coreth's
+> `HeaderExtra.PostRPCMarshal` adds `extDataHash`, `extDataGasUsed`, `blockGasCost`,
+> `timestampMilliseconds`, `minDelayExcess`, `minPriceExponent`; `BlockBodyExtra.PostRPCMarshal`
+> adds `blockExtraData`; subnet-evm exposes its subset. The Rust port already
+> "reproduce[s] coreth's tracer outputs … for parity" — the same parity obligation
+> now covers these extra fields in `eth_getBlockBy*` header/block JSON; our reth
+> `EthApi` override must surface them. The same bump also adds a libevm
+> `RulesExtra.ShouldRefundGas()` hook — coreth returns `!IsApricotPhase1`,
+> subnet-evm `!IsSubnetEVM` (i.e. gas refunds are disabled once the respective fork
+> is active). **Judgment call worth a second look:** confirm reth's
+> Avalanche-configured EVM already suppresses gas refunds post-AP1 on the C-Chain;
+> if it relies on a libevm-style hook, that is a real gas-execution parity item, not
+> just RPC cosmetics. RPC-marshalling parity tracked as `plan/M7` M7.49. Live (not
+> Helicon-gated).
+
 ### 9.2 `avax.*` namespace
 
 A custom RPC module (axum/JSON-RPC 2.0 per overview §4.2; reth's RPC uses
@@ -762,6 +780,19 @@ Methods mirror coreth's `avax` service:
 `avax.issueTx` (submit an atomic tx), `avax.getAtomicTx`, `avax.getAtomicTxStatus`,
 `avax.getUTXOs`, `avax.export`/`avax.import` helpers, `avax.getBlockByHeight`. The
 admin namespace (`admin.go`) and health (`health.go`) likewise ported.
+
+> **Upstream delta (avalanchego `03cdf8e97c`, #5564 — folded 2026-06-24).** The
+> SAE C-Chain now actually **implements `avax.getAtomicTxStatus`** (listed above and
+> in `14` §avax). It is **deprecated** in favor of `getAtomicTx` (which returns the
+> tx *and* its height in one call): `getAtomicTxStatus` looks up `state.GetTx(txID)`
+> and returns `TxStatus{Status: choices.Status, Height *Uint64}` — `Unknown` (with
+> no height) on `database.ErrNotFound`, else `Accepted` with the accepting block's
+> height. The docstring warns the status reflects whether the tx is written to
+> state, which can briefly precede the block being fully executed (the SAE
+> settled-vs-executed distinction). The Rust port implements it under the `avax`
+> namespace task (M6.24/M7.33 surface); tracked as `plan/M7` M7.48. The response
+> shape matches `14` §avax (`status` is now `snow/choices.Status`, not
+> `atomic.Status`). Live API (not Helicon-gated), but deprecated.
 
 ### 9.3 Block `bytes` wire format
 
@@ -820,6 +851,32 @@ coreth header is not plain-`alloy::Header`-decodable — the extras above are wh
 > block-time hook reads the sub-second component back while anchoring the seconds
 > to `Header.Time` (`BlockTime(h).Unix() == h.Time`). This is SAE-C-Chain behavior
 > on the *same* header format documented here; see `11` §8 and `plan/M7` M7.44.
+
+> **Upstream delta (avalanchego `cec35390e0`, #5437 — folded 2026-06-24).** A new
+> optional header-tail field **`MinPriceExponent`** (`*uint64`, type
+> `dynamic.PriceExponent`) is added after `MinDelayExcess`, activated by **Helicon
+> (ACP-283)** — the wire materialization of the dynamic-minimum-gas-price exponent
+> integrator already specified in `21` §6.x (its `PriceExponent` row) and ported in
+> `plan/M7` M7.34. It is threaded through the coreth header serializable in all
+> three encodings: `HeaderExtra` field, `gen_header_serializable_rlp.go` (a new
+> `_tmp9` optional-tail term), `gen_header_serializable_json.go` (`"minPriceExponent"`),
+> and `RPCMarshalHeader` (`result["minPriceExponent"]`). Coreth rejects a coreth
+> block carrying it (`customheader.VerifyMinPriceExponent`) — the field belongs to
+> SAE. In the Rust port this is a reth header-extension field; landing it is
+> `plan/M7` M7.46. **Non-gating** (Helicon unscheduled), but a wire/header-format
+> parity constraint. Append to the header-tail table above as a Helicon row.
+
+> **Upstream delta (avalanchego `dbf0f71dc1`, #5573 — folded 2026-06-24).** Four
+> further optional header-tail fields — **`SettledHeight`, `SettledGasUnix`,
+> `SettledGasNumerator`, `SettledExcess`** (all `*uint64`) — are appended after
+> `MinPriceExponent`, again across RLP (`_tmp10`–`_tmp13`), JSON, and
+> `RPCMarshalHeader`. They carry the SAE settled-block marker
+> (`hook.Settled {Height, GasUnix, GasNumerator, Excess}`) so `cchain.hooks.SettledBy`
+> can recover the settled gas-clock from a parsed header; the C-Chain builder
+> populates them and coreth's `customheader.VerifySettled` rejects a coreth block
+> that carries any of them. See `11` §1.3 for the marker semantics and `plan/M7`
+> M7.45 for the Rust port task. **Non-gating** (Helicon-dormant SAE C-Chain).
+> Append to the header-tail table above as Helicon/SAE rows.
 
 > **Genesis-header subtlety (M6.8).** The **genesis** header's `ExtDataHash` is the
 > **zero hash** (`0x0000…0000`), **NOT** `EmptyExtDataHash` — coreth's `Genesis.toBlock`
