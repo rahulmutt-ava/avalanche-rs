@@ -1589,6 +1589,53 @@ where
     .await
 }
 
+/// Test-only entry to [`boot_chain_over_network_core`] with a synthetic identity
+/// (`LOCAL_ID`, alias `"network"`, empty asset id, sha256 genesis id). Lets an
+/// integration test drive the shared-router production boot core without exposing
+/// the private `NetBootSpec`.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn boot_chain_over_network_core_for_test<V>(
+    chain_id: Id,
+    subnet_id: Id,
+    router: Arc<ChainRouter>,
+    clock: Arc<dyn Clock>,
+    network: Arc<dyn ava_network::network::Network>,
+    allower: Arc<dyn ava_network::network::Allower>,
+    inner_vm: V,
+    genesis_bytes: &[u8],
+    base_db: Arc<dyn DynDatabase>,
+    token: CancellationToken,
+    beacons: Option<BTreeMap<NodeId, u64>>,
+) -> Result<NetworkChainBootHandle>
+where
+    V: ava_vm::block::ChainVm + 'static,
+{
+    let genesis_id =
+        Id::from_slice(&ava_crypto::hashing::sha256(genesis_bytes)).unwrap_or(Id::EMPTY);
+    boot_chain_over_network_core(
+        NetBootSpec {
+            network_id: ava_types::constants::LOCAL_ID,
+            chain_id,
+            subnet_id,
+            primary_alias: "network",
+            avax_asset_id: Id::EMPTY,
+            genesis_id,
+        },
+        router,
+        clock,
+        network,
+        allower,
+        inner_vm,
+        genesis_bytes,
+        base_db,
+        token,
+        None,
+        beacons,
+    )
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Production chain creator (M9.15 step (a) — drive the queued chains)
 // ---------------------------------------------------------------------------
@@ -1935,4 +1982,29 @@ pub async fn run_queued_chains_over_network(
     }
 
     Ok(handles)
+}
+
+/// The production node-startup chain creator over the real network seam: drive
+/// the queued P/X/C chains over the node's shared [`ChainRouter`] + a real
+/// [`OutboundSender`], so a **live** `avalanchers` process routes inbound peer
+/// ops into the running engines and sends outbound to real peers.
+///
+/// `beacons` empty ⇒ solo/beaconless: every critical chain short-circuits
+/// `Bootstrapping → NormalOp` (the beacon role). Non-empty ⇒ the node bootstraps
+/// from those beacons (the follower path), gated on `gate`.
+///
+/// # Errors
+/// Propagates a chain boot failure from [`run_queued_chains_over_network`].
+#[allow(clippy::too_many_arguments)]
+pub async fn drive_startup_chains_over_network(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    base_db: Arc<dyn DynDatabase>,
+    network: Arc<dyn ava_network::network::Network>,
+    router: Arc<ChainRouter>,
+    gate: watch::Receiver<bool>,
+    beacons: BTreeMap<NodeId, u64>,
+) -> Result<Vec<NetworkChainBootHandle>> {
+    run_queued_chains_over_network(manager, network_id, base_db, network, router, gate, beacons)
+        .await
 }
