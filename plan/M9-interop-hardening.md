@@ -1582,8 +1582,9 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >
 > **Root cause: rustls/webpki rejects avalanchego's RSA staking certificates as X.509 v1.** avalanchego mints its
 > staking key pairs using `crypto/tls.X509KeyPair` via self-signed RSA certs. These certs are **X.509 v1** (no v3
-> structure, no extensions). webpki (the verifier backend used by rustls) enforces X.509 v3 and refuses v1 certs
-> with `UnsupportedCertVersion`. Go's TLS stack (with `InsecureSkipVerify: true` + a custom
+> structure, no extensions) — confirmed directly: `openssl x509 -in staking/local/staker1.crt -noout -text` reports
+> `Version: 1 (0x0)`, `rsaEncryption`. webpki (the verifier backend used by rustls) enforces X.509 v3 and refuses
+> v1 certs with `UnsupportedCertVersion`. Go's TLS stack (with `InsecureSkipVerify: true` + a custom
 > `VerifyConnection: staking.ValidateCertificate` hook) accepts them: `ValidateCertificate` only parses the leaf
 > cert, extracts the public key, and derives the NodeID — it does NOT enforce X.509 version, chain structure, or
 > standard PKI rules. ECDSA certs minted by current `staking.NewCertAndKeyBytes()` are v3, so CELL5 passes cleanly.
