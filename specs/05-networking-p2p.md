@@ -697,6 +697,15 @@ the real handshake-signature check** via the crypto provider — proving the pee
 the private key for the presented leaf. That, plus `validate_leaf_public_key`, is
 exactly what Go's `InsecureSkipVerify + VerifyConnection` achieves.
 
+> **AS-BUILT delta (2026-06-25).** The rustls verifiers verify the TLS-1.3
+> handshake signature with `verify_tls13_signature_with_raw_key` over the leaf
+> SPKI (extracted via `x509-parser`), not the cert-based `verify_tls13_signature`.
+> Rationale: webpki rejects avalanchego's X.509 **v1** RSA staking certs with
+> `UnsupportedCertVersion`; the raw-key path verifies the same signature without
+> webpki's cert-version enforcement. Matches Go's `InsecureSkipVerify +
+> VerifyConnection(ValidateCertificate)`, which authenticates purely by the leaf
+> public key.
+
 ### 4.5 Client-side server-cert verifier
 
 The mirror: `rustls::client::danger::ServerCertVerifier` with `verify_server_cert`

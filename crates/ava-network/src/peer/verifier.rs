@@ -10,10 +10,13 @@
 //!
 //! The verifiers live in the [`danger`] module because they deliberately
 //! override certificate-chain verification. They are NOT insecure: the real
-//! TLS 1.3 handshake-signature check still runs (`verify_tls13_signature`
-//! delegates to the crypto provider), proving the peer holds the private key
-//! for the presented leaf — exactly what Go achieves. This module contains no
-//! `unsafe` code (`specs/00` §7.6).
+//! TLS 1.3 handshake-signature check still runs — `verify_tls13_signature`
+//! extracts the leaf SPKI and verifies it via the raw-key path
+//! (`verify_tls13_signature_with_raw_key`), proving the peer holds the private
+//! key for the presented leaf. The raw-key path is used (instead of the
+//! cert-based variant) because avalanchego mints RSA staking certs as X.509 v1,
+//! which webpki's cert parser rejects. This module contains no `unsafe` code
+//! (`specs/00` §7.6).
 
 /// Verifiers that override the default certificate-chain verification, applying
 /// only Avalanche's leaf-public-key policy (`specs/05` §4.4/§4.5).
@@ -22,7 +25,9 @@ pub mod danger {
 
     use rustls::DigitallySignedStruct;
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms, verify_tls13_signature};
+    use rustls::crypto::{
+        CryptoProvider, WebPkiSupportedAlgorithms, verify_tls13_signature_with_raw_key,
+    };
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
     use rustls::{DistinguishedName, SignatureScheme};
@@ -105,7 +110,12 @@ pub mod danger {
             cert: &CertificateDer<'_>,
             dss: &DigitallySignedStruct,
         ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            verify_tls13_signature(message, cert, dss, &self.supported)
+            // webpki (the default `verify_tls13_signature`) rejects avalanchego's
+            // X.509 v1 RSA staking certs with `UnsupportedCertVersion`. We extract
+            // the leaf SPKI ourselves (v1-tolerant) and verify against the raw key,
+            // bypassing webpki's cert-version gate (`specs/05` §4.4/§4.5).
+            let spki = super::leaf_spki_der(cert)?;
+            verify_tls13_signature_with_raw_key(message, &spki, dss, &self.supported)
         }
 
         fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -143,7 +153,12 @@ pub mod danger {
             cert: &CertificateDer<'_>,
             dss: &DigitallySignedStruct,
         ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            verify_tls13_signature(message, cert, dss, &self.supported)
+            // webpki (the default `verify_tls13_signature`) rejects avalanchego's
+            // X.509 v1 RSA staking certs with `UnsupportedCertVersion`. We extract
+            // the leaf SPKI ourselves (v1-tolerant) and verify against the raw key,
+            // bypassing webpki's cert-version gate (`specs/05` §4.4/§4.5).
+            let spki = super::leaf_spki_der(cert)?;
+            verify_tls13_signature_with_raw_key(message, &spki, dss, &self.supported)
         }
 
         fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -152,7 +167,7 @@ pub mod danger {
     }
 }
 
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, SubjectPublicKeyInfoDer};
 use x509_parser::prelude::FromDer;
 use x509_parser::public_key::PublicKey as X509PublicKey;
 
@@ -168,6 +183,20 @@ fn policy_to_rustls(e: Error) -> rustls::Error {
         _ => CertificateError::ApplicationVerificationFailure,
     };
     rustls::Error::InvalidCertificate(cert_err)
+}
+
+/// Extract the leaf certificate's `SubjectPublicKeyInfo` DER, tolerant of X.509
+/// v1 certs (avalanchego mints RSA staking certs as v1, which webpki refuses).
+/// Used by the verifiers' raw-key TLS-1.3 signature check. A parse failure maps
+/// to `BadEncoding`, matching `policy_to_rustls`'s treatment of unparsable certs.
+fn leaf_spki_der(
+    cert: &CertificateDer<'_>,
+) -> core::result::Result<SubjectPublicKeyInfoDer<'static>, rustls::Error> {
+    let (_, parsed) = x509_parser::certificate::X509Certificate::from_der(cert.as_ref())
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
+    Ok(SubjectPublicKeyInfoDer::from(
+        parsed.public_key().raw.to_vec(),
+    ))
 }
 
 /// Allowed RSA modulus bit lengths (Go `staking.allowedRSAModulusBitLens`).
