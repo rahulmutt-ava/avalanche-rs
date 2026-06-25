@@ -1603,6 +1603,20 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > to interop with RSA-keyed Go nodes on a real network.) The live `mixed_network` arm stays
 > `#[cfg(feature="live")] #[ignore]` until this verifier fix lands and the matrix's RSA cells (`CELL1`, `CELL2`) go
 > green.
+>
+> **AS-BUILT (2026-06-25) — verifier fix landed.** `crates/ava-network/src/peer/verifier.rs`
+> now verifies the TLS-1.3 CertificateVerify signature via
+> `rustls::crypto::verify_tls13_signature_with_raw_key` over the leaf SPKI we
+> extract with `x509-parser` (new private `leaf_spki_der`), for BOTH
+> `AvaServerCertVerifier` and `AvaClientCertVerifier`. This removes webpki's
+> X.509-v3 cert-version gate that rejected avalanchego's v1 RSA staking certs
+> with `UnsupportedCertVersion`; the leaf-key *policy* check in
+> `verify_{server,client}_cert` is unchanged. Reproduced + regression-proven in
+> `crates/ava-network/tests/tls_v1_rsa_handshake.rs` (in-process v1-RSA mutual
+> handshake, both directions; vendored fixture = avalanchego local staker1, v1
+> RSA-4096/exp-65537). The repro matrix's RSA cells now have a passing in-process
+> analogue. STILL DEFERRED: RSA staking-key *loading* (`Identity::from_pem`) and
+> flipping the live `mixed_network`/matrix arms green (nightly-gated).
 
 ---
 
