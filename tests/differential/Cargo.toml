@@ -30,6 +30,14 @@ live = [  ]
 # The M9.20 crash-injection harness (`crash.rs`) constructs the `ava-database`
 # `Error::Other(anyhow::Error)` failpoint error, so it needs `anyhow` directly.
 anyhow = { workspace = true }
+# The `tls_repro` module (M9.15) drives `ava-network`'s `Upgrader` against the
+# Go harness to localize the mixed-network TLS stall. Promoted from dev-deps so
+# the public library functions in `tls_repro.rs` can reference it.
+ava-network = { path = "../../crates/ava-network" }
+# `tls_repro::diagnostic_client_config` wraps `rustls::KeyLogFile`; `serde` +
+# `serde_json` deserialize the Go harness's JSON outcome line (M9.15).
+rustls = { workspace = true }
+serde = { workspace = true }
 arbitrary = { workspace = true }
 # The `xchain` collector (M5.22) drives the REAL X-Chain VM/block pipeline to
 # produce a normalized `Observation`, so the lib links the `ava-avm` VM + its
@@ -72,8 +80,8 @@ tokio-util = { workspace = true }
 [dev-dependencies]
 # The recorded-fallback arm of `differential_interop_handshake` (M2.22) drives the
 # real `ava-network` peer actor + `ava-message` codec offline against a Go-derived
-# transcript, so it links the networking stack as dev-deps.
-ava-network = { path = "../../crates/ava-network" }
+# transcript, so it links the networking stack as dev-deps. `ava-network` is also
+# a lib dep (M9.15 `tls_repro`); it appears here only for `ava-message`.
 ava-message = { path = "../../crates/ava-message" }
 # The M5.22 `differential::xchain_issue_tx` determinism gate is a proptest dev
 # consumer of the `xchain` collector; M7.29 `differential::sae_recovery` reuses
