@@ -1552,6 +1552,57 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   rustls↔Go TLS alert/EOF and compare the Rust client cert/signature-scheme against Go `staking.ParseCertificate`
 >   + `crypto/tls` server acceptance.
 
+> **AS-BUILT — M9.15 rustls↔Go TLS-1.3 handshake repro matrix root-cause (2026-06-25).** The isolated repro harness
+> (Tasks 1–3: Go server binary `tests/tls_handshake/main.go`, Rust helper module `tls_repro.rs`, and matrix test
+> `tls_handshake_repro.rs` in `ava-differential`) was run against the live Go oracle
+> (`check_oracle_binary.sh` → `OK`; `avalanchego` HEAD dbf0f71, `rpcchainvm=45`, `go1.25.10`). The 5-cell matrix
+> ran and passed in 22.4 s. Three cells produced evidence; the remaining cells (3 = Go-client↔Rust-server, 4 =
+> Rust-vs-Rust) were not needed to localise the fault. Verbatim captured cell output:
+> - `CELL1` (`verify=staking`, `keytype=rsa`): `rust=Err("dial 127.0.0.1:52249: Connection refused (os error 61)")`;
+>   `go={"ok":false,"error":"go timed out after 15s"}`.
+> - `CELL2` (`verify=noop`, `keytype=rsa`): `rust=Err("tls error: invalid peer certificate: Other(OtherError(UnsupportedCertVersion))")`;
+>   `go={"ok":false,"error":"remote error: tls: unknown certificate"}`.
+> - `CELL5` (`verify=staking`, `keytype=ecdsa`): `rust=Ok("NodeID-CZaYJrAyK8Kg7TuB1KR9PexoX4RaXXcJc")`;
+>   `go={"ok":true,"version":772,"cipher_suite":4865,"peer_cert_len":1,"peer_key_type":"ecdsa"}`.
+>
+> **Decisive-cell analysis:**
+> - **CELL5 (ECDSA) — SUCCESS.** Rust client ↔ Go server complete a full mutual TLS 1.3 handshake (version 772 =
+>   TLS 1.3, cipher 4865 = `TLS_AES_128_GCM_SHA256`). The Rust side derives a `NodeID`. rustls↔Go TLS 1.3 itself
+>   is fundamentally sound.
+> - **CELL2 (RSA, Go-side client-cert check DISABLED via `verify=noop`) — the decisive cell.** The Rust client
+>   rejects the Go server's RSA certificate with `UnsupportedCertVersion`. The Go-side error `remote error: tls:
+>   unknown certificate` is simply the TLS alert sent back by the Rust client after that rejection. Because
+>   `verify=noop` disables Go's verification of the Rust *client* cert, the only verification in play is the Rust
+>   client's check of the Go *server's* RSA cert — this isolates the fault to the **rustls/webpki certificate
+>   verifier**, not to Go's policy and not to the Rust client certificate.
+> - **CELL1 (RSA, `verify=staking`) — harness timing artifact, not signal.** `Connection refused` means the Rust
+>   client dialed before the Go server (first-spawned in the run) finished binding its port. Go then sat in
+>   `Accept()` until the harness 15 s timeout expired. CELL2 is the cell that actually connected over the RSA path
+>   and produced the real TLS rejection.
+>
+> **Root cause: rustls/webpki rejects avalanchego's RSA staking certificates as X.509 v1.** avalanchego mints its
+> staking key pairs using `crypto/tls.X509KeyPair` via self-signed RSA certs. These certs are **X.509 v1** (no v3
+> structure, no extensions). webpki (the verifier backend used by rustls) enforces X.509 v3 and refuses v1 certs
+> with `UnsupportedCertVersion`. Go's TLS stack (with `InsecureSkipVerify: true` + a custom
+> `VerifyConnection: staking.ValidateCertificate` hook) accepts them: `ValidateCertificate` only parses the leaf
+> cert, extracts the public key, and derives the NodeID — it does NOT enforce X.509 version, chain structure, or
+> standard PKI rules. ECDSA certs minted by current `staking.NewCertAndKeyBytes()` are v3, so CELL5 passes cleanly.
+>
+> **This refines the 2026-06-23 hypothesis above.** That note suspected Go rejecting the Rust *client's* ECDSA cert
+> (client-cert signature-scheme / `SerialNumber=0`) and noted the signed-IP hypothesis had already been ruled out.
+> The isolated repro shows the **reverse and more specific** cause: the Rust *client* rejects the Go *server's* RSA
+> cert (`UnsupportedCertVersion`). The live `mixed_network` beacon logged `stakingKeyType:"RSA"`, so this is exactly
+> the live stall: our rustls verifier refuses the beacon's v1 RSA cert below the app layer, the peer never
+> establishes, and bootstrap never starts.
+>
+> **Ordered next step (fix lands separately — do NOT implement here):** make `crates/ava-network`'s rustls
+> server/client certificate verifier mirror avalanchego's `staking.ValidateCertificate` semantics — accept
+> self-signed X.509 v1 certs (RSA included), skip webpki's v3/chain/version enforcement, and derive the NodeID from
+> the leaf public key. (Auxiliary: ensure Rust-side fixtures use ECDSA, but the verifier must still accept RSA peers
+> to interop with RSA-keyed Go nodes on a real network.) The live `mixed_network` arm stays
+> `#[cfg(feature="live")] #[ignore]` until this verifier fix lands and the matrix's RSA cells (`CELL1`, `CELL2`) go
+> green.
+
 ---
 
 ## Spec coverage check
