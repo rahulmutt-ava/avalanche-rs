@@ -209,3 +209,35 @@ fn ip_from_bytes(b: &[u8]) -> Option<std::net::IpAddr> {
     }
     Some(ip)
 }
+
+/// `ClaimedIPPort.GossipID` (Go `utils/ips/claimed_ip_port.go`): the bloom key
+/// for a tracked peer — `sha256(node_id || timestamp_be)`.
+#[must_use]
+pub fn gossip_id(node: &NodeId, timestamp: u64) -> [u8; 32] {
+    let mut preimage = Vec::with_capacity(node.as_bytes().len().saturating_add(8));
+    preimage.extend_from_slice(node.as_bytes());
+    preimage.extend_from_slice(&timestamp.to_be_bytes());
+    ava_crypto::hashing::sha256(&preimage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gossip_id_packs_node_then_timestamp_be() {
+        let node = NodeId::from_slice(&[7u8; 20]).expect("node id");
+        // GossipID = sha256(node_bytes (20) || timestamp (8, BE)).
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(node.as_bytes());
+        preimage.extend_from_slice(&1_700_000_000u64.to_be_bytes());
+        let expected = ava_crypto::hashing::sha256(&preimage);
+        assert_eq!(gossip_id(&node, 1_700_000_000), expected, "gossip_id preimage");
+    }
+
+    #[test]
+    fn gossip_id_differs_by_timestamp() {
+        let node = NodeId::from_slice(&[7u8; 20]).expect("node id");
+        assert_ne!(gossip_id(&node, 1), gossip_id(&node, 2), "timestamp affects gossip id");
+    }
+}
