@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 
 use crate::config::MAX_BLOOM_SALT_LEN;
 use crate::error::{Error, Result};
-use crate::network::bloom::ReadFilter;
+use crate::network::bloom::{Filter, ReadFilter, estimate_count, optimal_parameters};
 use crate::network::tracked_ip::ClaimedIp;
 use crate::peer::ip::{SignedIp, UnsignedIp};
 
@@ -38,23 +38,59 @@ pub const PEER_LIST_BLOOM_RESET_FREQ: std::time::Duration = std::time::Duration:
 /// Max validator IPs gossiped per message (Go `DefaultNetworkPeerListNumValidatorIPs`).
 pub const PEER_LIST_NUM_VALIDATOR_IPS: usize = 15;
 
+/// Bloom false-positive target (Go `targetFalsePositiveProbability`).
+const TARGET_FALSE_POSITIVE_PROBABILITY: f64 = 0.001;
+/// Minimum bloom element-count estimate (Go `minCountEstimate`).
+const MIN_COUNT_ESTIMATE: usize = 128;
+/// Max bloom additions per node (Go `maxIPEntriesPerNode`).
+const MAX_IP_ENTRIES_PER_NODE: usize = 2;
+/// Bloom salt length (Go `saltSize`).
+const SALT_SIZE: usize = 32;
+
 /// Tracks learned validator IPs + answers peer-list-gossip queries.
-#[derive(Default)]
 pub struct IpTracker {
     inner: Mutex<Inner>,
 }
 
-#[derive(Default)]
 struct Inner {
     /// node -> its most-recent verified claim (sorted for determinism).
     claims: BTreeMap<NodeId, ClaimedIp>,
+    /// The peer-list-gossip bloom filter (Go `ipTracker.bloom`).
+    bloom: Filter,
+    /// The 32-byte bloom salt (Go `ipTracker.bloomSalt`).
+    bloom_salt: Vec<u8>,
+    /// Per-node count of bloom additions (Go `ipTracker.bloomAdditions`),
+    /// capped at `MAX_IP_ENTRIES_PER_NODE`.
+    bloom_additions: BTreeMap<NodeId, usize>,
+}
+
+impl Default for IpTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IpTracker {
-    /// A fresh, empty tracker.
+    /// A fresh tracker with a seeded (empty) bloom filter + salt.
     #[must_use]
     pub fn new() -> IpTracker {
-        IpTracker::default()
+        let (bloom, bloom_salt) = build_bloom(&BTreeMap::new());
+        IpTracker {
+            inner: Mutex::new(Inner {
+                claims: BTreeMap::new(),
+                bloom,
+                bloom_salt,
+                bloom_additions: BTreeMap::new(),
+            }),
+        }
+    }
+
+    /// The current bloom filter bytes + salt for an outbound `Handshake` /
+    /// `GetPeerList` (Go `ipTracker.Bloom()` / the peer's `KnownPeers()`).
+    #[must_use]
+    pub fn bloom(&self) -> (Vec<u8>, Vec<u8>) {
+        let inner = self.inner.lock();
+        (inner.bloom.marshal(), inner.bloom_salt.clone())
     }
 
     /// Number of currently-tracked claims.
@@ -140,6 +176,13 @@ impl IpTracker {
             .is_none_or(|existing| claimed.timestamp >= existing.timestamp);
         if replace {
             inner.claims.insert(node_id, claim);
+            let additions = inner.bloom_additions.get(&node_id).copied().unwrap_or(0);
+            if additions < MAX_IP_ENTRIES_PER_NODE {
+                let gid = gossip_id(&node_id, claimed.timestamp);
+                let salt = inner.bloom_salt.clone();
+                inner.bloom.add_key(&gid, &salt);
+                inner.bloom_additions.insert(node_id, additions.saturating_add(1));
+            }
         }
         Ok(node_id)
     }
@@ -210,6 +253,35 @@ fn ip_from_bytes(b: &[u8]) -> Option<std::net::IpAddr> {
     Some(ip)
 }
 
+/// Build a fresh bloom filter + salt sized for `claims` (Go
+/// `ipTracker.resetBloom`). Seeds every claim that has a verified IP
+/// (`cert_der` non-empty) keyed on its `gossip_id`.
+fn build_bloom(claims: &BTreeMap<NodeId, ClaimedIp>) -> (Filter, Vec<u8>) {
+    let count = MAX_IP_ENTRIES_PER_NODE
+        .saturating_mul(claims.len())
+        .max(MIN_COUNT_ESTIMATE);
+    let (num_hashes, num_entries) =
+        optimal_parameters(count, TARGET_FALSE_POSITIVE_PROBABILITY);
+    let mut filter = Filter::new(num_hashes, num_entries).unwrap_or_else(|_| Filter::minimal());
+
+    let mut salt = vec![0u8; SALT_SIZE];
+    crate::network::bloom::fill_random_pub(&mut salt);
+
+    for (node, claim) in claims {
+        // Manually-tracked entries (no verified cert) are not bloom'd
+        // (Go `trackedNode.ip == nil` skip).
+        if claim.cert_der.is_empty() {
+            continue;
+        }
+        let gid = gossip_id(node, claim.timestamp);
+        filter.add_key(&gid, &salt);
+    }
+    // `estimate_count` is computed by the deferred ResetBloom timer; not needed
+    // until auto-reset lands (see plan follow-ups). Reference call retained:
+    let _ = estimate_count(num_hashes, num_entries, TARGET_FALSE_POSITIVE_PROBABILITY);
+    (filter, salt)
+}
+
 /// `ClaimedIPPort.GossipID` (Go `utils/ips/claimed_ip_port.go`): the bloom key
 /// for a tracked peer — `sha256(node_id || timestamp_be)`.
 #[must_use]
@@ -223,6 +295,29 @@ pub fn gossip_id(node: &NodeId, timestamp: u64) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_bloom_is_go_parseable_and_311_bytes() {
+        let tracker = IpTracker::new();
+        let (filter, salt) = tracker.bloom();
+        assert_eq!(salt.len(), 32, "salt is saltSize bytes");
+        // count=128, fpp=0.001 -> (10, 230) -> 1 + 10*8 + 230 = 311.
+        assert_eq!(filter.len(), 311, "fresh empty filter marshal length");
+        let rf = crate::network::bloom::ReadFilter::parse(&filter)
+            .expect("fresh bloom parses (Go bloom.Parse equivalent)");
+        assert!(!rf.contains_key(&[0u8; 20], &salt), "empty filter contains nothing");
+    }
+
+    #[test]
+    fn manually_tracked_node_is_not_in_bloom() {
+        let tracker = IpTracker::new();
+        let node = NodeId::from_slice(&[3u8; 20]).expect("node id");
+        tracker.manually_track(node, "127.0.0.1:9651".parse().expect("addr"));
+        let (filter, salt) = tracker.bloom();
+        let rf = crate::network::bloom::ReadFilter::parse(&filter).expect("parse");
+        // manually-tracked (no verified IP) is not bloom'd (Go ip == nil skip).
+        assert!(!rf.contains_key(&gossip_id(&node, 0), &salt), "manual track not in bloom");
+    }
 
     #[test]
     fn gossip_id_packs_node_then_timestamp_be() {

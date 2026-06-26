@@ -148,6 +148,11 @@ impl ReadFilter {
     }
 }
 
+/// Fill `buf` with CSPRNG bytes for callers outside this module (the salt).
+pub fn fill_random_pub(buf: &mut [u8]) {
+    fill_random(buf);
+}
+
 /// Fill `buf` with cryptographically-random bytes (Go `crypto/rand`). On the
 /// (practically impossible) CSPRNG failure, `buf` is left as-is (all zeros),
 /// which is still a *valid* bloom filter — only less random — so callers stay
