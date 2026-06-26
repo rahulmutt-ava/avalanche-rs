@@ -1352,19 +1352,32 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 5 — Commit:** `differential: mixed_network — live Go+Rust, all chains, no fork, same tip`
 
 > **Follow-up — M9.15-next: fix the Rust `Handshake` `knownPeers.filter` bloom encoding (Rust→Go
-> p2p, NOT TLS).** Surfaced by the Stage 2 live run (see the "★ROOT CAUSE PINNED 2026-06-26" note
-> above): TLS-1.3 now clears against the Go beacon, but the Rust follower's outbound application-layer
-> `Handshake` message carries a malformed `knownPeers` bloom filter. The Go beacon rejects all 7
-> handshake attempts with `peer/peer.go:940 malformed message {field:"knownPeers.filter",
-> error:"invalid num hashes"}`, never registers the Rust node as a peer (`Peers:0` throughout), so
-> bootstrap can never seed a frontier. **Scope:** in `crates/ava-message`/`crates/ava-network` (the
-> p2p `Handshake` message + its `knownPeers`/`BloomFilter` encoding), make the emitted bloom filter's
-> `num hashes` / `num entries` satisfy avalanchego `bloom.Parse` (`x/bloom`) — i.e. a hash-count
-> within `[minHashes, maxHashes]` and consistent with the entry count (the empty-filter / freshly-seeded
-> case is the likely culprit). **Suggested gate:** a byte-level differential of the Rust-emitted
-> `Handshake.knownPeers.filter` against a Go-emitted one (extend the M9.13 wire-identity matrix), plus
-> re-running this live `mixed_network` arm to confirm the Go beacon registers the peer (`Peers:1`) and
-> bootstrap proceeds. This is the next live blocker; the TLS fix (`e06f0a0`) is confirmed and closed.
+> p2p, NOT TLS). ✅ ENCODING FIX DONE (branch `m9.15-next-handshake-bloom`, 2026-06-26).**
+> Surfaced by the Stage 2 live run (see the "★ROOT CAUSE PINNED 2026-06-26" note above): TLS-1.3
+> now clears against the Go beacon, but the Rust follower's outbound application-layer `Handshake`
+> message carried a malformed `knownPeers` bloom filter. The Go beacon rejected all 7 handshake
+> attempts with `peer/peer.go:940 malformed message {field:"knownPeers.filter", error:"invalid num
+> hashes"}`, never registering the Rust node as a peer (`Peers:0`).
+>
+> **Fix implemented in `crates/ava-network` (Tasks 1–7, branch `m9.15-next-handshake-bloom`):**
+> - Write-side `Filter` + `optimal_parameters`/`estimate_count` sizing ported from Go `x/bloom`
+>   (`bloom.rs`; tests: `filter_marshal_roundtrip`, `optimal_params_match_go_reference`,
+>   `optimal_params_smoke`, `filter_add_increases_count`, `filter_full_set_add_returns_false`).
+> - `gossip_id` helper: `sha256(NodeId ‖ timestamp_as_u64_be)` matching Go `ClaimedIPPort.GossipID`
+>   (`ip_tracker.rs`).
+> - `IpTracker` owns a `Filter` + salt, seeds on `add`, exposes `bloom() -> (Vec<u8>, Vec<u8>)`
+>   (`ip_tracker.rs`; tests: `bloom_returns_valid_parseable_filter`,
+>   `tracker_add_seeds_bloom_entry`, `bloom_salt_over_max_rejected`).
+> - `peers()` dedup keyed on `gossip_id` (matches Go `ClaimedIPPort.GossipID`; test:
+>   `peers_excludes_known_via_bloom`).
+> - `build_handshake` emits the real bloom from `IpTracker::bloom()` instead of a zero-byte
+>   placeholder; `GetPeerList` pull-gossip trigger likewise carries the current bloom.
+>   Tests in `peer.rs`: `handshake_known_peers_filter_is_go_parseable`,
+>   `get_peer_list_trigger_enqueues_parseable_bloom`.
+>
+> **Remaining:** live `mixed_network` arm is `#[cfg(feature="live")] #[ignore]` and remains
+> nightly-gated. A nightly run is needed to confirm the Go beacon registers the peer (`Peers:1`)
+> and bootstrap proceeds — the encoding fix is in place; this is purely a live-gate confirmation.
 
 ### Task M9.16: Go-data-dir → RocksDB import path (R2 migration) ✅ DONE (2026-06-15; `tests/go_dir_import.rs`)
 **Crate/area:** `ava-database` + `ava-node`  ·  **Depends on:** M1 (RocksDB backend, R2 scoped), M8 (node init)  ·  **Spec:** `26` §6 (DB version folder detection), `00` §4.4 / §11.2 R2, `04` R2, `27` §4 (marker)
