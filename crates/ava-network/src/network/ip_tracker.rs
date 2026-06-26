@@ -181,7 +181,9 @@ impl IpTracker {
                 let gid = gossip_id(&node_id, claimed.timestamp);
                 let salt = inner.bloom_salt.clone();
                 inner.bloom.add_key(&gid, &salt);
-                inner.bloom_additions.insert(node_id, additions.saturating_add(1));
+                inner
+                    .bloom_additions
+                    .insert(node_id, additions.saturating_add(1));
             }
         }
         Ok(node_id)
@@ -260,8 +262,7 @@ fn build_bloom(claims: &BTreeMap<NodeId, ClaimedIp>) -> (Filter, Vec<u8>) {
     let count = MAX_IP_ENTRIES_PER_NODE
         .saturating_mul(claims.len())
         .max(MIN_COUNT_ESTIMATE);
-    let (num_hashes, num_entries) =
-        optimal_parameters(count, TARGET_FALSE_POSITIVE_PROBABILITY);
+    let (num_hashes, num_entries) = optimal_parameters(count, TARGET_FALSE_POSITIVE_PROBABILITY);
     let mut filter = Filter::new(num_hashes, num_entries).unwrap_or_else(|_| Filter::minimal());
 
     let mut salt = vec![0u8; SALT_SIZE];
@@ -305,7 +306,10 @@ mod tests {
         assert_eq!(filter.len(), 311, "fresh empty filter marshal length");
         let rf = crate::network::bloom::ReadFilter::parse(&filter)
             .expect("fresh bloom parses (Go bloom.Parse equivalent)");
-        assert!(!rf.contains_key(&[0u8; 20], &salt), "empty filter contains nothing");
+        assert!(
+            !rf.contains_key(&[0u8; 20], &salt),
+            "empty filter contains nothing"
+        );
     }
 
     #[test]
@@ -316,7 +320,10 @@ mod tests {
         let (filter, salt) = tracker.bloom();
         let rf = crate::network::bloom::ReadFilter::parse(&filter).expect("parse");
         // manually-tracked (no verified IP) is not bloom'd (Go ip == nil skip).
-        assert!(!rf.contains_key(&gossip_id(&node, 0), &salt), "manual track not in bloom");
+        assert!(
+            !rf.contains_key(&gossip_id(&node, 0), &salt),
+            "manual track not in bloom"
+        );
     }
 
     #[test]
@@ -327,12 +334,20 @@ mod tests {
         preimage.extend_from_slice(node.as_bytes());
         preimage.extend_from_slice(&1_700_000_000u64.to_be_bytes());
         let expected = ava_crypto::hashing::sha256(&preimage);
-        assert_eq!(gossip_id(&node, 1_700_000_000), expected, "gossip_id preimage");
+        assert_eq!(
+            gossip_id(&node, 1_700_000_000),
+            expected,
+            "gossip_id preimage"
+        );
     }
 
     #[test]
     fn gossip_id_differs_by_timestamp() {
         let node = NodeId::from_slice(&[7u8; 20]).expect("node id");
-        assert_ne!(gossip_id(&node, 1), gossip_id(&node, 2), "timestamp affects gossip id");
+        assert_ne!(
+            gossip_id(&node, 1),
+            gossip_id(&node, 2),
+            "timestamp affects gossip id"
+        );
     }
 }

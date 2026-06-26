@@ -329,8 +329,7 @@ pub fn optimal_hashes(num_entries: usize, count: usize) -> usize {
     if count == 0 {
         return MAX_HASHES;
     }
-    let num_hashes =
-        ((num_entries as f64) * (BITS_PER_BYTE as f64) * LN2 / (count as f64)).ceil();
+    let num_hashes = ((num_entries as f64) * (BITS_PER_BYTE as f64) * LN2 / (count as f64)).ceil();
     if num_hashes >= MAX_HASHES as f64 {
         return MAX_HASHES;
     }
@@ -404,20 +403,33 @@ mod tests {
         f.add_key(b"node-a", b"salt");
         let bytes = f.marshal();
         // marshal layout: [num_hashes] || seeds(n*8) || entries
-        assert_eq!(*bytes.first().expect("marshal non-empty") as usize, 3, "num_hashes byte");
+        assert_eq!(
+            *bytes.first().expect("marshal non-empty") as usize,
+            3,
+            "num_hashes byte"
+        );
         assert_eq!(bytes.len(), 1 + 3 * 8 + 16, "marshal length");
         let rf = ReadFilter::parse(&bytes).expect("ReadFilter::parse of marshaled Filter");
-        assert!(rf.contains_key(b"node-a", b"salt"), "added key present after roundtrip");
+        assert!(
+            rf.contains_key(b"node-a", b"salt"),
+            "added key present after roundtrip"
+        );
     }
 
     #[test]
     fn filter_add_then_contains() {
         let mut f = Filter::new(8, 256).expect("Filter::new");
-        assert!(f.add_key(b"present", b""), "first add returns true (newly added)");
+        assert!(
+            f.add_key(b"present", b""),
+            "first add returns true (newly added)"
+        );
         assert_eq!(f.count(), 1, "count after one add");
         let rf = ReadFilter::parse(&f.marshal()).expect("parse");
         assert!(rf.contains_key(b"present", b""), "present key contained");
-        assert!(!rf.contains_key(b"absent-key-xyz", b""), "absent key not contained");
+        assert!(
+            !rf.contains_key(b"absent-key-xyz", b""),
+            "absent key not contained"
+        );
     }
 
     #[test]
@@ -426,7 +438,10 @@ mod tests {
         let bytes = f.marshal();
         assert_eq!(bytes.len(), 1 + 8 + 1, "minimal = 1 hash, 1 entry");
         let rf = ReadFilter::parse(&bytes).expect("minimal parses");
-        assert!(!rf.contains_key(b"anything", b""), "minimal contains nothing");
+        assert!(
+            !rf.contains_key(b"anything", b""),
+            "minimal contains nothing"
+        );
     }
 
     #[test]
@@ -448,18 +463,30 @@ mod tests {
     fn optimal_parameters_are_buildable_and_marshal_to_311_bytes() {
         let (nh, ne) = optimal_parameters(128, 0.001);
         let f = Filter::new(nh, ne).expect("Filter::new with optimal params");
-        assert_eq!(f.marshal().len(), 1 + 10 * 8 + 230, "fresh empty filter is 311 bytes");
+        assert_eq!(
+            f.marshal().len(),
+            1 + 10 * 8 + 230,
+            "fresh empty filter is 311 bytes"
+        );
     }
 
     #[test]
     fn optimal_entries_floors_and_caps() {
-        assert_eq!(optimal_entries(0, 0.001), 1, "non-positive count -> minEntries");
+        assert_eq!(
+            optimal_entries(0, 0.001),
+            1,
+            "non-positive count -> minEntries"
+        );
         assert_eq!(optimal_entries(128, 1.0), 1, "fpp>=1 -> minEntries");
     }
 
     #[test]
     fn optimal_hashes_floors_and_caps() {
-        assert_eq!(optimal_hashes(0, 128), 1, "numEntries<minEntries -> minHashes");
+        assert_eq!(
+            optimal_hashes(0, 128),
+            1,
+            "numEntries<minEntries -> minHashes"
+        );
         assert_eq!(optimal_hashes(230, 0), 16, "count<=0 -> maxHashes");
     }
 }

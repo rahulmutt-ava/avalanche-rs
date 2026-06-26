@@ -26,10 +26,9 @@ fn offline_gate_and_parse() {
     // returns a path. A Go build failure here is tolerated — it just means the
     // Go toolchain is unavailable in this environment, which is expected in the
     // offline/sandbox path.
-    let parsed = tls_repro::parse_go_outcome(
-        r#"{"ok":true,"version":772,"peer_key_type":"ecdsa"}"#,
-    )
-    .expect("parse");
+    let parsed =
+        tls_repro::parse_go_outcome(r#"{"ok":true,"version":772,"peer_key_type":"ecdsa"}"#)
+            .expect("parse");
     assert!(parsed.ok, "offline parse smoke");
 
     if !tls_repro::avalanchego_available() {
@@ -94,15 +93,13 @@ async fn tls_handshake_matrix_live() {
             .expect("spawn go client");
 
         // Accept + upgrade on the Rust server side, bounded like the fwd cells.
-        let rust_result = match tokio::time::timeout(
-            CELL_TIMEOUT,
-            tls_repro::rust_server_upgrade(listener, id),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => Err(format!("timed out after {}s", CELL_TIMEOUT.as_secs())),
-        };
+        let rust_result =
+            match tokio::time::timeout(CELL_TIMEOUT, tls_repro::rust_server_upgrade(listener, id))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(format!("timed out after {}s", CELL_TIMEOUT.as_secs())),
+            };
 
         let go_stdout = match tokio::time::timeout(CELL_TIMEOUT, child.wait()).await {
             Ok(Ok(_status)) => {
@@ -234,15 +231,24 @@ async fn tls_handshake_matrix_live() {
 
     // CELL2 (RSA, verify=noop) — the decisive isolation cell.
     let go2 = tls_repro::parse_go_outcome(&g2).expect("CELL2 go outcome");
-    assert!(go2.ok, "CELL2 (rsa, noop) Go handshake ok — verifier fix: {g2}");
+    assert!(
+        go2.ok,
+        "CELL2 (rsa, noop) Go handshake ok — verifier fix: {g2}"
+    );
     assert_eq!(go2.version, Some(772), "CELL2 negotiated TLS 1.3");
-    assert!(r2.is_ok(), "CELL2 Rust client accepted Go's v1 RSA cert: {r2:?}");
+    assert!(
+        r2.is_ok(),
+        "CELL2 Rust client accepted Go's v1 RSA cert: {r2:?}"
+    );
 
     // CELL1 (RSA, verify=staking) — full production policy on both sides.
     let go1 = tls_repro::parse_go_outcome(&g1).expect("CELL1 go outcome");
     assert!(go1.ok, "CELL1 (rsa, staking) Go handshake ok: {g1}");
     assert_eq!(go1.version, Some(772), "CELL1 negotiated TLS 1.3");
-    assert!(r1.is_ok(), "CELL1 Rust client + Go RSA staking cert: {r1:?}");
+    assert!(
+        r1.is_ok(),
+        "CELL1 Rust client + Go RSA staking cert: {r1:?}"
+    );
 
     // --- Reverse direction: Go *client* (RSA staking cert) -> Rust *server*.
     // Validates the inbound-peer verifier path against a real Go RSA cert. ---
@@ -252,5 +258,8 @@ async fn tls_handshake_matrix_live() {
     let gsr = tls_repro::parse_go_outcome(&gs).expect("REVERSE go outcome");
     assert!(gsr.ok, "REVERSE Go client handshake ok: {gs}");
     assert_eq!(gsr.version, Some(772), "REVERSE negotiated TLS 1.3");
-    assert!(rs.is_ok(), "REVERSE Rust server accepted Go RSA client cert: {rs:?}");
+    assert!(
+        rs.is_ok(),
+        "REVERSE Rust server accepted Go RSA client cert: {rs:?}"
+    );
 }

@@ -82,10 +82,9 @@ pub fn build_go_harness() -> Result<PathBuf, String> {
     let src = go_src_dir();
     let pkg = src.join("tests").join("tls_handshake_repro");
     std::fs::create_dir_all(&pkg).map_err(|e| format!("mkdir {pkg:?}: {e}"))?;
-    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("go-oracle/tls_handshake/main.go");
-    std::fs::copy(&canonical, pkg.join("main.go"))
-        .map_err(|e| format!("copy main.go: {e}"))?;
+    let canonical =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("go-oracle/tls_handshake/main.go");
+    std::fs::copy(&canonical, pkg.join("main.go")).map_err(|e| format!("copy main.go: {e}"))?;
     let out = src.join("target-tls-handshake");
     let go_bin = std::env::var("TLS_REPRO_GO").unwrap_or_else(|_| "go".to_string());
     let status = std::process::Command::new(&go_bin)
@@ -122,7 +121,9 @@ pub fn diagnostic_client_config(id: &Identity) -> Result<Arc<ClientConfig>, Stri
 /// # Errors
 /// Returns `Err` with the TCP dial or TLS handshake error message.
 pub async fn rust_client_upgrade(addr: SocketAddr, id: &Identity) -> Result<String, String> {
-    let tcp = TcpStream::connect(addr).await.map_err(|e| format!("dial {addr}: {e}"))?;
+    let tcp = TcpStream::connect(addr)
+        .await
+        .map_err(|e| format!("dial {addr}: {e}"))?;
     let cfg = tls_config::client_config(id).map_err(|e| e.to_string())?;
     match Upgrader::client(cfg).upgrade(tcp).await {
         Ok((node_id, _tls, _cert)) => Ok(node_id.to_string()),
@@ -136,7 +137,10 @@ pub async fn rust_client_upgrade(addr: SocketAddr, id: &Identity) -> Result<Stri
 /// # Errors
 /// Returns `Err` with the accept or TLS handshake error message.
 pub async fn rust_server_upgrade(listener: TcpListener, id: &Identity) -> Result<String, String> {
-    let (tcp, _peer) = listener.accept().await.map_err(|e| format!("accept: {e}"))?;
+    let (tcp, _peer) = listener
+        .accept()
+        .await
+        .map_err(|e| format!("accept: {e}"))?;
     let cfg = tls_config::server_config(id).map_err(|e| e.to_string())?;
     match Upgrader::server(cfg).upgrade(tcp).await {
         Ok((node_id, _tls, _cert)) => Ok(node_id.to_string()),
@@ -173,13 +177,19 @@ mod tests {
 
     #[test]
     fn parse_rejects_non_json() {
-        assert!(parse_go_outcome("not json at all").is_err(), "non-json rejected");
+        assert!(
+            parse_go_outcome("not json at all").is_err(),
+            "non-json rejected"
+        );
     }
 
     #[test]
     fn go_src_dir_defaults_under_home() {
         // With AVALANCHEGO_SRC unset, falls back to $HOME/avalanchego.
         let dir = go_src_dir();
-        assert!(dir.ends_with("avalanchego"), "default src dir ends in avalanchego, got {dir:?}");
+        assert!(
+            dir.ends_with("avalanchego"),
+            "default src dir ends in avalanchego, got {dir:?}"
+        );
     }
 }

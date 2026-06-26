@@ -608,11 +608,11 @@ mod tests {
     use ava_message::codec::MsgBuilder;
     use tokio_util::sync::CancellationToken;
 
+    use crate::Identity;
     use crate::network::bloom::ReadFilter;
     use crate::peer::message_queue::MessageQueue;
     use crate::peer::peer::{Direction, Peer};
     use crate::peer::testutil::TestPeerBuilder;
-    use crate::Identity;
 
     /// Build a minimal `Arc<Peer>` for unit-testing `build_handshake`.
     ///
@@ -625,14 +625,12 @@ mod tests {
 
         let peer_id = ava_types::node_id::NodeId::from_slice(&[9u8; 20]).expect("peer id");
 
-        let queue = Arc::new(
-            crate::peer::message_queue::ThrottledMessageQueue::new(
-                crate::throttling::outbound_msg::OutboundMsgThrottler::new(
-                    crate::throttling::outbound_msg::OutboundMsgThrottlerConfig::default(),
-                ),
-                peer_id,
+        let queue = Arc::new(crate::peer::message_queue::ThrottledMessageQueue::new(
+            crate::throttling::outbound_msg::OutboundMsgThrottler::new(
+                crate::throttling::outbound_msg::OutboundMsgThrottlerConfig::default(),
             ),
-        );
+            peer_id,
+        ));
         let close_token = CancellationToken::new();
         Arc::new(Peer {
             cfg,
