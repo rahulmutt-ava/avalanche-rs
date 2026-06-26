@@ -1016,6 +1016,60 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > `Verifier` on the p2p handler, calling `verify_block` inbound) is a deferred integration
 > step — still "no warp lifecycle wired into the VM" until then. See `plan/M7` M7.38 as-built.
 
+> **Upstream delta (avalanchego `5e040de53e`, #5514 — folded 2026-06-26).** Go
+> *wires* the M7.38 `cchain/warp` package into the C-Chain VM lifecycle, resolving
+> the three TODOs the M7.38 as-built flagged as deferred. Four seams, all in
+> `vms/saevm/cchain/`: (1) `vm.go Initialize` now parses `configBytes` into a
+> `config` carrying `WarpOffChainMessages` (`[]hexutil.Bytes` of off-chain
+> messages the node will sign), constructs `warp.NewStorage(avaDB, msgs...)`, and
+> calls `registerWarpHandler(vm.VM, warpStorage, snowCtx.WarpSigner)` — an
+> `acp118.NewCachedHandler` (512-entry LRU) over a `warpBackend` whose `IsAccepted`
+> guards against non-canonical `GetBlock` results by re-checking
+> `GetBlockIDAtHeight`. (2) `hooks.AfterExecutingBlock` replaces `_ = receipts`
+> with `warp.FromReceipts(receipts)` → `warpStorage.Add(...)` (persist produced
+> messages). (3) `hooks.BuildBlock` replaces `_ = blockCtx` with the inbound
+> predicate pass `warp.VerifyBlock(ctx, blockCtx, rulesExtra, ethTxs)`, serializing
+> the resulting `warpValidity.Bytes()` into `header.Extra` via
+> `customheader.SetPredicateBytesInExtra` (Go flags the current predicate-bytes
+> format as inefficient — a `// TODO` to repack as canoto). (4) `hooks`/`builder`
+> now thread `*params.ChainConfig` so `BuildBlock` can compute `rulesExtra`. The
+> Rust analog (`ava-saevm-cchain`) already has the `warp` *package* (M7.38); this
+> is the VM-`Initialize` integration the M7.38 as-built explicitly deferred. Staged
+> as `plan/M7` **M7.50**. **Non-gating** (Helicon unscheduled, SAE C-Chain Warp
+> interop not yet exercised).
+
+> **Upstream delta (avalanchego `f72fee1347`, #5441 — folded 2026-06-26).** The
+> ACP-283 `MinPriceExponent` (M7.34 `dynamic.PriceExponent` integrator, M7.46 wire
+> home) is now *consumed* in the C-Chain block lifecycle, replacing the hardcoded
+> `MinPrice: 1`. In `vms/saevm/cchain/`: `dynamic.InitialPriceExponent = 0` (the
+> 1-wei minimum) is added; `hooks.GasConfigAfter(header)` now returns
+> `MinPrice: priceExponent(header).Price()` where `priceExponent` reads
+> `GetHeaderExtra(h).MinPriceExponent` (defaulting to `InitialPriceExponent` when
+> absent); `builder.BuildHeader` computes the child exponent as
+> `priceExponent(parent).Toward(b.desired.priceExponent)`, where the node's
+> *desired* exponent comes from the operator config's `min-price-target`
+> (`config.desired()` → `dynamic.DesiredPriceExponent(PriceTarget)`); and
+> `BlockRebuilderFrom` re-derives `desired` from the existing header's exponent.
+> Genesis seeds `InitialPriceExponent` (was a zero-valued `new(PriceExponent)`).
+> This is the integrator→pricing wiring the M7.34/M7.46 callouts anticipated — no
+> new formula (see `21` §6.x). Staged as `plan/M7` **M7.51**. **Non-gating**
+> (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `cbea62895c`, #5574 — folded 2026-06-26).**
+> `vms/saevm/cchain` gains a real operator-config surface: `Initialize` decodes
+> `configBytes` into a `config` (new `config.md` documents the JSON keys) with a
+> `defaultConfig()` (pruning on, default tx-pool slots) so unset fields populate
+> sane defaults. Active keys: `min-price-target` (the ACP-283 `PriceTarget`,
+> above), `pruning-enabled` + `commit-interval` (→ `saedb.Config{Archival,
+> TrieCommitInterval}`), and `local-txs-enabled` / `tx-pool-account-slots` /
+> `tx-pool-global-slots` (→ `legacypool.Config`). A `config.saeConfig(now)` helper
+> folds these into the `sae.Config` previously hardcoded in `Initialize` (the
+> `mempoolConfig.NoLocals = true` line moves behind `!LocalTxsEnabled`). Many
+> coreth keys remain commented-out stubs (trie caches, state-sync, API limits) —
+> a `// TODO(JonathanOppenheimer) enable and wire all remaining configs`. The Rust
+> analog is the `ava-saevm-cchain` VM config decode (cross-ref `13`/`14` chain
+> config). Staged as `plan/M7` **M7.52**. **Non-gating** (Helicon unscheduled).
+
 ### Reuse decision (binding cross-ref to `10`)
 
 **Decision: SAE's `cchain` reuses `ava-evm` (reth/revm + Firewood), not an

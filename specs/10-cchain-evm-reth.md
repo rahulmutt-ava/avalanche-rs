@@ -738,6 +738,18 @@ Precompile enablement + params come from **genesis JSON** (`config` block) and
 subnet-evm/coreth (§11). At each block, `AvaPrecompiles::for_height` computes the
 activated set from the timestamp-keyed upgrade schedule.
 
+> **Upstream delta (avalanchego `cbea62895c`, #5574 — folded 2026-06-26).** The
+> *SAE* C-Chain (`vms/saevm/cchain`) grows an operator node-config surface decoded
+> from the `configBytes` passed to `VM.Initialize` (separate from the genesis/upgrade
+> JSON above): a `config` struct + `defaultConfig()` + `config.md`. The keys are a
+> subset of coreth's familiar node config — `pruning-enabled`/`commit-interval`
+> (→ `saedb` archival + trie-commit cadence), `local-txs-enabled` /
+> `tx-pool-account-slots` / `tx-pool-global-slots` (→ `legacypool.Config`), and the
+> ACP-283 `min-price-target` (see `11` §8 / `21` §6.x). Many coreth keys (trie
+> caches, state-sync, API limits) are still commented-out stubs. Mirrors a config
+> surface a Rust SAE C-Chain VM will also need; ported as `plan/M7` **M7.52**.
+> **Non-gating** (Helicon unscheduled).
+
 ---
 
 ## 9. RPC + wire format (C9)

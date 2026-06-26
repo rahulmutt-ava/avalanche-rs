@@ -802,6 +802,30 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.50: `cchain` wires the `warp` package into the VM lifecycle **[UPSTREAM DELTA — added 2026-06-26]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`vm` Initialize + hooks) · **Depends on:** M7.38 (`warp` lifecycle package) · **Spec:** `11` §8 upstream-delta (Go `5e040de53e` #5514)
+> **Upstream parity (Go `5e040de53e`, #5514).** Resolves the three TODOs the M7.38 as-built deferred — the VM-`Initialize` integration of the warp package. (1) `Initialize` parses `configBytes` → `config.WarpOffChainMessages`, builds `warp.NewStorage(avaDB, msgs...)`, and mounts `registerWarpHandler` = an `acp118.NewCachedHandler` (512-LRU) over a `warpBackend` (`IsAccepted` re-checks `GetBlockIDAtHeight` to reject non-canonical `GetBlock` results) on `acp118.HandlerID` with `snowCtx.WarpSigner`. (2) `AfterExecutingBlock` does `warp.FromReceipts(receipts)` → `warpStorage.Add(...)`. (3) `BuildBlock` runs `warp.VerifyBlock(ctx, blockCtx, rulesExtra, ethTxs)` and writes `warpValidity.Bytes()` into `header.Extra` via `customheader.SetPredicateBytesInExtra`; `hooks`/`builder` thread `*params.ChainConfig` to derive `rulesExtra`.
+> **Rust task:** wire `ava-saevm-cchain::warp` into the VM: feed `Storage` from post-execution receipts, mount the ACP-118 `Verifier` on the p2p handler with the chain's warp signer, and run `verify_block` inbound during block-build with the predicate bytes encoded into the header extra. **Non-gating** (Helicon unscheduled; SAE C-Chain Warp interop not yet exercised).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/vm.rs` + `hooks.rs`, `crates/ava-saevm/cchain/src/warp/`, `tests/`.
+
+---
+
+### Task M7.51: `cchain` consumes `MinPriceExponent` in the block lifecycle (ACP-283 pricing) **[UPSTREAM DELTA — added 2026-06-26]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`hooks`/`dynamic`) · **Depends on:** M7.34 (`PriceExponent` integrator), M7.46 (`MinPriceExponent` header field) · **Spec:** `11` §8 + `21` §6.x upstream-delta (Go `f72fee1347` #5441)
+> **Upstream parity (Go `f72fee1347`, #5441).** Wires the ACP-283 exponent into pricing: `GasConfigAfter(header)` returns `MinPrice = priceExponent(header).Price()` (was hardcoded `1`); `BuildHeader` advances the child via `priceExponent(parent).Toward(desired)` where `desired` = the operator `min-price-target` mapped through `DesiredPriceExponent`; `BlockRebuilderFrom` re-derives `desired` from the header. New `dynamic.InitialPriceExponent = 0` names the 1-wei floor (genesis + absent-field default).
+> **Rust task:** in the C-Chain hooks, read the header `MinPriceExponent` (default `InitialPriceExponent`) to set the gas-config `MinPrice`, and advance the child exponent toward the node's desired target in `build_header`. **No formula change** — reuse the §6.x `Price()`/`Toward`/`Desired*` math. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/hooks.rs` + `dynamic.rs`, `tests/`.
+
+---
+
+### Task M7.52: `cchain` parses operator node config (`configBytes`) **[UPSTREAM DELTA — added 2026-06-26]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`config` + `vm` Initialize) · **Depends on:** M7.23 (VM Initialize harness) · **Spec:** `11` §8 + `10` §8.3 upstream-delta (Go `cbea62895c` #5574)
+> **Upstream parity (Go `cbea62895c`, #5574).** `Initialize` decodes `configBytes` into a `config` (+ `defaultConfig()` so unset fields get sane defaults, + a `config.md` doc). Active keys: `min-price-target` (ACP-283 `PriceTarget`, M7.51), `pruning-enabled` + `commit-interval` (→ `saedb.Config{Archival, TrieCommitInterval}`), `local-txs-enabled` / `tx-pool-account-slots` / `tx-pool-global-slots` (→ `legacypool.Config`). `config.saeConfig(now)` folds these into the `sae.Config` previously hardcoded in `Initialize`. Remaining coreth keys (trie caches, state-sync, API limits) are commented-out stubs.
+> **Rust task:** add a `config` decode for the SAE C-Chain VM's config bytes with defaults, threading pruning/commit-interval into the `saedb` config and the tx-pool slots into the mempool config (cross-ref `13`/`14` chain config). **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/config.rs` (new) + `vm.rs`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -849,6 +873,9 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 + `10` §header-tail upstream-delta | `cchain` `ParseBlock` handles genesis + pre-AP1 blocks (empty-`ExtDataHash` branch + embedded mainnet/fuji corpora) (Go `08ae32b741` #5565) | **M7.47** (non-gating beyond coreth-retirement; consensus-parse parity) |
 | `10` §9.2 + `14` §avax upstream-delta | `cchain` implements deprecated `avax.getAtomicTxStatus` (`{status, blockHeight?}`) (Go `03cdf8e97c` #5564) | **M7.48** (live API, deprecated) |
 | `10` §9.1 upstream-delta | `cchain` RPC surfaces custom header/block extras (`PostRPCMarshal`) + `ShouldRefundGas` verify (Go `2471172fe1` #5572) | **M7.49** (live; RPC parity + gas-refund verify) |
+| `11` §8 upstream-delta | `cchain` wires the `warp` package into VM `Initialize`/hooks (storage from receipts, ACP-118 handler, `VerifyBlock`→predicate bytes in header) (Go `5e040de53e` #5514) | **M7.50** (non-gating, Helicon; completes M7.38 wiring) |
+| `11` §8 + `21` §6.x upstream-delta | `cchain` consumes `MinPriceExponent` in pricing (`GasConfigAfter`→`Price()`, `BuildHeader`→`Toward(desired)`, `InitialPriceExponent`) (Go `f72fee1347` #5441) | **M7.51** (non-gating, Helicon; consumes M7.34/M7.46) |
+| `11` §8 + `10` §8.3 upstream-delta | `cchain` parses operator node config from `configBytes` (pruning/commit-interval/tx-pool slots/min-price-target + defaults) (Go `cbea62895c` #5574) | **M7.52** (non-gating, Helicon) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |
