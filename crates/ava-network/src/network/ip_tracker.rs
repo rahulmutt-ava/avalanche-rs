@@ -284,12 +284,19 @@ fn build_bloom(claims: &BTreeMap<NodeId, ClaimedIp>) -> (Filter, Vec<u8>) {
 }
 
 /// `ClaimedIPPort.GossipID` (Go `utils/ips/claimed_ip_port.go`): the bloom key
-/// for a tracked peer — `sha256(node_id || timestamp_be)`.
+/// for a tracked peer. Go hashes a PRE-SIZED `preimageLen = ids.IDLen(32) +
+/// LongLen(8) = 40`-byte buffer — the 20-byte NodeID at `[0..20)`, the 8-byte
+/// big-endian timestamp at `[20..28)`, and 12 trailing zero bytes at `[28..40)`
+/// — i.e. `sha256(node_id || timestamp_be || 12 zero bytes)`. The packer never
+/// reslices to the write offset, so all 40 bytes are hashed.
 #[must_use]
 pub fn gossip_id(node: &NodeId, timestamp: u64) -> [u8; 32] {
-    let mut preimage = Vec::with_capacity(node.as_bytes().len().saturating_add(8));
-    preimage.extend_from_slice(node.as_bytes());
-    preimage.extend_from_slice(&timestamp.to_be_bytes());
+    /// Go `preimageLen` = `ids.IDLen(32) + wrappers.LongLen(8)`.
+    const PREIMAGE_LEN: usize = 40;
+    let mut preimage = Vec::with_capacity(PREIMAGE_LEN);
+    preimage.extend_from_slice(node.as_bytes());          // [0..20)
+    preimage.extend_from_slice(&timestamp.to_be_bytes()); // [20..28)
+    preimage.resize(PREIMAGE_LEN, 0);                     // pad [28..40) with zeros
     ava_crypto::hashing::sha256(&preimage)
 }
 
@@ -327,18 +334,18 @@ mod tests {
     }
 
     #[test]
-    fn gossip_id_packs_node_then_timestamp_be() {
+    fn gossip_id_matches_go_oracle() {
+        // Pinned against avalanchego ips.ClaimedIPPort.GossipID computed by the
+        // real Go wrappers.Packer + hashing.ComputeHash256Array for
+        // node=[7;20], timestamp=1_700_000_000 (preimage = node(20) ||
+        // ts_be(8) || 12 zero bytes = 40 bytes).
         let node = NodeId::from_slice(&[7u8; 20]).expect("node id");
-        // GossipID = sha256(node_bytes (20) || timestamp (8, BE)).
-        let mut preimage = Vec::new();
-        preimage.extend_from_slice(node.as_bytes());
-        preimage.extend_from_slice(&1_700_000_000u64.to_be_bytes());
-        let expected = ava_crypto::hashing::sha256(&preimage);
-        assert_eq!(
-            gossip_id(&node, 1_700_000_000),
-            expected,
-            "gossip_id preimage"
-        );
+        let expected: [u8; 32] = [
+            0x8c, 0x6a, 0x26, 0x75, 0xfd, 0xa1, 0x2b, 0xc1, 0xc7, 0x32, 0x46, 0xbe, 0x2c, 0xd7,
+            0xed, 0xd7, 0x0e, 0x45, 0x2d, 0xf0, 0x94, 0x90, 0xf2, 0x33, 0xe9, 0xa4, 0x01, 0x73,
+            0x35, 0x80, 0xd2, 0xdc,
+        ];
+        assert_eq!(gossip_id(&node, 1_700_000_000), expected, "gossip_id matches Go GossipID");
     }
 
     #[test]
