@@ -16,8 +16,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use ava_crypto::bls::LocalSigner;
 use ava_message::proto::p2p;
 use ava_network::Identity;
-use ava_network::network::bloom::{ReadFilter, hash};
-use ava_network::network::ip_tracker::IpTracker;
+use ava_network::network::bloom::{Filter, ReadFilter, hash};
+use ava_network::network::ip_tracker::{IpTracker, gossip_id};
 use ava_network::peer::ip::UnsignedIp;
 use ava_types::node_id::NodeId;
 
@@ -75,15 +75,21 @@ fn peers_excludes_known_via_bloom() {
     let returned = tracker.peers(&empty_filter(), &salt).expect("peers");
     assert_eq!(returned.len(), 1, "unknown peer is gossiped");
 
-    // Build a one-hash filter that *contains* this node id (salted), so it is
-    // excluded.
-    let mut full = vec![1u8];
-    full.extend_from_slice(&0u64.to_be_bytes());
-    full.push(0xFF); // every bit set → contains everything
-    let f = ReadFilter::parse(&full).expect("parse full");
-    assert!(f.contains(hash(node.as_bytes(), &salt)));
-    let returned = tracker.peers(&full, &salt).expect("peers");
-    assert!(returned.is_empty(), "known peer is excluded");
+    // Build a filter that contains the gossip_id of this claim (keyed on
+    // gossip_id, not raw node bytes) — so peers() should exclude it when
+    // checking gossip_id, but NOT when checking raw node.as_bytes().
+    let gid = gossip_id(&node, 1_700_000_000);
+    let mut filter = Filter::new(1, 64).expect("Filter::new");
+    filter.add_key(&gid, &salt);
+    let filter_bytes = filter.marshal();
+    let f = ReadFilter::parse(&filter_bytes).expect("parse");
+    assert!(f.contains(hash(&gid, &salt)), "gossip_id is in the filter");
+    assert!(
+        !f.contains(hash(node.as_bytes(), &salt)),
+        "raw node bytes are NOT in the filter (ensures RED before fix)"
+    );
+    let returned = tracker.peers(&filter_bytes, &salt).expect("peers");
+    assert!(returned.is_empty(), "known peer (by gossip id) is excluded");
 }
 
 /// A `ClaimedIpPort` with a bad signature is rejected; a valid one is tracked.

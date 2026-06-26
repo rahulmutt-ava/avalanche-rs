@@ -207,9 +207,9 @@ impl IpTracker {
             if out.len() >= PEER_LIST_NUM_VALIDATOR_IPS {
                 break;
             }
-            // Skip an IP the requester already knows (its node id is in the
-            // bloom filter, salted).
-            if filter.contains_key(node.as_bytes(), salt) {
+            // Skip an IP the requester already knows (its gossip id is in the
+            // bloom filter, salted) — Go keys on ClaimedIPPort.GossipID.
+            if filter.contains_key(&gossip_id(node, claim.timestamp), salt) {
                 continue;
             }
             out.push(p2p::ClaimedIpPort {
