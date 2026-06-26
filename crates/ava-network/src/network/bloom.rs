@@ -281,6 +281,81 @@ impl Filter {
     }
 }
 
+/// Natural-log-of-2, matching Go `math.Ln2`.
+const LN2: f64 = std::f64::consts::LN_2;
+
+/// `OptimalParameters` (Go `utils/bloom/optimal.go`): returns the
+/// `(num_hashes, num_entries)` minimizing size for `count` elements at
+/// `false_positive_probability`. Bloom *sizing* only — not a consensus path.
+#[must_use]
+pub fn optimal_parameters(count: usize, false_positive_probability: f64) -> (usize, usize) {
+    let num_entries = optimal_entries(count, false_positive_probability);
+    let num_hashes = optimal_hashes(num_entries, count);
+    (num_hashes, num_entries)
+}
+
+/// `OptimalEntries` (Go).
+#[must_use]
+pub fn optimal_entries(count: usize, false_positive_probability: f64) -> usize {
+    if count == 0 {
+        return MIN_ENTRIES;
+    }
+    if false_positive_probability >= 1.0 {
+        return MIN_ENTRIES;
+    }
+    if false_positive_probability <= 0.0 {
+        return usize::MAX;
+    }
+    let ln2_squared = LN2 * LN2;
+    let entries_in_bits = -(count as f64) * false_positive_probability.ln() / ln2_squared;
+    let entries = (entries_in_bits + (BITS_PER_BYTE as f64) - 1.0) / (BITS_PER_BYTE as f64);
+    if entries >= usize::MAX as f64 {
+        return usize::MAX;
+    }
+    (entries as usize).max(MIN_ENTRIES)
+}
+
+/// `OptimalHashes` (Go).
+#[must_use]
+pub fn optimal_hashes(num_entries: usize, count: usize) -> usize {
+    if num_entries < MIN_ENTRIES {
+        return MIN_HASHES;
+    }
+    if count == 0 {
+        return MAX_HASHES;
+    }
+    let num_hashes =
+        ((num_entries as f64) * (BITS_PER_BYTE as f64) * LN2 / (count as f64)).ceil();
+    if num_hashes >= MAX_HASHES as f64 {
+        return MAX_HASHES;
+    }
+    (num_hashes as usize).max(MIN_HASHES)
+}
+
+/// `EstimateCount` (Go): the element count at which the filter reaches
+/// `false_positive_probability`.
+#[must_use]
+pub fn estimate_count(
+    num_hashes: usize,
+    num_entries: usize,
+    false_positive_probability: f64,
+) -> usize {
+    if num_hashes < MIN_HASHES || num_entries < MIN_ENTRIES || false_positive_probability <= 0.0 {
+        return 0;
+    }
+    if false_positive_probability >= 1.0 {
+        return usize::MAX;
+    }
+    let inv_num_hashes = 1.0 / (num_hashes as f64);
+    let num_bits = (num_entries as f64) * (BITS_PER_BYTE as f64);
+    let exp = 1.0 - false_positive_probability.powf(inv_num_hashes);
+    let count = (-exp.ln() * num_bits * inv_num_hashes).ceil();
+    if count >= usize::MAX as f64 {
+        return usize::MAX;
+    }
+    count as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +427,34 @@ mod tests {
     #[test]
     fn filter_new_rejects_too_few_entries() {
         assert!(matches!(Filter::new(1, 0), Err(BloomError::TooFewEntries)));
+    }
+
+    #[test]
+    fn optimal_parameters_matches_go_reference() {
+        // Reference computed from avalanchego utils/bloom/optimal.go for the
+        // ip_tracker fresh-node inputs (count = minCountEstimate = 128,
+        // targetFalsePositiveProbability = 0.001).
+        let (num_hashes, num_entries) = optimal_parameters(128, 0.001);
+        assert_eq!(num_hashes, 10, "num_hashes for (128, 0.001)");
+        assert_eq!(num_entries, 230, "num_entries for (128, 0.001)");
+    }
+
+    #[test]
+    fn optimal_parameters_are_buildable_and_marshal_to_311_bytes() {
+        let (nh, ne) = optimal_parameters(128, 0.001);
+        let f = Filter::new(nh, ne).expect("Filter::new with optimal params");
+        assert_eq!(f.marshal().len(), 1 + 10 * 8 + 230, "fresh empty filter is 311 bytes");
+    }
+
+    #[test]
+    fn optimal_entries_floors_and_caps() {
+        assert_eq!(optimal_entries(0, 0.001), 1, "non-positive count -> minEntries");
+        assert_eq!(optimal_entries(128, 1.0), 1, "fpp>=1 -> minEntries");
+    }
+
+    #[test]
+    fn optimal_hashes_floors_and_caps() {
+        assert_eq!(optimal_hashes(0, 128), 1, "numEntries<minEntries -> minHashes");
+        assert_eq!(optimal_hashes(230, 0), 16, "count<=0 -> maxHashes");
     }
 }
