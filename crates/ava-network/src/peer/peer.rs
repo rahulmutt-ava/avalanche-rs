@@ -432,6 +432,8 @@ impl Peer {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
+        let (known_peers_filter, known_peers_salt) = self.cfg.ip_tracker.bloom();
+
         let msg = self.cfg.creator.handshake(
             self.cfg.network_id,
             my_time,
@@ -447,8 +449,8 @@ impl Peer {
             &self.cfg.my_tracked_subnets,
             &self.cfg.my_supported_acps,
             &self.cfg.my_objected_acps,
-            &[],
-            &[],
+            &known_peers_filter,
+            &known_peers_salt,
             true,
         )?;
         Ok(msg)
@@ -581,5 +583,99 @@ struct CloseGuard {
 impl Drop for CloseGuard {
     fn drop(&mut self) {
         self.closed.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! M9.15-next — the outbound `Handshake` carries a Go-parseable
+    //! `knownPeers` bloom filter (regression guard for the live
+    //! `mixed_network` blocker).
+    #![allow(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        clippy::arithmetic_side_effects
+    )]
+
+    use std::sync::Arc;
+
+    use ava_message::codec::MsgBuilder;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::network::bloom::ReadFilter;
+    use crate::peer::peer::{Direction, Peer};
+    use crate::peer::testutil::TestPeerBuilder;
+    use crate::Identity;
+
+    /// Build a minimal `Arc<Peer>` for unit-testing `build_handshake`.
+    ///
+    /// `build_handshake` only reads from `cfg` and the ip_signer (both
+    /// synchronous), so the tasks are never started and no Tokio runtime is
+    /// needed.
+    fn minimal_peer() -> Arc<Peer> {
+        let builder = TestPeerBuilder::new();
+        let cfg = builder.build_config();
+
+        let peer_id = ava_types::node_id::NodeId::from_slice(&[9u8; 20]).expect("peer id");
+
+        let queue = Arc::new(
+            crate::peer::message_queue::ThrottledMessageQueue::new(
+                crate::throttling::outbound_msg::OutboundMsgThrottler::new(
+                    crate::throttling::outbound_msg::OutboundMsgThrottlerConfig::default(),
+                ),
+                peer_id,
+            ),
+        );
+        let close_token = CancellationToken::new();
+        Arc::new(Peer {
+            cfg,
+            id: peer_id,
+            cert: ava_crypto::staking::parse_certificate(
+                Identity::generate().expect("identity").cert_der(),
+            )
+            .expect("cert"),
+            direction: Direction::Outbound,
+            queue,
+            got_handshake: std::sync::atomic::AtomicBool::new(false),
+            finished_handshake: CancellationToken::new(),
+            observed_uptime: std::sync::atomic::AtomicU32::new(0),
+            last_ping_sent_nanos: std::sync::atomic::AtomicI64::new(0),
+            hs: parking_lot::Mutex::new(super::HandshakeState::default()),
+            close_token,
+        })
+    }
+
+    #[test]
+    fn handshake_known_peers_filter_is_go_parseable() {
+        // Build a Peer with a fresh IpTracker.
+        let peer = minimal_peer();
+        let msg = peer.build_handshake().expect("build_handshake");
+
+        // `msg.bytes` is the raw proto-encoded outer Message (no length prefix).
+        let (p2p_msg, _saved, _op) = MsgBuilder::default()
+            .unmarshal(&msg.bytes)
+            .expect("unmarshal handshake");
+
+        let handshake = match p2p_msg.message {
+            Some(ava_message::proto::p2p::message::Message::Handshake(h)) => h,
+            other => panic!("expected Handshake variant, got {other:?}"),
+        };
+
+        let known = handshake
+            .known_peers
+            .expect("known_peers field present in Handshake");
+
+        assert!(
+            !known.filter.is_empty(),
+            "filter must be non-empty (was the &[] bug — Go rejects empty as \
+             'invalid num hashes')"
+        );
+        ReadFilter::parse(&known.filter)
+            .expect("filter parses (Go bloom.Parse equivalent — ReadFilter::parse)");
+        assert_eq!(
+            known.salt.len(),
+            32,
+            "salt must be exactly 32 bytes (Go x/bloom expects a 32-byte salt)"
+        );
     }
 }
