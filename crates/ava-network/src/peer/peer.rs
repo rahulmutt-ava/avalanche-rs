@@ -409,8 +409,14 @@ impl Peer {
         Ok(())
     }
 
-    /// Hook for the `GetPeerList` trigger (peer-list gossip lands in M2.17).
-    fn on_get_peer_list_trigger(self: &Arc<Self>) {}
+    /// On the `GetPeerList` pull-gossip trigger, send a `GetPeerList` request
+    /// carrying our current known-peers bloom filter + salt (`specs/05` §3.5).
+    fn on_get_peer_list_trigger(self: &Arc<Self>) {
+        let (filter, salt) = self.cfg.ip_tracker.bloom();
+        if let Ok(msg) = self.cfg.creator.get_peer_list(&filter, &salt, true) {
+            self.queue.push(msg);
+        }
+    }
 }
 
 impl Peer {
@@ -603,6 +609,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use crate::network::bloom::ReadFilter;
+    use crate::peer::message_queue::MessageQueue;
     use crate::peer::peer::{Direction, Peer};
     use crate::peer::testutil::TestPeerBuilder;
     use crate::Identity;
@@ -669,6 +676,50 @@ mod tests {
             !known.filter.is_empty(),
             "filter must be non-empty (was the &[] bug — Go rejects empty as \
              'invalid num hashes')"
+        );
+        ReadFilter::parse(&known.filter)
+            .expect("filter parses (Go bloom.Parse equivalent — ReadFilter::parse)");
+        assert_eq!(
+            known.salt.len(),
+            32,
+            "salt must be exactly 32 bytes (Go x/bloom expects a 32-byte salt)"
+        );
+    }
+
+    /// After triggering `on_get_peer_list_trigger`, the peer must enqueue a
+    /// `GetPeerList` message whose `known_peers.filter` is Go-parseable and
+    /// whose salt is 32 bytes — matching the Handshake filter parity requirement
+    /// (`specs/05` §3.5).
+    #[test]
+    fn get_peer_list_trigger_enqueues_parseable_bloom() {
+        let peer = minimal_peer();
+
+        // Call the trigger — stub enqueues nothing; the real impl enqueues a
+        // GetPeerList.
+        peer.on_get_peer_list_trigger();
+
+        // pop_now() is synchronous and does not require a Tokio runtime.
+        let msg = peer
+            .queue
+            .pop_now()
+            .expect("on_get_peer_list_trigger must enqueue a GetPeerList message");
+
+        let (p2p_msg, _saved, _op) = MsgBuilder::default()
+            .unmarshal(&msg.bytes)
+            .expect("unmarshal GetPeerList");
+
+        let gpl = match p2p_msg.message {
+            Some(ava_message::proto::p2p::message::Message::GetPeerList(g)) => g,
+            other => panic!("expected GetPeerList variant, got {other:?}"),
+        };
+
+        let known = gpl
+            .known_peers
+            .expect("known_peers field present in GetPeerList");
+
+        assert!(
+            !known.filter.is_empty(),
+            "filter must be non-empty (Go rejects empty as 'invalid num hashes')"
         );
         ReadFilter::parse(&known.filter)
             .expect("filter parses (Go bloom.Parse equivalent — ReadFilter::parse)");
