@@ -148,6 +148,139 @@ impl ReadFilter {
     }
 }
 
+/// Fill `buf` with cryptographically-random bytes (Go `crypto/rand`). On the
+/// (practically impossible) CSPRNG failure, `buf` is left as-is (all zeros),
+/// which is still a *valid* bloom filter — only less random — so callers stay
+/// infallible.
+fn fill_random(buf: &mut [u8]) {
+    use ring::rand::SecureRandom;
+    let rng = ring::rand::SystemRandom::new();
+    if rng.fill(buf).is_err() {
+        // Leave zeros: a zero-seed / zero-salt filter still parses and works.
+    }
+}
+
+/// A writable bloom filter (Go `bloom.Filter`). Lock-free: callers wrap it in
+/// their own lock (`IpTracker` holds it inside its `Mutex`).
+#[derive(Debug, Clone)]
+pub struct Filter {
+    num_bits: u64,
+    hash_seeds: Vec<u64>,
+    entries: Vec<u8>,
+    count: usize,
+}
+
+impl Filter {
+    /// Create a filter with `num_hashes` random seeds and `num_entries` bytes
+    /// (Go `bloom.New`).
+    ///
+    /// # Errors
+    /// [`BloomError`] if `num_entries < minEntries` or `num_hashes` is outside
+    /// `[minHashes, maxHashes]`.
+    pub fn new(num_hashes: usize, num_entries: usize) -> Result<Filter, BloomError> {
+        if num_entries < MIN_ENTRIES {
+            return Err(BloomError::TooFewEntries);
+        }
+        if num_hashes < MIN_HASHES {
+            return Err(BloomError::TooFewHashes(num_hashes));
+        }
+        if num_hashes > MAX_HASHES {
+            return Err(BloomError::TooManyHashes(num_hashes));
+        }
+
+        let mut seed_bytes = vec![0u8; num_hashes.saturating_mul(BYTES_PER_U64)];
+        fill_random(&mut seed_bytes);
+        let mut hash_seeds = Vec::with_capacity(num_hashes);
+        for i in 0..num_hashes {
+            let start = i.saturating_mul(BYTES_PER_U64);
+            let end = start.saturating_add(BYTES_PER_U64);
+            let mut s = [0u8; 8];
+            if let Some(chunk) = seed_bytes.get(start..end) {
+                s.copy_from_slice(chunk);
+            }
+            hash_seeds.push(u64::from_be_bytes(s));
+        }
+
+        Ok(Filter {
+            num_bits: (num_entries as u64).saturating_mul(BITS_PER_BYTE),
+            hash_seeds,
+            entries: vec![0u8; num_entries],
+            count: 0,
+        })
+    }
+
+    /// A minimal valid empty filter (1 hash, 1 entry) — infallible fallback.
+    #[must_use]
+    pub fn minimal() -> Filter {
+        let mut seed = [0u8; 8];
+        fill_random(&mut seed);
+        Filter {
+            num_bits: BITS_PER_BYTE,
+            hash_seeds: vec![u64::from_be_bytes(seed)],
+            entries: vec![0u8; MIN_ENTRIES],
+            count: 0,
+        }
+    }
+
+    /// Add `hash` to the filter (Go `Filter.Add`). Returns `true` if it was not
+    /// already present.
+    pub fn add(&mut self, mut hash: u64) -> bool {
+        if self.num_bits == 0 {
+            return false;
+        }
+        let mut accumulator: u8 = 1;
+        for &seed in &self.hash_seeds {
+            hash = hash.rotate_left(HASH_ROTATION) ^ seed;
+            let index = hash.checked_rem(self.num_bits).unwrap_or(0);
+            let byte_index = (index.checked_div(BITS_PER_BYTE).unwrap_or(0)) as usize;
+            let bit_index = (index.checked_rem(BITS_PER_BYTE).unwrap_or(0)) as u32;
+            if let Some(entry) = self.entries.get_mut(byte_index) {
+                accumulator &= entry.checked_shr(bit_index).unwrap_or(0);
+                *entry |= 1u8.checked_shl(bit_index).unwrap_or(0);
+            }
+        }
+        let added = accumulator == 0;
+        if added {
+            self.count = self.count.saturating_add(1);
+        }
+        added
+    }
+
+    /// Add `key` salted with `salt` (Go free function `bloom.Add`).
+    pub fn add_key(&mut self, key: &[u8], salt: &[u8]) -> bool {
+        self.add(hash(key, salt))
+    }
+
+    /// Serialize to the wire format `[num_hashes] || seeds(BE) || entries`
+    /// (Go `Filter.Marshal` / `marshal`).
+    #[must_use]
+    pub fn marshal(&self) -> Vec<u8> {
+        let num_hashes = self.hash_seeds.len();
+        let entries_offset = num_hashes.saturating_mul(BYTES_PER_U64).saturating_add(1);
+        let mut out = vec![0u8; entries_offset.saturating_add(self.entries.len())];
+        if let Some(b) = out.first_mut() {
+            *b = num_hashes as u8;
+        }
+        for (i, seed) in self.hash_seeds.iter().enumerate() {
+            let start = i.saturating_mul(BYTES_PER_U64).saturating_add(1);
+            let end = start.saturating_add(BYTES_PER_U64);
+            if let Some(slot) = out.get_mut(start..end) {
+                slot.copy_from_slice(&seed.to_be_bytes());
+            }
+        }
+        if let Some(slot) = out.get_mut(entries_offset..) {
+            slot.copy_from_slice(&self.entries);
+        }
+        out
+    }
+
+    /// Number of elements added (Go `Filter.Count`).
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +316,41 @@ mod tests {
         let f = ReadFilter::parse(&v).expect("parse");
         assert!(f.contains_key(b"x", b""));
         assert!(f.contains_key(b"y", b"salt"));
+    }
+
+    #[test]
+    fn filter_marshal_roundtrips_through_read_filter() {
+        let mut f = Filter::new(3, 16).expect("Filter::new");
+        f.add_key(b"node-a", b"salt");
+        let bytes = f.marshal();
+        // marshal layout: [num_hashes] || seeds(n*8) || entries
+        assert_eq!(*bytes.first().expect("marshal non-empty") as usize, 3, "num_hashes byte");
+        assert_eq!(bytes.len(), 1 + 3 * 8 + 16, "marshal length");
+        let rf = ReadFilter::parse(&bytes).expect("ReadFilter::parse of marshaled Filter");
+        assert!(rf.contains_key(b"node-a", b"salt"), "added key present after roundtrip");
+    }
+
+    #[test]
+    fn filter_add_then_contains() {
+        let mut f = Filter::new(8, 256).expect("Filter::new");
+        assert!(f.add_key(b"present", b""), "first add returns true (newly added)");
+        assert_eq!(f.count(), 1, "count after one add");
+        let rf = ReadFilter::parse(&f.marshal()).expect("parse");
+        assert!(rf.contains_key(b"present", b""), "present key contained");
+        assert!(!rf.contains_key(b"absent-key-xyz", b""), "absent key not contained");
+    }
+
+    #[test]
+    fn filter_minimal_is_valid_empty() {
+        let f = Filter::minimal();
+        let bytes = f.marshal();
+        assert_eq!(bytes.len(), 1 + 8 + 1, "minimal = 1 hash, 1 entry");
+        let rf = ReadFilter::parse(&bytes).expect("minimal parses");
+        assert!(!rf.contains_key(b"anything", b""), "minimal contains nothing");
+    }
+
+    #[test]
+    fn filter_new_rejects_too_few_entries() {
+        assert!(matches!(Filter::new(1, 0), Err(BloomError::TooFewEntries)));
     }
 }
