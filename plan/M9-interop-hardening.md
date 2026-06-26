@@ -1351,6 +1351,21 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 - [ ] **Step 4 — Confirm green:** `cargo nextest run -p ava-differential mixed_network` → passes (live mode; run on the nightly budget).
 - [ ] **Step 5 — Commit:** `differential: mixed_network — live Go+Rust, all chains, no fork, same tip`
 
+> **Follow-up — M9.15-next: fix the Rust `Handshake` `knownPeers.filter` bloom encoding (Rust→Go
+> p2p, NOT TLS).** Surfaced by the Stage 2 live run (see the "★ROOT CAUSE PINNED 2026-06-26" note
+> above): TLS-1.3 now clears against the Go beacon, but the Rust follower's outbound application-layer
+> `Handshake` message carries a malformed `knownPeers` bloom filter. The Go beacon rejects all 7
+> handshake attempts with `peer/peer.go:940 malformed message {field:"knownPeers.filter",
+> error:"invalid num hashes"}`, never registers the Rust node as a peer (`Peers:0` throughout), so
+> bootstrap can never seed a frontier. **Scope:** in `crates/ava-message`/`crates/ava-network` (the
+> p2p `Handshake` message + its `knownPeers`/`BloomFilter` encoding), make the emitted bloom filter's
+> `num hashes` / `num entries` satisfy avalanchego `bloom.Parse` (`x/bloom`) — i.e. a hash-count
+> within `[minHashes, maxHashes]` and consistent with the entry count (the empty-filter / freshly-seeded
+> case is the likely culprit). **Suggested gate:** a byte-level differential of the Rust-emitted
+> `Handshake.knownPeers.filter` against a Go-emitted one (extend the M9.13 wire-identity matrix), plus
+> re-running this live `mixed_network` arm to confirm the Go beacon registers the peer (`Peers:1`) and
+> bootstrap proceeds. This is the next live blocker; the TLS fix (`e06f0a0`) is confirmed and closed.
+
 ### Task M9.16: Go-data-dir → RocksDB import path (R2 migration) ✅ DONE (2026-06-15; `tests/go_dir_import.rs`)
 **Crate/area:** `ava-database` + `ava-node`  ·  **Depends on:** M1 (RocksDB backend, R2 scoped), M8 (node init)  ·  **Spec:** `26` §6 (DB version folder detection), `00` §4.4 / §11.2 R2, `04` R2, `27` §4 (marker)
 **Files:** `crates/ava-database/src/migrate/import.rs` (facade over the existing `migrate/` engine), `crates/ava-node/src/init/db_init.rs`, `crates/ava-database/tests/go_dir_import.rs`
@@ -1640,6 +1655,58 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > it prints `LISTENING <addr>` (emitted right after `tls.Listen` succeeds), bounded by `CELL_TIMEOUT`
 > — no timing constant, and (unlike a throwaway TCP probe) it does not consume the server's single
 > `Accept()`. All four cells PASS (`ava-differential` 1/1 live, `offline_gate_and_parse` unchanged).
+
+> **★ROOT CAUSE PINNED 2026-06-26 (Stage 2 of `m9.15-validate-tls-fix-live`) — TLS clears; the
+> live `mixed_network` arm now stalls one rung HIGHER, at the application-layer p2p `Handshake`
+> message.** Ran the gated arm against `~/avalanchego@cbea62895c` (`rpcchainvm=45`):
+>
+> ```
+> AVALANCHEGO_PATH="$HOME/avalanchego/build/avalanchego" \
+>   cargo nextest run -p ava-differential --features live --run-ignored all \
+>   -E 'test(=mixed_network)' --nocapture 2>&1 | tee /tmp/mixed_network_live.log
+> ```
+>
+> Result: TIMEOUT at the nextest 120 s per-test leash (the harness's own 180 s
+> `await_bootstrapped` deadline never elapsed). The decisive evidence is in the two node logs
+> (`$WORK_DIR/{go,rust}/node.log`, `$WORK_DIR = $TMPDIR/mixed-net-24301`):
+>
+> - **TLS layer — GREEN (Stage 1 fix holds).** The Rust follower's rustls transcript shows a full
+>   TLS-1.3 mutual handshake against the Go beacon's RSA staking cert: `Using ciphersuite
+>   TLS13_AES_128_GCM_SHA256`, `Got CertificateRequest`, `Attempting client auth` — then repeated
+>   `Resuming session` / `Resuming using PSK` on the reconnect-backoff cycle. No
+>   `UnsupportedCertVersion`, no cert error. The verifier fix (`e06f0a0`) is confirmed live.
+> - **App-layer p2p `Handshake` — BROKEN (the new rung).** The Go beacon rejects EVERY one of the 7
+>   handshake attempts (timestamps interleave exactly with the Rust client's reconnect cycle:
+>   `18.264 / 19.251 / 21.252 / 25.502 / 33.752 / 50.002 / 58:22.253`) with:
+>   ```
+>   peer/peer.go:940 malformed message
+>     {"nodeID":"NodeID-NgW9axPkSrexLerRtUp1wUAS5GhdGVjok","messageOp":"handshake",
+>      "field":"knownPeers.filter","error":"invalid num hashes"}
+>   ```
+>   All 7 malformed-message lines name the same field, `knownPeers.filter`. As a consequence the Go
+>   side never registers the Rust node as a peer — every P/X `app_request` sender line shows
+>   `"to":{"NodeIDs":[],"Validators":0,"NonValidators":0,"Peers":0}` and bootstrap logs
+>   `bootstrapping skipped {"reason":"no provided bootstraps"}` / `sampledNodes:[], numNodes:0`. The
+>   Rust follower never logs ANY application-layer handshake/peerlist/bloom event (only the rustls
+>   transcript), consistent with Go dropping the connection right after decoding the bad Handshake.
+>
+> **Ruled IN:** a Rust-side wire-encoding defect in the outbound `Handshake` message's `knownPeers`
+> bloom filter — specifically the `num hashes` (bloom `NumHashes`) field of the `BloomFilter`/`IPPort`
+> claimed-peers structure (`message/p2p` Handshake → `knownPeers.filter`). avalanchego's
+> `bloom.Parse` rejects a filter whose hash-count is outside `[minHashes, maxHashes]` (or whose
+> num-entries/num-hashes are inconsistent) with exactly `"invalid num hashes"`.
+> **Ruled OUT:** (1) the TLS-1.3 cert-version / verifier stall from Stage 1 (the rustls transcript is
+> clean and reaches client-auth — that blocker is closed). (2) The `RouterBridge` inbound-drop /
+> production boot-wiring gap suspected in prior memory — that is an *intra-Rust* concern at the
+> consensus-router seam, but here the connection never gets past the Go peer's Handshake decode, so it
+> is never reached; the stall is squarely on the Rust→Go p2p Handshake wire bytes, below any routing.
+> (3) PeerList exchange and bootstrap-connectivity gating — both are downstream of a registered peer,
+> which never happens.
+>
+> Captured artifacts: `/tmp/mixed_network_live.log` (nextest run), plus the two node logs copied for
+> inspection. Per Stage 2's diagnose-not-fix mandate, the `mixed_network` arm stays
+> `#[cfg(feature="live")] #[ignore]` with its no-fork/same-tip assertions unchanged, and the encoding
+> fix is filed as the follow-up below (NOT applied here).
 
 ---
 
