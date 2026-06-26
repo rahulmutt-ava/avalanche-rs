@@ -66,6 +66,66 @@ async fn tls_handshake_matrix_live() {
     // capturable evidence (Task 4) instead of hanging.
     const CELL_TIMEOUT: Duration = Duration::from_secs(15);
 
+    // Reverse direction: spawn the Go harness as a TLS *client* (real RSA
+    // staking cert) dialing a Rust *server*, exercising the inbound-peer
+    // verifier path against a real Go cert — not just the in-process fixture.
+    async fn go_client_vs_rust_server(
+        go_bin: &std::path::Path,
+        id: &ava_network::Identity,
+        verify: &str,
+        keytype: &str,
+    ) -> (Result<String, String>, String) {
+        // Bind the Rust server listener first so the Go client has a fixed addr.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind rust server");
+        let addr = listener.local_addr().expect("rust server local_addr");
+
+        let mut child = tokio::process::Command::new(go_bin)
+            .args([
+                "--role=client",
+                &format!("--addr={addr}"),
+                &format!("--verify={verify}"),
+                &format!("--keytype={keytype}"),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn go client");
+
+        // Accept + upgrade on the Rust server side, bounded like the fwd cells.
+        let rust_result = match tokio::time::timeout(
+            CELL_TIMEOUT,
+            tls_repro::rust_server_upgrade(listener, id),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(format!("timed out after {}s", CELL_TIMEOUT.as_secs())),
+        };
+
+        let go_stdout = match tokio::time::timeout(CELL_TIMEOUT, child.wait()).await {
+            Ok(Ok(_status)) => {
+                let mut buf = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    use tokio::io::AsyncReadExt;
+                    let _ = out.read_to_end(&mut buf).await;
+                }
+                String::from_utf8_lossy(&buf).to_string()
+            }
+            Ok(Err(e)) => format!(r#"{{"ok":false,"error":"go wait failed: {e}"}}"#),
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                format!(
+                    r#"{{"ok":false,"error":"go timed out after {}s"}}"#,
+                    CELL_TIMEOUT.as_secs()
+                )
+            }
+        };
+        (rust_result, go_stdout)
+    }
+
     // Helper: spawn the Go harness as server, read its LISTENING addr from
     // stderr, drive the Rust client against it, then collect the Go outcome.
     async fn rust_client_vs_go_server(
@@ -88,7 +148,24 @@ async fn tls_handshake_matrix_live() {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn go server");
-        tokio::time::sleep(Duration::from_millis(500)).await; // let it bind
+        // Wait for the Go server to actually bind, deterministically: the harness
+        // prints `LISTENING <addr>` to stderr right after `tls.Listen` succeeds.
+        // Read stderr lines until we see it, bounded by CELL_TIMEOUT. This removes
+        // the cold-start timing race without a magic sleep (a freshly-spawned Go
+        // process on an OS-uncached binary can take ~1s to bind) — and, unlike a
+        // throwaway TCP probe, it does NOT consume the server's single `Accept()`.
+        if let Some(stderr) = child.stderr.take() {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut lines = BufReader::new(stderr).lines();
+            let _ = tokio::time::timeout(CELL_TIMEOUT, async {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if line.starts_with("LISTENING") {
+                        break;
+                    }
+                }
+            })
+            .await;
+        }
 
         // Bound the Rust-client upgrade so a stalled handshake yields a captured
         // error string rather than hanging the harness.
@@ -145,23 +222,35 @@ async fn tls_handshake_matrix_live() {
     let (r5, g5) = rust_client_vs_go_server(&go_bin, &id, "staking", "ecdsa").await;
     eprintln!("CELL5 rust={r5:?}\nCELL5 go={g5}");
 
-    // Diagnosis assertion: cell 2 (no Go-side cert policy) MUST localize the
-    // fault. If cell 2 succeeds while cell 1 fails, the root cause is Go's
-    // ValidateCertificate rejecting our cert. If cell 2 also fails, it is a
-    // pure-TLS interop issue. Either way, capture — do not silently pass.
-    //
-    // The cell helper guarantees `g2` is always a structured JSON line: a real
-    // Go outcome on success, or a synthesized `{"ok":false,...}` line on the
-    // timeout / wait-failure path. So `parse_go_outcome` succeeds even when the
-    // handshake stalled — a timeout is *recorded as evidence* rather than
-    // hanging or panicking the harness mid-diagnosis.
-    let go2 = tls_repro::parse_go_outcome(&g2);
-    assert!(
-        go2.is_ok(),
-        "cell 2 Go side must emit a structured outcome (got {g2:?})",
-    );
-    // The live arm is expected RED until the root cause is fixed; the captured
-    // eprintln evidence is the deliverable (see Task 4). We assert only that the
-    // harness ran end-to-end (both sides produced an outcome), not that the
-    // handshake succeeded.
+    // --- Fix-validation gates (post-e06f0a0). The RSA cells previously failed
+    // with rustls UnsupportedCertVersion (Go's v1 RSA staking cert); the
+    // verify_tls13_signature_with_raw_key path must now let them complete. ---
+
+    // CELL5 (ECDSA) was already green pre-fix and must stay green.
+    let go5 = tls_repro::parse_go_outcome(&g5).expect("CELL5 go outcome");
+    assert!(go5.ok, "CELL5 (ecdsa) Go handshake ok: {g5}");
+    assert_eq!(go5.version, Some(772), "CELL5 negotiated TLS 1.3");
+    assert!(r5.is_ok(), "CELL5 Rust client derived a NodeID: {r5:?}");
+
+    // CELL2 (RSA, verify=noop) — the decisive isolation cell.
+    let go2 = tls_repro::parse_go_outcome(&g2).expect("CELL2 go outcome");
+    assert!(go2.ok, "CELL2 (rsa, noop) Go handshake ok — verifier fix: {g2}");
+    assert_eq!(go2.version, Some(772), "CELL2 negotiated TLS 1.3");
+    assert!(r2.is_ok(), "CELL2 Rust client accepted Go's v1 RSA cert: {r2:?}");
+
+    // CELL1 (RSA, verify=staking) — full production policy on both sides.
+    let go1 = tls_repro::parse_go_outcome(&g1).expect("CELL1 go outcome");
+    assert!(go1.ok, "CELL1 (rsa, staking) Go handshake ok: {g1}");
+    assert_eq!(go1.version, Some(772), "CELL1 negotiated TLS 1.3");
+    assert!(r1.is_ok(), "CELL1 Rust client + Go RSA staking cert: {r1:?}");
+
+    // --- Reverse direction: Go *client* (RSA staking cert) -> Rust *server*.
+    // Validates the inbound-peer verifier path against a real Go RSA cert. ---
+    let server_id = ava_network::Identity::generate().expect("rust server identity");
+    let (rs, gs) = go_client_vs_rust_server(&go_bin, &server_id, "staking", "rsa").await;
+    eprintln!("REVERSE rust_server={rs:?}\nREVERSE go_client={gs}");
+    let gsr = tls_repro::parse_go_outcome(&gs).expect("REVERSE go outcome");
+    assert!(gsr.ok, "REVERSE Go client handshake ok: {gs}");
+    assert_eq!(gsr.version, Some(772), "REVERSE negotiated TLS 1.3");
+    assert!(rs.is_ok(), "REVERSE Rust server accepted Go RSA client cert: {rs:?}");
 }

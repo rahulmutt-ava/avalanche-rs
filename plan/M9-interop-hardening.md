@@ -1618,6 +1618,29 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > analogue. STILL DEFERRED: RSA staking-key *loading* (`Identity::from_pem`) and
 > flipping the live `mixed_network`/matrix arms green (nightly-gated).
 
+> **AS-BUILT (2026-06-26, Stage 1 of `m9.15-validate-tls-fix-live`) — live TLS matrix is now a real
+> fix-validation gate.** `tests/differential/tests/tls_handshake_repro.rs::tls_handshake_matrix_live`
+> now hard-asserts the post-`e06f0a0` GREEN state instead of the former soft "harness ran end-to-end"
+> diagnosis guard. Run against `~/avalanchego@cbea62895c`, `rpcchainvm=45`:
+>
+> - **CELL1** (`verify=staking`, `keytype=rsa`): `rust=Ok(NodeID-...)`, Go `ok:true,version:772` —
+>   RSA cell flipped GREEN (previously `UnsupportedCertVersion` pre-fix).
+> - **CELL2** (`verify=noop`, `keytype=rsa`): `rust=Ok(NodeID-...)`, Go `ok:true,version:772` —
+>   decisive isolation cell also GREEN.
+> - **CELL5** (`verify=staking`, `keytype=ecdsa`): `rust=Ok(NodeID-...)`, Go `ok:true,version:772` —
+>   ECDSA cell was green pre-fix and stays green.
+> - **REVERSE** (new cell — Go *client* RSA → Rust *server*, `verify=staking`, `keytype=rsa`):
+>   `rust_server=Ok(NodeID-...)`, Go `ok:true,version:772` — inbound-peer verifier path validated
+>   live against a real Go RSA staking cert.
+>
+> New `go_client_vs_rust_server` helper added (binds Rust server first, spawns Go client, bounded
+> by same `CELL_TIMEOUT`). The pre-existing CELL1 cold-start race (a freshly-spawned Go server on an
+> OS-uncached binary can take ~1 s to bind, which the prior fixed sleep didn't reliably cover) is now
+> handled by a **deterministic stderr-readiness wait**: the helper reads the Go server's stderr until
+> it prints `LISTENING <addr>` (emitted right after `tls.Listen` succeeds), bounded by `CELL_TIMEOUT`
+> — no timing constant, and (unlike a throwaway TCP probe) it does not consume the server's single
+> `Accept()`. All four cells PASS (`ava-differential` 1/1 live, `offline_gate_and_parse` unchanged).
+
 ---
 
 ## Spec coverage check
