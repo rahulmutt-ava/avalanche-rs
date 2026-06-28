@@ -81,6 +81,11 @@ pub struct NodeLaunch {
     /// Empty for a beacon / seed; one or more peers for a follower or a
     /// mesh member. Rendered as comma-joined `--bootstrap-ips`/`--bootstrap-ids`.
     pub bootstrap: Vec<Bootstrap>,
+    /// Path to the BLS staking-signer key (`--staking-signer-key-file`). Set for
+    /// genesis Go validators — their BLS key must match the genesis-registered
+    /// proof-of-possession, else peers reject the signed-IP BLS signature and the
+    /// cluster never forms quorum. `None` for the non-validating Rust follower.
+    pub signer_key_file: Option<PathBuf>,
 }
 
 /// The exact CLI flag vector for `launch` (mirrors specs/13; both binaries
@@ -105,6 +110,9 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         // not change node behavior.
         "--log-level=debug".to_owned(),
     ];
+    if let Some(signer) = &launch.signer_key_file {
+        args.push(format!("--staking-signer-key-file={}", signer.display()));
+    }
     if !launch.bootstrap.is_empty() {
         let ips = launch
             .bootstrap
@@ -177,6 +185,38 @@ fn local_staker_in(src: &std::path::Path, idx: u8) -> Result<CertPair, NetworkEr
         )));
     }
     Ok(CertPair { cert, key })
+}
+
+/// Resolve the well-known local validator's BLS signer key `signerN.key` from
+/// `$AVALANCHEGO_SRC/staking/local/` (default `~/avalanchego`). Each genesis
+/// initial-staker registers a fixed BLS proof-of-possession; the matching signer
+/// key must be supplied or the node generates a random BLS key whose signed-IP
+/// signature peers reject (the cluster then never forms quorum).
+///
+/// # Errors
+/// Returns [`NetworkError::CertSource`] if the signer key file is not found.
+pub fn local_signer_key(idx: u8) -> Result<PathBuf, NetworkError> {
+    let src = std::env::var("AVALANCHEGO_SRC").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/avalanchego")
+    });
+    local_signer_key_in(std::path::Path::new(&src), idx)
+}
+
+/// Resolve signer `idx` under an explicit source root (testable core of
+/// [`local_signer_key`]).
+fn local_signer_key_in(src: &std::path::Path, idx: u8) -> Result<PathBuf, NetworkError> {
+    let path = src
+        .join("staking")
+        .join("local")
+        .join(format!("signer{idx}.key"));
+    if !path.exists() {
+        return Err(NetworkError::CertSource(format!(
+            "signer{idx} key not found at {} (set $AVALANCHEGO_SRC)",
+            path.display()
+        )));
+    }
+    Ok(path)
 }
 
 /// Generate a fresh ECDSA-P256 staking cert/key (the only format `avalanchers`
@@ -528,6 +568,7 @@ mod tests {
                     id: "NodeID-abc".to_owned(),
                 }],
             },
+            signer_key_file: None,
         }
     }
 
@@ -608,6 +649,48 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), 4, "ports are distinct");
         assert!(ports.iter().all(|&p| p != 0), "no zero ports");
+    }
+
+    #[test]
+    fn node_args_emit_signer_key_file_when_set() {
+        let mut l = launch(Role::Beacon);
+        l.signer_key_file = Some(PathBuf::from("/x/signer3.key"));
+        let args = node_args(&l);
+        assert!(
+            args.iter()
+                .any(|a| a == "--staking-signer-key-file=/x/signer3.key"),
+            "signer key flag emitted when set"
+        );
+    }
+
+    #[test]
+    fn node_args_omit_signer_key_file_when_none() {
+        let l = launch(Role::Beacon); // signer_key_file: None
+        let args = node_args(&l);
+        assert!(
+            !args.iter().any(|a| a.starts_with("--staking-signer-key-file")),
+            "no signer key flag when None"
+        );
+    }
+
+    #[test]
+    fn local_signer_key_in_resolves_existing_file() {
+        let dir = std::env::temp_dir().join("m9_15_signer_fixture");
+        let local = dir.join("staking").join("local");
+        std::fs::create_dir_all(&local).expect("mkdir fixture");
+        let kp = local.join("signer2.key");
+        std::fs::write(&kp, b"fake-bls-key").expect("write fixture");
+        let got = local_signer_key_in(&dir, 2).expect("resolve signer2");
+        assert_eq!(got, kp, "resolves signerN.key under staking/local");
+    }
+
+    #[test]
+    fn local_signer_key_in_missing_file_errors() {
+        let dir = std::env::temp_dir().join("m9_15_signer_missing");
+        assert!(
+            local_signer_key_in(&dir, 9).is_err(),
+            "missing signer key is an error"
+        );
     }
 
     #[test]

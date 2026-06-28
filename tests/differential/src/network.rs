@@ -635,6 +635,7 @@ impl Network {
                 cert_file: staker.cert,
                 key_file: staker.key,
                 bootstrap: Vec::new(), // filled below once the full set is known
+                signer_key_file: Some(crate::livenet::local_signer_key(idx)?),
             });
         }
         // Each Go node bootstraps from the other four (full mesh ⇒ quorum).
@@ -719,6 +720,7 @@ impl Network {
             cert_file: rust_staker.cert,
             key_file: rust_staker.key,
             bootstrap: crate::livenet::mesh_peers(&go_validators, usize::MAX),
+            signer_key_file: None,
         };
         nodes.push(spawn_role_node(&rust_path, Binary::Rust, 5, &rust_launch)?);
 
