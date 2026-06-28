@@ -38,6 +38,33 @@ pub struct Bootstrap {
     pub id: String,
 }
 
+/// A live Go validator slot: its staking endpoint + NodeID, used to build the
+/// full-mesh bootstrap lists in [`crate::network::Network::boot_mixed`].
+#[derive(Debug, Clone)]
+pub struct GoValidator {
+    /// `host:staking_port`, e.g. `127.0.0.1:9651`.
+    pub ip: String,
+    /// The validator's `NodeID-...` string.
+    pub id: String,
+}
+
+/// The bootstrap-peer list for the validator at index `exclude`: every *other*
+/// validator (full mesh), preserving order. An `exclude` index past the end
+/// (e.g. `usize::MAX`) yields the full set — used for the non-validating
+/// follower, which bootstraps from all validators.
+#[must_use]
+pub fn mesh_peers(validators: &[GoValidator], exclude: usize) -> Vec<Bootstrap> {
+    validators
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != exclude)
+        .map(|(_, v)| Bootstrap {
+            ip: v.ip.clone(),
+            id: v.id.clone(),
+        })
+        .collect()
+}
+
 /// Everything needed to launch one node (binary path supplied separately).
 #[derive(Debug, Clone)]
 pub struct NodeLaunch {
@@ -460,6 +487,30 @@ fn ewoq_key() -> Result<PrivateKey, NetworkError> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn mesh_peers_excludes_self_and_preserves_order() {
+        let vs = vec![
+            GoValidator { ip: "127.0.0.1:1".to_owned(), id: "NodeID-a".to_owned() },
+            GoValidator { ip: "127.0.0.1:2".to_owned(), id: "NodeID-b".to_owned() },
+            GoValidator { ip: "127.0.0.1:3".to_owned(), id: "NodeID-c".to_owned() },
+        ];
+        let peers = mesh_peers(&vs, 1);
+        assert_eq!(peers.len(), 2, "every validator except #1");
+        assert_eq!(peers[0].ip, "127.0.0.1:1");
+        assert_eq!(peers[0].id, "NodeID-a");
+        assert_eq!(peers[1].ip, "127.0.0.1:3");
+        assert_eq!(peers[1].id, "NodeID-c");
+    }
+
+    #[test]
+    fn mesh_peers_out_of_range_returns_all() {
+        let vs = vec![
+            GoValidator { ip: "127.0.0.1:1".to_owned(), id: "NodeID-a".to_owned() },
+            GoValidator { ip: "127.0.0.1:2".to_owned(), id: "NodeID-b".to_owned() },
+        ];
+        assert_eq!(mesh_peers(&vs, usize::MAX).len(), 2, "no exclusion ⇒ all peers");
+    }
 
     fn launch(role: Role) -> NodeLaunch {
         NodeLaunch {

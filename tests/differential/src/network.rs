@@ -289,6 +289,18 @@ impl Network {
         &self.nodes
     }
 
+    /// The Go beacon (staker1) — the first node booted. `None` if empty.
+    #[must_use]
+    pub fn go_beacon(&self) -> Option<&Node> {
+        self.nodes.first()
+    }
+
+    /// The Rust follower — the last node booted. `None` if empty.
+    #[must_use]
+    pub fn rust_follower(&self) -> Option<&Node> {
+        self.nodes.last()
+    }
+
     /// Wait until every node reports connected peers (handshakes complete /
     /// PeerLists exchanged), polling `info.peers` over each node's API.
     ///
@@ -679,6 +691,16 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accessors_on_empty_network_are_none() {
+        let net = Network {
+            nodes: Vec::new(),
+            work_dir: std::path::PathBuf::from("/tmp/empty-net"),
+        };
+        assert!(net.go_beacon().is_none(), "empty net has no beacon");
+        assert!(net.rust_follower().is_none(), "empty net has no follower");
+    }
 
     #[test]
     fn resolve_go_binary_missing_is_go_binary_missing() {
