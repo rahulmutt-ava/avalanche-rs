@@ -242,6 +242,7 @@ impl Sender for OutboundSender {
     }
 
     fn send_get_accepted_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
+        tracing::debug!(?nodes, request_id = req, "rung 7: GetAcceptedFrontier broadcast to beacon set (production OutboundSender)");
         self.register(nodes, req, op::GET_ACCEPTED_FRONTIER);
         self.send_to(
             p2p::message::Message::GetAcceptedFrontier(p2p::GetAcceptedFrontier {
