@@ -612,7 +612,7 @@ impl Network {
             data_dir: work_dir.join("go"),
             cert_file: go_staker.cert,
             key_file: go_staker.key,
-            bootstrap: None,
+            bootstrap: Vec::new(),
         };
         let go_node = spawn_role_node(&go_path, Binary::Go, 0, &go_launch)?;
 
@@ -642,10 +642,10 @@ impl Network {
             data_dir: work_dir.join("rust"),
             cert_file: rust_staker.cert,
             key_file: rust_staker.key,
-            bootstrap: Some(crate::livenet::Bootstrap {
+            bootstrap: vec![crate::livenet::Bootstrap {
                 ip: format!("127.0.0.1:{go_staking}"),
                 id: go_id,
-            }),
+            }],
         };
         let rust_node = spawn_role_node(&rust_path, Binary::Rust, 1, &rust_launch)?;
 

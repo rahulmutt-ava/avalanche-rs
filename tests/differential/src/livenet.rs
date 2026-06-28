@@ -51,8 +51,9 @@ pub struct NodeLaunch {
     pub cert_file: PathBuf,
     /// Path to the TLS staking key.
     pub key_file: PathBuf,
-    /// `None` for a beacon; `Some` for a follower.
-    pub bootstrap: Option<Bootstrap>,
+    /// Empty for a beacon / seed; one or more peers for a follower or a
+    /// mesh member. Rendered as comma-joined `--bootstrap-ips`/`--bootstrap-ids`.
+    pub bootstrap: Vec<Bootstrap>,
 }
 
 /// The exact CLI flag vector for `launch` (mirrors specs/13; both binaries
@@ -77,9 +78,21 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         // not change node behavior.
         "--log-level=debug".to_owned(),
     ];
-    if let Some(b) = &launch.bootstrap {
-        args.push(format!("--bootstrap-ips={}", b.ip));
-        args.push(format!("--bootstrap-ids={}", b.id));
+    if !launch.bootstrap.is_empty() {
+        let ips = launch
+            .bootstrap
+            .iter()
+            .map(|b| b.ip.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let ids = launch
+            .bootstrap
+            .iter()
+            .map(|b| b.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        args.push(format!("--bootstrap-ips={ips}"));
+        args.push(format!("--bootstrap-ids={ids}"));
     }
     args
 }
@@ -444,11 +457,11 @@ mod tests {
             cert_file: PathBuf::from("/certs/staker1.crt"),
             key_file: PathBuf::from("/certs/staker1.key"),
             bootstrap: match role {
-                Role::Beacon => None,
-                Role::Follower => Some(Bootstrap {
+                Role::Beacon => Vec::new(),
+                Role::Follower => vec![Bootstrap {
                     ip: "127.0.0.1:9651".to_owned(),
                     id: "NodeID-abc".to_owned(),
-                }),
+                }],
             },
         }
     }
@@ -492,6 +505,31 @@ mod tests {
         assert!(
             args.iter().any(|a| a == "--bootstrap-ids=NodeID-abc"),
             "bootstrap-ids"
+        );
+    }
+
+    #[test]
+    fn multi_bootstrapper_args_are_comma_joined() {
+        let mut l = launch(Role::Beacon);
+        l.bootstrap = vec![
+            Bootstrap {
+                ip: "127.0.0.1:1".to_owned(),
+                id: "NodeID-a".to_owned(),
+            },
+            Bootstrap {
+                ip: "127.0.0.1:2".to_owned(),
+                id: "NodeID-b".to_owned(),
+            },
+        ];
+        let args = node_args(&l);
+        assert!(
+            args.iter()
+                .any(|a| a == "--bootstrap-ips=127.0.0.1:1,127.0.0.1:2"),
+            "ips comma-joined in order"
+        );
+        assert!(
+            args.iter().any(|a| a == "--bootstrap-ids=NodeID-a,NodeID-b"),
+            "ids comma-joined in order"
         );
     }
 
