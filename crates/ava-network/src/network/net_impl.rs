@@ -153,6 +153,7 @@ impl NetworkImpl {
                 () = handle.finished_handshake() => {
                     this.connecting.remove(&node);
                     this.connected.insert(handle.clone());
+                    tracing::debug!(%node, "rung 3: app handshake complete (promoted to connected)");
                     // Reconnect-backoff: reset the backoff for this peer so the
                     // next outbound dial (after disconnect) starts fresh.
                     if let Some(t) = this.tracked_ips.lock().get_mut(&node) {
@@ -167,6 +168,7 @@ impl NetworkImpl {
                 () = handle.closed() => {
                     this.connecting.remove(&node);
                     this.connected.remove(&node);
+                    tracing::debug!(%node, "rung 3: peer handshake failed / connection closed");
                     return;
                 }
             }
@@ -219,12 +221,15 @@ impl NetworkImpl {
         let this = Arc::clone(self);
         self.tasks.spawn(async move {
             let stream = match this.dialer.dial(addr).await {
-                Ok(s) => s,
+                Ok(s) => {
+                    tracing::debug!(%addr, "rung 1-2: outbound TCP+TLS dial connected");
+                    s
+                }
                 Err(e) => {
                     // Surface the dial failure (TCP refused / unreachable) — Go
                     // logs the dialer error at debug. Previously swallowed, which
                     // hid live-interop bring-up failures (M9.15 D3).
-                    tracing::debug!(%addr, error = %e, "outbound dial failed");
+                    tracing::debug!(%addr, error = %e, "rung 1: outbound dial failed");
                     return;
                 }
             };
@@ -234,6 +239,7 @@ impl NetworkImpl {
                     if this.connected.contains(&node_id) || this.connecting.contains(&node_id) {
                         return;
                     }
+                    tracing::debug!(%addr, %node_id, "rung 3: outbound peer spawned (app handshake starting)");
                     let handle = Peer::spawn(
                         Arc::clone(&this.peer_config),
                         node_id,
