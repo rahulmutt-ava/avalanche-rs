@@ -531,9 +531,18 @@ mod tests {
     #[test]
     fn mesh_peers_excludes_self_and_preserves_order() {
         let vs = vec![
-            GoValidator { ip: "127.0.0.1:1".to_owned(), id: "NodeID-a".to_owned() },
-            GoValidator { ip: "127.0.0.1:2".to_owned(), id: "NodeID-b".to_owned() },
-            GoValidator { ip: "127.0.0.1:3".to_owned(), id: "NodeID-c".to_owned() },
+            GoValidator {
+                ip: "127.0.0.1:1".to_owned(),
+                id: "NodeID-a".to_owned(),
+            },
+            GoValidator {
+                ip: "127.0.0.1:2".to_owned(),
+                id: "NodeID-b".to_owned(),
+            },
+            GoValidator {
+                ip: "127.0.0.1:3".to_owned(),
+                id: "NodeID-c".to_owned(),
+            },
         ];
         let peers = mesh_peers(&vs, 1);
         assert_eq!(peers.len(), 2, "every validator except #1");
@@ -548,10 +557,20 @@ mod tests {
     #[test]
     fn mesh_peers_out_of_range_returns_all() {
         let vs = vec![
-            GoValidator { ip: "127.0.0.1:1".to_owned(), id: "NodeID-a".to_owned() },
-            GoValidator { ip: "127.0.0.1:2".to_owned(), id: "NodeID-b".to_owned() },
+            GoValidator {
+                ip: "127.0.0.1:1".to_owned(),
+                id: "NodeID-a".to_owned(),
+            },
+            GoValidator {
+                ip: "127.0.0.1:2".to_owned(),
+                id: "NodeID-b".to_owned(),
+            },
         ];
-        assert_eq!(mesh_peers(&vs, usize::MAX).len(), 2, "no exclusion ⇒ all peers");
+        assert_eq!(
+            mesh_peers(&vs, usize::MAX).len(),
+            2,
+            "no exclusion ⇒ all peers"
+        );
     }
 
     fn launch(role: Role) -> NodeLaunch {
@@ -668,7 +687,9 @@ mod tests {
         let l = launch(Role::Beacon); // signer_key_file: None
         let args = node_args(&l);
         assert!(
-            !args.iter().any(|a| a.starts_with("--staking-signer-key-file")),
+            !args
+                .iter()
+                .any(|a| a.starts_with("--staking-signer-key-file")),
             "no signer key flag when None"
         );
     }
