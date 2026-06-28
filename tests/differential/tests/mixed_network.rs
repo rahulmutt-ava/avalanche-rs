@@ -159,8 +159,8 @@ async fn mixed_network() {
         .await
         .expect("Go and Rust complete the TLS handshake / exchange PeerLists");
 
-    let go_api = net.nodes().first().expect("go beacon").api_base.clone();
-    let rust_api = net.nodes().get(1).expect("rust follower").api_base.clone();
+    let go_api = net.go_beacon().expect("go beacon").api_base.clone();
+    let rust_api = net.rust_follower().expect("rust follower").api_base.clone();
 
     // 2. Record the pre-tx C height, drive one tx on the Go validator, settle.
     let before = await_same_c_height(&go_api, &rust_api, 0, Duration::from_secs(30))
