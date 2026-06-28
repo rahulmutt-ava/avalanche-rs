@@ -1379,6 +1379,33 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > nightly-gated. A nightly run is needed to confirm the Go beacon registers the peer (`Peers:1`)
 > and bootstrap proceeds — the encoding fix is in place; this is purely a live-gate confirmation.
 
+> **★ AS-BUILT — LIVE 5-Go-validator-quorum + Rust-follower run (2026-06-28, branch
+> `m9.15-mixed-network-go-quorum`).** `boot_mixed` was rewritten (test-harness only) to bring up the
+> full 5-validator Go primary network (full bootstrap mesh) + 1 Rust ECDSA follower, with a staged
+> Stage 1 (Go cluster bootstraps) → Stage 2 (Rust follows) wait, plus `Vec<Bootstrap>` multi-bootstrapper
+> args, a vendored `LOCAL_VALIDATOR_NODE_IDS` table, `mesh_peers`, and `go_beacon()`/`rust_follower()`
+> accessors. Run against `~/avalanchego@cbea62895c` (`rpcchainvm=45`):
+> - **STAGE 1 — GREEN.** The 5 Go validators reach quorum and bootstrap P/X/C (`go1` health
+>   `readiness/bootstrapped` + `health/{P,X,C}` all "started passing"). ★ **Required a fix the spec
+>   missed:** the harness launched each Go validator with its TLS staker cert/key (→ NodeID) but **no
+>   BLS signer key**, so each generated a random BLS key whose signed-IP signature did not match the
+>   genesis-registered `proofOfPossession` → every validator rejected its peers with `invalid BLS
+>   signature` → no quorum (run #1). Fix: `NodeLaunch.signer_key_file` + `--staking-signer-key-file` +
+>   `local_signer_key(idx)` resolving `$AVALANCHEGO_SRC/staking/local/signerN.key` (the keys ship in the
+>   avalanchego repo); Go validators get `Some(signerN.key)` aligned with their NodeID, the Rust follower
+>   `None` (non-validating, no registered pubkey).
+> - **STAGE 2 — RED (rung isolated, the next spec/plan).** The Rust follower does **not** bootstrap
+>   P/X/C within 180 s (`mixed_network.rs:157` timeout). Progress vs the prior TLS-version and
+>   knownPeers-bloom blockers: TLS 1.3 mutual handshake completes (rustls client, ECDSA client-auth) **and
+>   the app-layer Handshake now succeeds** — the follower replied with a `PeerList` to Go validator
+>   `NodeID-GWPcb…` (staker4). The **new** rung: the follower's log shows exactly that one handshake then
+>   goes silent — **no** bootstrap-protocol traffic (`GetAcceptedFrontier`/`AcceptedFrontier`/`Ancestors`)
+>   is ever emitted. It stalls at the connect→bootstrap-start boundary (never registers enough connected
+>   validators to begin frontier exchange). This is **production engine/bootstrapper wiring**, out of
+>   scope for this test-harness-only plan, and becomes the next M9.15 spec/plan.
+> - **Arm stays nightly-gated** (`#[cfg(feature="live")] #[ignore]`). The offline arms
+>   (`mixed_network_replay_is_deterministic` + proptest) are untouched and CI-green.
+
 ### Task M9.16: Go-data-dir → RocksDB import path (R2 migration) ✅ DONE (2026-06-15; `tests/go_dir_import.rs`)
 **Crate/area:** `ava-database` + `ava-node`  ·  **Depends on:** M1 (RocksDB backend, R2 scoped), M8 (node init)  ·  **Spec:** `26` §6 (DB version folder detection), `00` §4.4 / §11.2 R2, `04` R2, `27` §4 (marker)
 **Files:** `crates/ava-database/src/migrate/import.rs` (facade over the existing `migrate/` engine), `crates/ava-node/src/init/db_init.rs`, `crates/ava-database/tests/go_dir_import.rs`
