@@ -562,6 +562,7 @@ impl ava_engine::common::sender::Sender for RecordingSender {
     }
     fn send_accepted_state_summary(&self, _node: NodeId, _req: u32, _summary_ids: &[Id]) {}
     fn send_get_accepted_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
+        tracing::debug!(?nodes, "rung 7: GetAcceptedFrontier broadcast to beacon set");
         self.push(Sent::GetAcceptedFrontier {
             nodes: sorted_nodes(nodes),
             req,
@@ -1340,8 +1341,15 @@ where
             // returns `Err` only when the sender is dropped; treat that as
             // "gate closed / node shutting down" and skip the start.
             if gate.wait_for(|&v| v).await.is_ok() {
+                tracing::debug!(
+                    "rung 5-6: connectivity gate resolved true; starting bootstrapper handler"
+                );
                 let inner = handler.start();
                 let _ = inner.await;
+            } else {
+                tracing::debug!(
+                    "rung 5: connectivity gate closed before firing (node shutting down)"
+                );
             }
         })
     } else {
