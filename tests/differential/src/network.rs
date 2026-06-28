@@ -591,86 +591,142 @@ impl Network {
 
         let work_dir = std::env::temp_dir().join(format!("mixed-net-{seed}"));
         let _ = std::fs::create_dir_all(&work_dir);
-        let ports = crate::livenet::free_ports(4)
+
+        // 12 ports up front: 5 Go validators × (http, staking) + 1 Rust × (http, staking).
+        let ports = crate::livenet::free_ports(12)
             .map_err(|e| NetworkError::Timeout(format!("free_ports: {e}")))?;
-        // Extract the four ports by position — free_ports(4) always returns exactly 4.
-        let go_http = ports
+
+        // Build the 5 Go validator slots. Validator i uses stakerI's RSA
+        // cert/key (Go loads RSA natively) and the i-th well-known local NodeID,
+        // so the full bootstrap mesh can be wired before any node is spawned.
+        let mut go_validators: Vec<crate::livenet::GoValidator> = Vec::with_capacity(5);
+        let mut go_launches: Vec<crate::livenet::NodeLaunch> = Vec::with_capacity(5);
+        for i in 0..5usize {
+            let port_http = i
+                .checked_mul(2)
+                .ok_or_else(|| NetworkError::Timeout("port index overflow".to_owned()))?;
+            let port_staking = port_http
+                .checked_add(1)
+                .ok_or_else(|| NetworkError::Timeout("port index overflow".to_owned()))?;
+            let http = *ports
+                .get(port_http)
+                .ok_or_else(|| NetworkError::Timeout("missing go http port".to_owned()))?;
+            let staking = *ports
+                .get(port_staking)
+                .ok_or_else(|| NetworkError::Timeout("missing go staking port".to_owned()))?;
+            // local_staker is 1-indexed (staker1..staker5).
+            let i1 = i
+                .checked_add(1)
+                .ok_or_else(|| NetworkError::Timeout("staker index overflow".to_owned()))?;
+            let idx = u8::try_from(i1)
+                .map_err(|_| NetworkError::Timeout("staker index overflow".to_owned()))?;
+            let staker = crate::livenet::local_staker(idx)?;
+            let node_id = crate::livenet::LOCAL_VALIDATOR_NODE_IDS
+                .get(i)
+                .ok_or_else(|| NetworkError::Timeout("missing local validator id".to_owned()))?;
+            go_validators.push(crate::livenet::GoValidator {
+                ip: format!("127.0.0.1:{staking}"),
+                id: (*node_id).to_owned(),
+            });
+            go_launches.push(crate::livenet::NodeLaunch {
+                http_port: http,
+                staking_port: staking,
+                data_dir: work_dir.join(format!("go{i1}")),
+                cert_file: staker.cert,
+                key_file: staker.key,
+                bootstrap: Vec::new(), // filled below once the full set is known
+            });
+        }
+        // Each Go node bootstraps from the other four (full mesh ⇒ quorum).
+        for (i, launch) in go_launches.iter_mut().enumerate() {
+            launch.bootstrap = crate::livenet::mesh_peers(&go_validators, i);
+        }
+
+        // Spawn all 5 Go validators.
+        let mut nodes: Vec<Node> = Vec::with_capacity(6);
+        for (i, launch) in go_launches.iter().enumerate() {
+            let slot = u32::try_from(i)
+                .map_err(|_| NetworkError::Timeout("go slot overflow".to_owned()))?;
+            nodes.push(spawn_role_node(&go_path, Binary::Go, slot, launch)?);
+        }
+
+        // The beacon (staker1) is node 0; everything keys off its API.
+        let beacon_api = nodes
             .first()
-            .copied()
-            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 1 port".to_owned()))?;
-        let go_staking = ports
-            .get(1)
-            .copied()
-            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 2 ports".to_owned()))?;
-        let rust_http = ports
-            .get(2)
-            .copied()
-            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 3 ports".to_owned()))?;
-        let rust_staking = ports
-            .get(3)
-            .copied()
-            .ok_or_else(|| NetworkError::Timeout("free_ports returned < 4 ports".to_owned()))?;
-        let go_staker = crate::livenet::local_staker(1)?;
-        // The Rust follower is a non-validating bootstrapper, so its node-ID need
-        // not be a genesis staker — and `avalanchers` only loads ECDSA-P256 keys
-        // (it rejects the RSA local staker keys; M9.15 gap). Give it a fresh
-        // ECDSA cert instead of the RSA `staker2`.
-        let rust_staker = crate::livenet::generate_staker(&work_dir, "rust-staker")?;
+            .ok_or_else(|| NetworkError::Timeout("go beacon missing".to_owned()))?
+            .api_base
+            .clone();
+        let beacon_log = nodes
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("go beacon missing".to_owned()))?
+            .log_path
+            .clone();
 
-        // 1. Go beacon (no bootstrap peers — it is the genesis validator).
-        let go_launch = crate::livenet::NodeLaunch {
-            http_port: go_http,
-            staking_port: go_staking,
-            data_dir: work_dir.join("go"),
-            cert_file: go_staker.cert,
-            key_file: go_staker.key,
-            bootstrap: Vec::new(),
-        };
-        let go_node = spawn_role_node(&go_path, Binary::Go, 0, &go_launch)?;
-
-        // 2. Scrape the Go node-ID (it must answer info.getNodeID before we wire bootstrap).
-        let go_id = {
+        // Sanity: the scraped beacon NodeID must match the vendored table head
+        // (catches a wrong cert↔id mapping early).
+        {
             let deadline = std::time::Instant::now()
                 .checked_add(std::time::Duration::from_secs(60))
                 .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
             loop {
-                if let Ok(id) = crate::livenet::scrape_node_id(&go_node.api_base).await {
-                    break id;
+                if let Ok(id) = crate::livenet::scrape_node_id(&beacon_api).await {
+                    if id != crate::livenet::LOCAL_VALIDATOR_NODE_IDS[0] {
+                        return Err(NetworkError::Timeout(format!(
+                            "beacon NodeID {id} != vendored staker1 {}",
+                            crate::livenet::LOCAL_VALIDATOR_NODE_IDS[0]
+                        )));
+                    }
+                    break;
                 }
                 if std::time::Instant::now() >= deadline {
                     return Err(NetworkError::Timeout(format!(
                         "Go beacon never answered info.getNodeID:\n{}",
-                        log_tail(&go_node.log_path, 40)
+                        log_tail(&beacon_log, 40)
                     )));
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
-        };
+        }
 
-        // 3. Rust follower, bootstrapped from the Go beacon.
+        // STAGE 1: the 5-validator Go cluster must reach quorum and bootstrap
+        // P/X/C before it can serve a frontier to the follower.
+        crate::livenet::await_bootstrapped(
+            &beacon_api,
+            &["P", "X", "C"],
+            std::time::Duration::from_secs(240),
+        )
+        .await
+        .map_err(|e| {
+            NetworkError::Timeout(format!(
+                "Go cluster did not bootstrap (quorum not reached?):\n{e}\ngo beacon log:\n{}",
+                log_tail(&beacon_log, 60)
+            ))
+        })?;
+
+        // Rust follower: a fresh ECDSA cert (avalanchers rejects the RSA local
+        // stakers — M9.15 gap), 0 weight, bootstrapping from ALL 5 Go validators.
+        let rust_http = *ports
+            .get(10)
+            .ok_or_else(|| NetworkError::Timeout("missing rust http port".to_owned()))?;
+        let rust_staking = *ports
+            .get(11)
+            .ok_or_else(|| NetworkError::Timeout("missing rust staking port".to_owned()))?;
+        let rust_staker = crate::livenet::generate_staker(&work_dir, "rust-staker")?;
         let rust_launch = crate::livenet::NodeLaunch {
             http_port: rust_http,
             staking_port: rust_staking,
             data_dir: work_dir.join("rust"),
             cert_file: rust_staker.cert,
             key_file: rust_staker.key,
-            bootstrap: vec![crate::livenet::Bootstrap {
-                ip: format!("127.0.0.1:{go_staking}"),
-                id: go_id,
-            }],
+            bootstrap: crate::livenet::mesh_peers(&go_validators, usize::MAX),
         };
-        let rust_node = spawn_role_node(&rust_path, Binary::Rust, 1, &rust_launch)?;
+        nodes.push(spawn_role_node(&rust_path, Binary::Rust, 5, &rust_launch)?);
 
-        let net = Network {
-            nodes: vec![go_node, rust_node],
-            work_dir,
-        };
+        let net = Network { nodes, work_dir };
 
-        // 4. Wait for the Rust follower to bootstrap P/X/C from Go.
-        // nodes[1] is the Rust follower — we just pushed it at index 1 above.
+        // STAGE 2: the Rust follower bootstraps P/X/C from the Go cluster.
         let rust_node_ref = net
-            .nodes
-            .get(1)
+            .rust_follower()
             .ok_or_else(|| NetworkError::Timeout("rust follower missing".to_owned()))?;
         let rust_api = rust_node_ref.api_base.clone();
         let rust_log = rust_node_ref.log_path.clone();
