@@ -744,6 +744,118 @@ impl Network {
 
         Ok(net)
     }
+
+    /// Bisection probe for M9.15 rung-3: one Go validator (self-bootstraps) +
+    /// one Rust follower whose sole bootstrap beacon is that Go node. The
+    /// follower's connectivity gate threshold collapses to
+    /// `required_conns = (3*1 + 3) / 4 = 1`, so a single beacon connection fires
+    /// the gate — exercising the engine/frontier path against real Go in
+    /// isolation from the 5-validator quorum-connectivity problem.
+    pub async fn boot_single_go_beacon(seed: u64) -> Result<Network, NetworkError> {
+        let go_path = resolve_go_binary(std::env::var("AVALANCHEGO_PATH").ok())?;
+        let rust_path = locate_rust_binary()?;
+
+        // Pre-gate: the Go binary commit must match the ~/avalanchego checkout.
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/check_oracle_binary.sh");
+        let status = std::process::Command::new(&script).status().map_err(|e| {
+            NetworkError::Timeout(format!(
+                "check_oracle_binary.sh not runnable ({}): {e}",
+                script.display()
+            ))
+        })?;
+        if !status.success() {
+            return Err(NetworkError::Timeout(
+                "check_oracle_binary.sh failed — rebuild ~/avalanchego (stale binary)".to_owned(),
+            ));
+        }
+
+        let work_dir = std::env::temp_dir().join(format!("single-beacon-{seed}"));
+        let _ = std::fs::create_dir_all(&work_dir);
+
+        // 4 ports: 1 Go validator (http, staking) + 1 Rust follower (http, staking).
+        let ports =
+            crate::livenet::free_ports(4).map_err(|e| NetworkError::Timeout(format!("free_ports: {e}")))?;
+        let go_http = *ports.first().ok_or_else(|| NetworkError::Timeout("go http".to_owned()))?;
+        let go_staking = *ports.get(1).ok_or_else(|| NetworkError::Timeout("go staking".to_owned()))?;
+        let rust_http = *ports.get(2).ok_or_else(|| NetworkError::Timeout("rust http".to_owned()))?;
+        let rust_staking =
+            *ports.get(3).ok_or_else(|| NetworkError::Timeout("rust staking".to_owned()))?;
+
+        // The single Go validator uses staker1's RSA cert/key + BLS signer key and
+        // the first well-known local NodeID, and bootstraps from itself (a 1-node
+        // cluster self-bootstraps trivially).
+        let staker = crate::livenet::local_staker(1)?;
+        let go_node_id = crate::livenet::LOCAL_VALIDATOR_NODE_IDS
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("missing local validator id".to_owned()))?;
+        let go_validator = crate::livenet::GoValidator {
+            ip: format!("127.0.0.1:{go_staking}"),
+            id: (*go_node_id).to_owned(),
+        };
+        let go_launch = crate::livenet::NodeLaunch {
+            http_port: go_http,
+            staking_port: go_staking,
+            data_dir: work_dir.join("go1"),
+            cert_file: staker.cert,
+            key_file: staker.key,
+            bootstrap: Vec::new(), // a lone genesis validator self-bootstraps
+            signer_key_file: Some(crate::livenet::local_signer_key(1)?),
+        };
+        let mut nodes: Vec<Node> = Vec::with_capacity(2);
+        nodes.push(spawn_role_node(&go_path, Binary::Go, 0, &go_launch)?);
+
+        let beacon_api = nodes
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("go beacon missing".to_owned()))?
+            .api_base
+            .clone();
+        let beacon_log = nodes
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("go beacon missing".to_owned()))?
+            .log_path
+            .clone();
+
+        // STAGE 1: the lone Go validator must bootstrap P/X/C before serving a frontier.
+        crate::livenet::await_bootstrapped(&beacon_api, &["P", "X", "C"], std::time::Duration::from_secs(240))
+            .await
+            .map_err(|e| {
+                NetworkError::Timeout(format!(
+                    "lone Go validator did not bootstrap:\n{e}\ngo log:\n{}",
+                    log_tail(&beacon_log, 60)
+                ))
+            })?;
+
+        // The Rust follower: fresh ECDSA cert, non-validating, bootstraps from the one Go node.
+        let rust_staker = crate::livenet::generate_staker(&work_dir, "rust-staker")?;
+        let rust_launch = crate::livenet::NodeLaunch {
+            http_port: rust_http,
+            staking_port: rust_staking,
+            data_dir: work_dir.join("rust"),
+            cert_file: rust_staker.cert,
+            key_file: rust_staker.key,
+            bootstrap: vec![crate::livenet::Bootstrap {
+                id: go_validator.id.clone(),
+                ip: go_validator.ip.clone(),
+            }],
+            signer_key_file: None,
+        };
+        nodes.push(spawn_role_node(&rust_path, Binary::Rust, 1, &rust_launch)?);
+
+        let net = Network { nodes, work_dir };
+
+        // STAGE 2: the Rust follower bootstraps P/X/C from the single Go beacon.
+        let rust_node_ref = net
+            .rust_follower()
+            .ok_or_else(|| NetworkError::Timeout("rust follower missing".to_owned()))?;
+        let rust_api = rust_node_ref.api_base.clone();
+        let rust_log = rust_node_ref.log_path.clone();
+        crate::livenet::await_bootstrapped(&rust_api, &["P", "X", "C"], std::time::Duration::from_secs(180))
+            .await
+            .map_err(|e| NetworkError::Timeout(format!("{e}\nrust log:\n{}", log_tail(&rust_log, 80))))?;
+
+        Ok(net)
+    }
 }
 
 #[cfg(test)]

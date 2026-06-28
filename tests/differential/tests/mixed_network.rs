@@ -198,3 +198,24 @@ async fn mixed_network() {
 
     net.shutdown().await;
 }
+
+/// Bisection probe for M9.15 rung-3 (single Go beacon → `required_conns = 1`).
+/// If the follower bootstraps here, the engine/gate/frontier path works against
+/// real Go and the 5-validator failure is purely connectivity (forming 4/5).
+/// Gated behind `live` + `#[ignore]`; needs `$AVALANCHEGO_PATH` + a built `avalanchers`.
+#[cfg(feature = "live")]
+#[tokio::test]
+#[ignore = "boots a single-Go-beacon + Rust follower net — nightly only"]
+async fn mixed_network_single_beacon() {
+    use ava_differential::network::Network;
+
+    if std::env::var("AVALANCHEGO_PATH").is_err() {
+        eprintln!("AVALANCHEGO_PATH unset — skipping live mixed_network_single_beacon");
+        return;
+    }
+    let net = Network::boot_single_go_beacon(0x515E)
+        .await
+        .expect("single-Go-beacon net boots + follower bootstraps P/X/C");
+    assert!(net.go_beacon().is_some(), "go beacon present");
+    assert!(net.rust_follower().is_some(), "rust follower present");
+}

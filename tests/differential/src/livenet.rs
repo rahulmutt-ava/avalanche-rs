@@ -528,6 +528,39 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Extract the value for a `--flag=value` style argument (the format
+    /// [`node_args`] produces). Returns `None` if no arg starts with `"flag="`.
+    fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        let prefix = format!("{flag}=");
+        args.iter()
+            .find(|a| a.starts_with(prefix.as_str()))
+            .map(|a| &a[prefix.len()..])
+    }
+
+    #[test]
+    fn single_beacon_follower_args_have_one_bootstrap_pair() {
+        // A follower configured with exactly one Go beacon emits exactly one
+        // bootstrap id and one bootstrap ip (comma-joined lists of length 1).
+        let l = NodeLaunch {
+            http_port: 9_650,
+            staking_port: 9_651,
+            data_dir: std::path::PathBuf::from("/tmp/rust-follower"),
+            cert_file: std::path::PathBuf::from("/tmp/c.crt"),
+            key_file: std::path::PathBuf::from("/tmp/c.key"),
+            bootstrap: vec![Bootstrap {
+                id: LOCAL_VALIDATOR_NODE_IDS[0].to_owned(),
+                ip: "127.0.0.1:9999".to_owned(),
+            }],
+            signer_key_file: None,
+        };
+        let args = node_args(&l);
+        let ids = arg_value(&args, "--bootstrap-ids").expect("bootstrap-ids present");
+        let ips = arg_value(&args, "--bootstrap-ips").expect("bootstrap-ips present");
+        assert_eq!(ids.split(',').count(), 1, "exactly one bootstrap id");
+        assert_eq!(ips.split(',').count(), 1, "exactly one bootstrap ip");
+        assert_eq!(ids, LOCAL_VALIDATOR_NODE_IDS[0], "the single beacon id");
+    }
+
     #[test]
     fn mesh_peers_excludes_self_and_preserves_order() {
         let vs = vec![
