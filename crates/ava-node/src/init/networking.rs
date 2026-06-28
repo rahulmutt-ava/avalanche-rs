@@ -223,7 +223,18 @@ impl ExternalHandler for BeaconManager {
                 .num_conns
                 .fetch_add(1, Ordering::AcqRel)
                 .saturating_add(1);
+            tracing::debug!(
+                %node_id,
+                conns,
+                required = self.required_conns,
+                "beacon connected (rung 4: connectivity count)"
+            );
             if conns >= self.required_conns {
+                tracing::debug!(
+                    conns,
+                    required = self.required_conns,
+                    "rung 5: beacon-connectivity gate fired"
+                );
                 let _ = self.on_sufficiently_connected.send(true);
             }
         }
@@ -513,6 +524,7 @@ fn chrono_to_system_time(t: chrono::DateTime<chrono::Utc>) -> std::time::SystemT
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use std::collections::HashSet;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
 
@@ -523,12 +535,126 @@ mod tests {
     use ava_genesis::Bootstrapper;
     use ava_message::codec::{Compression, MsgBuilder};
     use ava_message::proto::p2p;
+    use ava_types::constants::PRIMARY_NETWORK_ID;
     use ava_types::id::Id;
     use ava_types::node_id::NodeId;
+    use ava_validators::{ManagerCallbackListener, ValidatorManager};
+    use ava_validators::validator::Validator;
     use bytes::Bytes;
     use tokio_util::sync::CancellationToken;
 
-    use super::{BeaconTracker, InboundHandler, RouterBridge, track_bootstrappers};
+    use super::{
+        AppVersion, BeaconManager, BeaconTracker, ExternalHandler, InboundHandler, RouterBridge,
+        track_bootstrappers,
+    };
+
+    // ---------------------------------------------------------------------------
+    // Minimal stubs for the BeaconManager gate test
+    // ---------------------------------------------------------------------------
+
+    /// A no-op `ExternalHandler` (both traits) used as the inner handler.
+    struct NoopHandler;
+
+    #[async_trait]
+    impl InboundHandler for NoopHandler {
+        async fn handle_inbound(&self, _ctx: &CancellationToken, _msg: ava_message::codec::InboundMessage) {}
+    }
+
+    #[async_trait]
+    impl ExternalHandler for NoopHandler {
+        fn connected(&self, _n: NodeId, _v: &AppVersion, _s: Id) {}
+        fn disconnected(&self, _n: NodeId) {}
+    }
+
+    /// A stub `ValidatorManager` that returns weight=1 only for node_ids in
+    /// `members`; all other methods are unimplemented (not called by this test).
+    struct StubBeacons {
+        members: HashSet<NodeId>,
+    }
+
+    impl ValidatorManager for StubBeacons {
+        fn add_staker(
+            &self,
+            _subnet: Id,
+            _node: NodeId,
+            _pk: Option<ava_crypto::bls::PublicKey>,
+            _tx: Id,
+            _weight: u64,
+        ) -> ava_validators::error::Result<()> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn add_weight(&self, _subnet: Id, _node: NodeId, _weight: u64) -> ava_validators::error::Result<()> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn remove_weight(&self, _subnet: Id, _node: NodeId, _weight: u64) -> ava_validators::error::Result<()> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn get_weight(&self, _subnet: Id, node_id: NodeId) -> u64 {
+            u64::from(self.members.contains(&node_id))
+        }
+
+        fn get_validator(&self, _subnet: Id, _node: NodeId) -> Option<Validator> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn get_validator_ids(&self, _subnet: Id) -> Vec<NodeId> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn subset_weight(&self, _subnet: Id, _ids: &HashSet<NodeId>) -> ava_validators::error::Result<u64> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn total_weight(&self, _subnet: Id) -> ava_validators::error::Result<u64> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn num_validators(&self, _subnet: Id) -> usize {
+            self.members.len()
+        }
+
+        fn num_subnets(&self) -> usize {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn sample(&self, _subnet: Id, _size: usize) -> ava_validators::error::Result<Vec<NodeId>> {
+            unimplemented!("not needed for gate test")
+        }
+
+        fn register_callback_listener(&self, _subnet: Id, _l: Arc<dyn ManagerCallbackListener>) {
+            // no-op: not needed for gate test
+        }
+    }
+
+    /// `BeaconManager` fires the watch gate at exactly `required_conns` beacon
+    /// connections, not before, and a non-beacon connection must not count.
+    #[tokio::test]
+    async fn beacon_manager_fires_gate_at_required_conns() {
+        let beacon_ids = [
+            NodeId::from([1u8; 20]),
+            NodeId::from([2u8; 20]),
+            NodeId::from([3u8; 20]),
+        ];
+        let non_beacon = NodeId::from([9u8; 20]);
+
+        let beacons: Arc<dyn ValidatorManager> = Arc::new(StubBeacons {
+            members: beacon_ids.iter().copied().collect(),
+        });
+        let inner: Arc<dyn ExternalHandler> = Arc::new(NoopHandler);
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let bm = BeaconManager::new(inner, beacons, 2, tx);
+
+        let v = ava_version::CURRENT.clone();
+        bm.connected(non_beacon, &v, PRIMARY_NETWORK_ID); // ignored: not a beacon
+        assert!(!*rx.borrow_and_update(), "non-beacon must not fire the gate");
+        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID); // 1/2
+        assert!(!*rx.borrow_and_update(), "one beacon < required_conns");
+        bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID); // 2/2
+        assert!(*rx.borrow_and_update(), "gate fires at required_conns");
+    }
 
     /// A recording stub that captures every [`EngineInboundMessage`] it receives.
     struct RecordingRouter {
