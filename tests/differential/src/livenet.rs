@@ -497,10 +497,12 @@ mod tests {
         ];
         let peers = mesh_peers(&vs, 1);
         assert_eq!(peers.len(), 2, "every validator except #1");
-        assert_eq!(peers[0].ip, "127.0.0.1:1");
-        assert_eq!(peers[0].id, "NodeID-a");
-        assert_eq!(peers[1].ip, "127.0.0.1:3");
-        assert_eq!(peers[1].id, "NodeID-c");
+        let p0 = peers.first().expect("peers[0]");
+        assert_eq!(p0.ip, "127.0.0.1:1");
+        assert_eq!(p0.id, "NodeID-a");
+        let p1 = peers.get(1).expect("peers[1]");
+        assert_eq!(p1.ip, "127.0.0.1:3");
+        assert_eq!(p1.id, "NodeID-c");
     }
 
     #[test]
