@@ -294,9 +294,9 @@ pub fn gossip_id(node: &NodeId, timestamp: u64) -> [u8; 32] {
     /// Go `preimageLen` = `ids.IDLen(32) + wrappers.LongLen(8)`.
     const PREIMAGE_LEN: usize = 40;
     let mut preimage = Vec::with_capacity(PREIMAGE_LEN);
-    preimage.extend_from_slice(node.as_bytes());          // [0..20)
+    preimage.extend_from_slice(node.as_bytes()); // [0..20)
     preimage.extend_from_slice(&timestamp.to_be_bytes()); // [20..28)
-    preimage.resize(PREIMAGE_LEN, 0);                     // pad [28..40) with zeros
+    preimage.resize(PREIMAGE_LEN, 0); // pad [28..40) with zeros
     ava_crypto::hashing::sha256(&preimage)
 }
 
@@ -345,7 +345,11 @@ mod tests {
             0xed, 0xd7, 0x0e, 0x45, 0x2d, 0xf0, 0x94, 0x90, 0xf2, 0x33, 0xe9, 0xa4, 0x01, 0x73,
             0x35, 0x80, 0xd2, 0xdc,
         ];
-        assert_eq!(gossip_id(&node, 1_700_000_000), expected, "gossip_id matches Go GossipID");
+        assert_eq!(
+            gossip_id(&node, 1_700_000_000),
+            expected,
+            "gossip_id matches Go GossipID"
+        );
     }
 
     #[test]
