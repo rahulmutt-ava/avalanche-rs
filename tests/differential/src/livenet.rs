@@ -241,6 +241,18 @@ pub async fn await_bootstrapped(
     }
 }
 
+/// The five well-known `local`-network initial-staker NodeIDs, in `staker1..5`
+/// order — must match `crates/ava-genesis/data/genesis_local.json`
+/// `initialStakers`. Fixed constants (the local genesis never changes);
+/// `boot_mixed` sanity-checks index 0 against a live `info.getNodeID` scrape.
+pub const LOCAL_VALIDATOR_NODE_IDS: [&str; 5] = [
+    "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg",
+    "NodeID-MFrZFVCXPv5iCn6M9K6XduxGTYp891xXZ",
+    "NodeID-NFBbbJ4qCmNaCzeW7sxErhvWqvEQMnYcN",
+    "NodeID-GWPcbFJZFfZreETSoWjPimr846mXEKCtu",
+    "NodeID-P7oB2McjBGgW2NXXWVYjV8JEDFoW9xDE5",
+];
+
 /// Local C-chain ID for the Avalanche `local` network (`--network-id=local`).
 const LOCAL_CHAIN_ID: u64 = 43_112;
 
@@ -528,7 +540,8 @@ mod tests {
             "ips comma-joined in order"
         );
         assert!(
-            args.iter().any(|a| a == "--bootstrap-ids=NodeID-a,NodeID-b"),
+            args.iter()
+                .any(|a| a == "--bootstrap-ids=NodeID-a,NodeID-b"),
             "ids comma-joined in order"
         );
     }
@@ -575,6 +588,19 @@ mod tests {
             Some(false)
         );
         assert_eq!(parse_bootstrapped(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn local_validator_node_ids_are_five_distinct() {
+        assert_eq!(LOCAL_VALIDATOR_NODE_IDS.len(), 5, "five local validators");
+        let mut sorted: Vec<&str> = LOCAL_VALIDATOR_NODE_IDS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 5, "node ids are distinct");
+        assert_eq!(
+            LOCAL_VALIDATOR_NODE_IDS[0], "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg",
+            "staker1 is the first validator (matches the genesis order)"
+        );
     }
 }
 
