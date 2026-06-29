@@ -562,7 +562,10 @@ impl ava_engine::common::sender::Sender for RecordingSender {
     }
     fn send_accepted_state_summary(&self, _node: NodeId, _req: u32, _summary_ids: &[Id]) {}
     fn send_get_accepted_frontier(&self, nodes: &HashSet<NodeId>, req: u32) {
-        tracing::debug!(?nodes, "rung 7: GetAcceptedFrontier broadcast to beacon set");
+        tracing::debug!(
+            ?nodes,
+            "rung 7: GetAcceptedFrontier broadcast to beacon set"
+        );
         self.push(Sent::GetAcceptedFrontier {
             nodes: sorted_nodes(nodes),
             req,

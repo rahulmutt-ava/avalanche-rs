@@ -538,8 +538,8 @@ mod tests {
     use ava_types::constants::PRIMARY_NETWORK_ID;
     use ava_types::id::Id;
     use ava_types::node_id::NodeId;
-    use ava_validators::{ManagerCallbackListener, ValidatorManager};
     use ava_validators::validator::Validator;
+    use ava_validators::{ManagerCallbackListener, ValidatorManager};
     use bytes::Bytes;
     use tokio_util::sync::CancellationToken;
 
@@ -557,7 +557,12 @@ mod tests {
 
     #[async_trait]
     impl InboundHandler for NoopHandler {
-        async fn handle_inbound(&self, _ctx: &CancellationToken, _msg: ava_message::codec::InboundMessage) {}
+        async fn handle_inbound(
+            &self,
+            _ctx: &CancellationToken,
+            _msg: ava_message::codec::InboundMessage,
+        ) {
+        }
     }
 
     #[async_trait]
@@ -584,11 +589,21 @@ mod tests {
             unimplemented!("not needed for gate test")
         }
 
-        fn add_weight(&self, _subnet: Id, _node: NodeId, _weight: u64) -> ava_validators::error::Result<()> {
+        fn add_weight(
+            &self,
+            _subnet: Id,
+            _node: NodeId,
+            _weight: u64,
+        ) -> ava_validators::error::Result<()> {
             unimplemented!("not needed for gate test")
         }
 
-        fn remove_weight(&self, _subnet: Id, _node: NodeId, _weight: u64) -> ava_validators::error::Result<()> {
+        fn remove_weight(
+            &self,
+            _subnet: Id,
+            _node: NodeId,
+            _weight: u64,
+        ) -> ava_validators::error::Result<()> {
             unimplemented!("not needed for gate test")
         }
 
@@ -604,7 +619,11 @@ mod tests {
             unimplemented!("not needed for gate test")
         }
 
-        fn subset_weight(&self, _subnet: Id, _ids: &HashSet<NodeId>) -> ava_validators::error::Result<u64> {
+        fn subset_weight(
+            &self,
+            _subnet: Id,
+            _ids: &HashSet<NodeId>,
+        ) -> ava_validators::error::Result<u64> {
             unimplemented!("not needed for gate test")
         }
 
@@ -649,7 +668,10 @@ mod tests {
 
         let v = ava_version::CURRENT.clone();
         bm.connected(non_beacon, &v, PRIMARY_NETWORK_ID); // ignored: not a beacon
-        assert!(!*rx.borrow_and_update(), "non-beacon must not fire the gate");
+        assert!(
+            !*rx.borrow_and_update(),
+            "non-beacon must not fire the gate"
+        );
         bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID); // 1/2
         assert!(!*rx.borrow_and_update(), "one beacon < required_conns");
         bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID); // 2/2

@@ -714,8 +714,16 @@ mod tests {
         let p = make_chain_logger::<Registry>("P", &cfg).expect("P logger");
 
         let chain_slot = ChainSlotVec(vec![
-            ChainEntry { alias: c.alias, level: c.level, layer: c.layer },
-            ChainEntry { alias: p.alias, level: p.level, layer: p.layer },
+            ChainEntry {
+                alias: c.alias,
+                level: c.level,
+                layer: c.layer,
+            },
+            ChainEntry {
+                alias: p.alias,
+                level: p.level,
+                layer: p.layer,
+            },
         ]);
         let subscriber = Registry::default().with(chain_slot);
         let dispatch = tracing::Dispatch::new(subscriber);
@@ -780,11 +788,8 @@ mod tests {
 
         // Start with an EMPTY chain-slot wrapped in a reload handle — exactly
         // as init_logging builds it.
-        let (chain_slot_layer, chain_slot_handle) =
-            reload::Layer::new(ChainSlotVec(Vec::new()));
-        let subscriber = Registry::default()
-            .with(chain_slot_layer)
-            .with(main_layer);
+        let (chain_slot_layer, chain_slot_handle) = reload::Layer::new(ChainSlotVec(Vec::new()));
+        let subscriber = Registry::default().with(chain_slot_layer).with(main_layer);
         let dispatch = tracing::Dispatch::new(subscriber);
 
         tracing::dispatcher::with_default(&dispatch, || {
@@ -803,7 +808,11 @@ mod tests {
                 guard: c_guard,
                 handle: _,
             } = make_chain_logger::<Registry>("C", &cfg).expect("C logger");
-            let entry = ChainEntry { alias, level, layer };
+            let entry = ChainEntry {
+                alias,
+                level,
+                layer,
+            };
             chain_slot_handle
                 .modify(|slot| slot.0.push(entry))
                 .expect("modify chain slot");
@@ -814,8 +823,7 @@ mod tests {
             drop(c_guard);
         });
 
-        let main_contents =
-            std::fs::read_to_string(&main_log_path).expect("read main.log");
+        let main_contents = std::fs::read_to_string(&main_log_path).expect("read main.log");
 
         // Both untagged events must appear in the main sink.
         assert!(
@@ -842,21 +850,17 @@ mod tests {
 
         // Build the SAME layer stack that init_logging builds:
         //   chain_slot_layer (empty ChainSlotVec, reloadable) → file_layer (plain fmt).
-        let (chain_slot_layer, _chain_slot_handle) =
-            reload::Layer::new(ChainSlotVec(Vec::new()));
+        let (chain_slot_layer, _chain_slot_handle) = reload::Layer::new(ChainSlotVec(Vec::new()));
 
         let log_path = dir.path().join("main.log");
         let file = std::fs::File::create(&log_path).expect("create main.log");
-        let (file_filter, _file_handle) =
-            reload::Layer::new(LevelFilter::INFO);
+        let (file_filter, _file_handle) = reload::Layer::new(LevelFilter::INFO);
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::sync::Mutex::new(file))
             .with_ansi(false)
             .with_filter(file_filter);
 
-        let subscriber = Registry::default()
-            .with(chain_slot_layer)
-            .with(file_layer);
+        let subscriber = Registry::default().with(chain_slot_layer).with(file_layer);
         let dispatch = tracing::Dispatch::new(subscriber);
         tracing::dispatcher::with_default(&dispatch, || {
             tracing::info!("untagged node event");

@@ -127,13 +127,11 @@ impl Upgrader {
                     let acceptor = self.acceptor.as_ref().ok_or_else(|| {
                         Error::TlsConfig("server upgrader missing acceptor".into())
                     })?;
-                    let accepted = tokio::time::timeout(
-                        self.handshake_timeout,
-                        acceptor.accept(stream),
-                    )
-                    .await
-                    .map_err(|_| Error::Tls("handshake timeout".into()))?
-                    .map_err(|e| Error::Tls(e.to_string()))?;
+                    let accepted =
+                        tokio::time::timeout(self.handshake_timeout, acceptor.accept(stream))
+                            .await
+                            .map_err(|_| Error::Tls("handshake timeout".into()))?
+                            .map_err(|e| Error::Tls(e.to_string()))?;
                     TlsStream::Server(accepted)
                 }
                 UpgraderSide::Client => {
@@ -242,9 +240,11 @@ mod tests {
         let guard = Duration::from_secs(2);
         let result = tokio::time::timeout(guard, upgrader.upgrade(local))
             .await
-            .expect("upgrade future must complete within the test guard (2 s); \
+            .expect(
+                "upgrade future must complete within the test guard (2 s); \
                      if it timed out here the handshake_timeout is not wired up \
-                     and the beacon-leak bug is present");
+                     and the beacon-leak bug is present",
+            );
 
         assert!(
             result.is_err(),

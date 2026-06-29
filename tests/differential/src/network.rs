@@ -808,13 +808,20 @@ impl Network {
         let _ = std::fs::create_dir_all(&work_dir);
 
         // 4 ports: 1 Go validator (http, staking) + 1 Rust follower (http, staking).
-        let ports =
-            crate::livenet::free_ports(4).map_err(|e| NetworkError::Timeout(format!("free_ports: {e}")))?;
-        let go_http = *ports.first().ok_or_else(|| NetworkError::Timeout("go http".to_owned()))?;
-        let go_staking = *ports.get(1).ok_or_else(|| NetworkError::Timeout("go staking".to_owned()))?;
-        let rust_http = *ports.get(2).ok_or_else(|| NetworkError::Timeout("rust http".to_owned()))?;
-        let rust_staking =
-            *ports.get(3).ok_or_else(|| NetworkError::Timeout("rust staking".to_owned()))?;
+        let ports = crate::livenet::free_ports(4)
+            .map_err(|e| NetworkError::Timeout(format!("free_ports: {e}")))?;
+        let go_http = *ports
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("go http".to_owned()))?;
+        let go_staking = *ports
+            .get(1)
+            .ok_or_else(|| NetworkError::Timeout("go staking".to_owned()))?;
+        let rust_http = *ports
+            .get(2)
+            .ok_or_else(|| NetworkError::Timeout("rust http".to_owned()))?;
+        let rust_staking = *ports
+            .get(3)
+            .ok_or_else(|| NetworkError::Timeout("rust staking".to_owned()))?;
 
         // The single Go validator uses staker1's RSA cert/key + BLS signer key and
         // the first well-known local NodeID, and bootstraps from itself (a 1-node
@@ -852,14 +859,18 @@ impl Network {
             .clone();
 
         // STAGE 1: the lone Go validator must bootstrap P/X/C before serving a frontier.
-        crate::livenet::await_bootstrapped(&beacon_api, &["P", "X", "C"], std::time::Duration::from_secs(240))
-            .await
-            .map_err(|e| {
-                NetworkError::Timeout(format!(
-                    "lone Go validator did not bootstrap:\n{e}\ngo log:\n{}",
-                    log_tail(&beacon_log, 60)
-                ))
-            })?;
+        crate::livenet::await_bootstrapped(
+            &beacon_api,
+            &["P", "X", "C"],
+            std::time::Duration::from_secs(240),
+        )
+        .await
+        .map_err(|e| {
+            NetworkError::Timeout(format!(
+                "lone Go validator did not bootstrap:\n{e}\ngo log:\n{}",
+                log_tail(&beacon_log, 60)
+            ))
+        })?;
 
         // The Rust follower: fresh ECDSA cert, non-validating, bootstraps from the one Go node.
         let rust_staker = crate::livenet::generate_staker(&work_dir, "rust-staker")?;
@@ -886,9 +897,15 @@ impl Network {
             .ok_or_else(|| NetworkError::Timeout("rust follower missing".to_owned()))?;
         let rust_api = rust_node_ref.api_base.clone();
         let rust_log = rust_node_ref.log_path.clone();
-        crate::livenet::await_bootstrapped(&rust_api, &["P", "X", "C"], std::time::Duration::from_secs(180))
-            .await
-            .map_err(|e| NetworkError::Timeout(format!("{e}\nrust log:\n{}", log_tail(&rust_log, 80))))?;
+        crate::livenet::await_bootstrapped(
+            &rust_api,
+            &["P", "X", "C"],
+            std::time::Duration::from_secs(180),
+        )
+        .await
+        .map_err(|e| {
+            NetworkError::Timeout(format!("{e}\nrust log:\n{}", log_tail(&rust_log, 80)))
+        })?;
 
         Ok(net)
     }
