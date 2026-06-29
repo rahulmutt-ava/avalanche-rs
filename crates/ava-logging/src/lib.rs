@@ -35,7 +35,7 @@ use parking_lot::Mutex;
 use tracing::field::{Field, Visit};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::layer::{Filter, SubscriberExt};
+use tracing_subscriber::layer::{Context, Filter, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, Registry, reload};
 
@@ -51,6 +51,119 @@ pub use tracing_subscriber::registry::LookupSpan;
 /// The reloadable chain-layer slot ([`init_logging`]) is the *first* layer
 /// added to the registry, so each boxed chain layer is a `Layer<Registry>`.
 type ChainLayer = Box<dyn Layer<Registry> + Send + Sync>;
+
+/// A growable collection of per-chain layers that is transparent when empty.
+///
+/// `Vec<L>` delegates `register_callsite` to its elements; when the vec is
+/// empty it returns `Interest::never()`, which causes `Layered::pick_interest`
+/// to short-circuit and cache every callsite as disabled for the **whole**
+/// subscriber stack — silencing the display and file layers too.
+///
+/// `ChainSlotVec` corrects both failure modes of the empty-vec case:
+/// - `register_callsite` returns `Interest::sometimes()` when empty, so the
+///   interest check is deferred to `enabled`/`event_enabled` at runtime and
+///   outer layers are never suppressed.
+/// - `max_level_hint` returns `None` when empty, meaning "no level opinion",
+///   so the global max-level hint is not capped at `OFF`.
+///
+/// When non-empty the delegation is identical to `Vec<L>`.
+struct ChainSlotVec(Vec<ChainLayer>);
+
+impl Layer<Registry> for ChainSlotVec {
+    fn register_callsite(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        if self.0.is_empty() {
+            // No chain layers yet — return "sometimes" so callsite interest is
+            // re-evaluated per event and the display/file layers are not vetoed.
+            return tracing::subscriber::Interest::sometimes();
+        }
+        // Delegate to Vec's implementation: return the highest interest across
+        // all chain layers (same semantics as Vec<L>).
+        let mut interest = tracing::subscriber::Interest::never();
+        for layer in &self.0 {
+            let new = layer.register_callsite(metadata);
+            if (interest.is_sometimes() && new.is_always())
+                || (interest.is_never() && !new.is_never())
+            {
+                interest = new;
+            }
+        }
+        interest
+    }
+
+    fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, Registry>) -> bool {
+        self.0.iter().all(|l| l.enabled(metadata, ctx.clone()))
+    }
+
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        if self.0.is_empty() {
+            // No chain layers — no opinion on the max level.  Returning `None`
+            // lets outer layers (display + file) set the effective ceiling.
+            return None;
+        }
+        // Mirrors Vec<L>: return the highest level across all chain layers.
+        let mut max_level = LevelFilter::OFF;
+        for layer in &self.0 {
+            let hint = layer.max_level_hint()?;
+            if hint > max_level {
+                max_level = hint;
+            }
+        }
+        Some(max_level)
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) {
+        for layer in &self.0 {
+            layer.on_event(event, ctx.clone());
+        }
+    }
+
+    fn event_enabled(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) -> bool {
+        self.0.iter().all(|l| l.event_enabled(event, ctx.clone()))
+    }
+
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, Registry>,
+    ) {
+        for layer in &self.0 {
+            layer.on_new_span(attrs, id, ctx.clone());
+        }
+    }
+
+    fn on_record(
+        &self,
+        span: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, Registry>,
+    ) {
+        for layer in &self.0 {
+            layer.on_record(span, values, ctx.clone());
+        }
+    }
+
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, Registry>) {
+        for layer in &self.0 {
+            layer.on_enter(id, ctx.clone());
+        }
+    }
+
+    fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, Registry>) {
+        for layer in &self.0 {
+            layer.on_exit(id, ctx.clone());
+        }
+    }
+
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, Registry>) {
+        for layer in &self.0 {
+            layer.on_close(id.clone(), ctx.clone());
+        }
+    }
+}
 
 /// Errors raised while building or mutating the logging subscriber.
 #[derive(Debug, thiserror::Error)]
@@ -367,11 +480,18 @@ pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
         reload::Layer::new(ava_to_level_filter(cfg.display_level));
     let (file_filter, file_handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
 
-    // The reloadable per-chain slot: a `Vec` of boxed layers (empty at init).
-    // It is the *first* layer on the registry so each chain layer is a
+    // The reloadable per-chain slot: a `ChainSlotVec` of boxed layers (empty at
+    // init).  It is the *first* layer on the registry so each chain layer is a
     // `Layer<Registry>`, which `add_chain_logger` can build without naming the
     // outer `Layered<...>` subscriber type.
-    let (chain_slot_layer, chain_slot_handle) = reload::Layer::new(Vec::<ChainLayer>::new());
+    //
+    // `ChainSlotVec` (not a bare `Vec`) is used here because `Vec::register_callsite`
+    // returns `Interest::never()` when empty, which causes `Layered::pick_interest`
+    // to short-circuit and cache every callsite as permanently disabled for the
+    // *whole* subscriber stack — silencing the display and file layers.
+    // `ChainSlotVec` returns `Interest::sometimes()` and `max_level_hint = None`
+    // when empty so the outer layers are never suppressed.
+    let (chain_slot_layer, chain_slot_handle) = reload::Layer::new(ChainSlotVec(Vec::new()));
 
     let display_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stdout)
@@ -395,7 +515,7 @@ pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
 
     let chain_slot: ChainSlotAppender = Box::new(move |layer: ChainLayer| {
         chain_slot_handle
-            .modify(|layers| layers.push(layer))
+            .modify(|slot| slot.0.push(layer))
             .map_err(|e| LogError::Reload(e.to_string()))
     });
 
@@ -588,5 +708,46 @@ mod tests {
 
         assert!(p_log.contains("hello from P"), "P.log: {p_log:?}");
         assert!(!p_log.contains("hello from C"), "P.log leaked C: {p_log:?}");
+    }
+
+    /// Regression: the chain-slot layer installed as the first layer on the
+    /// registry must NOT suppress untagged (no `chain` field) events from
+    /// reaching the main display/file layers.
+    ///
+    /// Before the fix, `Vec::register_callsite` returned `Interest::never()` when
+    /// the vec was empty, and `Layered::pick_interest` short-circuited on
+    /// `Interest::never()` from a non-filter layer, caching the callsite as
+    /// permanently disabled for the whole subscriber stack.
+    #[test]
+    fn untagged_events_reach_the_main_sink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Build the SAME layer stack that init_logging builds:
+        //   chain_slot_layer (empty ChainSlotVec, reloadable) → file_layer (plain fmt).
+        let (chain_slot_layer, _chain_slot_handle) =
+            reload::Layer::new(ChainSlotVec(Vec::new()));
+
+        let log_path = dir.path().join("main.log");
+        let file = std::fs::File::create(&log_path).expect("create main.log");
+        let (file_filter, _file_handle) =
+            reload::Layer::new(LevelFilter::INFO);
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_ansi(false)
+            .with_filter(file_filter);
+
+        let subscriber = Registry::default()
+            .with(chain_slot_layer)
+            .with(file_layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!("untagged node event");
+        });
+
+        let contents = std::fs::read_to_string(&log_path).expect("read main.log");
+        assert!(
+            contents.contains("untagged node event"),
+            "untagged event was suppressed by the empty chain-slot layer; main.log: {contents:?}",
+        );
     }
 }
