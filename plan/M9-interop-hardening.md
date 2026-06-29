@@ -1782,6 +1782,40 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   on a fast PASS the follower is SIGKILLed before flushing, so read the **Go** node log for ground truth.
 > - The arm stays `#[cfg(feature="live")] #[ignore]`; offline arms untouched.
 
+> **AS-BUILT — M9.15 rung-3 Branch-A (5-validator follower): connectivity RULED OUT; racy gate-fire
+> isolated as the next rung (2026-06-29).** Pursued the full Branch-A fix (logging fixes + handshake
+> timeout + graceful-teardown harness so live logs survive). Findings, evidence-based:
+> - **The 5-validator follower bootstrap is RACY** (~2 of 6 live runs reach Stage 2 NormalOp; the rest
+>   time out at Stage 2). Even on the "good" runs the stricter `await_all_connected` full-mesh assertion
+>   (`mixed_network.rs`) fails.
+> - **Connectivity is NOT the cause.** Go-side ground truth (complete logs): in a STALLED run all 5 Go
+>   validators show the follower connected (peer stable ~2.5 min) AND the follower emits a `GetPeerList`
+>   pull every 2 s — `run_timers` pulls only to the `connected` set, so the follower **finished
+>   handshakes with all 5 Go**. Yet the Go validators receive **zero `GetAcceptedFrontier`/`GetAncestors`**
+>   ⇒ the bootstrapper never starts the frontier query ⇒ stall. This is the engine/gate/frontier half
+>   (Branch B-shaped), not the dial/handshake half.
+> - **Falsified hypotheses:** (1) hung-TLS-upgrade — added a 15 s handshake timeout (`ab1495e`, Go
+>   `readHandshakeTimeout` parity, kept as a correct improvement) but it did NOT change the race; (2)
+>   Go-skips-PeerList — Go's `handleHandshake` (peer.go:1039-1056) **always** sends a handshake PeerList
+>   (the "skipping empty peer list" log is `handleGetPeerList` gossip, not the handshake).
+> - **Wiring traced, all correct on inspection:** `finish_handshake` notifies `connected(PRIMARY)` (zero
+>   Id = PrimaryNetworkID); `BeaconManager.connected` increments `num_conns` per weight-bearing beacon,
+>   fires at `required_conns=(3·5+3)/4=4`; `consensus_router`(BeaconManager) IS the peer router; the live
+>   follower's frontier set is `extra_beacons={5 Go}` (`boot_chain_over_network_core`, `include_self_beacon
+>   =false`). Single-beacon (required_conns=1) PROVES this whole path works against real Go.
+> - **META-BLOCKER (why the exact rung is unpinned):** the follower's `tracing` subscriber goes silent at
+>   ~14 ms under the harness's concurrent-connection load (5 simultaneous peer connections + chain boot),
+>   hiding the decisive `rung 4` (num_conns count) / `rung 5` (gate fired) / `rung 7` (frontier node-set)
+>   markers. This survives BOTH chain-slot logging fixes (which work in solo) and graceful SIGTERM+flush
+>   teardown (so it is NOT log buffering — the subscriber stops emitting under load). Production logging
+>   bug fixed for the solo/normal path (`f7e2f43`+`32ff8e8`); the concurrent-load residual is separate.
+> - **NEXT RUNG (gated, next session):** bypass tracing for this signal — expose `BeaconManager.num_conns`
+>   + gate-fire as an always-on metric/coarse counter (or fix the concurrent-load subscriber death) — then
+>   ONE live run pins it: gate counts `<4` (count/notify bug) vs fires-but-broadcasts-empty (frontier
+>   addressing) vs a connect/disconnect race. Candidates left: connect/disconnect flap decrementing
+>   `num_conns` below 4; a `finish_handshake`→`connected` notification not reaching BeaconManager for some
+>   peers under load. Live `mixed_network` arm stays `#[cfg(feature="live")] #[ignore]`; offline arms green.
+
 ---
 
 ## Spec coverage check
