@@ -258,6 +258,37 @@ impl ExternalHandler for BeaconManager {
     }
 }
 
+/// Wrap `inner` with a [`BeaconManager`] connectivity gate sized for
+/// `bootstrappers` (Go `(3·n + 3) / 4`). Returns the (possibly-wrapped) handler
+/// and a watch receiver that resolves `true` once enough beacons complete the
+/// handshake. With no beacons (`required_conns == 0`) the gate is pre-fired and
+/// `inner` is returned unwrapped, so a solo node never blocks.
+#[must_use]
+pub fn wrap_with_beacon_gate(
+    inner: Arc<dyn ExternalHandler>,
+    bootstrappers: Arc<dyn ValidatorManager>,
+) -> (Arc<dyn ExternalHandler>, tokio::sync::watch::Receiver<bool>) {
+    let (connected_tx, connected_rx) = tokio::sync::watch::channel(false);
+    let num_beacons = bootstrappers.num_validators(PRIMARY_NETWORK_ID);
+    let required_conns = i64::try_from(num_beacons)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(3)
+        .saturating_add(3)
+        / 4;
+    if required_conns > 0 {
+        let bm = Arc::new(BeaconManager::new(
+            inner,
+            bootstrappers,
+            required_conns,
+            connected_tx,
+        ));
+        (bm as Arc<dyn ExternalHandler>, connected_rx)
+    } else {
+        let _ = connected_tx.send(true);
+        (inner, connected_rx)
+    }
+}
+
 /// Everything step 16 hands back to `Node::new`.
 pub struct Networking {
     /// The P2P runtime.
@@ -416,23 +447,8 @@ pub async fn init_networking(
         ));
     }
 
-    let (connected_tx, connected_rx) = tokio::sync::watch::channel(false);
-    let num_beacons = bootstrappers.num_validators(PRIMARY_NETWORK_ID);
-    let required_conns = i64::try_from(num_beacons)
-        .unwrap_or(i64::MAX)
-        .saturating_mul(3)
-        .saturating_add(3)
-        / 4;
-    if required_conns > 0 {
-        consensus_router = Arc::new(BeaconManager::new(
-            consensus_router,
-            Arc::clone(bootstrappers),
-            required_conns,
-            connected_tx,
-        ));
-    } else {
-        let _ = connected_tx.send(true);
-    }
+    let (consensus_router, connected_rx) =
+        wrap_with_beacon_gate(consensus_router, Arc::clone(bootstrappers));
 
     let clock: Arc<dyn PeerClock> = Arc::new(SystemClock);
     let compatibility = Arc::new(ava_version::compatibility::get_compatibility(
@@ -554,7 +570,7 @@ mod tests {
 
     use super::{
         AppVersion, BeaconManager, BeaconTracker, ExternalHandler, InboundHandler, RouterBridge,
-        track_bootstrappers,
+        track_bootstrappers, wrap_with_beacon_gate,
     };
 
     // ---------------------------------------------------------------------------
@@ -897,6 +913,35 @@ mod tests {
             Some((b1.id, b1.ip)),
             "second beacon tracked in order with exact ip"
         );
+    }
+
+    /// `wrap_with_beacon_gate` pre-fires the gate when there are no beacons (a solo
+    /// node never blocks) and returns an unfired gate + a wrapping handler when
+    /// there are.
+    #[tokio::test]
+    async fn wrap_with_beacon_gate_prefires_when_beaconless() {
+        // No beacons ⇒ required_conns == 0 ⇒ gate pre-fires true.
+        let empty: Arc<dyn ValidatorManager> = Arc::new(StubBeacons {
+            members: HashSet::new(),
+        });
+        let (handler, mut rx) = wrap_with_beacon_gate(Arc::new(NoopHandler), empty);
+        assert!(*rx.borrow_and_update(), "beaconless node: gate pre-fires");
+        // The handler is returned unwrapped (no beacon to count) — connecting any
+        // node must not panic and the gate stays true.
+        handler.connected(NodeId::from([7u8; 20]), &ava_version::CURRENT.clone(), PRIMARY_NETWORK_ID);
+
+        // Five beacons ⇒ required_conns == 4 ⇒ gate starts unfired.
+        let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
+        let beacons: Arc<dyn ValidatorManager> = Arc::new(StubBeacons {
+            members: beacon_ids.iter().copied().collect(),
+        });
+        let (handler, mut rx) = wrap_with_beacon_gate(Arc::new(NoopHandler), beacons);
+        assert!(!*rx.borrow_and_update(), "5 beacons: gate starts closed");
+        let v = ava_version::CURRENT.clone();
+        for id in &beacon_ids[0..4] {
+            handler.connected(*id, &v, PRIMARY_NETWORK_ID);
+        }
+        assert!(*rx.borrow_and_update(), "gate fires at 4 of 5 beacons via the wrapped handler");
     }
 
     /// Verify that a non-consensus message (Ping) is silently dropped and
