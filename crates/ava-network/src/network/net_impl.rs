@@ -201,6 +201,12 @@ impl NetworkImpl {
                         &this.net_token,
                         &this.tasks,
                     );
+                    // M9.15 follow-up: unlike `handle_dial`, the inbound path does
+                    // not dedup against `connected`/`connecting`, so the same beacon
+                    // can fire `connected()`/`disconnected()` more than once.
+                    // Every `ExternalHandler` (RouterBridge, engine router, etc.)
+                    // must tolerate duplicate notifications; `BeaconManager` does so
+                    // via its `HashSet`. Tracked for a broader at-most-once fix.
                     this.watch_peer(handle);
                 }
                 Err(_) => {

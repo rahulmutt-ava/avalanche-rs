@@ -182,10 +182,16 @@ pub fn padded_node_id(node_id: NodeId) -> Id {
 pub struct BeaconManager {
     inner: Arc<dyn ExternalHandler>,
     beacons: Arc<dyn ValidatorManager>,
-    /// The set of connected beacon node-ids (Go `beacon_manager.go` peer-set
-    /// semantics): `connected` inserts (idempotent), `disconnected` removes.
-    /// `len()` is the live connection count — never double-counts a duplicate
-    /// `connected`, never goes negative on a spurious `disconnected`.
+    /// Deduplicated set of connected beacon node-ids: `connected` inserts
+    /// (idempotent), `disconnected` removes by id (a no-op for an absent node,
+    /// so the count never goes negative on a spurious disconnect). `len()` is
+    /// the live connection count. This dedup COMPENSATES for ava-network's
+    /// inbound `handle_accepted` path not deduplicating against
+    /// `connected`/`connecting` (unlike outbound `handle_dial`), so the same
+    /// beacon can fire `connected()`/`disconnected()` more than once. Note: Go
+    /// itself uses a bare `atomic.AddInt64` — its network layer delivers
+    /// `Connected`/`Disconnected` at-most-once per peer and strictly paired;
+    /// ava-network does not yet guarantee this on the inbound path.
     conns: Mutex<HashSet<NodeId>>,
     required_conns: i64,
     on_sufficiently_connected: tokio::sync::watch::Sender<bool>,

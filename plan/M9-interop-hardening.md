@@ -1823,15 +1823,25 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > negative on a spurious `disconnected()` for an un-counted beacon — either drives
 > the gate below / never to `required_conns`, so the bootstrapper never broadcast
 > `GetAcceptedFrontier`. Fix: count a **deduplicated set of connected beacon
-> node-ids** (Go `node/beacon_manager.go` peer-set parity); `connected` inserts
-> (idempotent), `disconnected` removes-by-id, gate fires at `set.len() >=
-> required_conns`. Pinned by `ava-node` `duplicate_connected_does_not_double_count`
-> + `disconnect_before_connect_does_not_wedge_gate` (RED→GREEN) and guarded
-> end-to-end by `avalanchers` `follower_bootstraps_through_real_beacon_gate` — a
-> 5-beacon localhost-TLS bootstrap driven by the REAL `BeaconManager` gate (the
-> coverage `networked_bootstrap.rs` lacked: it hand-fired the gate). The live
-> two-binary `mixed_network` arm stays `#[cfg(feature="live")] #[ignore]`
-> (nightly-gated by design); this fix unblocks its rung-3 stall.
+> node-ids**; `connected` inserts (idempotent), `disconnected` removes-by-id, gate
+> fires at `set.len() >= required_conns`. The set COMPENSATES for ava-network's
+> inbound `handle_accepted` path not deduplicating against `connected`/`connecting`
+> (unlike outbound `handle_dial`), so the same beacon can fire
+> `connected()`/`disconnected()` more than once. Note: Go's `beacon_manager.go`
+> uses a bare `atomic.AddInt64` — its network layer delivers `Connected`/`Disconnected`
+> at-most-once per peer and strictly paired; the set is a Rust-side divergence
+> compensation, not a Go peer-set port. Pinned by `ava-node`
+> `duplicate_connected_does_not_double_count` +
+> `disconnect_before_connect_does_not_wedge_gate` (RED→GREEN) and guarded end-to-end
+> by `avalanchers` `follower_bootstraps_through_real_beacon_gate` — a 5-beacon
+> localhost-TLS bootstrap driven by the REAL `BeaconManager` gate (the coverage
+> `networked_bootstrap.rs` lacked: it hand-fired the gate). The live two-binary
+> `mixed_network` arm stays `#[cfg(feature="live")] #[ignore]` (nightly-gated by
+> design); this fix unblocks its rung-3 stall. Follow-up: the inbound-dedup gap in
+> `ava-network` `net_impl.rs` `handle_accepted` (no `connected`/`connecting` guard,
+> unlike `handle_dial`) means duplicate connect/disconnect notifications reach every
+> `ExternalHandler` (RouterBridge, engine router, etc.), not just BeaconManager —
+> the broader at-most-once fix is tracked as a follow-up item.
 
 ---
 

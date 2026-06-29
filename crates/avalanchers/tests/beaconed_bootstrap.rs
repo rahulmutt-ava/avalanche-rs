@@ -339,25 +339,26 @@ async fn follower_bootstraps_through_real_beacon_gate() {
 
     // ---- The follower handshakes ≥4 of 5 beacons ⇒ the real gate fires ⇒
     // bootstrapper broadcasts GetAcceptedFrontier ⇒ reaches NormalOp. ----
-    let finished = wait_until_timeout(Duration::from_secs(60), || {
+    // 120s: 6-node TLS bring-up needs cold-runtime/CI headroom (warm runs complete <1s).
+    let finished = wait_until_timeout(Duration::from_secs(120), || {
         matches!(**follower_handle.ctx.state.load(), EngineState::NormalOp)
     })
     .await;
     assert!(
         finished,
-        "follower reached NormalOp through the real BeaconManager gate"
+        "follower did NOT reach NormalOp within 120s through the real beacon gate"
     );
 
     // ---- Convergence: follower tip == a beacon's tip. ----
     assert_eq!(
         follower_obs.last_accepted_height(),
         TIP_HEIGHT,
-        "follower accepted up to the beacon tip height"
+        "follower last_accepted_height did not converge to the beacon tip height"
     );
     assert_eq!(
         follower_obs.last_accepted_id(),
         beacon_obs[0].last_accepted_id(),
-        "follower converged on the beacon tip"
+        "follower last_accepted_id did not converge to the beacon tip id"
     );
 
     // ---- Clean shutdown. ----
