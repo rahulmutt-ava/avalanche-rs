@@ -50,11 +50,13 @@ pub fn init(cfg: &LoggingConfig) -> Result<LogHandles> {
 /// Build a per-chain rolling-file logger (`<log-dir>/<alias>.log`), mirroring
 /// `LogFactory.MakeChain(primaryAlias)` (specs/18 §5.3).
 ///
-/// The returned [`ChainLogger`] carries a chain-field-filtered layer (only
-/// events tagged `chain = "<alias>"` reach it), the reload handle for that
-/// chain's logger, and the appender worker guard (keep alive for the chain's
-/// lifetime). The usual runtime path is [`LogHandles::add_chain_logger`], which
-/// appends the layer to the global reloadable chain slot installed by [`init`];
+/// The returned [`ChainLogger`] carries a plain rolling-file layer plus the
+/// `alias`/`level` the chain slot uses to route events to it (only events tagged
+/// `chain = "<alias>"` are written, gated by the per-chain `level`), the reload
+/// handle for that chain's logger, and the appender worker guard (keep alive for
+/// the chain's lifetime). The usual runtime path is
+/// [`LogHandles::add_chain_logger`], which appends the layer to the global
+/// reloadable chain slot installed by [`init`];
 /// this lower-level builder is for callers assembling their own subscriber.
 ///
 /// [`LogHandles::add_chain_logger`]: ava_logging::LogHandles::add_chain_logger
