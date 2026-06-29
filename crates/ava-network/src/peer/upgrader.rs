@@ -10,6 +10,7 @@
 //! outbound (client) directions.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ava_crypto::staking::{Certificate, parse_certificate};
 use ava_types::node_id::NodeId;
@@ -19,6 +20,14 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
 use crate::error::{Error, Result};
+
+/// Maximum time allowed for the TLS 1.3 mutual-auth handshake to complete.
+///
+/// Go parity: `network/peer/upgrader.go` `readHandshakeTimeout = 15s`. Without
+/// this bound a stalled rustls↔Go TLS-1.3 handshake hangs the upgrade future
+/// forever, leaking the beacon slot and preventing the follower from reaching
+/// its 4-connection quorum.
+pub const READ_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `ids.NodeIDFromCert` over raw DER: `RIPEMD160(SHA256(DER))`. Convenience
 /// wrapper that strict-parses the DER first (so a malformed cert is rejected).
@@ -55,6 +64,9 @@ pub struct Upgrader {
     side: UpgraderSide,
     acceptor: Option<TlsAcceptor>,
     connector: Option<TlsConnector>,
+    /// Maximum time for the TLS 1.3 mutual-auth handshake to complete.
+    /// Defaults to [`READ_HANDSHAKE_TIMEOUT`] (15 s, Go parity).
+    handshake_timeout: Duration,
 }
 
 impl Upgrader {
@@ -65,6 +77,7 @@ impl Upgrader {
             side: UpgraderSide::Server,
             acceptor: Some(TlsAcceptor::from(config)),
             connector: None,
+            handshake_timeout: READ_HANDSHAKE_TIMEOUT,
         }
     }
 
@@ -75,7 +88,15 @@ impl Upgrader {
             side: UpgraderSide::Client,
             acceptor: None,
             connector: Some(TlsConnector::from(config)),
+            handshake_timeout: READ_HANDSHAKE_TIMEOUT,
         }
+    }
+
+    /// Override the handshake timeout (primarily for tests).
+    #[must_use]
+    pub fn with_handshake_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = timeout;
+        self
     }
 
     /// This upgrader's role.
@@ -91,7 +112,9 @@ impl Upgrader {
     /// `TcpStream`s and in-process `tokio::io::duplex` test streams.
     ///
     /// # Errors
-    /// - [`Error::Tls`] if the TLS handshake fails (incl. a rejected leaf key).
+    /// - [`Error::Tls`] if the TLS handshake fails or times out (incl. a
+    ///   rejected leaf key or a stalled handshake exceeding
+    ///   [`READ_HANDSHAKE_TIMEOUT`]).
     /// - [`Error::NoPeerCertificate`] if no peer cert was negotiated.
     /// - [`Error::CertificateParse`] if the leaf fails the strict parser.
     pub async fn upgrade<IO>(&self, stream: IO) -> Result<(NodeId, TlsStream<IO>, Certificate)>
@@ -104,10 +127,13 @@ impl Upgrader {
                     let acceptor = self.acceptor.as_ref().ok_or_else(|| {
                         Error::TlsConfig("server upgrader missing acceptor".into())
                     })?;
-                    let accepted = acceptor
-                        .accept(stream)
-                        .await
-                        .map_err(|e| Error::Tls(e.to_string()))?;
+                    let accepted = tokio::time::timeout(
+                        self.handshake_timeout,
+                        acceptor.accept(stream),
+                    )
+                    .await
+                    .map_err(|_| Error::Tls("handshake timeout".into()))?
+                    .map_err(|e| Error::Tls(e.to_string()))?;
                     TlsStream::Server(accepted)
                 }
                 UpgraderSide::Client => {
@@ -118,10 +144,13 @@ impl Upgrader {
                     // by leaf key, not hostname). A fixed placeholder name is used.
                     let server_name = ServerName::try_from("avalanche")
                         .map_err(|e| Error::TlsConfig(format!("server name: {e}")))?;
-                    let connected = connector
-                        .connect(server_name, stream)
-                        .await
-                        .map_err(|e| Error::Tls(e.to_string()))?;
+                    let connected = tokio::time::timeout(
+                        self.handshake_timeout,
+                        connector.connect(server_name, stream),
+                    )
+                    .await
+                    .map_err(|_| Error::Tls("handshake timeout".into()))?
+                    .map_err(|e| Error::Tls(e.to_string()))?;
                     TlsStream::Client(connected)
                 }
             };
@@ -152,6 +181,8 @@ impl Upgrader {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::identity::Identity;
     use crate::peer::tls_config;
@@ -178,6 +209,52 @@ mod tests {
             result.is_err(),
             "client upgrade over a peer that closes without a TLS response must \
              return Err (the arm handle_dial logs), got Ok"
+        );
+    }
+
+    /// Regression (M9.15 rung-3): a stalled TLS handshake (the peer ACCEPTS the
+    /// TCP connection and holds it open but never sends or reads any TLS bytes) is
+    /// bounded by `handshake_timeout` instead of hanging forever.
+    ///
+    /// Without the fix `connector.connect(…).await` would block indefinitely,
+    /// leaking the beacon slot and preventing the follower from reaching its
+    /// 4-connection quorum. With the fix the future resolves to `Err` within
+    /// `handshake_timeout`.
+    ///
+    /// The outer `tokio::time::timeout` acts as a test-level safety net: if it
+    /// fires the future DID hang (the beacon-leak bug is present).
+    #[tokio::test]
+    async fn stalled_tls_handshake_is_bounded_by_handshake_timeout() {
+        let identity = Identity::generate().expect("generate identity");
+        let client_cfg = tls_config::client_config(&identity).expect("client config");
+
+        // A short timeout so the test runs quickly.
+        let timeout = Duration::from_millis(100);
+        let upgrader = Upgrader::client(client_cfg).with_handshake_timeout(timeout);
+
+        // The remote half is kept open (NOT dropped) but never sends TLS bytes.
+        // This simulates the stalled rustls↔Go TLS-1.3 handshake: TCP connected,
+        // no TLS ServerHello arrives, `connector.connect()` stalls indefinitely.
+        let (local, _remote) = tokio::io::duplex(1 << 16);
+
+        // Give 2 s as a test-level guard: if the inner upgrade doesn't resolve
+        // within that window the handshake timeout is missing / broken.
+        let guard = Duration::from_secs(2);
+        let result = tokio::time::timeout(guard, upgrader.upgrade(local))
+            .await
+            .expect("upgrade future must complete within the test guard (2 s); \
+                     if it timed out here the handshake_timeout is not wired up \
+                     and the beacon-leak bug is present");
+
+        assert!(
+            result.is_err(),
+            "stalled TLS handshake must resolve to Err after handshake_timeout, got Ok"
+        );
+        // Confirm the error message indicates a timeout (not some other failure).
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("handshake timeout"),
+            "error should mention 'handshake timeout', got: {err_str}"
         );
     }
 }
