@@ -711,7 +711,7 @@ mod tests {
 
     /// Five beacons, `required_conns = 4`. A duplicate `connected()` for the same
     /// beacon must NOT inflate the count: 4 raw calls spanning only 3 *distinct*
-    /// beacons must leave the gate closed (Go peer-set dedup semantics; M9.15).
+    /// beacons must leave the gate closed (deduplicated-set semantics; M9.15).
     #[tokio::test]
     async fn duplicate_connected_does_not_double_count() {
         let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
