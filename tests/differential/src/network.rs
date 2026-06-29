@@ -636,6 +636,7 @@ impl Network {
                 key_file: staker.key,
                 bootstrap: Vec::new(), // filled below once the full set is known
                 signer_key_file: Some(crate::livenet::local_signer_key(idx)?),
+                extra_args: Vec::new(),
             });
         }
         // Each Go node bootstraps from the other four (full mesh ⇒ quorum).
@@ -721,6 +722,7 @@ impl Network {
             key_file: rust_staker.key,
             bootstrap: crate::livenet::mesh_peers(&go_validators, usize::MAX),
             signer_key_file: None,
+            extra_args: Vec::new(),
         };
         nodes.push(spawn_role_node(&rust_path, Binary::Rust, 5, &rust_launch)?);
 
@@ -801,6 +803,7 @@ impl Network {
             key_file: staker.key,
             bootstrap: Vec::new(), // a lone genesis validator self-bootstraps
             signer_key_file: Some(crate::livenet::local_signer_key(1)?),
+            extra_args: vec!["--sybil-protection-enabled=false".to_owned()],
         };
         let mut nodes: Vec<Node> = Vec::with_capacity(2);
         nodes.push(spawn_role_node(&go_path, Binary::Go, 0, &go_launch)?);
@@ -839,6 +842,7 @@ impl Network {
                 ip: go_validator.ip.clone(),
             }],
             signer_key_file: None,
+            extra_args: Vec::new(),
         };
         nodes.push(spawn_role_node(&rust_path, Binary::Rust, 1, &rust_launch)?);
 

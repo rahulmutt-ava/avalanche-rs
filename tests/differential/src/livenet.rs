@@ -86,6 +86,11 @@ pub struct NodeLaunch {
     /// proof-of-possession, else peers reject the signed-IP BLS signature and the
     /// cluster never forms quorum. `None` for the non-validating Rust follower.
     pub signer_key_file: Option<PathBuf>,
+    /// Extra raw CLI flags appended verbatim to this node's args (e.g.
+    /// `--sybil-protection-enabled=false` for a standalone single-node beacon
+    /// that has no validator quorum to clear the connected-stake gate). Empty
+    /// for ordinary mesh/follower nodes.
+    pub extra_args: Vec<String>,
 }
 
 /// The exact CLI flag vector for `launch` (mirrors specs/13; both binaries
@@ -129,6 +134,7 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         args.push(format!("--bootstrap-ips={ips}"));
         args.push(format!("--bootstrap-ids={ids}"));
     }
+    args.extend(launch.extra_args.iter().cloned());
     args
 }
 
@@ -552,6 +558,7 @@ mod tests {
                 ip: "127.0.0.1:9999".to_owned(),
             }],
             signer_key_file: None,
+            extra_args: Vec::new(),
         };
         let args = node_args(&l);
         let ids = arg_value(&args, "--bootstrap-ids").expect("bootstrap-ids present");
@@ -621,6 +628,7 @@ mod tests {
                 }],
             },
             signer_key_file: None,
+            extra_args: Vec::new(),
         }
     }
 
@@ -778,6 +786,17 @@ mod tests {
             Some(false)
         );
         assert_eq!(parse_bootstrapped(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn node_args_append_extra_args_verbatim() {
+        let mut l = launch(Role::Beacon);
+        l.extra_args = vec!["--sybil-protection-enabled=false".to_owned()];
+        let args = node_args(&l);
+        assert!(
+            args.iter().any(|a| a == "--sybil-protection-enabled=false"),
+            "extra_args appended verbatim to node_args"
+        );
     }
 
     #[test]
