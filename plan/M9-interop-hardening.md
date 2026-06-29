@@ -1748,6 +1748,40 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `#[cfg(feature="live")] #[ignore]` with its no-fork/same-tip assertions unchanged, and the encoding
 > fix is filed as the follow-up below (NOT applied here).
 
+> **AS-BUILT — M9.15 rung-3 single-Go-beacon bisect: rungs 6-9 PROVEN against real Go (2026-06-29).**
+> Implemented the diagnose-by-bisection plan (`docs/superpowers/plans/2026-06-28-m9.15-rung3-live-follower-bootstrap.md`):
+> a single-Go-beacon probe (`Network::boot_single_go_beacon`, `mixed_network_single_beacon`) + env-gated
+> rung instrumentation across the connect→bootstrap ladder (BeaconManager gate-count, ava-network dial/
+> handshake rungs 1-3, chains.rs gate/start/frontier rungs 5-7 on BOTH the production `OutboundSender`
+> and the in-process `RecordingSender`).
+> - **Probe-boot fix (evidence-gated):** the first live run showed the *lone Go beacon itself* never reaches
+>   `isBootstrapped(P/X/C)` — a single node holding 1-of-5 stake from the stock `local` genesis with no
+>   peers can't clear avalanchego's connected-stake gate to transition to normal-op (all 3 chains
+>   `bootstrapping skipped: no provided bootstraps` then stall at `proposervm Waiting for inner VM event
+>   before normal operation`; no `bootstrapped` health check passes). FIX: pass
+>   `--sybil-protection-enabled=false` to ONLY the lone Go beacon (new per-node `extra_args` on
+>   `NodeLaunch`), so it operates standalone like a single-node dev net.
+> - **★ RESULT — single-beacon arm GREEN (15.6s).** The Rust ECDSA follower bootstraps P/X/C from one
+>   live Go node. **Verified REAL** via the Go beacon's own log (the follower-side native rungs are
+>   swallowed by the known LogFactory wiring gap, AS-BUILT 2026-06-23): the follower
+>   (`NodeID-F2rifANHJDmLsdetBsCoXYDVqMH85FYdK`) appears `connected` on P/X/C, sends `get_ancestors`
+>   (req 3), and the Go beacon serves `ancestors` (numContainers:1) on all three chains. Production path
+>   confirmed networked+gated: `main → drive_startup_chains_over_network → boot_chain_over_network_core`
+>   (real `OutboundSender` + `on_sufficiently_connected` gate); `get_bootstrap_config` populates
+>   `bootstrappers` from `--bootstrap-ips/ids` ⇒ non-empty ⇒ `required_conns = (3·1+3)/4 = 1` ⇒ real
+>   gated bootstrap (not the empty-beacon short-circuit).
+> - **★★ BISECT VERDICT → Branch A (connectivity).** Rungs 5-9 (gate fire → `handler.start()` →
+>   GetAcceptedFrontier out → ancestors in → NormalOp) **work against real Go**. Therefore the
+>   5-validator Stage 2 stall is **purely a connectivity problem**: the follower forms only 1 of the 4
+>   beacon connections `required_conns=(3·5+3)/4=4` demands. The remaining work (rungs 1-4: why 4 of 5
+>   dials/handshakes don't complete) is the next rung, and pinpointing it first needs the LogFactory
+>   wiring gap fixed so the follower's own rung 1-3 dial-outcome markers surface in a 5-validator run.
+> - **Live-run invocation notes (for the next operator):** nextest's 120s slow-timeout kills these arms →
+>   run via `cargo test -p ava-differential --features live --test mixed_network -- --ignored --nocapture
+>   <name>`; pin `TMPDIR` to a stable dir (the nix-shell `temp_dir()` is ephemeral and its logs vanish);
+>   on a fast PASS the follower is SIGKILLed before flushing, so read the **Go** node log for ground truth.
+> - The arm stays `#[cfg(feature="live")] #[ignore]`; offline arms untouched.
+
 ---
 
 ## Spec coverage check
