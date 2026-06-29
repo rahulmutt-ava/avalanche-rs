@@ -10,11 +10,11 @@
 //! `06` ChainRouter once the wire→engine op conversion lands (M8.30,
 //! `tests/PORTING.md`).
 
+use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -182,7 +182,11 @@ pub fn padded_node_id(node_id: NodeId) -> Id {
 pub struct BeaconManager {
     inner: Arc<dyn ExternalHandler>,
     beacons: Arc<dyn ValidatorManager>,
-    num_conns: AtomicI64,
+    /// The set of connected beacon node-ids (Go `beacon_manager.go` peer-set
+    /// semantics): `connected` inserts (idempotent), `disconnected` removes.
+    /// `len()` is the live connection count — never double-counts a duplicate
+    /// `connected`, never goes negative on a spurious `disconnected`.
+    conns: Mutex<HashSet<NodeId>>,
     required_conns: i64,
     on_sufficiently_connected: tokio::sync::watch::Sender<bool>,
 }
@@ -199,7 +203,7 @@ impl BeaconManager {
         Self {
             inner,
             beacons,
-            num_conns: AtomicI64::new(0),
+            conns: Mutex::new(HashSet::new()),
             required_conns,
             on_sufficiently_connected,
         }
@@ -219,10 +223,11 @@ impl ExternalHandler for BeaconManager {
         if subnet_id == PRIMARY_NETWORK_ID
             && self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0
         {
-            let conns = self
-                .num_conns
-                .fetch_add(1, Ordering::AcqRel)
-                .saturating_add(1);
+            let conns = {
+                let mut set = self.conns.lock();
+                set.insert(node_id);
+                i64::try_from(set.len()).unwrap_or(i64::MAX)
+            };
             tracing::debug!(
                 %node_id,
                 conns,
@@ -242,8 +247,12 @@ impl ExternalHandler for BeaconManager {
     }
 
     fn disconnected(&self, node_id: NodeId) {
+        // Remove by id (a spurious disconnect for an un-counted node is a
+        // no-op — the set never goes "negative"). The gate is one-shot (Go
+        // `onSufficientlyConnected` parity): once fired it never downgrades, so
+        // a disconnect after firing does not re-close it.
         if self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0 {
-            self.num_conns.fetch_sub(1, Ordering::AcqRel);
+            self.conns.lock().remove(&node_id);
         }
         self.inner.disconnected(node_id);
     }
@@ -522,7 +531,7 @@ fn chrono_to_system_time(t: chrono::DateTime<chrono::Utc>) -> std::time::SystemT
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
     use std::collections::HashSet;
     use std::net::SocketAddr;
