@@ -75,21 +75,11 @@ impl ValidatorManager for BeaconSet {
         unimplemented!()
     }
 
-    fn add_weight(
-        &self,
-        _s: Id,
-        _n: NodeId,
-        _w: u64,
-    ) -> ava_validators::error::Result<()> {
+    fn add_weight(&self, _s: Id, _n: NodeId, _w: u64) -> ava_validators::error::Result<()> {
         unimplemented!()
     }
 
-    fn remove_weight(
-        &self,
-        _s: Id,
-        _n: NodeId,
-        _w: u64,
-    ) -> ava_validators::error::Result<()> {
+    fn remove_weight(&self, _s: Id, _n: NodeId, _w: u64) -> ava_validators::error::Result<()> {
         unimplemented!()
     }
 
@@ -105,11 +95,7 @@ impl ValidatorManager for BeaconSet {
         unimplemented!()
     }
 
-    fn subset_weight(
-        &self,
-        _s: Id,
-        _ids: &HashSet<NodeId>,
-    ) -> ava_validators::error::Result<u64> {
+    fn subset_weight(&self, _s: Id, _ids: &HashSet<NodeId>) -> ava_validators::error::Result<u64> {
         unimplemented!()
     }
 
@@ -125,11 +111,7 @@ impl ValidatorManager for BeaconSet {
         unimplemented!()
     }
 
-    fn sample(
-        &self,
-        _s: Id,
-        _n: usize,
-    ) -> ava_validators::error::Result<Vec<NodeId>> {
+    fn sample(&self, _s: Id, _n: usize) -> ava_validators::error::Result<Vec<NodeId>> {
         unimplemented!()
     }
 
@@ -182,17 +164,14 @@ impl Node {
         // When a beacon set is supplied, the network's consensus handler is the
         // REAL production BeaconManager gate (wrapping the bridge) — exactly the
         // init_networking wiring. Otherwise the bare bridge (a beacon node).
-        let (consensus_handler, gate): (Arc<dyn ExternalHandler>, Option<_>) =
-            match gate_beacons {
-                Some(beacons) => {
-                    let (h, rx) = wrap_with_beacon_gate(
-                        Arc::clone(&bridge) as Arc<dyn ExternalHandler>,
-                        beacons,
-                    );
-                    (h, Some(rx))
-                }
-                None => (Arc::clone(&bridge) as Arc<dyn ExternalHandler>, None),
-            };
+        let (consensus_handler, gate): (Arc<dyn ExternalHandler>, Option<_>) = match gate_beacons {
+            Some(beacons) => {
+                let (h, rx) =
+                    wrap_with_beacon_gate(Arc::clone(&bridge) as Arc<dyn ExternalHandler>, beacons);
+                (h, Some(rx))
+            }
+            None => (Arc::clone(&bridge) as Arc<dyn ExternalHandler>, None),
+        };
 
         // Upgrade far in the future: the pre-upgrade floor applies (matches the
         // network testutil), so the handshake uses the stable compatibility.
@@ -343,7 +322,9 @@ async fn follower_bootstraps_through_real_beacon_gate() {
     )
     .await
     .expect("boot follower");
-    follower.bridge.set_engine_router(Arc::clone(&follower_handle.router));
+    follower
+        .bridge
+        .set_engine_router(Arc::clone(&follower_handle.router));
 
     // ---- Drive all network event loops. ----
     let mut dispatches = Vec::new();

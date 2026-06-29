@@ -726,10 +726,7 @@ mod tests {
         );
 
         bm.connected(beacon_ids[3], &v, PRIMARY_NETWORK_ID); // 4th DISTINCT beacon
-        assert!(
-            *rx.borrow_and_update(),
-            "gate fires at 4 distinct beacons"
-        );
+        assert!(*rx.borrow_and_update(), "gate fires at 4 distinct beacons");
     }
 
     /// A `disconnected()` for a beacon that never connected must not drive the count
@@ -928,7 +925,11 @@ mod tests {
         assert!(*rx.borrow_and_update(), "beaconless node: gate pre-fires");
         // The handler is returned unwrapped (no beacon to count) — connecting any
         // node must not panic and the gate stays true.
-        handler.connected(NodeId::from([7u8; 20]), &ava_version::CURRENT.clone(), PRIMARY_NETWORK_ID);
+        handler.connected(
+            NodeId::from([7u8; 20]),
+            &ava_version::CURRENT.clone(),
+            PRIMARY_NETWORK_ID,
+        );
 
         // Five beacons ⇒ required_conns == 4 ⇒ gate starts unfired.
         let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
@@ -941,7 +942,10 @@ mod tests {
         for id in &beacon_ids[0..4] {
             handler.connected(*id, &v, PRIMARY_NETWORK_ID);
         }
-        assert!(*rx.borrow_and_update(), "gate fires at 4 of 5 beacons via the wrapped handler");
+        assert!(
+            *rx.borrow_and_update(),
+            "gate fires at 4 of 5 beacons via the wrapped handler"
+        );
     }
 
     /// Verify that a non-consensus message (Ping) is silently dropped and

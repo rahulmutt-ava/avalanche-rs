@@ -1816,6 +1816,23 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `num_conns` below 4; a `finish_handshake`→`connected` notification not reaching BeaconManager for some
 >   peers under load. Live `mixed_network` arm stays `#[cfg(feature="live")] #[ignore]`; offline arms green.
 
+> **AS-BUILT — M9.15 rung-3 racy gate-fire FIXED (2026-06-29).** Root cause pinned
+> deterministically offline (no live run, sidestepping the concurrent-load tracing
+> death): `BeaconManager` counted connections with a bare `AtomicI64` that (a)
+> double-counted a duplicate `connected()` for the same beacon and (b) went
+> negative on a spurious `disconnected()` for an un-counted beacon — either drives
+> the gate below / never to `required_conns`, so the bootstrapper never broadcast
+> `GetAcceptedFrontier`. Fix: count a **deduplicated set of connected beacon
+> node-ids** (Go `node/beacon_manager.go` peer-set parity); `connected` inserts
+> (idempotent), `disconnected` removes-by-id, gate fires at `set.len() >=
+> required_conns`. Pinned by `ava-node` `duplicate_connected_does_not_double_count`
+> + `disconnect_before_connect_does_not_wedge_gate` (RED→GREEN) and guarded
+> end-to-end by `avalanchers` `follower_bootstraps_through_real_beacon_gate` — a
+> 5-beacon localhost-TLS bootstrap driven by the REAL `BeaconManager` gate (the
+> coverage `networked_bootstrap.rs` lacked: it hand-fired the gate). The live
+> two-binary `mixed_network` arm stays `#[cfg(feature="live")] #[ignore]`
+> (nightly-gated by design); this fix unblocks its rung-3 stall.
+
 ---
 
 ## Spec coverage check
