@@ -22,6 +22,21 @@ use std::process::Stdio;
 
 use tokio::process::{Child, Command};
 
+/// Send SIGTERM to a child by pid (best-effort; lets the process flush logs
+/// before the SIGKILL backstop). Test-harness only.
+///
+/// Uses the system `kill` binary to avoid `unsafe` in this crate
+/// (`#![forbid(unsafe_code)]`). Errors are intentionally swallowed — this is a
+/// best-effort graceful-flush attempt before the SIGKILL backstop fires.
+fn sigterm(child: &Child) {
+    if let Some(pid) = child.id() {
+        let _ = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+    }
+}
+
 /// Which node implementation a network slot runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Binary {
@@ -362,7 +377,17 @@ impl Network {
     }
 
     /// Kill every child and drop the network.
+    ///
+    /// Teardown sequence: SIGTERM all nodes → sleep 3 s (lets tracing_appender
+    /// WorkerGuard flush) → SIGKILL backstop → wait.
     pub async fn shutdown(mut self) {
+        // SIGTERM all nodes first so they can flush their log sinks.
+        for node in &mut self.nodes {
+            sigterm(&node.child);
+        }
+        // Give all nodes a moment to flush and exit cleanly.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        // SIGKILL backstop for any nodes still alive.
         for node in &mut self.nodes {
             let _ = node.child.start_kill();
         }
@@ -375,8 +400,15 @@ impl Network {
 
 impl Drop for Network {
     fn drop(&mut self) {
-        // Best-effort kill on drop so a panicking test never leaks node
-        // processes (`shutdown` is the graceful path).
+        // Graceful teardown: SIGTERM all nodes so they can flush their log
+        // sinks (tracing_appender WorkerGuard), sleep 3 s, then SIGKILL any
+        // still alive. This ensures the Rust follower's diagnostic logs survive
+        // a panicking test. `shutdown` is the preferred async path; Drop is the
+        // sync backstop.
+        for node in &mut self.nodes {
+            sigterm(&node.child);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
         for node in &mut self.nodes {
             let _ = node.child.start_kill();
         }
