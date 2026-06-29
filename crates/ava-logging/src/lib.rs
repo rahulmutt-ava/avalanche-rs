@@ -35,7 +35,7 @@ use parking_lot::Mutex;
 use tracing::field::{Field, Visit};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::layer::{Context, Filter, SubscriberExt};
+use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, Registry, reload};
 
@@ -46,82 +46,113 @@ pub use level::{AvaLevel, ParseLevelError};
 /// bound without a direct `tracing-subscriber` dependency.
 pub use tracing_subscriber::registry::LookupSpan;
 
-/// The subscriber the global per-chain slot is parameterized over.
+/// A per-chain entry stored inside [`ChainSlotVec`].
 ///
-/// The reloadable chain-layer slot ([`init_logging`]) is the *first* layer
-/// added to the registry, so each boxed chain layer is a `Layer<Registry>`.
-type ChainLayer = Box<dyn Layer<Registry> + Send + Sync>;
+/// Chain layers must NOT use `with_filter` / `Filtered` wrappers because
+/// `Filtered` requires `on_layer` to be called to register a `FilterId` with
+/// the subscriber.  Layers added dynamically via `reload::modify` never have
+/// `on_layer` called — so any `Filtered` wrapper would panic the moment an
+/// event is processed.
+///
+/// Instead, the routing (chain-field check) and level gate are performed
+/// directly by [`ChainSlotVec::on_event`], and the inner layer is a plain
+/// `fmt` layer with no filter wrappers.
+struct ChainEntry {
+    /// The alias this entry routes, e.g. `"C"`, `"P"`.
+    alias: String,
+    /// The current level gate for this chain logger.  Updated atomically by
+    /// the per-chain [`ReloadHandle`] returned to the admin `setLoggerLevel`
+    /// endpoint.
+    level: std::sync::Arc<Mutex<LevelFilter>>,
+    /// The plain rolling-file layer (no `Filtered` wrapper).  Only
+    /// [`ChainSlotVec::on_event`] calls into it, after the alias and level
+    /// gates have been checked.
+    layer: Box<dyn Layer<Registry> + Send + Sync>,
+}
 
-/// A growable collection of per-chain layers that is transparent when empty.
+/// A growable collection of per-chain layers that is transparent to the
+/// display and file layers.
 ///
-/// `Vec<L>` delegates `register_callsite` to its elements; when the vec is
-/// empty it returns `Interest::never()`, which causes `Layered::pick_interest`
-/// to short-circuit and cache every callsite as disabled for the **whole**
-/// subscriber stack — silencing the display and file layers too.
+/// ## Why not `Vec<L>`?
 ///
-/// `ChainSlotVec` corrects both failure modes of the empty-vec case:
-/// - `register_callsite` returns `Interest::sometimes()` when empty, so the
-///   interest check is deferred to `enabled`/`event_enabled` at runtime and
-///   outer layers are never suppressed.
-/// - `max_level_hint` returns `None` when empty, meaning "no level opinion",
-///   so the global max-level hint is not capped at `OFF`.
+/// `Vec<L>` delegates `register_callsite` to its elements and returns
+/// `Interest::never()` when empty, which causes `Layered::pick_interest` to
+/// short-circuit and cache the callsite as permanently disabled for the
+/// **whole** subscriber — silencing the display and file layers too.
 ///
-/// When non-empty the delegation is identical to `Vec<L>`.
-struct ChainSlotVec(Vec<ChainLayer>);
+/// Even when non-empty the problem persists: all chain layers return
+/// `Interest::never()` for callsites that lack a `chain` field, so the
+/// combined result is still `never()`.  Because `reload::modify` calls
+/// `callsite::rebuild_interest_cache()` after every push, every untagged
+/// callsite gets re-cached as disabled the moment the first chain logger is
+/// added — the node goes silent ~15 ms after boot.
+///
+/// ## Fix
+///
+/// `ChainSlotVec` returns `Interest::sometimes()` and `max_level_hint = None`
+/// unconditionally.  This defers interest evaluation to per-event time and
+/// never lets the chain slot impose a global level ceiling on the display/file
+/// layers.
+///
+/// Per-chain routing (`chain = "C"` events → C.log only) is done in
+/// [`Layer::on_event`] by inspecting the event's fields directly, without
+/// going through `Filtered` wrappers that would require `FilterId`
+/// registration (which is impossible for dynamically-added layers).
+struct ChainSlotVec(Vec<ChainEntry>);
 
 impl Layer<Registry> for ChainSlotVec {
     fn register_callsite(
         &self,
-        metadata: &'static tracing::Metadata<'static>,
+        _metadata: &'static tracing::Metadata<'static>,
     ) -> tracing::subscriber::Interest {
-        if self.0.is_empty() {
-            // No chain layers yet — return "sometimes" so callsite interest is
-            // re-evaluated per event and the display/file layers are not vetoed.
-            return tracing::subscriber::Interest::sometimes();
-        }
-        // Delegate to Vec's implementation: return the highest interest across
-        // all chain layers (same semantics as Vec<L>).
-        let mut interest = tracing::subscriber::Interest::never();
-        for layer in &self.0 {
-            let new = layer.register_callsite(metadata);
-            if (interest.is_sometimes() && new.is_always())
-                || (interest.is_never() && !new.is_never())
-            {
-                interest = new;
-            }
-        }
-        interest
+        // Always defer to per-event evaluation.  The chain layers route via
+        // on_event (not via Filtered/callsite interest), so this slot has no
+        // static opinion about any callsite.  Returning `sometimes()` ensures
+        // the callsite is never cached disabled — which would also silence the
+        // display and file layers stacked above this one.
+        tracing::subscriber::Interest::sometimes()
     }
 
-    fn enabled(&self, metadata: &tracing::Metadata<'_>, ctx: Context<'_, Registry>) -> bool {
-        self.0.iter().all(|l| l.enabled(metadata, ctx.clone()))
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>, _ctx: Context<'_, Registry>) -> bool {
+        // The chain slot has no metadata-level opinion.  Routing is done per
+        // event in on_event.  Returning `true` passes the decision up to the
+        // outer layers (display + file).
+        true
     }
 
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        if self.0.is_empty() {
-            // No chain layers — no opinion on the max level.  Returning `None`
-            // lets outer layers (display + file) set the effective ceiling.
-            return None;
-        }
-        // Mirrors Vec<L>: return the highest level across all chain layers.
-        let mut max_level = LevelFilter::OFF;
-        for layer in &self.0 {
-            let hint = layer.max_level_hint()?;
-            if hint > max_level {
-                max_level = hint;
-            }
-        }
-        Some(max_level)
+        // The chain layers express no global level ceiling — returning `None`
+        // lets the display and file layers' own `LevelFilter`s decide the
+        // effective maximum.
+        None
+    }
+
+    fn event_enabled(&self, _event: &tracing::Event<'_>, _ctx: Context<'_, Registry>) -> bool {
+        // Routing is handled in on_event; never veto events here so the outer
+        // (display + file) layers are not suppressed.
+        true
     }
 
     fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) {
-        for layer in &self.0 {
-            layer.on_event(event, ctx.clone());
-        }
-    }
+        // Extract the `chain` field value from the event (if any).
+        let mut visitor = ChainFieldVisitor::default();
+        event.record(&mut visitor);
+        let chain_alias = visitor.chain.as_deref();
 
-    fn event_enabled(&self, event: &tracing::Event<'_>, ctx: Context<'_, Registry>) -> bool {
-        self.0.iter().all(|l| l.event_enabled(event, ctx.clone()))
+        // Route to the matching chain entry; untagged events are intentionally
+        // not forwarded to any chain layer.
+        for entry in &self.0 {
+            if chain_alias != Some(entry.alias.as_str()) {
+                continue;
+            }
+            // Level gate: skip if the event's level is below the chain's filter.
+            let level_filter = *entry.level.lock();
+            if event.metadata().level() > &level_filter {
+                break;
+            }
+            entry.layer.on_event(event, ctx.clone());
+            break;
+        }
     }
 
     fn on_new_span(
@@ -130,8 +161,8 @@ impl Layer<Registry> for ChainSlotVec {
         id: &tracing::span::Id,
         ctx: Context<'_, Registry>,
     ) {
-        for layer in &self.0 {
-            layer.on_new_span(attrs, id, ctx.clone());
+        for entry in &self.0 {
+            entry.layer.on_new_span(attrs, id, ctx.clone());
         }
     }
 
@@ -141,26 +172,26 @@ impl Layer<Registry> for ChainSlotVec {
         values: &tracing::span::Record<'_>,
         ctx: Context<'_, Registry>,
     ) {
-        for layer in &self.0 {
-            layer.on_record(span, values, ctx.clone());
+        for entry in &self.0 {
+            entry.layer.on_record(span, values, ctx.clone());
         }
     }
 
     fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, Registry>) {
-        for layer in &self.0 {
-            layer.on_enter(id, ctx.clone());
+        for entry in &self.0 {
+            entry.layer.on_enter(id, ctx.clone());
         }
     }
 
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, Registry>) {
-        for layer in &self.0 {
-            layer.on_exit(id, ctx.clone());
+        for entry in &self.0 {
+            entry.layer.on_exit(id, ctx.clone());
         }
     }
 
     fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, Registry>) {
-        for layer in &self.0 {
-            layer.on_close(id.clone(), ctx.clone());
+        for entry in &self.0 {
+            entry.layer.on_close(id.clone(), ctx.clone());
         }
     }
 }
@@ -278,6 +309,23 @@ impl ReloadHandle {
         }
     }
 
+    /// Build a [`ReloadHandle`] backed by a shared [`LevelFilter`] mutex.
+    ///
+    /// Used for per-chain loggers whose level is stored in [`ChainEntry`]
+    /// rather than via a `tracing_subscriber::reload` handle (chain layers are
+    /// appended dynamically and cannot go through the `reload` machinery).
+    fn from_arc(level: std::sync::Arc<Mutex<LevelFilter>>, initial: AvaLevel) -> Self {
+        let level_arc = level.clone();
+        let setter: FilterSetter = Box::new(move |filter: LevelFilter| {
+            *level_arc.lock() = filter;
+            Ok(())
+        });
+        Self {
+            setter: std::sync::Arc::new(setter),
+            current: std::sync::Arc::new(Mutex::new(initial)),
+        }
+    }
+
     /// The level this logger is currently filtering at.
     #[must_use]
     pub fn level(&self) -> AvaLevel {
@@ -307,8 +355,8 @@ impl std::fmt::Debug for ReloadHandle {
 ///
 /// `reload::Handle` is parameterized by the slot's layer type and the
 /// subscriber; we erase the `modify`/append operation behind a boxed closure so
-/// callers can append chain layers without naming `tracing-subscriber` types.
-type ChainSlotAppender = Box<dyn Fn(ChainLayer) -> Result<()> + Send + Sync>;
+/// callers can append chain entries without naming `tracing-subscriber` types.
+type ChainSlotAppender = Box<dyn Fn(ChainEntry) -> Result<()> + Send + Sync>;
 
 /// The handles + writer guards returned by [`init_logging`].
 ///
@@ -343,11 +391,17 @@ impl LogHandles {
     /// - [`LogError::Reload`] if the chain slot is no longer reachable.
     pub fn add_chain_logger(&mut self, alias: &str) -> Result<ReloadHandle> {
         let ChainLogger {
+            alias: alias_string,
+            level,
             layer,
             handle,
             guard,
         } = make_chain_logger::<Registry>(alias, &self.cfg)?;
-        (self.chain_slot)(layer)?;
+        (self.chain_slot)(ChainEntry {
+            alias: alias_string,
+            level,
+            layer,
+        })?;
         self.guards.push(guard);
         Ok(handle)
     }
@@ -404,19 +458,10 @@ fn rolling_appender(
     Ok(tracing_appender::non_blocking(writer))
 }
 
-/// A `Filter` that admits only events carrying a `chain = "<alias>"` field.
-///
-/// `filter_fn` only sees `&Metadata`, which does not carry per-event field
-/// *values*; so this custom filter visits the event's fields and matches the
-/// `chain` value against the layer's alias. Events without a matching `chain`
-/// field are routed elsewhere (the main file / display layers), never to this
-/// chain's file — mirroring Go's per-chain logger.
-#[derive(Clone)]
-struct ChainFieldFilter {
-    alias: String,
-}
-
 /// Visitor that captures the value of a `chain` field, if present.
+///
+/// Used by [`ChainSlotVec::on_event`] to extract the chain alias and route
+/// the event to the matching per-chain layer.
 #[derive(Default)]
 struct ChainFieldVisitor {
     chain: Option<String>,
@@ -436,30 +481,6 @@ impl Visit for ChainFieldVisitor {
             // common `&str`/`String` case `record_str` already handled it.
             self.chain = Some(format!("{value:?}"));
         }
-    }
-}
-
-impl<S> Filter<S> for ChainFieldFilter {
-    fn enabled(
-        &self,
-        _meta: &tracing::Metadata<'_>,
-        _cx: &tracing_subscriber::layer::Context<'_, S>,
-    ) -> bool {
-        // Field values are not available at `enabled` time (callsite-level
-        // check); defer the real decision to `event_enabled`, which sees the
-        // event. Returning `true` keeps the callsite live so `event_enabled` is
-        // consulted per event.
-        true
-    }
-
-    fn event_enabled(
-        &self,
-        event: &tracing::Event<'_>,
-        _cx: &tracing_subscriber::layer::Context<'_, S>,
-    ) -> bool {
-        let mut visitor = ChainFieldVisitor::default();
-        event.record(&mut visitor);
-        visitor.chain.as_deref() == Some(self.alias.as_str())
     }
 }
 
@@ -513,9 +534,9 @@ pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
         .try_init()
         .map_err(|_| LogError::AlreadyInitialized)?;
 
-    let chain_slot: ChainSlotAppender = Box::new(move |layer: ChainLayer| {
+    let chain_slot: ChainSlotAppender = Box::new(move |entry: ChainEntry| {
         chain_slot_handle
-            .modify(|slot| slot.0.push(layer))
+            .modify(|slot| slot.0.push(entry))
             .map_err(|e| LogError::Reload(e.to_string()))
     });
 
@@ -530,13 +551,20 @@ pub fn init_logging(cfg: &LogConfig) -> Result<LogHandles> {
 
 /// A per-chain file logger layer plus its reload handle and worker guard.
 ///
-/// Produced by [`make_chain_logger`]. The `layer` is filtered so only events
-/// carrying a `chain = "<alias>"` field route to it; it is added to a layered
-/// subscriber (the usual path is [`LogHandles::add_chain_logger`], which appends
-/// it to the global reloadable chain slot). Keep `guard` alive for the chain's
-/// lifetime.
+/// Produced by [`make_chain_logger`].  The plain `layer` (no `Filtered`
+/// wrappers) is intended for the [`ChainSlotVec`] which handles chain-field
+/// routing and level gating itself.  Most callers use
+/// [`LogHandles::add_chain_logger`] instead of calling this directly.
+///
+/// Keep `guard` alive for the chain's lifetime.
 pub struct ChainLogger<S> {
-    /// The rolling-file layer writing `<alias>.log`, level- and chain-filtered.
+    /// The chain alias, e.g. `"C"`, `"P"`.  Consumed by [`ChainEntry`].
+    pub alias: String,
+    /// The shared level filter for this chain logger.  Updated by the
+    /// returned [`ReloadHandle`] and read by [`ChainSlotVec::on_event`].
+    pub level: std::sync::Arc<Mutex<LevelFilter>>,
+    /// The plain rolling-file layer writing `<alias>.log`, with NO `Filtered`
+    /// wrappers — routing and level checks are done by [`ChainSlotVec`].
     pub layer: Box<dyn Layer<S> + Send + Sync>,
     /// The reloadable level for this chain logger.
     pub handle: ReloadHandle,
@@ -547,11 +575,15 @@ pub struct ChainLogger<S> {
 /// Build a per-chain rolling file logger writing `<log-dir>/<alias>.log`
 /// (specs/18 §5.3).
 ///
-/// The returned `layer` carries two stacked filters: a reloadable
-/// [`LevelFilter`] (flipped by the returned [`ReloadHandle`] for the admin
-/// `setLoggerLevel` endpoint) and a chain-field filter so only events tagged
-/// `chain = "<alias>"` reach this chain's file. Most callers go through
-/// [`LogHandles::add_chain_logger`] instead of calling this directly.
+/// The returned `layer` is a **plain** `fmt` layer with no `Filtered`
+/// wrappers.  Chain-field routing and level gating are handled by
+/// [`ChainSlotVec`] so that the layer itself needs no `FilterId`
+/// registration — which is impossible for layers appended dynamically via
+/// `reload::modify`.  The caller is responsible for constructing a
+/// [`ChainEntry`] and passing it to the chain slot.
+///
+/// Most callers go through [`LogHandles::add_chain_logger`] instead of
+/// calling this directly.
 ///
 /// # Errors
 /// [`LogError::Io`] if the log directory cannot be created or opened.
@@ -559,21 +591,20 @@ pub fn make_chain_logger<S>(alias: &str, cfg: &LogConfig) -> Result<ChainLogger<
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    let (level_filter, handle) = reload::Layer::new(ava_to_level_filter(cfg.file_level));
+    let initial_level = ava_to_level_filter(cfg.file_level);
+    let level = std::sync::Arc::new(Mutex::new(initial_level));
     let (writer, guard) = rolling_appender(&cfg.directory, alias, cfg.rotation)?;
-    let chain_filter = ChainFieldFilter {
-        alias: alias.to_owned(),
-    };
+    // No with_filter wrappers — ChainSlotVec performs the routing and level gate.
     let layer = tracing_subscriber::fmt::layer()
         .with_writer(writer)
         .with_ansi(false)
         .event_format(AvaFormat::new(cfg.format))
-        .with_filter(chain_filter)
-        .with_filter(level_filter)
         .boxed();
     Ok(ChainLogger {
+        alias: alias.to_owned(),
+        level: level.clone(),
         layer,
-        handle: ReloadHandle::new(handle, cfg.file_level),
+        handle: ReloadHandle::from_arc(level, cfg.file_level),
         guard,
     })
 }
@@ -677,13 +708,15 @@ mod tests {
             ..LogConfig::default()
         };
 
-        // Build two chain layers over a plain `Registry` directly (the same `S`
-        // `add_chain_logger` uses) and collect them into a single `Vec<ChainLayer>`
-        // layer — exactly the reloadable slot `init_logging` installs.
+        // Build two chain loggers and assemble them into a `ChainSlotVec` —
+        // the same structure that `init_logging` installs as a reloadable slot.
         let c = make_chain_logger::<Registry>("C", &cfg).expect("C logger");
         let p = make_chain_logger::<Registry>("P", &cfg).expect("P logger");
 
-        let chain_slot: Vec<ChainLayer> = vec![c.layer, p.layer];
+        let chain_slot = ChainSlotVec(vec![
+            ChainEntry { alias: c.alias, level: c.level, layer: c.layer },
+            ChainEntry { alias: p.alias, level: p.level, layer: p.layer },
+        ]);
         let subscriber = Registry::default().with(chain_slot);
         let dispatch = tracing::Dispatch::new(subscriber);
         tracing::dispatcher::with_default(&dispatch, || {
@@ -708,6 +741,91 @@ mod tests {
 
         assert!(p_log.contains("hello from P"), "P.log: {p_log:?}");
         assert!(!p_log.contains("hello from C"), "P.log leaked C: {p_log:?}");
+    }
+
+    /// Regression: once at least one chain logger is added to the chain-slot
+    /// (`ChainSlotVec` becomes non-empty via `reload::modify`), the chain-slot
+    /// layer must NOT suppress untagged (no `chain` field) events from reaching
+    /// the main display/file layers.
+    ///
+    /// Before this fix, `ChainSlotVec::register_callsite` in the non-empty branch
+    /// seeded the combine loop with `Interest::never()`.  `reload::modify` calls
+    /// `callsite::rebuild_interest_cache()` after every change, so the moment
+    /// the first chain logger was pushed, every callsite lacking a `chain` field
+    /// was re-registered as `never()` and cached as permanently disabled for the
+    /// **whole** subscriber stack — silencing the display and file layers ~15 ms
+    /// after node boot.
+    ///
+    /// The fix: `register_callsite` must always return `Interest::sometimes()` so
+    /// callsite interest is never cached disabled by the chain slot, regardless of
+    /// whether the slot is empty or non-empty.
+    #[test]
+    fn untagged_events_reach_main_sink_when_chain_slot_nonempty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = LogConfig {
+            directory: dir.path().to_path_buf(),
+            format: Format::Plain,
+            ..LogConfig::default()
+        };
+
+        // Build the "main" sink — a separate plain file layer, mirroring the
+        // display/file layers in init_logging.
+        let main_log_path = dir.path().join("main.log");
+        let main_file = std::fs::File::create(&main_log_path).expect("create main.log");
+        let (file_filter, _file_handle) = reload::Layer::new(LevelFilter::INFO);
+        let main_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::sync::Mutex::new(main_file))
+            .with_ansi(false)
+            .with_filter(file_filter);
+
+        // Start with an EMPTY chain-slot wrapped in a reload handle — exactly
+        // as init_logging builds it.
+        let (chain_slot_layer, chain_slot_handle) =
+            reload::Layer::new(ChainSlotVec(Vec::new()));
+        let subscriber = Registry::default()
+            .with(chain_slot_layer)
+            .with(main_layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            // Emit BEFORE adding any chain logger — callsite is registered here.
+            tracing::info!("untagged before chains added");
+
+            // Now add a chain logger via reload::modify.  This triggers
+            // callsite::rebuild_interest_cache(), which re-invokes
+            // register_callsite on the now-non-empty ChainSlotVec.  Before the
+            // fix, this re-cached the callsite as Interest::never(), silencing
+            // the subscriber.
+            let ChainLogger {
+                alias,
+                level,
+                layer,
+                guard: c_guard,
+                handle: _,
+            } = make_chain_logger::<Registry>("C", &cfg).expect("C logger");
+            let entry = ChainEntry { alias, level, layer };
+            chain_slot_handle
+                .modify(|slot| slot.0.push(entry))
+                .expect("modify chain slot");
+
+            // Emit AFTER the chain logger was added — this is the regression
+            // case.  With the bug, this and all subsequent events are silent.
+            tracing::info!("untagged after chains added");
+            drop(c_guard);
+        });
+
+        let main_contents =
+            std::fs::read_to_string(&main_log_path).expect("read main.log");
+
+        // Both untagged events must appear in the main sink.
+        assert!(
+            main_contents.contains("untagged before chains added"),
+            "untagged event (before) was suppressed; main.log: {main_contents:?}",
+        );
+        assert!(
+            main_contents.contains("untagged after chains added"),
+            "untagged event was suppressed by non-empty chain-slot; main.log: {main_contents:?}",
+        );
     }
 
     /// Regression: the chain-slot layer installed as the first layer on the
