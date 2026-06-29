@@ -678,6 +678,84 @@ mod tests {
         assert!(*rx.borrow_and_update(), "gate fires at required_conns");
     }
 
+    /// Five beacons, `required_conns = 4`. A duplicate `connected()` for the same
+    /// beacon must NOT inflate the count: 4 raw calls spanning only 3 *distinct*
+    /// beacons must leave the gate closed (Go peer-set dedup semantics; M9.15).
+    #[tokio::test]
+    async fn duplicate_connected_does_not_double_count() {
+        let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
+        let beacons: Arc<dyn ValidatorManager> = Arc::new(StubBeacons {
+            members: beacon_ids.iter().copied().collect(),
+        });
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let bm = BeaconManager::new(Arc::new(NoopHandler), beacons, 4, tx);
+        let v = ava_version::CURRENT.clone();
+
+        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID);
+        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID); // duplicate — must not count twice
+        bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID);
+        bm.connected(beacon_ids[2], &v, PRIMARY_NETWORK_ID);
+        assert!(
+            !*rx.borrow_and_update(),
+            "3 distinct beacons < required 4 despite 4 raw connects"
+        );
+
+        bm.connected(beacon_ids[3], &v, PRIMARY_NETWORK_ID); // 4th DISTINCT beacon
+        assert!(
+            *rx.borrow_and_update(),
+            "gate fires at 4 distinct beacons"
+        );
+    }
+
+    /// A `disconnected()` for a beacon that never connected must not drive the count
+    /// negative and wedge the gate below threshold (M9.15 hypothesis 3).
+    #[tokio::test]
+    async fn disconnect_before_connect_does_not_wedge_gate() {
+        let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
+        let beacons: Arc<dyn ValidatorManager> = Arc::new(StubBeacons {
+            members: beacon_ids.iter().copied().collect(),
+        });
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let bm = BeaconManager::new(Arc::new(NoopHandler), beacons, 4, tx);
+        let v = ava_version::CURRENT.clone();
+
+        bm.disconnected(beacon_ids[4]); // spurious: never connected
+        for id in &beacon_ids[0..4] {
+            bm.connected(*id, &v, PRIMARY_NETWORK_ID);
+        }
+        assert!(
+            *rx.borrow_and_update(),
+            "4 beacons connected ⇒ gate fires even after a spurious disconnect"
+        );
+    }
+
+    /// Concurrent `connected()` bursts (the real `finish_handshake` pattern: N peers
+    /// complete on N runtime threads) fire the gate exactly once with the full set.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_connects_fire_gate() {
+        let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
+        let beacons: Arc<dyn ValidatorManager> = Arc::new(StubBeacons {
+            members: beacon_ids.iter().copied().collect(),
+        });
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let bm = Arc::new(BeaconManager::new(Arc::new(NoopHandler), beacons, 4, tx));
+
+        let mut handles = Vec::new();
+        for id in beacon_ids {
+            let bm = Arc::clone(&bm);
+            handles.push(tokio::spawn(async move {
+                bm.connected(id, &ava_version::CURRENT.clone(), PRIMARY_NETWORK_ID);
+            }));
+        }
+        for h in handles {
+            h.await.expect("connected task joins");
+        }
+        assert!(
+            *rx.borrow_and_update(),
+            "gate fires once all 5 beacons connect concurrently"
+        );
+    }
+
     /// A recording stub that captures every [`EngineInboundMessage`] it receives.
     struct RecordingRouter {
         received: Arc<Mutex<Vec<EngineInboundMessage>>>,
