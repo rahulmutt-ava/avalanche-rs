@@ -75,3 +75,65 @@ async fn start_close_drains_all_tasks() {
         .expect("dispatch returns after start_close");
     assert!(res.is_ok(), "dispatch task joined cleanly");
 }
+
+/// Both networks track each other and dispatch, so each side gets a racing
+/// inbound + outbound for the same peer. After the fix, each side's router
+/// records the other peer `connected` EXACTLY ONCE (at-most-once delivery to an
+/// ExternalHandler — M9.15 inbound dedup).
+#[tokio::test]
+async fn mutual_dial_connects_each_peer_exactly_once() {
+    let a = TestNetwork::start().await;
+    let b = TestNetwork::start().await;
+
+    a.network().manually_track(b.node_id(), b.listen_addr());
+    b.network().manually_track(a.node_id(), a.listen_addr());
+
+    let a_dispatch = {
+        let net = Arc::clone(a.network());
+        tokio::spawn(async move { net.dispatch().await })
+    };
+    let b_dispatch = {
+        let net = Arc::clone(b.network());
+        tokio::spawn(async move { net.dispatch().await })
+    };
+
+    // Wait until both sides see each other connected (or time out).
+    let both = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if a.network().connected_peers().contains(&b.node_id())
+                && b.network().connected_peers().contains(&a.node_id())
+            {
+                break true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(both, "both networks should connect to each other");
+
+    // Let any racing duplicate connection settle.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let a_count = a
+        .router()
+        .connected
+        .lock()
+        .iter()
+        .filter(|n| **n == b.node_id())
+        .count();
+    let b_count = b
+        .router()
+        .connected
+        .lock()
+        .iter()
+        .filter(|n| **n == a.node_id())
+        .count();
+    assert_eq!(a_count, 1, "A should record B connected exactly once");
+    assert_eq!(b_count, 1, "B should record A connected exactly once");
+
+    a.network().start_close();
+    b.network().start_close();
+    let _ = tokio::time::timeout(Duration::from_secs(10), a_dispatch).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), b_dispatch).await;
+}

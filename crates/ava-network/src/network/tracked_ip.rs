@@ -42,6 +42,11 @@ pub struct TrackedIp {
     pub delay: Duration,
     /// The earliest instant the dialer may (re)attempt this IP.
     pub next_attempt: Instant,
+    /// A per-instance jitter seed derived from the address and creation time.
+    /// Used to break the lockstep when two nodes mutually dial each other:
+    /// each `TrackedIp` gets a unique seed so their jittered retry windows
+    /// differ even when `record_attempt` is called at the same wall-clock time.
+    jitter_seed: u32,
 }
 
 impl TrackedIp {
@@ -54,10 +59,22 @@ impl TrackedIp {
         // Subtract the initial delay so the fresh IP is always dial-ready.
         let now = Instant::now();
         let next_attempt = now.checked_sub(INITIAL_RECONNECT_DELAY).unwrap_or(now);
+        // Seed the per-instance jitter from the address port (unique per peer in
+        // a test or production run) XOR'd with the low bits of the current
+        // nanosecond timestamp for additional entropy. This ensures two
+        // `TrackedIp`s created for different peers at the same instant have
+        // different jitter, breaking mutual-dial retry lockstep.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let port_seed = u32::from(addr.port());
+        let jitter_seed = nanos ^ port_seed;
         TrackedIp {
             addr,
             delay: INITIAL_RECONNECT_DELAY,
             next_attempt,
+            jitter_seed,
         }
     }
 
@@ -68,10 +85,37 @@ impl TrackedIp {
     }
 
     /// Record a (failed/pending) dial attempt at `now`: gate the next attempt by
-    /// the current delay, then grow the backoff.
+    /// a jittered version of the current delay, then grow the base delay.
+    ///
+    /// Using a jittered `next_attempt` (rather than the raw `delay`) breaks the
+    /// retry synchrony of two peers that mutually dial each other and both fail
+    /// simultaneously: their `record_attempt` calls happen at different instants,
+    /// so the jitter (derived from nanosecond wall-clock entropy) gives each side
+    /// a different `next_attempt`, and the one with the shorter wait retries
+    /// first, establishing the connection before the other side fires.
     pub fn record_attempt(&mut self, now: Instant) {
-        self.next_attempt = now.checked_add(self.delay).unwrap_or(now);
+        // Apply jitter to the CURRENT retry window, not just future ones.
+        let jittered = self.jittered_delay();
+        self.next_attempt = now.checked_add(jittered).unwrap_or(now);
         self.increase_delay();
+    }
+
+    /// Jittered copy of the current delay in `[delay, 2*delay)`, using the
+    /// instance's `jitter_seed`. Advances the seed (LCG) so successive calls
+    /// also differ. This ensures each `TrackedIp` instance has a unique retry
+    /// window even when called at the exact same wall-clock instant.
+    fn jittered_delay(&mut self) -> Duration {
+        // LCG step (Knuth): advance the per-instance seed.
+        self.jitter_seed = self
+            .jitter_seed
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        // jitter_frac ∈ [0, 1) from 30 low bits.
+        let jitter_frac = f64::from(self.jitter_seed & 0x3FFF_FFFF) / f64::from(0x4000_0000u32);
+        // multiplier ∈ [1.0, 2.0) — mirrors Go's `(1 + rand.Float64())`.
+        let multiplier = 1.0 + jitter_frac;
+        let jittered = Duration::from_secs_f64(self.delay.as_secs_f64() * multiplier);
+        jittered.min(MAX_RECONNECT_DELAY)
     }
 
     /// Record a successful connection at `now`: reset the backoff and re-open dialing.
@@ -80,11 +124,26 @@ impl TrackedIp {
         self.next_attempt = now;
     }
 
-    /// Increase the backoff after a failed dial, capped at the maximum
-    /// (Go: `delay = min(2*delay, max)` with a small jitter — jitter omitted).
+    /// Increase the base delay for the NEXT `record_attempt`, capped at the
+    /// maximum. Uses the instance's `jitter_seed` (advanced by a LCG step) so
+    /// successive increases are unique per `TrackedIp` instance — mirrors Go's
+    /// `trackedIP.increaseDelay` with `math/rand` (non-cryptographic, `#nosec G404`).
     pub fn increase_delay(&mut self) {
-        let doubled = self.delay.saturating_mul(2);
-        self.delay = doubled.min(MAX_RECONNECT_DELAY);
+        // LCG step: advance the per-instance seed.
+        self.jitter_seed = self
+            .jitter_seed
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        let jitter_frac = f64::from(self.jitter_seed & 0x3FFF_FFFF) / f64::from(0x4000_0000u32);
+        let multiplier = 1.0 + jitter_frac;
+        let new_delay = Duration::from_secs_f64(self.delay.as_secs_f64() * multiplier);
+        if new_delay > MAX_RECONNECT_DELAY {
+            // Clamp to [0.75, 1.0) * MAX — Go parity.
+            let frac = (3.0 + jitter_frac) / 4.0;
+            self.delay = Duration::from_secs_f64(MAX_RECONNECT_DELAY.as_secs_f64() * frac);
+        } else {
+            self.delay = new_delay;
+        }
     }
 
     /// Reset the backoff (after a successful connection).
@@ -111,37 +170,47 @@ mod tests {
         // Fresh: dial immediately.
         assert!(ip.should_dial(t0), "fresh tracked ip should dial");
 
-        // After an attempt, the next dial is gated by the (initial 1s) delay,
-        // and the delay doubles for the following attempt.
+        // After an attempt, the next dial is gated by the initial 1s delay.
+        // The delay window is [1s, 2s) due to jitter (Go parity).
         ip.record_attempt(t0);
         assert!(!ip.should_dial(t0), "must wait out the backoff window");
+        // At least 1s must elapse (the lower bound of the jittered delay).
         assert!(
             !ip.should_dial(t0 + Duration::from_millis(999)),
             "still inside the 1s window"
         );
         assert!(
-            ip.should_dial(t0 + Duration::from_secs(1)),
-            "dial once the window elapses"
+            ip.should_dial(t0 + Duration::from_secs(2)),
+            "dial once the window elapses (upper bound of jitter range)"
         );
 
-        // Second failed attempt: window is now 2s.
-        let t1 = t0 + Duration::from_secs(1);
+        // Second failed attempt: window is now in [delay, 2*delay) where delay
+        // is the jittered value from the first attempt (∈ [1s, 2s)).
+        let t1 = ip.next_attempt; // the exact next_attempt after the first attempt
         ip.record_attempt(t1);
+        let second_delay = ip.delay;
         assert!(
-            !ip.should_dial(t1 + Duration::from_millis(1999)),
-            "2s window"
+            second_delay >= INITIAL_RECONNECT_DELAY,
+            "delay must grow after failure"
         );
         assert!(
-            ip.should_dial(t1 + Duration::from_secs(2)),
-            "after 2s window"
+            second_delay <= MAX_RECONNECT_DELAY,
+            "delay must not exceed maximum"
         );
 
-        // Cap at MAX_RECONNECT_DELAY.
-        for _ in 0..10 {
+        // Cap at MAX_RECONNECT_DELAY (after many attempts).
+        for _ in 0..20 {
             let now = ip.next_attempt;
             ip.record_attempt(now);
         }
-        assert_eq!(ip.delay, MAX_RECONNECT_DELAY, "backoff caps at the maximum");
+        assert!(
+            ip.delay <= MAX_RECONNECT_DELAY,
+            "backoff caps at the maximum"
+        );
+        assert!(
+            ip.delay >= MAX_RECONNECT_DELAY.mul_f64(0.75),
+            "near-cap delay stays in [0.75 * MAX, MAX]"
+        );
 
         // A successful connection resets the backoff and re-opens dialing.
         let t2 = ip.next_attempt;
