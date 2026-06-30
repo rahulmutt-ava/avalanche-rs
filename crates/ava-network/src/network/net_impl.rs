@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use ava_types::node_id::NodeId;
 use parking_lot::Mutex;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -56,6 +57,12 @@ pub struct NetworkImpl {
     tracked_ips: Mutex<std::collections::HashMap<NodeId, TrackedIp>>,
     connecting: Arc<PeerSet>,
     connected: Arc<PeerSet>,
+    /// Serializes the compound "is this node already tracked? → register it"
+    /// transition across `connecting`/`connected` for BOTH connection
+    /// directions (Go's single `peersLock`). A leaf lock: held only across
+    /// synchronous sections, never across an `.await`, never nested with
+    /// `tracked_ips`.
+    peers_lock: Mutex<()>,
     conn_upgrade_throttler:
         Arc<crate::throttling::inbound_conn_upgrade::InboundConnUpgradeThrottler>,
     /// Connection-level `avalanche_network_*` metrics (`specs/18` §2.1). Holds
@@ -122,6 +129,7 @@ impl NetworkImpl {
             tracked_ips: Mutex::new(std::collections::HashMap::new()),
             connecting: Arc::new(PeerSet::new()),
             connected: Arc::new(PeerSet::new()),
+            peers_lock: Mutex::new(()),
             conn_upgrade_throttler,
             metrics,
             net_token: CancellationToken::new(),
@@ -141,18 +149,59 @@ impl NetworkImpl {
         self.connected.node_ids()
     }
 
-    /// Spawn the bookkeeping that promotes a peer to `connected` on handshake
-    /// completion and removes it (notifying the router) on close.
-    fn watch_peer(self: &Arc<Self>, handle: crate::peer::handle::PeerHandle) {
-        let node = handle.node_id();
-        self.connecting.insert(handle.clone());
+    /// Atomically admit a freshly-upgraded peer for BOTH directions. Under
+    /// `peers_lock`, reject the connection if the node is already
+    /// connected/connecting (a duplicate — `io` is dropped, closing the
+    /// socket, and NO actor is spawned), otherwise spawn the peer actor and
+    /// register it in `connecting`. Returns whether the peer was admitted.
+    fn admit_peer<IO>(
+        self: &Arc<Self>,
+        node_id: NodeId,
+        cert: ava_crypto::staking::Certificate,
+        direction: Direction,
+        io: IO,
+    ) -> bool
+    where
+        IO: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        let handle = {
+            let _guard = self.peers_lock.lock();
+            if self.connected.contains(&node_id) || self.connecting.contains(&node_id) {
+                tracing::debug!(%node_id, "duplicate connection rejected");
+                return false;
+            }
+            let handle = Peer::spawn(
+                Arc::clone(&self.peer_config),
+                node_id,
+                cert,
+                direction,
+                io,
+                &self.net_token,
+                &self.tasks,
+            );
+            self.connecting.insert(handle.clone());
+            handle
+        };
+        self.spawn_watcher(handle);
+        true
+    }
 
+    /// Watch an admitted peer: promote it `connecting` → `connected` on
+    /// handshake completion, remove it (notifying the router) on close. Every
+    /// membership transition takes `peers_lock` so it is atomic w.r.t.
+    /// `admit_peer`. (`admit_peer` already inserted the handle into
+    /// `connecting`.)
+    fn spawn_watcher(self: &Arc<Self>, handle: crate::peer::handle::PeerHandle) {
+        let node = handle.node_id();
         let this = Arc::clone(self);
         self.tasks.spawn(async move {
             tokio::select! {
                 () = handle.finished_handshake() => {
-                    this.connecting.remove(&node);
-                    this.connected.insert(handle.clone());
+                    {
+                        let _guard = this.peers_lock.lock();
+                        this.connecting.remove(&node);
+                        this.connected.insert(handle.clone());
+                    }
                     tracing::debug!(%node, "rung 3: app handshake complete (promoted to connected)");
                     // Reconnect-backoff: reset the backoff for this peer so the
                     // next outbound dial (after disconnect) starts fresh.
@@ -166,16 +215,22 @@ impl NetworkImpl {
                     }
                 }
                 () = handle.closed() => {
-                    this.connecting.remove(&node);
-                    this.connected.remove(&node);
+                    {
+                        let _guard = this.peers_lock.lock();
+                        this.connecting.remove(&node);
+                        this.connected.remove(&node);
+                    }
                     tracing::debug!(%node, "rung 3: peer handshake failed / connection closed");
                     return;
                 }
             }
             // Promoted to connected: now wait for it to close.
             handle.closed().await;
-            this.connecting.remove(&node);
-            this.connected.remove(&node);
+            {
+                let _guard = this.peers_lock.lock();
+                this.connecting.remove(&node);
+                this.connected.remove(&node);
+            }
             // metrics: a post-handshake disconnect (`times_disconnected`,
             // `specs/18` §2.1).
             if let Some(m) = &this.metrics {
@@ -189,31 +244,14 @@ impl NetworkImpl {
     fn handle_accepted(self: &Arc<Self>, stream: TcpStream) {
         let this = Arc::clone(self);
         self.tasks.spawn(async move {
-            let upgraded = this.server_upgrader.upgrade(stream).await;
-            match upgraded {
+            match this.server_upgrader.upgrade(stream).await {
                 Ok((node_id, tls, cert)) => {
-                    let handle = Peer::spawn(
-                        Arc::clone(&this.peer_config),
-                        node_id,
-                        cert,
-                        Direction::Inbound,
-                        tls,
-                        &this.net_token,
-                        &this.tasks,
-                    );
-                    // M9.15 follow-up: unlike `handle_dial`, the inbound path does
-                    // not dedup against `connected`/`connecting`, so the same beacon
-                    // can fire `connected()`/`disconnected()` more than once.
-                    // Every `ExternalHandler` (RouterBridge, engine router, etc.)
-                    // must tolerate duplicate notifications; `BeaconManager` does so
-                    // via its `HashSet`. Tracked for a broader at-most-once fix.
-                    this.watch_peer(handle);
+                    this.admit_peer(node_id, cert, Direction::Inbound, tls);
                 }
                 Err(_) => {
                     // metrics: an inbound connection rejected at the TLS upgrade
                     // (unsupported leaf cert / failed handshake), Go
-                    // `tls_conn_rejected` (`specs/18` §2.1). Mirrors Go's
-                    // listener upgrade-failure counter.
+                    // `tls_conn_rejected` (`specs/18` §2.1).
                     if let Some(m) = &this.metrics {
                         m.observe_tls_conn_rejected();
                     }
@@ -241,21 +279,8 @@ impl NetworkImpl {
             };
             match this.client_upgrader.upgrade(stream).await {
                 Ok((node_id, tls, cert)) => {
-                    // Avoid a duplicate if already connected/connecting.
-                    if this.connected.contains(&node_id) || this.connecting.contains(&node_id) {
-                        return;
-                    }
-                    tracing::debug!(%addr, %node_id, "rung 3: outbound peer spawned (app handshake starting)");
-                    let handle = Peer::spawn(
-                        Arc::clone(&this.peer_config),
-                        node_id,
-                        cert,
-                        Direction::Outbound,
-                        tls,
-                        &this.net_token,
-                        &this.tasks,
-                    );
-                    this.watch_peer(handle);
+                    tracing::debug!(%addr, %node_id, "rung 3: outbound peer upgraded (admitting)");
+                    this.admit_peer(node_id, cert, Direction::Outbound, tls);
                 }
                 Err(e) => {
                     // The outbound TLS upgrade failed (e.g. a rustls↔Go TLS 1.3
@@ -469,5 +494,53 @@ impl super::Network for NetworkImpl {
             }
         }
         sent
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use crate::network::Network;
+    use crate::network::testutil::TestNetwork;
+    use ava_types::node_id::NodeId;
+
+    /// Two admissions for the SAME node-id: the first wins and spawns exactly
+    /// one peer actor; the second is rejected. This is the deterministic guard
+    /// for the atomic dedup gate (M9.15 inbound at-most-once follow-up).
+    #[tokio::test]
+    async fn admit_peer_dedups_same_node_id() {
+        let tn = TestNetwork::start().await;
+        let net = tn.network();
+
+        // Two independent certs — dedup keys on node-id, not on the cert.
+        let mk_cert = || {
+            ava_crypto::staking::parse_certificate(
+                crate::Identity::generate()
+                    .expect("generate identity")
+                    .cert_der(),
+            )
+            .expect("parse certificate")
+        };
+        let node = NodeId::from_slice(&[9u8; 20]).expect("node id");
+
+        let (io1, _b1) = tokio::io::duplex(64);
+        let (io2, _b2) = tokio::io::duplex(64);
+
+        let first = net.admit_peer(node, mk_cert(), Direction::Inbound, io1);
+        let second = net.admit_peer(node, mk_cert(), Direction::Inbound, io2);
+
+        assert!(first, "admit_peer: first admission for a fresh node wins");
+        assert!(
+            !second,
+            "admit_peer: second admission for the same node is rejected"
+        );
+        assert_eq!(
+            net.connecting.len(),
+            1,
+            "admit_peer: only one peer actor admitted"
+        );
+
+        net.start_close();
     }
 }
