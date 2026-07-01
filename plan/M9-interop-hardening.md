@@ -1880,6 +1880,58 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > break lockstep. `ava-network` + `ava-node` nextest green, clippy `-D warnings` +
 > fmt clean.
 
+> **AS-BUILT — M9.15 bootstrap failure accounting + `beaconed_bootstrap` un-gated
+> (2026-07-01, branch `m9.15-bootstrap-failure-accounting`, commits 3f855fb–eba1957).**
+>
+> **Root cause (two compounding gaps):**
+> (1) The bootstrapper required ALL configured beacons to reply with a non-empty
+> accepted-frontier set before it could progress past the frontier phase. A beacon that
+> never completed its TLS handshake (because the connectivity gate fired before all
+> handshakes finished) produced no reply at all — neither success nor failure — so the
+> frontier phase stalled indefinitely waiting for a quorum that would never come.
+> (2) `boot_chain_over_network` passed a `MockClock` (frozen time) into
+> `AdaptiveTimeoutManager`, which disabled the request-timeout backstop: the per-request
+> deadline that normally synthesizes a `*Failed` op for a non-responding peer never fired,
+> so the timeout-driven recovery path was also silenced.
+>
+> **Go-parity fix (5 commits):**
+> - *Frontier-phase failure accounting* (`get_accepted_frontier_failed`): records the
+>   failing beacon into `frontier_responded` (the same set that successful replies insert
+>   into), contributing no id to `frontier_replies`. The phase is now complete when
+>   `frontier_responded.len() == num_bootstrappers`, whether each entry came from a success
+>   or a failure. A beacon that never connected counts as failed via the timeout-synthesized
+>   op.
+> - *Restart-frontier-discovery when all beacons fail*: if the frontier phase completes but
+>   `frontier_replies` is empty (every beacon failed), the bootstrapper re-broadcasts
+>   `GetAcceptedFrontier` rather than falsely treating the empty set as already-synced (Go
+>   parity: `bootstrapper.go` re-sends when `numFrontierIDs == 0`).
+> - *Accepted-phase failure accounting* (`get_accepted_failed`): mirrors the frontier fix —
+>   records the failing beacon into `accepted_replies` with an empty id-set so the phase
+>   completes when all beacons have responded (success or failure).
+> - *`*Failed` dispatch wired through `BootstrapperEngineAdapter::handle`*: both
+>   `GetAcceptedFrontierFailed` and `GetAcceptedFailed` `InboundOp` variants are now
+>   routed to the bootstrapper (previously they fell into the no-op arm and were silently
+>   dropped).
+> - *`RealClock` on the test-boot path*: `boot_chain_over_network` now uses `RealClock`
+>   instead of a frozen `MockClock`, so `AdaptiveTimeoutManager`'s request-timeout
+>   backstop fires for peers that do not reply (closing the silent-drop window in tests).
+>
+> **Un-gated `follower_bootstraps_through_real_beacon_gate`**: this avalanchers e2e test
+> (5-beacon localhost-TLS, real `BeaconManager` gate, `required_conns=4`) was previously
+> `#[ignore]`d due to a bimodal flakiness (~25% permanent-wedge rate). The two fixes above
+> eliminate the wedge: the bootstrapper now completes the frontier phase even when the gate
+> fires before all 5 beacons have handshaked. Verified deterministically green across 30
+> runs; the test now runs as a standard (non-ignored) CI test. This provides the gate
+> coverage that `networked_bootstrap.rs` lacks (the latter hand-fires the connectivity gate
+> via `connected_tx.send(true)`).
+>
+> **Remaining follow-up:** the `ava-network` concurrent self-dial TOCTOU in `run_dialer` —
+> a second `handle_dial` can be dispatched to a node before the first completes its TLS
+> upgrade and enters `connecting` (unlike Go's one-goroutine-per-tracked-IP model). This
+> was investigated and ruled out as the cause of the beacon-gate wedge, but it is a real
+> latent bug. Fix: add an in-flight-dial guard set or port Go's per-IP dialer loop. The
+> nightly live two-binary `mixed_network` arm remains gated by design.
+
 ---
 
 ## Spec coverage check
