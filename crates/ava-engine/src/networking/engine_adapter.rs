@@ -185,6 +185,14 @@ where
                     log_engine_error("getter.get", &err);
                 }
             }
+            InboundOp::GetAcceptedFrontierFailed { request_id } => {
+                let res = self.boot.get_accepted_frontier_failed(node, request_id).await;
+                self.after("bootstrap.get_accepted_frontier_failed", res).await;
+            }
+            InboundOp::GetAcceptedFailed { request_id } => {
+                let res = self.boot.get_accepted_failed(node, request_id).await;
+                self.after("bootstrap.get_accepted_failed", res).await;
+            }
             // Ops the bootstrapper does not consume (queries, puts, app, other
             // failures) are dropped: they are not part of the boot state machine.
             _ => {}

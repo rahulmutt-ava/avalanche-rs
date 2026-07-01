@@ -676,6 +676,60 @@ async fn bootstrap_adapter_get_ops_routed_to_getter() {
     );
 }
 
+/// The bootstrapper adapter routes a synthesized `GetAcceptedFrontierFailed`
+/// (from a request timeout) into the bootstrapper, completing the frontier phase
+/// on the beacons that did reply.
+#[tokio::test]
+async fn adapter_dispatches_get_accepted_frontier_failed() {
+    let token = CancellationToken::new();
+    let vm: TestVm = init_test_vm(&token).await.expect("vm");
+    let tip = vm.last_accepted(&token).await.expect("genesis");
+
+    let ctx = consensus_ctx();
+    let sender = RecordingSender::new();
+
+    let a = NodeId::from([10u8; 20]);
+    let b = NodeId::from([11u8; 20]);
+    let mut beacons = BTreeMap::new();
+    beacons.insert(a, 1u64);
+    beacons.insert(b, 1u64);
+
+    let vm_arc = Arc::new(AsyncMutex::new(vm));
+    let boot = Bootstrapper::new(BootConfig {
+        subnet_id: Id::EMPTY,
+        ctx: ctx.clone(),
+        vm: Arc::clone(&vm_arc),
+        sender: Arc::clone(&sender),
+        beacons,
+        token: token.clone(),
+    });
+    let getter = Arc::new(ava_engine::snowman::Getter::new(
+        Arc::clone(&vm_arc),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+    // Keep the transition receiver alive so `after()`'s transition send never errors.
+    let (transition_tx, _transition_rx) = transition_channel(8);
+    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+
+    adapter.start().await; // sends GetAcceptedFrontier (request id 1)
+    let _ = sender.drain();
+
+    // One beacon replies; the other's query times out (synthesized *Failed).
+    adapter
+        .handle(a, InboundOp::AcceptedFrontier { request_id: 1, container_id: tip })
+        .await;
+    adapter
+        .handle(b, InboundOp::GetAcceptedFrontierFailed { request_id: 1 })
+        .await;
+
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s, Sent::GetAccepted { .. })),
+        "the failed op must be dispatched and complete the frontier phase, got {sent:?}"
+    );
+}
+
 /// Yield enough times for the single-task select loop to drain queued work.
 async fn pump() {
     for _ in 0..32 {
