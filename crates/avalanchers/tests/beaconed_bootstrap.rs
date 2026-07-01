@@ -248,19 +248,14 @@ async fn wait_until_timeout<F: FnMut() -> bool>(timeout: Duration, mut cond: F) 
 /// `networked_bootstrap.rs` (which hand-fires the gate). The follower must reach
 /// `NormalOp` and converge on the beacons' tip.
 ///
-/// `#[ignore]` (M9.15): this 6-node real-TLS bring-up is **bimodally flaky** — it
-/// either reaches `NormalOp` in ~0.1s or wedges past the bounded wait (~1-in-4
-/// runs), a startup race in the concurrent multi-node TLS bring-up (harness-level,
-/// not the production gate logic). The `BeaconManager` fix is the authoritative,
-/// *deterministic* regression guard via the `ava-node` unit tests
-/// (`duplicate_connected_does_not_double_count`,
-/// `disconnect_before_connect_does_not_wedge_gate`,
-/// `concurrent_connects_fire_gate`, `beacon_manager_fires_gate_at_required_conns`).
-/// This end-to-end test is retained as an on-demand check — run it with
-/// `cargo nextest run -p avalanchers -E 'test(follower_bootstraps_through_real_beacon_gate)' --run-ignored all`.
-/// Un-gating it requires root-causing the bring-up race (tracked as M9.15 follow-up).
+/// This exercises the real `BeaconManager` connectivity gate end-to-end (the
+/// coverage `networked_bootstrap.rs` lacks, since it hand-fires the gate). The
+/// bootstrapper tolerates a beacon that has not yet handshaked when the gate
+/// fires at `required_conns` (< all beacons): the missing frontier reply is
+/// recovered via the request-timeout-synthesized `GetAcceptedFrontierFailed`
+/// (see `ava-engine` bootstrap failure accounting), so the follower reaches
+/// `NormalOp` deterministically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "bimodally flaky 6-node TLS bring-up race (harness, not gate logic); ava-node unit tests are the deterministic guard — see doc comment"]
 async fn follower_bootstraps_through_real_beacon_gate() {
     const TIP_HEIGHT: u64 = 3;
     const N_BEACONS: usize = 5;

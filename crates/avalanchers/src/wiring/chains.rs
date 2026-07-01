@@ -1565,10 +1565,17 @@ where
     let genesis_id =
         Id::from_slice(&ava_crypto::hashing::sha256(genesis_bytes)).unwrap_or(Id::EMPTY);
 
-    // Self-contained router + virtual clock for the single-chain test nodes that
-    // call this directly. The production multi-chain path uses the shared
+    // Self-contained router for the single-chain test nodes that call this
+    // directly. The production multi-chain path uses the shared
     // `node.chain_router` via `boot_chain_over_network_core`.
-    let clock: Arc<dyn Clock> = Arc::new(MockClock::at(SystemTime::UNIX_EPOCH));
+    //
+    // The `AdaptiveTimeoutManager` MUST be driven by an advancing monotonic
+    // clock: `fire_expired` compares `deadline <= clock.monotonic()`, so a
+    // frozen `MockClock` (whose `monotonic()` latches on first call) silently
+    // disables every request timeout — the bootstrapper would then never see a
+    // `*Failed` op for a lost/absent beacon reply and would hang. Use
+    // `RealClock`, matching production (`ava-node` `chain_manager.rs`).
+    let clock: Arc<dyn Clock> = Arc::new(RealClock);
     let timeouts = Arc::new(AdaptiveTimeoutManager::new(
         &timeout_config(),
         Arc::clone(&clock),
