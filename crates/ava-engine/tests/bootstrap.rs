@@ -234,6 +234,65 @@ async fn frontier_advances_when_a_beacon_fails() {
     );
 }
 
+/// A beacon that never answers the frontier-agreement query must not hang the
+/// accepted phase: its `GetAcceptedFailed` completes the phase on the beacons
+/// that did reply, and fetching begins for the agreed tip.
+///
+/// Uses **three** beacons so the two that accept the tip carry weight 2, which
+/// exceeds the `> total/2` threshold (`total = 3`, threshold `= 1`); with only
+/// two beacons a single accepter (weight 1) would not exceed threshold and the
+/// node would treat itself as caught up instead of fetching.
+#[tokio::test]
+async fn accepted_advances_when_a_beacon_fails() {
+    let token = CancellationToken::new();
+    let vm: TestVm = init_test_vm(&token).await.expect("vm");
+    let genesis = vm.last_accepted(&token).await.expect("genesis");
+    let (_chain_bytes, ids) = build_chain(genesis);
+    let tip = *ids.last().expect("tip");
+
+    let acceptor = Arc::new(RecordingAcceptor::default());
+    let ctx = consensus_ctx(acceptor.clone());
+    let sender = RecordingSender::new();
+
+    let a = NodeId::from([10u8; 20]);
+    let b = NodeId::from([11u8; 20]);
+    let c = NodeId::from([12u8; 20]);
+    let mut beacons = BTreeMap::new();
+    beacons.insert(a, 1u64);
+    beacons.insert(b, 1u64);
+    beacons.insert(c, 1u64);
+
+    let cfg = Config {
+        subnet_id: Id::EMPTY,
+        ctx: ctx.clone(),
+        vm: Arc::new(Mutex::new(vm)),
+        sender: sender.clone(),
+        beacons,
+        token: token.clone(),
+    };
+    let mut boot = Bootstrapper::new(cfg);
+
+    boot.start(0).await.expect("start");
+    // All three report the tip -> frontier agreement begins.
+    boot.accepted_frontier(a, 1, tip).await.expect("af a");
+    boot.accepted_frontier(b, 1, tip).await.expect("af b");
+    boot.accepted_frontier(c, 1, tip).await.expect("af c");
+    assert_eq!(boot.phase(), Phase::AgreeingFrontier, "all frontier replies in");
+    let _ = sender.drain();
+
+    // Two beacons accept the tip (weight 2 > threshold 1); the third fails.
+    boot.accepted(a, 2, &[tip]).await.expect("acc a");
+    boot.accepted(b, 2, &[tip]).await.expect("acc b");
+    boot.get_accepted_failed(c, 2).await.expect("accf c");
+
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s, Sent::GetAncestors { id, .. } if *id == tip)),
+        "expected GetAncestors for the agreed tip after failure completes accepted, got {sent:?}"
+    );
+    assert_eq!(boot.phase(), Phase::Fetching, "accepted phase completed -> fetching");
+}
+
 /// `halt_aborts_bootstrap` — cancelling the token aborts the execute pass
 /// promptly (the bootstrapper returns `Halted` and does not hand off).
 #[tokio::test]

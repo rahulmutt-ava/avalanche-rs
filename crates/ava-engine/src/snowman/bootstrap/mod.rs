@@ -300,6 +300,25 @@ where
         Ok(())
     }
 
+    /// `GetAcceptedFailed` — the beacon did not answer the frontier-agreement
+    /// query. Records an *empty opinion* (Go `majority.RecordOpinion(node, nil)`):
+    /// it counts toward phase completion but contributes no accepted weight.
+    ///
+    /// # Errors
+    /// Propagates a VM error from the fetch that may follow.
+    pub async fn get_accepted_failed(&mut self, node: NodeId, _req: u32) -> Result<()> {
+        if self.phase != Phase::AgreeingFrontier || !self.cfg.beacons.contains_key(&node) {
+            return Ok(());
+        }
+        if !self.accepted_replies.insert(node) {
+            return Ok(()); // duplicate response
+        }
+        if self.accepted_replies.len() == self.cfg.beacons.len() {
+            self.begin_fetching().await?;
+        }
+        Ok(())
+    }
+
     async fn begin_fetching(&mut self) -> Result<()> {
         let threshold = self.cfg.weight_threshold();
         self.accepted_tips = self
