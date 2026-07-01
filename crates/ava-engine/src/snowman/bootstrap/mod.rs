@@ -109,6 +109,10 @@ pub struct Bootstrapper<V, S> {
     last_accepted_height: u64,
     /// Beacons that have replied with an `AcceptedFrontier`.
     frontier_replies: BTreeMap<NodeId, Id>,
+    /// Beacons that have responded to the frontier query (reply **or** failure).
+    /// Phase completion is keyed on this set, not `frontier_replies`, so a
+    /// failed/absent beacon (empty opinion) still advances discovery.
+    frontier_responded: BTreeSet<NodeId>,
     /// Per-id accepted weight (frontier-agreement tally).
     accepted_weight: BTreeMap<Id, u64>,
     /// Beacons that have replied with an `Accepted`.
@@ -141,6 +145,7 @@ where
             request_id: 0,
             last_accepted_height: 0,
             frontier_replies: BTreeMap::new(),
+            frontier_responded: BTreeSet::new(),
             accepted_weight: BTreeMap::new(),
             accepted_replies: BTreeSet::new(),
             accepted_tips: BTreeSet::new(),
@@ -225,11 +230,39 @@ where
         if self.phase != Phase::DiscoveringFrontier || !self.cfg.beacons.contains_key(&node) {
             return Ok(());
         }
+        if !self.frontier_responded.insert(node) {
+            return Ok(()); // duplicate response
+        }
         self.frontier_replies.insert(node, container_id);
-        if self.frontier_replies.len() == self.cfg.beacons.len() {
+        self.maybe_begin_frontier_agreement();
+        Ok(())
+    }
+
+    /// `GetAcceptedFrontierFailed` — the beacon did not answer the frontier
+    /// query (request timed out / never connected). Records an *empty opinion*
+    /// (Go `minority.RecordOpinion(node, nil)`): it counts toward phase
+    /// completion but contributes no frontier id, so a slow/absent beacon
+    /// cannot stall discovery.
+    ///
+    /// # Errors
+    /// Propagates a VM/acceptor error from the agreement that may follow.
+    pub async fn get_accepted_frontier_failed(&mut self, node: NodeId, _req: u32) -> Result<()> {
+        if self.phase != Phase::DiscoveringFrontier || !self.cfg.beacons.contains_key(&node) {
+            return Ok(());
+        }
+        if !self.frontier_responded.insert(node) {
+            return Ok(()); // duplicate response
+        }
+        self.maybe_begin_frontier_agreement();
+        Ok(())
+    }
+
+    /// Begin frontier agreement once every beacon has responded (reply or
+    /// failure).
+    fn maybe_begin_frontier_agreement(&mut self) {
+        if self.frontier_responded.len() == self.cfg.beacons.len() {
             self.begin_frontier_agreement();
         }
-        Ok(())
     }
 
     fn begin_frontier_agreement(&mut self) {

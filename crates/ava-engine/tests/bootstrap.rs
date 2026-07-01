@@ -175,6 +175,65 @@ async fn bootstrap_fetches_and_executes_range() {
     assert!(!ctx.executing.load(Ordering::SeqCst));
 }
 
+/// A beacon that never answers the frontier query must not hang discovery: its
+/// `GetAcceptedFrontierFailed` completes the phase on the beacons that did reply.
+#[tokio::test]
+async fn frontier_advances_when_a_beacon_fails() {
+    let token = CancellationToken::new();
+    let vm: TestVm = init_test_vm(&token).await.expect("vm");
+    let tip = vm.last_accepted(&token).await.expect("genesis");
+
+    let acceptor = Arc::new(RecordingAcceptor::default());
+    let ctx = consensus_ctx(acceptor.clone());
+    let sender = RecordingSender::new();
+
+    let a = NodeId::from([10u8; 20]);
+    let b = NodeId::from([11u8; 20]);
+    let c = NodeId::from([12u8; 20]);
+    let mut beacons = BTreeMap::new();
+    beacons.insert(a, 1u64);
+    beacons.insert(b, 1u64);
+    beacons.insert(c, 1u64);
+
+    let cfg = Config {
+        subnet_id: Id::EMPTY,
+        ctx: ctx.clone(),
+        vm: Arc::new(Mutex::new(vm)),
+        sender: sender.clone(),
+        beacons,
+        token: token.clone(),
+    };
+    let mut boot = Bootstrapper::new(cfg);
+
+    boot.start(0).await.expect("start");
+    let _ = sender.drain();
+    assert_eq!(boot.phase(), Phase::DiscoveringFrontier, "start enters DiscoveringFrontier");
+
+    // Two of three beacons reply.
+    boot.accepted_frontier(a, 1, tip).await.expect("af a");
+    boot.accepted_frontier(b, 1, tip).await.expect("af b");
+    assert_eq!(
+        boot.phase(),
+        Phase::DiscoveringFrontier,
+        "still awaiting the third beacon"
+    );
+
+    // The third beacon's query failed (timeout / never connected).
+    boot.get_accepted_frontier_failed(c, 1).await.expect("aff c");
+
+    // The failure completes the phase; agreement begins with the two replies.
+    assert_eq!(
+        boot.phase(),
+        Phase::AgreeingFrontier,
+        "a failed beacon completes the frontier phase"
+    );
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s, Sent::GetAccepted { .. })),
+        "expected GetAccepted after failure completes frontier, got {sent:?}"
+    );
+}
+
 /// `halt_aborts_bootstrap` — cancelling the token aborts the execute pass
 /// promptly (the bootstrapper returns `Halted` and does not hand off).
 #[tokio::test]
