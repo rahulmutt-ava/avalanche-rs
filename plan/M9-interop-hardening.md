@@ -1849,6 +1849,37 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `ExternalHandler` (RouterBridge, engine router, etc.), not just BeaconManager —
 > the broader at-most-once fix is tracked as a follow-up item.
 
+> **AS-BUILT — M9.15 inbound at-most-once dedup CLOSED (2026-06-30).** The
+> follow-up flagged in the 2026-06-29 banner ("ava-network inbound `handle_accepted`
+> does not dedup against `connected`/`connecting`, unlike `handle_dial`") is now
+> fixed at the source. New `NetworkImpl::admit_peer<IO>` performs the membership
+> check → `Peer::spawn` → `connecting.insert` atomically under a single new
+> `peers_lock: Mutex<()>` (Go `peersLock` parity), for BOTH the inbound (accept)
+> and outbound (dial) paths; a duplicate connection for an already-tracked node is
+> rejected before any second actor is spawned, so `router.connected`/`disconnected`
+> are delivered at-most-once and strictly paired to every `ExternalHandler` (engine
+> router, RouterBridge, BeaconManager). `watch_peer` was split into `spawn_watcher`
+> with all promote/close membership transitions also under `peers_lock`. This also
+> closes the narrower TOCTOU the outbound path itself had (check and insert were not
+> previously atomic). Pinned by `ava-network` `admit_peer_dedups_same_node_id`
+> (deterministic unit: two admissions for one node-id → `(true, false)`,
+> `connecting.len() == 1`) + `mutual_dial_connects_each_peer_exactly_once`
+> (end-to-end: two `TestNetwork`s mutually dial → each `RecordingRouter` records the
+> peer connected exactly once). The `BeaconManager` `HashSet<NodeId>` is demoted to
+> defense-in-depth (its 4 deterministic `ava-node` tests stay green). **Key deviation
+> from plan:** Task 1's atomic dedup surfaced a mutual-dial livelock — when two nodes
+> dial each other simultaneously, TLS-1.3's client side completes before the server
+> side, so each node admits its own outbound and rejects the peer's inbound, leaving
+> the surviving connections half-dead; with a fixed retry delay both sides retry in
+> lockstep forever (100% failure, systematic). Task 2 therefore required a production
+> companion fix (not test-only as planned): Go's retry jitter from
+> `network/tracked_ip.go` `increaseDelay` — omitted in the Rust port with a "jitter
+> omitted" comment — was ported into `crates/ava-network/src/network/tracked_ip.rs`
+> using Go's single-draw model (`delay *= (1+rand)`, near-cap `MAX*(3+rand)/4`,
+> per-instance `jitter_seed = nanos^port`) so two peers' retry windows diverge and
+> break lockstep. `ava-network` + `ava-node` nextest green, clippy `-D warnings` +
+> fmt clean.
+
 ---
 
 ## Spec coverage check

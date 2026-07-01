@@ -185,13 +185,13 @@ pub struct BeaconManager {
     /// Deduplicated set of connected beacon node-ids: `connected` inserts
     /// (idempotent), `disconnected` removes by id (a no-op for an absent node,
     /// so the count never goes negative on a spurious disconnect). `len()` is
-    /// the live connection count. This dedup COMPENSATES for ava-network's
-    /// inbound `handle_accepted` path not deduplicating against
-    /// `connected`/`connecting` (unlike outbound `handle_dial`), so the same
-    /// beacon can fire `connected()`/`disconnected()` more than once. Note: Go
-    /// itself uses a bare `atomic.AddInt64` — its network layer delivers
-    /// `Connected`/`Disconnected` at-most-once per peer and strictly paired;
-    /// ava-network does not yet guarantee this on the inbound path.
+    /// the live connection count. As of the M9.15 inbound-dedup fix,
+    /// `ava-network` admits peers atomically and delivers `connected`/
+    /// `disconnected` at-most-once per peer on BOTH the inbound and outbound
+    /// paths (`admit_peer` + `peers_lock`), so this set is now DEFENSE-IN-DEPTH
+    /// rather than load-bearing. Note: Go's `beacon_manager.go` uses a bare
+    /// `atomic.AddInt64` because its network layer already guarantees
+    /// at-most-once, strictly-paired delivery — which ava-network now matches.
     conns: Mutex<HashSet<NodeId>>,
     required_conns: i64,
     on_sufficiently_connected: tokio::sync::watch::Sender<bool>,
