@@ -69,6 +69,8 @@ impl TrackedIp {
             .unwrap_or_default()
             .subsec_nanos();
         let port_seed = u32::from(addr.port());
+        // Deliberately non-deterministic: dialer backoff is a network path,
+        // not consensus. Go uses math/rand for the same reason (#nosec G404).
         let jitter_seed = nanos ^ port_seed;
         TrackedIp {
             addr,
@@ -84,38 +86,19 @@ impl TrackedIp {
         now >= self.next_attempt
     }
 
-    /// Record a (failed/pending) dial attempt at `now`: gate the next attempt by
-    /// a jittered version of the current delay, then grow the base delay.
+    /// Record a (failed/pending) dial attempt at `now`: grow the delay with a
+    /// single jitter draw (Go `increaseDelay`), then gate the next attempt by
+    /// that grown delay. The single draw is both the stored backoff AND the
+    /// sleep duration before the next redial — Go parity (no second draw).
     ///
-    /// Using a jittered `next_attempt` (rather than the raw `delay`) breaks the
-    /// retry synchrony of two peers that mutually dial each other and both fail
-    /// simultaneously: their `record_attempt` calls happen at different instants,
-    /// so the jitter (derived from nanosecond wall-clock entropy) gives each side
-    /// a different `next_attempt`, and the one with the shorter wait retries
-    /// first, establishing the connection before the other side fires.
+    /// Using a jittered `next_attempt` breaks the retry synchrony of two peers
+    /// that mutually dial each other and both fail simultaneously: their
+    /// `jitter_seed`s differ (different ports + wall-clock entropy), so their
+    /// grown delays diverge and the one with the shorter wait retries first,
+    /// establishing the connection before the other side fires.
     pub fn record_attempt(&mut self, now: Instant) {
-        // Apply jitter to the CURRENT retry window, not just future ones.
-        let jittered = self.jittered_delay();
-        self.next_attempt = now.checked_add(jittered).unwrap_or(now);
-        self.increase_delay();
-    }
-
-    /// Jittered copy of the current delay in `[delay, 2*delay)`, using the
-    /// instance's `jitter_seed`. Advances the seed (LCG) so successive calls
-    /// also differ. This ensures each `TrackedIp` instance has a unique retry
-    /// window even when called at the exact same wall-clock instant.
-    fn jittered_delay(&mut self) -> Duration {
-        // LCG step (Knuth): advance the per-instance seed.
-        self.jitter_seed = self
-            .jitter_seed
-            .wrapping_mul(1_664_525)
-            .wrapping_add(1_013_904_223);
-        // jitter_frac ∈ [0, 1) from 30 low bits.
-        let jitter_frac = f64::from(self.jitter_seed & 0x3FFF_FFFF) / f64::from(0x4000_0000u32);
-        // multiplier ∈ [1.0, 2.0) — mirrors Go's `(1 + rand.Float64())`.
-        let multiplier = 1.0 + jitter_frac;
-        let jittered = Duration::from_secs_f64(self.delay.as_secs_f64() * multiplier);
-        jittered.min(MAX_RECONNECT_DELAY)
+        self.increase_delay(); // one jitter draw grows delay (Go increaseDelay)
+        self.next_attempt = now.checked_add(self.delay).unwrap_or(now); // wait == grown delay
     }
 
     /// Record a successful connection at `now`: reset the backoff and re-open dialing.
@@ -184,8 +167,8 @@ mod tests {
             "dial once the window elapses (upper bound of jitter range)"
         );
 
-        // Second failed attempt: window is now in [delay, 2*delay) where delay
-        // is the jittered value from the first attempt (∈ [1s, 2s)).
+        // Second failed attempt: increase_delay runs again, growing the delay
+        // (which is already ∈ [1s, 2s) after the first attempt) further.
         let t1 = ip.next_attempt; // the exact next_attempt after the first attempt
         ip.record_attempt(t1);
         let second_delay = ip.delay;
