@@ -207,7 +207,11 @@ async fn frontier_advances_when_a_beacon_fails() {
 
     boot.start(0).await.expect("start");
     let _ = sender.drain();
-    assert_eq!(boot.phase(), Phase::DiscoveringFrontier, "start enters DiscoveringFrontier");
+    assert_eq!(
+        boot.phase(),
+        Phase::DiscoveringFrontier,
+        "start enters DiscoveringFrontier"
+    );
 
     // Two of three beacons reply.
     boot.accepted_frontier(a, 1, tip).await.expect("af a");
@@ -219,7 +223,9 @@ async fn frontier_advances_when_a_beacon_fails() {
     );
 
     // The third beacon's query failed (timeout / never connected).
-    boot.get_accepted_frontier_failed(c, 1).await.expect("aff c");
+    boot.get_accepted_frontier_failed(c, 1)
+        .await
+        .expect("aff c");
 
     // The failure completes the phase; agreement begins with the two replies.
     assert_eq!(
@@ -277,7 +283,11 @@ async fn accepted_advances_when_a_beacon_fails() {
     boot.accepted_frontier(a, 1, tip).await.expect("af a");
     boot.accepted_frontier(b, 1, tip).await.expect("af b");
     boot.accepted_frontier(c, 1, tip).await.expect("af c");
-    assert_eq!(boot.phase(), Phase::AgreeingFrontier, "all frontier replies in");
+    assert_eq!(
+        boot.phase(),
+        Phase::AgreeingFrontier,
+        "all frontier replies in"
+    );
     let _ = sender.drain();
 
     // Two beacons accept the tip (weight 2 > threshold 1); the third fails.
@@ -287,10 +297,15 @@ async fn accepted_advances_when_a_beacon_fails() {
 
     let sent = sender.drain();
     assert!(
-        sent.iter().any(|s| matches!(s, Sent::GetAncestors { id, .. } if *id == tip)),
+        sent.iter()
+            .any(|s| matches!(s, Sent::GetAncestors { id, .. } if *id == tip)),
         "expected GetAncestors for the agreed tip after failure completes accepted, got {sent:?}"
     );
-    assert_eq!(boot.phase(), Phase::Fetching, "accepted phase completed -> fetching");
+    assert_eq!(
+        boot.phase(),
+        Phase::Fetching,
+        "accepted phase completed -> fetching"
+    );
 }
 
 /// When every beacon fails the frontier query, the bootstrapper must NOT declare
@@ -324,8 +339,12 @@ async fn all_beacons_failing_restarts_frontier_discovery() {
     let _ = sender.drain();
 
     // Both beacons fail their frontier query.
-    boot.get_accepted_frontier_failed(a, 1).await.expect("aff a");
-    boot.get_accepted_frontier_failed(b, 1).await.expect("aff b");
+    boot.get_accepted_frontier_failed(a, 1)
+        .await
+        .expect("aff a");
+    boot.get_accepted_frontier_failed(b, 1)
+        .await
+        .expect("aff b");
 
     // No agreement: still discovering, and a fresh GetAcceptedFrontier was re-sent.
     assert_eq!(
@@ -335,7 +354,8 @@ async fn all_beacons_failing_restarts_frontier_discovery() {
     );
     let sent = sender.drain();
     assert!(
-        sent.iter().any(|s| matches!(s, Sent::GetAcceptedFrontier { .. })),
+        sent.iter()
+            .any(|s| matches!(s, Sent::GetAcceptedFrontier { .. })),
         "expected a re-broadcast GetAcceptedFrontier, got {sent:?}"
     );
 }

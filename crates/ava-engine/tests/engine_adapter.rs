@@ -717,7 +717,13 @@ async fn adapter_dispatches_get_accepted_frontier_failed() {
 
     // One beacon replies; the other's query times out (synthesized *Failed).
     adapter
-        .handle(a, InboundOp::AcceptedFrontier { request_id: 1, container_id: tip })
+        .handle(
+            a,
+            InboundOp::AcceptedFrontier {
+                request_id: 1,
+                container_id: tip,
+            },
+        )
         .await;
     adapter
         .handle(b, InboundOp::GetAcceptedFrontierFailed { request_id: 1 })

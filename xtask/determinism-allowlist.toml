@@ -88,3 +88,9 @@ file = "crates/ava-validators/src/manager.rs"
 symbol = "SystemTime::now"
 hazard = 5
 reason = "Coarse OS-entropy seed for poll sampling; explicitly off the consensus-decision path (specs/06 §6.2)."
+
+[[allow]]
+file = "crates/ava-network/src/network/tracked_ip.rs"
+symbol = "SystemTime::now"
+hazard = 5
+reason = "Per-instance jitter seed for reconnect backoff; network/dialer path, not consensus content. Deliberately non-deterministic (Go uses math/rand for the same, #nosec G404)."

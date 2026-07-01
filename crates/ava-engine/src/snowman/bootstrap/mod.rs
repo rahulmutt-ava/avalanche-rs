@@ -278,8 +278,7 @@ where
         self.frontier_responded.clear();
         self.frontier_replies.clear();
         self.request_id = self.request_id.wrapping_add(1);
-        let beacons: std::collections::HashSet<NodeId> =
-            self.cfg.beacons.keys().copied().collect();
+        let beacons: std::collections::HashSet<NodeId> = self.cfg.beacons.keys().copied().collect();
         self.cfg
             .sender
             .send_get_accepted_frontier(&beacons, self.request_id);

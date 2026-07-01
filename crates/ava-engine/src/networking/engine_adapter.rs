@@ -186,8 +186,12 @@ where
                 }
             }
             InboundOp::GetAcceptedFrontierFailed { request_id } => {
-                let res = self.boot.get_accepted_frontier_failed(node, request_id).await;
-                self.after("bootstrap.get_accepted_frontier_failed", res).await;
+                let res = self
+                    .boot
+                    .get_accepted_frontier_failed(node, request_id)
+                    .await;
+                self.after("bootstrap.get_accepted_frontier_failed", res)
+                    .await;
             }
             InboundOp::GetAcceptedFailed { request_id } => {
                 let res = self.boot.get_accepted_failed(node, request_id).await;
