@@ -257,12 +257,32 @@ where
         Ok(())
     }
 
-    /// Begin frontier agreement once every beacon has responded (reply or
-    /// failure).
+    /// Once every beacon has responded (reply or failure): begin agreement if
+    /// any frontier was reported, otherwise restart discovery (all beacons
+    /// failed — no frontier information at all; Go "no blocks accepted →
+    /// restart bootstrap").
     fn maybe_begin_frontier_agreement(&mut self) {
-        if self.frontier_responded.len() == self.cfg.beacons.len() {
-            self.begin_frontier_agreement();
+        if self.frontier_responded.len() != self.cfg.beacons.len() {
+            return;
         }
+        if self.frontier_replies.is_empty() {
+            self.restart_frontier_discovery();
+            return;
+        }
+        self.begin_frontier_agreement();
+    }
+
+    /// Re-broadcast `GetAcceptedFrontier` under a fresh request id after every
+    /// beacon failed, clearing the responded set so the new round can complete.
+    fn restart_frontier_discovery(&mut self) {
+        self.frontier_responded.clear();
+        self.frontier_replies.clear();
+        self.request_id = self.request_id.wrapping_add(1);
+        let beacons: std::collections::HashSet<NodeId> =
+            self.cfg.beacons.keys().copied().collect();
+        self.cfg
+            .sender
+            .send_get_accepted_frontier(&beacons, self.request_id);
     }
 
     fn begin_frontier_agreement(&mut self) {

@@ -293,6 +293,53 @@ async fn accepted_advances_when_a_beacon_fails() {
     assert_eq!(boot.phase(), Phase::Fetching, "accepted phase completed -> fetching");
 }
 
+/// When every beacon fails the frontier query, the bootstrapper must NOT declare
+/// itself caught up — it restarts discovery by re-broadcasting GetAcceptedFrontier.
+#[tokio::test]
+async fn all_beacons_failing_restarts_frontier_discovery() {
+    let token = CancellationToken::new();
+    let vm: TestVm = init_test_vm(&token).await.expect("vm");
+
+    let acceptor = Arc::new(RecordingAcceptor::default());
+    let ctx = consensus_ctx(acceptor.clone());
+    let sender = RecordingSender::new();
+
+    let a = NodeId::from([10u8; 20]);
+    let b = NodeId::from([11u8; 20]);
+    let mut beacons = BTreeMap::new();
+    beacons.insert(a, 1u64);
+    beacons.insert(b, 1u64);
+
+    let cfg = Config {
+        subnet_id: Id::EMPTY,
+        ctx: ctx.clone(),
+        vm: Arc::new(Mutex::new(vm)),
+        sender: sender.clone(),
+        beacons,
+        token: token.clone(),
+    };
+    let mut boot = Bootstrapper::new(cfg);
+
+    boot.start(0).await.expect("start"); // first GetAcceptedFrontier
+    let _ = sender.drain();
+
+    // Both beacons fail their frontier query.
+    boot.get_accepted_frontier_failed(a, 1).await.expect("aff a");
+    boot.get_accepted_frontier_failed(b, 1).await.expect("aff b");
+
+    // No agreement: still discovering, and a fresh GetAcceptedFrontier was re-sent.
+    assert_eq!(
+        boot.phase(),
+        Phase::DiscoveringFrontier,
+        "all-failed must restart, not advance/finish"
+    );
+    let sent = sender.drain();
+    assert!(
+        sent.iter().any(|s| matches!(s, Sent::GetAcceptedFrontier { .. })),
+        "expected a re-broadcast GetAcceptedFrontier, got {sent:?}"
+    );
+}
+
 /// `halt_aborts_bootstrap` — cancelling the token aborts the execute pass
 /// promptly (the bootstrapper returns `Halted` and does not hand off).
 #[tokio::test]
