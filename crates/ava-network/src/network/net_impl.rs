@@ -57,6 +57,12 @@ pub struct NetworkImpl {
     tracked_ips: Mutex<std::collections::HashMap<NodeId, TrackedIp>>,
     connecting: Arc<PeerSet>,
     connected: Arc<PeerSet>,
+    /// Node-ids with an in-flight outbound dial (spawned by `handle_dial`, not
+    /// yet admitted or failed). The scan dialer skips these so a slow/stalling
+    /// TLS upgrade does not accumulate duplicate concurrent dials to the same
+    /// peer — Go runs one dial goroutine per tracked IP; this guard set is the
+    /// scan-loop equivalent. Cleared by `DialGuard` on every `handle_dial` exit.
+    dialing: Mutex<std::collections::HashSet<NodeId>>,
     /// Serializes the compound "is this node already tracked? → register it"
     /// transition across `connecting`/`connected` for BOTH connection
     /// directions (Go's single `peersLock`). A leaf lock: held only across
@@ -129,6 +135,7 @@ impl NetworkImpl {
             tracked_ips: Mutex::new(std::collections::HashMap::new()),
             connecting: Arc::new(PeerSet::new()),
             connected: Arc::new(PeerSet::new()),
+            dialing: Mutex::new(std::collections::HashSet::new()),
             peers_lock: Mutex::new(()),
             conn_upgrade_throttler,
             metrics,
@@ -317,6 +324,29 @@ impl NetworkImpl {
             }
             self.handle_accepted(stream);
         }
+    }
+
+    /// Scan the tracked-IP table for peers to (re)dial at `now`. Skips any node
+    /// already `connected`, `connecting`, or with an in-flight dial (`dialing`),
+    /// applies the reconnect backoff, records the attempt, and marks each
+    /// selected node as in-flight before returning it. Factored out of the
+    /// dialer loop so the in-flight guard is deterministically unit-testable.
+    fn select_dial_targets(&self, now: Instant) -> Vec<(NodeId, SocketAddr)> {
+        let mut tracked = self.tracked_ips.lock();
+        let mut dialing = self.dialing.lock();
+        let mut out = Vec::new();
+        for (n, t) in tracked.iter_mut() {
+            if self.connected.contains(n) || self.connecting.contains(n) || dialing.contains(n) {
+                continue;
+            }
+            if !t.should_dial(now) {
+                continue;
+            }
+            t.record_attempt(now);
+            dialing.insert(*n);
+            out.push((*n, t.addr));
+        }
+        out
     }
 
     /// The dialer loop (#2): periodically (re)dial tracked IPs we are not yet
@@ -540,6 +570,40 @@ mod tests {
             1,
             "admit_peer: only one peer actor admitted"
         );
+
+        net.start_close();
+    }
+
+    /// A node with an in-flight dial (marked in `dialing`) is NOT re-selected
+    /// by the scan dialer even after its backoff window elapses — the guard
+    /// that stops duplicate concurrent dials during a slow/stalling upgrade.
+    /// Regression guard for the M9.15 run_dialer TOCTOU.
+    #[tokio::test]
+    async fn select_dial_targets_skips_in_flight_dials() {
+        let tn = TestNetwork::start().await;
+        let net = tn.network();
+
+        let node = NodeId::from_slice(&[7u8; 20]).expect("node id");
+        let addr: SocketAddr = "127.0.0.1:19651".parse().expect("addr");
+        net.manually_track(node, addr);
+
+        let t0 = Instant::now();
+
+        // First scan: fresh tracked IP is dial-ready → selected and marked.
+        let first = net.select_dial_targets(t0);
+        assert_eq!(first, vec![(node, addr)], "fresh tracked ip is dialed once");
+        assert!(net.dialing.lock().contains(&node), "selected node is marked in-flight");
+
+        // Backoff window (1-2s) has elapsed at t0+3s, so should_dial passes —
+        // but the in-flight guard must still hold the node out. On current
+        // code (no guard) this returns the node again: the RED assertion.
+        let second = net.select_dial_targets(t0 + Duration::from_secs(3));
+        assert!(second.is_empty(), "in-flight dial is not re-launched");
+
+        // Dial completes (task cleared the mark): the node is dial-ready again.
+        net.dialing.lock().remove(&node);
+        let third = net.select_dial_targets(t0 + Duration::from_secs(6));
+        assert_eq!(third, vec![(node, addr)], "re-dial once the in-flight guard clears");
 
         net.start_close();
     }
