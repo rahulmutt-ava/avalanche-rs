@@ -62,6 +62,11 @@ pub struct NetworkImpl {
     /// TLS upgrade does not accumulate duplicate concurrent dials to the same
     /// peer — Go runs one dial goroutine per tracked IP; this guard set is the
     /// scan-loop equivalent. Cleared by `DialGuard` on every `handle_dial` exit.
+    ///
+    /// A leaf lock, like `peers_lock`: held only across synchronous sections,
+    /// never across an `.await`, and never nested with `peers_lock`. The one
+    /// nesting that does occur is `tracked_ips` → `dialing` in
+    /// `select_dial_targets` (always that order — the only acquisition site).
     dialing: Mutex<std::collections::HashSet<NodeId>>,
     /// Serializes the compound "is this node already tracked? → register it"
     /// transition across `connecting`/`connected` for BOTH connection
