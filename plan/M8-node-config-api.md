@@ -710,6 +710,16 @@ Coordinate the live-vs-recorded oracle mode for `differential::api_parity` and `
 >   (network is open, localhost binds work); just not yet run — needs the full `avalanchers` build.
 > M8.32 still NOT marked DONE pending (4) + the pre-existing bazel-build/test + cargo-deny gates.
 
+---
+
+### Task M8.33: `--helicon-min-stake-duration` staking-config flag **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Crate:** ava-config + ava-platformvm  ·  **Depends on:** M8.12 (`get_node_config` staking economics)  ·  **Spec:** 13 §staking-economics upstream-delta (Go `a7b61f2598` #5299)
+> **Upstream parity (Go `a7b61f2598`, #5299).** Adds `--helicon-min-stake-duration` (`AVAGO_HELICON_MIN_STAKE_DURATION`, default `48h`) to the staking-economics block. `getStakingConfig` reads it into a new `node.StakingConfig.HeliconMinStakeDuration` field; **post-Helicon the minimum *validation* duration drops from 336h `MinStakeDuration` to 48h** (delegation still uses `MinStakeDuration`). Ignored on Mainnet/Fuji (`genesis.GetStakingConfig` wins); applies only on non-standard networks.
+> **Rust task:** add the flag + `StakingConfig.helicon_min_stake_duration` field to the M8.12 config, and thread it into the P-Chain validation-duration bound behind the Helicon fork gate (`ava-platformvm`). Extend `golden::flag_parity` (M8.4). The 48h validation floor is **Helicon-gated / dormant** (unscheduled fork); the flag/config plumbing is real.
+**Files (anticipated):** `crates/ava-config/src/**` (flag table + staking config), `crates/ava-platformvm/src/**` (validation bound), `tests/`.
+
+---
+
 | Spec section | Covered by task(s) | Notes / deferrals |
 |---|---|---|
 | 12 §1.2–1.4 (config layout, FlagSpec, clap) | M8.1, M8.2, M8.3 | |

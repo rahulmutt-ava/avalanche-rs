@@ -528,6 +528,31 @@ Key methods (cite `blocks/execution.go`, `settlement.go`):
 > not-found case to the DB-not-found sentinel and otherwise returns the
 > underlying error rather than `Ok(block)`. Tracked as `plan/M7` task **M7.42**.
 
+> **Upstream delta (avalanchego `50893e60d2` #5555 + `d8a8473be2` #5556 — folded 2026-07-06).**
+> Go **removed the explicit `MarkSynchronous` transition** and the recovery-time
+> `lastSynchronous` tracking, replacing the third disk-artefact entry-point with a
+> derive-on-restore path. Two paired changes: (1) **`Block.MarkSynchronous` is
+> gone** (`blocks/execution.go`, `settlement.go`); `markExecuted` no longer takes a
+> `setAsHeadBlock` flag (it always sets the head), and the shared `markExecuted`/
+> `markExecutedOnDisk`/`markExecutedAfterDiskArtefacts` split is simplified.
+> `RestoreExecutionArtefacts` now, when it finds **no** persisted `ExecutionResults`
+> for the block (`database.ErrNotFound`), *infers* them from the block header via
+> a new `synchronousExecutionResults(hooks)` (base fee capped at `MaxUint64` for
+> `gastime.New`, target/config from `hooks.GasConfigAfter`) and sets
+> `b.synchronous = true` — so a synchronous block is recognized by the *absence* of
+> persisted exec results rather than an explicit marker. (2) **`NewVM` no longer
+> takes a `genesisBlock` / does any synchronous seeding** (`sae/always.go`,
+> `sae/recovery.go`, `sae/vm.go`): `Initialize` now finalizes genesis by writing
+> the finalized-block hash directly (`rawdb.WriteFinalizedBlockHash(db, hash)` iff
+> none is set — "MUST only happen once"), and the `recovery` struct drops its
+> `lastSynchronous` field. **Rust seam:** the M7.11 `Block::synchronous`
+> (`OnceLock<()>`) and the §4.2 `mark_synchronous(...)` method — mirror the
+> derive-on-restore behavior (restore infers synchronous results from the header
+> when `xdb` has none, sets `synchronous`) and drop the explicit combined
+> exec+settle marker as a separate public transition; genesis finalization moves
+> into VM init. **Non-gating** (Helicon unscheduled) but a lifecycle/recovery
+> correctness refactor worth mirroring. Tracked as `plan/M7` task **M7.58**.
+
 The Go `runtime.AddCleanup` GC-leak counter (`InMemoryBlockCount`) maps to a
 `Drop` impl decrementing an `AtomicI64` (test observability — §10).
 
@@ -618,6 +643,21 @@ pub fn convert<BP, V: ChainVm<BP>>(vm: Arc<V>) -> impl ava_engine::block::ChainV
 > (The commit also renames `adaptor.go` → `vm.go`, a no-op.) The Rust analog is a
 > `ConvertStateSync` + `SyncableVm`/`SummaryProperties` traits in
 > `ava-saevm-adaptor`, paralleling the existing `convert`/`ChainVm`/`BlockProperties`.
+
+> **Upstream delta (avalanchego `f5ee5d2970`, #5604 — folded 2026-07-06).** The SAE
+> C-Chain gains a **`vms.Factory` registration + state-sync stubs**
+> (`cchain/factory.go`, `cchain/sync.go`). `Factory.New(log)` constructs a `cchain`
+> `VM` (with the pull/push gossip periods and `now` clock) and returns an anonymous
+> `fullVM` that composes **both** generic bridges from this section:
+> `adaptor.Convert(vm)` (the `ChainVMWithContext`) **and** `adaptor.ConvertStateSync(&syncer{})`
+> (the `StateSyncableVM`, consuming the M7.40 bridge above). The `syncer` is a
+> disabled stub (TODO #5513): `StateSyncEnabled → false`, the `Get*StateSummary`
+> methods return `database.ErrNotFound`, and `ParseStateSummary` returns
+> `block.ErrStateSyncableVMNotImplemented`. **Rust seam:** the `ava-saevm-cchain`
+> VM factory (the in-process boot path already exercised in M9.15 STEP-n) plus a
+> disabled `Syncer` implementing the M7.40 `SyncableVm` trait with the same
+> not-found / not-implemented sentinels. **Non-gating** (Helicon unscheduled; state
+> sync itself unported). Tracked as `plan/M7` task **M7.53**.
 > **Dormant:** SAE state sync itself (§10 / `10` §10, C8) is unported — this is
 > the bridge those summaries will flow through once a syncable SAE VM exists.
 > Tracked as `plan/M7` M7.40 (non-gating; Helicon unscheduled).
@@ -1069,6 +1109,56 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > a `// TODO(JonathanOppenheimer) enable and wire all remaining configs`. The Rust
 > analog is the `ava-saevm-cchain` VM config decode (cross-ref `13`/`14` chain
 > config). Staged as `plan/M7` **M7.52**. **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `eefec86365`, #5587 — folded 2026-07-06).** The SAE
+> C-Chain now **implements the ACP-176 dynamic gas target**, replacing the hardcoded
+> `GasConfigAfter` stub `return 1_000_000, …`. New `dynamic.InitialTargetExponent = 0`
+> (its target is the 1,000,000 gas/s minimum) names the `TargetExponent` floor.
+> `hooks.GasConfigAfter(header)` now derives the target via a `targetExponent(config,
+> h)` helper: use `GetHeaderExtra(h).TargetExponent` if present, else the initial
+> exponent for genesis/pre-Fortuna, else parse the last-synchronous ACP-176 fee
+> state (`acp176.ParseState(h.Extra).TargetExcess`); it returns `te.Target()` as the
+> gas target (a parse failure logs and defaults to the initial exponent). `BuildHeader`
+> advances the child exponent via `targetExponent(parent).Toward(desired.targetExponent)`,
+> where the node's *desired* target comes from operator config `gas-target`
+> (`config.desired()` → `dynamic.DesiredTargetExponent(GasTarget)` — the `GasTarget`
+> field is un-commented in `config`), and `BlockRebuilderFrom` re-derives `desired`
+> from the parent header's `TargetExponent`. Genesis seeds `InitialTargetExponent`
+> (`genesis.block()` under `IsHelicon`). This is the `TargetExponent` sibling of the
+> M7.51 `MinPriceExponent` consumption — no new formula (see `21` §6.x). **Rust
+> seam:** `ava-saevm-cchain` hooks `gas_config_after`/`build_header` + the `dynamic`
+> module `TargetExponent`/`DesiredTargetExponent`. Staged as `plan/M7` **M7.54**.
+> **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `d50617e16e`, #5589 — folded 2026-07-06).** The SAE
+> C-Chain **genesis block now populates the Helicon header fields** it previously
+> left nil. Under `IsHelicon(g.Timestamp)`, `genesis.block()` sets `TargetExponent =
+> InitialTargetExponent` and `MinPriceExponent = InitialPriceExponent` (see M7.54 /
+> M7.51), **and** the four settled-block markers `SettledHeight`/`SettledGasUnix`/
+> `SettledGasNumerator`/`SettledExcess` to zero pointers — since "the genesis block
+> is synchronous and thus self-settling, so its settlement markers are never read"
+> (the fields must be *present* for header well-formedness, but their values are
+> inert). **Rust seam:** the M7.43 C-Chain genesis path (`EvmVm::from_genesis` for
+> SAE) must emit the same Helicon-gated header extras (M7.45 settled markers +
+> M7.54/M7.51 exponents) in the genesis header. Staged as `plan/M7` **M7.55**.
+> **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `6a2eb63cdf`, #5597 — folded 2026-07-06).** The SAE
+> C-Chain **disallows empty blocks**: `builder.BuildBlock` now returns a new
+> `errEmptyBlock` when `len(ethTxs) == 0 && len(avaxTxs) == 0`, before assembling
+> the block. **Rust seam:** the `ava-saevm-cchain` block builder rejects a build
+> with no EVM and no atomic txs (a distinct sentinel error). Staged as `plan/M7`
+> **M7.56**. **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `736a6f98a5` #5596 + `c7e93845c3` #5607 — folded 2026-07-06).**
+> Two more operator-config keys from the M7.52 `config` struct are un-commented and
+> wired (previously stubs): **`allow-unprotected-txs`** (`AllowUnprotectedTxs bool`,
+> "required for deterministic-address deployments" — flows into `rpc.Config`) and
+> **`batch-request-limit`** (`BatchRequestLimit uint64`, max requests per JSON-RPC
+> batch, `0` = no limit, `defaultConfig()` = `1000` matching geth/libevm). `parseConfig`
+> now also `Verify()`s the resulting `RPCConfig` at decode time. **Rust seam:** extend
+> the M7.52 config decode with these two RPC keys + the decode-time verify. Staged as
+> `plan/M7` **M7.57**. **Non-gating** (Helicon unscheduled).
 
 ### Reuse decision (binding cross-ref to `10`)
 

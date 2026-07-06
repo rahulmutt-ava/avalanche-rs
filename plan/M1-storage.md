@@ -662,6 +662,14 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 
 ---
 
+### Task M1.27: `ava-blockdb` single-process advisory file lock **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Crate:** `ava-blockdb`  ·  **Depends on:** M1.22  ·  **Spec:** 04 §5.1 upstream-delta (Go `dc350727b7` #5420)
+> **Upstream parity (Go `dc350727b7`, #5420).** BlockDB now prevents multi-process access. On `New`, **before** any DB file is opened or recovery runs, it `MkdirAll`s `IndexDir` (and `DataDir` when distinct) and acquires an exclusive non-blocking `flock` (`LOCK_EX|LOCK_NB`) on a `LOCK` file in each; a second opener fails immediately with `errDatabaseInUse`. The lock releases after all files close on `Close`, and the OS reclaims it on unclean exit. Ordering invariant: **locks first, then recovery** (so two processes can't race the recovery scan and corrupt the index). The per-dir `MkdirAll` moved out of `openAndInitializeIndex`/`initializeDataFiles` into lock acquisition. Advisory only (non-cooperating tools not blocked); both dirs must be dedicated to BlockDB.
+> **Rust task:** acquire the per-directory `LOCK` file lock in `Database::new` (via `fs2`/`rustix` `flock` or `File::try_lock` on Rust ≥ 1.89), hold it in the `Database` handle, drop on close; add a distinct `Error::DirectoryInUse` sentinel; move dir creation to the lock step. This is real implementation work — **not** fork-gated.
+**Files (anticipated):** `crates/ava-blockdb/src/lib.rs` (+ `lock.rs` new), `crates/ava-blockdb/tests/lock.rs`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) | Notes |
@@ -687,6 +695,7 @@ The `Database` trait + sentinel `Error` (M1.1) is the chokepoint; the dbtest/pro
 | 04 §4.1/§4.2/§4.4 | Firewood SHA mode + propose/commit/revision | M1.20 | R3 |
 | 04 §4.1 (ethhash) + §4.3 | Firewood ethhash EVM root | M1.21 | golden::firewood_ethhash_root; full reth `StateProvider` deferred to M-EVM (10) |
 | 04 §5.1 | blockdb file format + recovery | M1.22 | prop::blockdb_roundtrip; + 27 §5.1 |
+| 04 §5.1 upstream-delta | blockdb single-process advisory file lock (Go `dc350727b7` #5420) | **M1.27** | not fork-gated; `LOCK` file `flock` before recovery |
 | 04 §5.2 | archivedb ^height encoding | M1.23 | golden vector |
 | 04 §6 | test plan (dbtest, goldens, proofs, proptest invariants, rpcdb interop) | M1.2, M1.3–M1.11, M1.14, M1.16, M1.17–M1.19 | live Go↔Rust differential interop deferred to M-differential (02 §11) |
 | 04 §7 + §11 + 00 R2 | Go-data-dir migration tool | M1.24 | CLI wiring in M12; in-place open documented NOT supported |

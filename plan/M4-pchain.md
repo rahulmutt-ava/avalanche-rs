@@ -819,6 +819,14 @@ Wave 7 (differential sync-to-tip + gate)
 
 ---
 
+### Task M4.31: ACP-236 (5) — auto-renewed reward proposal execution + block-builder issuing **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Crate:** ava-platformvm (`txs/executor` proposal + `block/builder`)  ·  **Depends on:** M4.17 (ProposalTx reward oracle), M4.25 (builder)  ·  **Spec:** 08 §4.3 upstream-delta (Go `133e5e7fa6` ACP-236 (5) #5204 + `170ec7fb6b` #5206)
+> **Upstream parity (Go `133e5e7fa6` #5204 + `170ec7fb6b` #5206).** Implements the auto-renew reward path predicted by the earlier ACP-236 deltas (M4.16/M4.17). (1) **Proposal execution** (`proposal_tx_executor.go`, +637): handles `RewardAutoRenewedValidatorTx` — on commit, *restake* the validator for the next period (update start/end + `PotentialReward`, re-insert into current set) instead of removing, minting reward + reward UTXOs; on abort, remove. (2) **Block builder** (`block/builder/builder.go`): `newRewardTxForStaker` dispatches on the unsigned staker type — `AddAutoRenewedValidatorTx` → `RewardAutoRenewedValidatorTx{TxID, Timestamp=block time}` (timestamp disambiguates cycles since the txID is stable across renewals); everything else → `RewardValidatorTx`; unexpected type → `errUnexpectedStakerTxType`. Companion: `vms/saevm/intmath` relocated to `utils/math/intmath` (Go-path move only; Rust `ava-utils` math already exists).
+> **Rust task:** extend the M4.17 proposal executor reward path (restake vs remove for `RewardAutoRenewedValidatorTx`) and the M4.25 builder (`new_reward_tx_for_staker` dispatch keyed on the unsigned staker type). **Helicon-gated / dormant** (auto-renew tx family activates only at the unscheduled Helicon fork) — non-gating for the milestone.
+**Files (anticipated):** `crates/ava-platformvm/src/txs/executor/{proposal,reward_validator}.rs`, `crates/ava-platformvm/src/block/builder/mod.rs`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Covered by task(s) | Notes / deferrals |

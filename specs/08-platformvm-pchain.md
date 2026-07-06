@@ -567,6 +567,31 @@ block:
 
 The builder advances chain time to `min(now, next_staker_change_time)` (clamped by `SyncBound`).
 
+> **Upstream delta (avalanchego `133e5e7fa6` ACP-236 (5) #5204 + `170ec7fb6b` #5206 — folded 2026-07-06).**
+> The auto-renew reward path predicted at §2.4/§3.4 is now **implemented end-to-end**
+> (the "later ACP-236 part" the earlier deltas anticipated). Two pieces:
+> (1) **Proposal execution** (`txs/executor/proposal_tx_executor.go`, +637): the
+> executor now handles `RewardAutoRenewedValidatorTx` — on commit it restakes the
+> validator for the next period (updates the staker's start/end + `PotentialReward`
+> and re-inserts it into the current set) instead of removing it, minting the earned
+> reward and reward UTXOs; on abort it removes as usual. (2) **Block-builder issuing**
+> (`block/builder/builder.go`): when a staker is due for reward, the builder now
+> selects the reward tx by staker type via `newRewardTxForStaker` — an
+> `AddAutoRenewedValidatorTx` staker gets a `RewardAutoRenewedValidatorTx{TxID,
+> Timestamp}` (the `Timestamp = block time` disambiguates reward txs across cycles
+> since an auto-renewed validator keeps the *same* txID), all other stakers keep the
+> plain `RewardValidatorTx`; an unexpected staker type is `errUnexpectedStakerTxType`.
+> The `advanceTimeTo` / priority invariants gain a matching comment (permissionless
+> stakers are removed by `RewardValidatorTx` **or** `RewardAutoRenewedValidatorTx`,
+> never `AdvanceTimeTx`). **Rust seam:** extend the M4.17 ProposalTx executor's
+> reward path and the M4.20-era block builder (`RewardAutoRenewedValidatorTx` restake
+> vs remove; `new_reward_tx_for_staker` dispatch keyed on the unsigned staker type).
+> Also note the companion refactor: `vms/saevm/intmath` was **relocated to
+> `utils/math/intmath`** (now shared node-wide, not SAE-local) — a Go-path move only
+> (Rust already has `ava-utils` math). **Helicon-gated / dormant** (the auto-renew tx
+> family activates only at the unscheduled Helicon fork), so non-gating for the
+> milestone. Tracked as a `plan/M4` task alongside M4.16/M4.17.
+
 ---
 
 ## 5. Reward formula (exact)

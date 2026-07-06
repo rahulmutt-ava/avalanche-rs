@@ -194,11 +194,25 @@ networks.
 | `--min-delegator-stake` | Uint64 | `25·Avax = 25 000 000 000` | `u64` | Minimum stake, in nAVAX, that can be delegated on the primary network |
 | `--min-delegation-fee` | Uint64 | `20000` (=2%) | `u64` | Minimum delegation fee, range [0, 1000000], for delegation on the primary network |
 | `--min-stake-duration` | Duration | `24h` | `Duration` | Minimum staking duration |
+| `--helicon-min-stake-duration` | Duration | `48h` | `Duration` | Minimum staking duration **post-Helicon**; applies to validation periods only (not delegation). **[upstream delta `a7b61f2598`, #5299]** |
 | `--max-stake-duration` | Duration | `365·24h` (`8760h`) | `Duration` | Maximum staking duration |
 | `--stake-max-consumption-rate` | Uint64 | `120000` (`.12·PercentDenominator`) | `u64` | Maximum consumption rate of the remaining tokens to mint in the staking function |
 | `--stake-min-consumption-rate` | Uint64 | `100000` (`.10·PercentDenominator`) | `u64` | Minimum consumption rate of the remaining tokens to mint in the staking function |
 | `--stake-minting-period` | Duration | `365·24h` (`8760h`) | `Duration` | Consumption period of the staking function |
 | `--stake-supply-cap` | Uint64 | `720·MegaAvax = 720 000 000 000 000 000` | `u64` | Supply cap of the staking function |
+
+> **Upstream delta (avalanchego `a7b61f2598`, #5299 — folded 2026-07-06).** A new
+> `--helicon-min-stake-duration` (`AVAGO_HELICON_MIN_STAKE_DURATION`, default `48h`)
+> is added to the staking-economics block. `getStakingConfig` reads it into a new
+> `node.StakingConfig.HeliconMinStakeDuration` field; **post-Helicon the minimum
+> *validation* duration drops from the 336h `MinStakeDuration` to 48h** (delegation
+> periods still use `MinStakeDuration`). Like the rest of the staking-economics
+> block it is ignored on Mainnet/Fuji (`genesis.GetStakingConfig` wins) and applies
+> only on non-standard networks. **Rust seam:** add the flag + config field
+> (`ava-config` staking config) and thread `HeliconMinStakeDuration` into the
+> P-Chain validation-duration bound behind the Helicon fork gate (`ava-platformvm`).
+> The 48h validation floor is **Helicon-gated / dormant** (unscheduled fork), but
+> the flag/config plumbing is real. Tracked as a `plan/M8` config task.
 
 **Network-dependent / validation (`getStakingConfig`):**
 - On **Mainnet/Fuji**, the entire staking-economics block (`uptime-requirement`,

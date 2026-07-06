@@ -616,6 +616,18 @@ commit thread / `spawn_blocking` (§1.2).
 > the `golden::firewood_ethhash_root` vectors — a hash-format or API change
 > between v0.5.0 and v0.6.0 would surface there first.
 
+> **Upstream delta (avalanchego `15c98fb2d8`, #5609 — folded 2026-07-06).** The Go
+> node bumped **`firewood-go-ethhash/ffi` v0.6.0 → v0.7.0** across all four modules
+> (root + the three `graft/*`). This supersedes the v0.6.0 note above as the tag
+> the live Go oracle now wraps: before running the M9 live/differential gates the
+> Rust workspace must re-pin `firewood`/`firewood-storage` (in `ava-merkledb` and
+> `ava-evm`) to the git tag v0.7.0 exposes and re-run `golden::firewood_ethhash_root`
+> to confirm no root-format/API drift. This bump is already staged as an
+> implementation task in the M9.15 live-`mixed_network` plan (Part A —
+> `docs/superpowers/plans/…-firewood-v07.md`, verified internal-only against the
+> existing goldens); it must land before the live arm can compare Rust roots
+> against the rebuilt oracle at `d8a8473b`.
+
 Sketch (updated to the real API):
 
 ```rust
@@ -708,6 +720,26 @@ Rust: memory-map or positioned `pread`/`pwrite` (`std::os::unix::fs::FileExt` /
 `positioned-io`) under an `RwLock`-free design (atomic `next_write_offset`), an
 `lru` block cache, `zstd` crate for compression, and `twox-hash` (`XxHash64::with_seed(0)`)
 for the Go-matching XXH64 checksum. Concurrency uses per-file handles so reads don't block writes.
+
+> **Upstream delta (avalanchego `dc350727b7`, #5420 — folded 2026-07-06).** BlockDB
+> now **prevents multi-process access via advisory file locks**. On `New`, before
+> any DB file is opened or recovery is attempted, it `MkdirAll`s `IndexDir` (and
+> `DataDir` when distinct) and acquires an exclusive non-blocking `flock`
+> (`LOCK_EX|LOCK_NB`) on a `LOCK` file in each; a second process opening the same
+> directory fails immediately with `errDatabaseInUse` ("database directory is
+> locked by another process"). The lock is released after all files are closed on
+> `Close`, and the OS reclaims it automatically on unclean exit (panic/SIGKILL/OOM).
+> Note the ordering invariant the PR calls out — **locks first, then recovery** —
+> so two nodes cannot race on the recovery scan and corrupt the index. The
+> `MkdirAll` for the index/data dirs moved *out* of `openAndInitializeIndex`/
+> `initializeDataFiles` and *into* lock acquisition (single creation point). The
+> lock is advisory (only coordinates cooperating processes; `rm`/backup tools are
+> not blocked) and both dirs must be dedicated to BlockDB (the `LOCK` filename can
+> collide). **Rust seam:** `ava-blockdb::Database::new` acquires the same lock via
+> `fs2`/`rustix` `flock` (or `File::try_lock` on Rust ≥ 1.89) over a `LOCK` file per
+> directory, held in the `Database` handle and dropped on close, returning a
+> distinct `Error::DirectoryInUse` sentinel. This is real implementation work —
+> **not** fork-gated — tracked as a `plan/M1` task.
 
 ### 5.2 `ava-archivedb` (`x/archivedb`)
 

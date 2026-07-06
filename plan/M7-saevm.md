@@ -826,6 +826,54 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.53: `cchain` factory + state-sync stubs **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`factory` + `sync`) · **Depends on:** M7.40 (`ConvertStateSync` bridge), M7.23 (VM Initialize harness) · **Spec:** `11` §5 upstream-delta (Go `f5ee5d2970` #5604)
+> **Upstream parity (Go `f5ee5d2970`, #5604).** `cchain/factory.go` adds a `vms.Factory` whose `New(log)` builds a `cchain.VM` (pull/push gossip periods + `now` clock) and returns a composed `fullVM{ adaptor.Convert(vm), adaptor.ConvertStateSync(&syncer{}) }`. `cchain/sync.go` adds a disabled `syncer` (TODO #5513): `StateSyncEnabled → false`, `Get*StateSummary → database.ErrNotFound`, `ParseStateSummary → block.ErrStateSyncableVMNotImplemented`.
+> **Rust task:** an `ava-saevm-cchain` VM factory (reuse the M9.15 STEP-n in-process boot) plus a disabled `Syncer` implementing the M7.40 `SyncableVm` trait with matching not-found / not-implemented sentinels. **Non-gating** (Helicon unscheduled; state sync itself unported).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/factory.rs` + `sync.rs` (new), `tests/`.
+
+---
+
+### Task M7.54: `cchain` implements the ACP-176 dynamic gas target **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`hooks`/`dynamic`) · **Depends on:** M7.34 (`TargetExponent` integrator), M7.51 (sibling price consumption) · **Spec:** `11` §8 + `21` §6.x upstream-delta (Go `eefec86365` #5587)
+> **Upstream parity (Go `eefec86365`, #5587).** Replaces the hardcoded `GasConfigAfter → 1_000_000` stub. New `dynamic.InitialTargetExponent = 0`. A `targetExponent(config, header)` reader returns the header `TargetExponent` if present, else the initial exponent for genesis/pre-Fortuna, else `dynamic.TargetExponent(acp176.ParseState(h.Extra).TargetExcess)`; `GasConfigAfter` returns `te.Target()` (parse failure logs + defaults). `BuildHeader` advances via `targetExponent(parent).Toward(desired.targetExponent)`, desired from operator config `gas-target` → `DesiredTargetExponent`; `BlockRebuilderFrom` re-derives desired from the parent header. Genesis seeds `InitialTargetExponent`.
+> **Rust task:** in the C-Chain hooks, derive the gas target from the header `TargetExponent` (with the genesis/pre-Fortuna/last-synchronous fallbacks) and advance the child toward the node's `gas-target`. **No formula change** — reuse the §6.x `Target()`/`Toward`/`Desired*` math. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/hooks.rs` + `dynamic.rs`, `tests/`.
+
+---
+
+### Task M7.55: `cchain` populates Helicon genesis header fields **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`genesis`) · **Depends on:** M7.43 (genesis path), M7.45 (settled markers), M7.54 / M7.51 (exponents) · **Spec:** `11` §8 upstream-delta (Go `d50617e16e` #5589)
+> **Upstream parity (Go `d50617e16e`, #5589).** Under `IsHelicon`, `genesis.block()` sets `TargetExponent`/`MinPriceExponent` to their initial exponents **and** the four settled markers `Settled{Height,GasUnix,GasNumerator,Excess}` to zero pointers (genesis is synchronous/self-settling, so the marker *values* are never read — but the fields must be present for header well-formedness).
+> **Rust task:** the M7.43 SAE C-Chain genesis path emits the Helicon-gated header extras (settled markers + exponents) in the genesis header. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/genesis.rs`, `tests/`.
+
+---
+
+### Task M7.56: `cchain` disallows empty blocks **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`hooks` builder) · **Depends on:** M7.23 · **Spec:** `11` §8 upstream-delta (Go `6a2eb63cdf` #5597)
+> **Upstream parity (Go `6a2eb63cdf`, #5597).** `builder.BuildBlock` returns `errEmptyBlock` when `len(ethTxs) == 0 && len(avaxTxs) == 0`, before assembling the block.
+> **Rust task:** the C-Chain block builder rejects a build with no EVM and no atomic txs (distinct sentinel error). **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/hooks.rs`, `tests/`.
+
+---
+
+### Task M7.57: `cchain` wires `allow-unprotected-txs` + `batch-request-limit` config **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`config`) · **Depends on:** M7.52 (operator config decode) · **Spec:** `11` §8 upstream-delta (Go `736a6f98a5` #5596 + `c7e93845c3` #5607)
+> **Upstream parity (Go `736a6f98a5` #5596 + `c7e93845c3` #5607).** Un-comments two M7.52 config keys: `allow-unprotected-txs` (`bool`, → `rpc.Config`) and `batch-request-limit` (`uint64`, `0` = no limit, default `1000`; → `rpc.Config`). `parseConfig` now `Verify()`s the resulting `RPCConfig` at decode time.
+> **Rust task:** extend the M7.52 config decode with the two RPC keys + a decode-time verify. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/config.rs`, `tests/`.
+
+---
+
+### Task M7.58: drop `MarkSynchronous`; derive synchronous results on restore **[UPSTREAM DELTA — added 2026-07-06]** ⬜ TODO
+**Sub-crate:** ava-saevm-blocks + ava-saevm-core (`blocks/execution`, `sae/{always,recovery,vm}`) · **Depends on:** M7.11 (block lifecycle), M7.24 (recovery) · **Spec:** `11` §4.2 upstream-delta (Go `50893e60d2` #5555 + `d8a8473be2` #5556)
+> **Upstream parity (Go `50893e60d2` #5555 + `d8a8473be2` #5556).** Removes the explicit `Block.MarkSynchronous` transition and the `markExecuted` `setAsHeadBlock` flag (head is always set); `RestoreExecutionArtefacts` infers synchronous exec results from the header (`synchronousExecutionResults(hooks)`, base fee capped at `MaxUint64`) when `xdb` has none and sets `b.synchronous = true`. `NewVM` no longer takes a genesis block / does synchronous seeding — `Initialize` finalizes genesis via `rawdb.WriteFinalizedBlockHash` (once), and `recovery` drops its `lastSynchronous` field.
+> **Rust task:** mirror the derive-on-restore behavior on `Block` (M7.11 `synchronous: OnceLock<()>`) — restore infers synchronous results from the header when no persisted results exist — and drop the combined exec+settle `mark_synchronous` as a separate public transition; move genesis finalization into VM init. **Non-gating** (Helicon unscheduled) but a recovery/lifecycle correctness refactor worth mirroring.
+**Files (anticipated):** `crates/ava-saevm/blocks/src/execution.rs`, `crates/ava-saevm/core/src/{recovery,vm}.rs`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -876,6 +924,12 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 upstream-delta | `cchain` wires the `warp` package into VM `Initialize`/hooks (storage from receipts, ACP-118 handler, `VerifyBlock`→predicate bytes in header) (Go `5e040de53e` #5514) | **M7.50** (non-gating, Helicon; completes M7.38 wiring) |
 | `11` §8 + `21` §6.x upstream-delta | `cchain` consumes `MinPriceExponent` in pricing (`GasConfigAfter`→`Price()`, `BuildHeader`→`Toward(desired)`, `InitialPriceExponent`) (Go `f72fee1347` #5441) | **M7.51** (non-gating, Helicon; consumes M7.34/M7.46) |
 | `11` §8 + `10` §8.3 upstream-delta | `cchain` parses operator node config from `configBytes` (pruning/commit-interval/tx-pool slots/min-price-target + defaults) (Go `cbea62895c` #5574) | **M7.52** (non-gating, Helicon) |
+| `11` §5 upstream-delta | `cchain` `vms.Factory` + disabled state-sync `syncer` stubs (composes M7.40 `ConvertStateSync`) (Go `f5ee5d2970` #5604) | **M7.53** (non-gating, Helicon; state sync unported) |
+| `11` §8 + `21` §6.x upstream-delta | `cchain` implements the ACP-176 dynamic gas target (`GasConfigAfter`→`Target()`, `BuildHeader`→`Toward(desired)`, `InitialTargetExponent`) (Go `eefec86365` #5587) | **M7.54** (non-gating, Helicon; consumes M7.34; sibling of M7.51) |
+| `11` §8 upstream-delta | `cchain` populates Helicon genesis header fields (`TargetExponent`/`MinPriceExponent` + 4 settled markers) (Go `d50617e16e` #5589) | **M7.55** (non-gating, Helicon; wire/format parity) |
+| `11` §8 upstream-delta | `cchain` disallows empty blocks (`BuildBlock` → `errEmptyBlock` when no eth+avax txs) (Go `6a2eb63cdf` #5597) | **M7.56** (non-gating, Helicon) |
+| `11` §8 upstream-delta | `cchain` wires `allow-unprotected-txs` + `batch-request-limit` config keys + decode-time `RPCConfig.Verify()` (Go `736a6f98a5` #5596, `c7e93845c3` #5607) | **M7.57** (non-gating, Helicon; extends M7.52) |
+| `11` §4.2 upstream-delta | drop `Block.MarkSynchronous`; `RestoreExecutionArtefacts` derives synchronous results from header + genesis finalized via `WriteFinalizedBlockHash` (Go `50893e60d2` #5555, `d8a8473be2` #5556) | **M7.58** (non-gating, Helicon; recovery/lifecycle refactor) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |

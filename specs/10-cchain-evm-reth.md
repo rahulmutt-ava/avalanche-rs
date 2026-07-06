@@ -560,6 +560,21 @@ as coreth.
   (§8). The proposervm block context arrives via `Block::verify_with_context`
   (06 §`ShouldVerifyWithContext`).
 
+> **Upstream delta (avalanchego `ffe6d8577c`, #5603 — folded 2026-07-06).** The
+> atomic block extension's **`ExtDataGasUsed` validation moved from syntactic to
+> semantic verify** (`graft/coreth/plugin/evm/atomic/vm/block_extension.go`). The
+> ApricotPhase4 "`ExtDataGasUsed` is populated correctly" check (and, before
+> Fortuna, the AP5 `header.VerifyGasUsed` path) previously ran in `SyntacticVerify`;
+> it now runs in `SemanticVerify` alongside the shared-memory UTXO-presence check,
+> because it needs the resolved `rules`/`headerExtra`/`atomicTxs` for the block.
+> This is a **verify-phase reordering, not a wire/format change** — the same
+> predicate, run later. **Rust seam:** in `ava-evm`'s C-Chain verify pipeline (the
+> steps 1→2→3 sketch above), keep the `ExtDataGasUsed` check in the semantic pass
+> (against parent-resolved rules) rather than a standalone syntactic pass. This is a
+> coreth **reference input** (the Rust EVM is reth, not a transliteration target),
+> so it constrains *when* the check fires, not new code to port — align the M6
+> verify-scope tasks (M6.17/M6.18) accordingly.
+
 ---
 
 ## 7. Dynamic fees & gas (C4/C5)

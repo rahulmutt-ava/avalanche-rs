@@ -883,6 +883,22 @@ impl GasTime {
 > math; this is the integrator→`MinPrice` wiring. See `11` §8 upstream-delta; ported
 > as `plan/M7` **M7.51**. **Non-gating** (Helicon unscheduled).
 
+> **Upstream delta (avalanchego `eefec86365`, #5437's sibling, #5587 — folded 2026-07-06).**
+> The `TargetExponent` integrator (row 1 of the table above, **ACP-176**) is now
+> *consumed* in the SAE C-Chain block lifecycle — the target-gas analog of the
+> #5441 price consumption. `cchain.hooks.GasConfigAfter` now returns
+> `te.Target()` as the gas target (was a hardcoded `1_000_000`), where `te` comes
+> from a `targetExponent(config, header)` reader: the header's `TargetExponent`
+> field if present, else `InitialTargetExponent` for genesis/pre-Fortuna, else
+> `dynamic.TargetExponent(acp176.ParseState(h.Extra).TargetExcess)` for the last
+> synchronous block. `BuildHeader` advances the child via
+> `targetExponent(parent).Toward(desired.targetExponent)`, with the node's desired
+> target from operator config `gas-target` → `DesiredTargetExponent`. A new
+> `dynamic.InitialTargetExponent = 0` names the 1,000,000-gas/s floor (genesis +
+> absent-field default). Still **no formula change** — `Target()`/`Toward`/`Desired*`
+> are the §6.x math; this is the integrator→gas-target wiring. See `11` §8
+> upstream-delta; ported as `plan/M7` **M7.54**. **Non-gating** (Helicon unscheduled).
+
 ## 7. Mechanism → fork → crate
 
 Fork gating uses the shared `Fork`/`UpgradeConfig` model in §03 / §11.

@@ -10,10 +10,11 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `cbea62895c` (2026-06-25) have been reviewed and folded in as **"Upstream
-> delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `14`,
-> `18`, `21`, `27`) and plan files (`plan/M4`, `plan/M7`, `plan/M8`). When re-syncing
-> against newer avalanchego, start the review from `cbea62895c`.
+> `d8a8473be2` (2026-07-02) have been reviewed and folded in as **"Upstream
+> delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `13`,
+> `14`, `18`, `21`, `27`) and plan files (`plan/M1`, `plan/M4`, `plan/M7`,
+> `plan/M8`). When re-syncing against newer avalanchego, start the review from
+> `d8a8473be2`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -127,6 +128,36 @@ from these documents.
 > reexecution (`2a93974d34`, #5487) — a `graft/coreth`+`graft/evm`+`graft/subnet-evm`
 > refactor of state reconstruction; the Rust EVM is reth + Firewood-direct, so this
 > is a reference input, not a port obligation.
+>
+> The `cbea62895c → d8a8473be2` sync (reviewed 2026-07-06) folded fourteen
+> spec-relevant commits of twenty-two. **Live / not fork-gated:** (1) **BlockDB
+> single-process file lock** (`dc350727b7`, #5420) — advisory `flock` on a per-dir
+> `LOCK` file, acquired before recovery → `04` §5.1 + `plan/M1` **M1.27**;
+> (2) **firewood ffi v0.6.0 → v0.7.0** (`15c98fb2d8`, #5609) → `04` §4.x
+> upstream-delta (re-pin before live gates; already staged in the M9.15 plan);
+> (3) **ExtDataGasUsed verify moved syntactic → semantic** (`ffe6d8577c`, #5603) →
+> `10` §6.5 (coreth reference input; constrains *when* the check fires, align
+> M6.17/M6.18). **P-Chain (Helicon-gated / dormant):** (4) **ACP-236 (5)
+> auto-renewed reward proposal execution + block-builder issuing**
+> (`133e5e7fa6` #5204 + `170ec7fb6b` #5206) → `08` §4.3 + `plan/M4` **M4.31** (also
+> notes the `vms/saevm/intmath` → `utils/math/intmath` relocation, a Go-path move);
+> (5) **`--helicon-min-stake-duration` 48h** (`a7b61f2598`, #5299) → `13`
+> staking-economics + `plan/M8` **M8.33** (flag plumbing real, 48h validation floor
+> dormant). **SAE C-Chain (Helicon-dormant, non-gating) → `plan/M7` M7.53–M7.58:**
+> (6) **`vms.Factory` + state-sync stubs** (`f5ee5d2970`, #5604) → `11` §5 / **M7.53**;
+> (7) **ACP-176 dynamic gas target** (`eefec86365`, #5587) → `11` §8 + `21` §6.x /
+> **M7.54**; (8) **populate Helicon genesis header fields** (`d50617e16e`, #5589) →
+> `11` §8 / **M7.55**; (9) **disallow empty blocks** (`6a2eb63cdf`, #5597) → `11` §8 /
+> **M7.56**; (10) **`allow-unprotected-txs` + `batch-request-limit` config**
+> (`736a6f98a5` #5596 + `c7e93845c3` #5607) → `11` §8 / **M7.57**; (11) **drop
+> `MarkSynchronous` / derive synchronous results on restore** (`50893e60d2` #5555 +
+> `d8a8473be2` #5556) → `11` §4.2 / **M7.58** (recovery/lifecycle refactor).
+> **Irrelevant (tooling / test-infra / docs, no spec surface):** Antithesis C-Chain
+> workload (`600640f318`, #5228), bazel external-dep cache (`ac6886f31f`, #5525),
+> e2e scheduled-upgrade test (`c0fd37dd00`, #5605), docs-guidelines index
+> (`3a88cfaec0`, #5600), firewood-chaos-test CI fix (`a252ab8ed0`, #5606), cap
+> coreth unit tests to Granite (`71fd51e0d8`, #5602), nix-flake CI cache
+> (`cda94cb0d4`, #5588), repository documentation guidelines (`f54f108712`, #5373).
 
 ## Read this first
 
