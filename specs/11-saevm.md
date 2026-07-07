@@ -78,7 +78,8 @@ height ────────────────────────�
     S frontier ≤ E frontier ≤ A frontier  (heights, always)
 ```
 
-- **Accepted (A):** consensus has committed the ordering. `rawdb` *canonical*.
+- **Accepted (A):** consensus has committed the ordering. `rawdb` *canonical*
+  (and, as of the delta below, *HeadFast*).
 - **Executed (E):** the executor has produced and committed the post-state. This
   is the EVM "head"/"latest". Lags A by the queue depth.
 - **Settled (S):** an executed block whose results have been *referenced by a
@@ -145,6 +146,25 @@ in-memory state**:
 Determinism guarantee: re-execution from the last committed root reproduces the
 exact same post-state roots, because execution is a pure function of the ordered
 blocks + parent state (no wall-clock, no map-iteration nondeterminism — §6.1).
+
+> **Upstream delta (avalanchego `c6654c34a4`, #5544 — folded 2026-07-07).**
+> SAE now persists an explicit **last-accepted pointer** by co-writing the
+> libevm `HeadFast` block hash on every `AcceptBlock` (`sae/consensus.go`:
+> `rawdb.WriteHeadFastBlockHash` alongside the existing `WriteCanonicalHash`),
+> and the genesis writers (`cchain/genesis.go`, the coreth/subnet-evm `Genesis.Commit`
+> reference inputs) seed it too. This tightens the mapping in §1.1: **Accepted ⇒
+> canonical *and* HeadFast** (`vms/saevm/docs/invariants.md`; `HeadFast` = "recorded
+> but not-yet-executed", which is exactly SAE Accepted and convenient for indexing
+> the last-accepted block). Recovery's accepted-but-not-executed walk
+> (`sae/recovery.go::canonicalAfter`, step 2 above) is rewritten to use it: instead
+> of scanning `ReadAllCanonicalHashes(parent+1, MaxUint64, MaxInt)`, it reads
+> `ReadHeadFastBlockHash` and walks parent → that hash by height; an unset hash
+> (`common.Hash{}`) means the accepted set is empty, so a genesis-only node yields
+> nothing (new `numBlocks: 0` recovery test case). **Rust seam:** `ava-saevm-core`
+> recovery (`canonical_after` / step-2 `execute_all_accepted`) + the `ava-evm`
+> rawdb-equivalent (`{Read,Write}HeadFastBlockHash` over the KV, §6.2 "Consensus
+> state"). **Non-gating** (Helicon unscheduled) but a recovery-correctness change
+> worth mirroring — folds into the M7.24 recovery work as **M7.59**.
 
 ### 1.5 Data-flow diagram
 

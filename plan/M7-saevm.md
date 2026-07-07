@@ -874,6 +874,14 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.59: store last-accepted hash (`HeadFast`) + bound the recovery walk **[UPSTREAM DELTA — added 2026-07-07]** ⬜ TODO
+**Sub-crate:** ava-saevm-core (`sae/{consensus,recovery}`) + ava-evm-reth (rawdb `HeadFast`) · **Depends on:** M7.24 (recovery), M7.17 (AcceptBlock) · **Spec:** `11` §1.1 + §1.4 upstream-delta (Go `c6654c34a4` #5544)
+> **Upstream parity (Go `c6654c34a4`, #5544).** `AcceptBlock` co-writes `rawdb.WriteHeadFastBlockHash(b.Hash())` next to the canonical-hash write, giving an explicit persisted last-accepted pointer; genesis writers (`cchain/genesis.go` + coreth/subnet-evm `Genesis.Commit` reference inputs) seed it. `recovery.canonicalAfter` no longer scans `ReadAllCanonicalHashes(parent+1, MaxUint64, MaxInt)` — it reads `ReadHeadFastBlockHash` and walks `parent → lastAcceptedHash` by height; an unset hash means the accepted set is empty (genesis-only node → nothing to re-enqueue; new `numBlocks: 0` recovery test). Invariants doc maps **Accepted ⇒ Canonical + HeadFast**.
+> **Rust task:** co-write a `HeadFast` last-accepted hash in the SAE `AcceptBlock` batch, seed it at genesis, and rewrite the M7.24 recovery accepted-block walk to bound on the persisted hash instead of an open-ended canonical scan (empty hash ⇒ empty accepted set). Add the `{Read,Write}HeadFastBlockHash` rawdb accessors in `ava-evm-reth`. **Non-gating** (Helicon unscheduled) but a recovery-correctness change worth mirroring.
+**Files (anticipated):** `crates/ava-saevm/core/src/{consensus,recovery}.rs`, `crates/ava-evm-reth/src/rawdb.rs`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -881,7 +889,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §1 / §1.1 | SAE model; three frontiers (S/E/A) + RPC label table | M7.17 (frontiers), M7.19 (RPC labels) |
 | `11` §1.2 | Settlement rule (`Settles`/`Range`/`last_to_settle_at`, `known=false`) | M7.11 (settlement), M7.17 (settle) |
 | `11` §1.3 | What a block carries (Root repurpose, `hook.Settled`, worst-case fields) | M7.11, M7.9, M7.18 |
-| `11` §1.4 | Recovery after restart (rebuild A/E/S) | **M7.24**, M7.29, M7.28 |
+| `11` §1.4 | Recovery after restart (rebuild A/E/S) | **M7.24**, M7.29, M7.28, **M7.59** (`HeadFast` last-accepted pointer bounds the walk) |
 | `11` §1.5 | Data-flow (builder→executor→events) | M7.14, M7.15, M7.18, M7.20 |
 | `11` §2.1 | `proxytime::Time<D>` | M7.5, M7.4 (compare) |
 | `11` §2.2 | `gastime` SAE gas clock (before/tick/after_block, price) | M7.6, **M7.36** (`new(starting_price)` delta) |
@@ -930,6 +938,7 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 upstream-delta | `cchain` disallows empty blocks (`BuildBlock` → `errEmptyBlock` when no eth+avax txs) (Go `6a2eb63cdf` #5597) | **M7.56** (non-gating, Helicon) |
 | `11` §8 upstream-delta | `cchain` wires `allow-unprotected-txs` + `batch-request-limit` config keys + decode-time `RPCConfig.Verify()` (Go `736a6f98a5` #5596, `c7e93845c3` #5607) | **M7.57** (non-gating, Helicon; extends M7.52) |
 | `11` §4.2 upstream-delta | drop `Block.MarkSynchronous`; `RestoreExecutionArtefacts` derives synchronous results from header + genesis finalized via `WriteFinalizedBlockHash` (Go `50893e60d2` #5555, `d8a8473be2` #5556) | **M7.58** (non-gating, Helicon; recovery/lifecycle refactor) |
+| `11` §1.1 + §1.4 upstream-delta | store last-accepted hash — `AcceptBlock`/genesis co-write `HeadFast`; recovery walk bounds on `ReadHeadFastBlockHash` instead of open-ended canonical scan (unset ⇒ empty accepted set) (Go `c6654c34a4` #5544) | **M7.59** (non-gating, Helicon; recovery correctness) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |

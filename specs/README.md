@@ -10,11 +10,11 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `d8a8473be2` (2026-07-02) have been reviewed and folded in as **"Upstream
+> `96897293a2` (2026-07-07) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `13`,
 > `14`, `18`, `21`, `27`) and plan files (`plan/M1`, `plan/M4`, `plan/M7`,
 > `plan/M8`). When re-syncing against newer avalanchego, start the review from
-> `d8a8473be2`.
+> `96897293a2`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -158,6 +158,16 @@ from these documents.
 > (`3a88cfaec0`, #5600), firewood-chaos-test CI fix (`a252ab8ed0`, #5606), cap
 > coreth unit tests to Granite (`71fd51e0d8`, #5602), nix-flake CI cache
 > (`cda94cb0d4`, #5588), repository documentation guidelines (`f54f108712`, #5373).
+>
+> The `d8a8473be2 → 96897293a2` sync (reviewed 2026-07-07) folded one
+> spec-relevant commit of two. **SAE (Helicon-dormant, non-gating) → `plan/M7`
+> M7.59:** (1) **store last accepted hash** (`c6654c34a4`, #5544) → `11` §1.1 +
+> §1.4 — `AcceptBlock`/genesis co-write the libevm `HeadFast` block hash (an
+> explicit last-accepted pointer; **Accepted ⇒ Canonical + HeadFast**), and
+> recovery's accepted-but-not-executed walk bounds on `ReadHeadFastBlockHash`
+> (unset ⇒ empty accepted set) instead of an open-ended canonical scan.
+> **Irrelevant (Go-only dep chore, no spec surface):** bump `golang.org/x/net`
+> 0.52.0 → 0.55.0 (`96897293a2`, #5628).
 
 ## Read this first
 
