@@ -37,13 +37,13 @@ tokio = { workspace = true, optional = true }
 # is exactly the revision the Go node's `firewood-go-ethhash/ffi v0.5.0` wraps.
 # Optional + gated behind the `firewood`/`firewood-ethhash` features so non-
 # firewood builds never pull it (it has a native/cmake-ish build).
-firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, optional = true }
+firewood = { git = "https://github.com/ava-labs/firewood", tag = "v0.7.0", default-features = false, optional = true }
 # `firewood::db::DbConfig` requires a `NodeHashAlgorithm` (firewood does not
 # re-export it from its public API), so we pull `firewood-storage` from the same
 # pinned rev just for `NodeHashAlgorithm::compile_option()`. Its `ethhash`
 # feature must track `firewood/ethhash` (both flip the global hash mode), so the
 # `firewood-ethhash` feature turns both on together.
-firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.6.0", default-features = false, optional = true }
+firewood-storage = { git = "https://github.com/ava-labs/firewood", tag = "v0.7.0", default-features = false, optional = true }
 
 [features]
 # Exposes `fuzz_support` (the canonical DbOp op-stream + oracle check shared by
