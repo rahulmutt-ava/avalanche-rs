@@ -13,6 +13,22 @@ ignore = [
   # via the staking-cert path (ava-crypto). Tracked for migration to
   # rustls-pki-types::pem; ignore until then. (specs/01 §9, RUSTSEC-2025-0134)
   "RUSTSEC-2025-0134",
+  # lru 0.12.5 IterMut unsoundness. Pre-existing on main at the identical
+  # version — NOT introduced by the firewood v0.7.0 bump. We verified no
+  # lru::IterMut usage anywhere in crates/*/src (the only iter_mut is a plain
+  # slice iterator in ava-database/src/prefixdb.rs). Bumping lru 0.12→0.18 is
+  # an API-risky change out of scope for this branch; tracked for a follow-up
+  # dep-hygiene pass.
+  "RUSTSEC-2026-0002",
+  # paste is an unmaintained compile-time proc-macro only (no runtime code).
+  # Pre-existing on main at the identical version — NOT introduced by the
+  # firewood v0.7.0 bump; tracked for a follow-up dep-hygiene pass.
+  "RUSTSEC-2024-0436",
+  # proc-macro-error2 is an unmaintained compile-time proc-macro only (no
+  # runtime code). Pre-existing on main at the identical version — NOT
+  # introduced by the firewood v0.7.0 bump; tracked for a follow-up
+  # dep-hygiene pass.
+  "RUSTSEC-2026-0173",
 ]
 
 [licenses]
@@ -27,11 +43,47 @@ allow = [
   "Zlib",
   "MPL-2.0", # used by some crypto deps; review case-by-case
   "CC0-1.0", # public-domain dedication; used by secp256k1 / secp256k1-sys (core dep)
+  "0BSD", # BSD Zero Clause (public-domain-equivalent); varint-rs via value-log/lsm-tree
+  "BSL-1.0", # Boost Software License 1.0 (permissive, NOT BUSL); xxhash-rust via lsm-tree
 ]
 confidence-threshold = 0.9
 exceptions = [
-  # { allow = ["..."], name = "some-crate" },
+  # firewood v0.7.0 ships LICENSE.md (Ava Labs Ecosystem license) without an
+  # SPDX `license` field in its manifests; same Ava Labs source we already
+  # trust as a pinned git dep. Permitted ONLY for the four firewood crates
+  # (clarified below) — deliberately NOT in the global allow list.
+  { allow = [ "LicenseRef-Firewood-Ecosystem" ], name = "firewood" },
+  { allow = [ "LicenseRef-Firewood-Ecosystem" ], name = "firewood-macros" },
+  { allow = [ "LicenseRef-Firewood-Ecosystem" ], name = "firewood-metrics" },
+  { allow = [ "LicenseRef-Firewood-Ecosystem" ], name = "firewood-storage" },
 ]
+
+# firewood v0.7.0 dropped the SPDX `license` field from its crate manifests
+# (only LICENSE.md ships). Clarify each crate's license from the shared
+# repo-root LICENSE.md (hash as reported by cargo-deny's gather step).
+[[licenses.clarify]]
+name = "firewood"
+version = "0.7.0"
+expression = "LicenseRef-Firewood-Ecosystem"
+license-files = [ { path = "../LICENSE.md", hash = 0xf3f18e53 } ]
+
+[[licenses.clarify]]
+name = "firewood-macros"
+version = "0.6.0"
+expression = "LicenseRef-Firewood-Ecosystem"
+license-files = [ { path = "../LICENSE.md", hash = 0xf3f18e53 } ]
+
+[[licenses.clarify]]
+name = "firewood-metrics"
+version = "0.7.0"
+expression = "LicenseRef-Firewood-Ecosystem"
+license-files = [ { path = "../LICENSE.md", hash = 0xf3f18e53 } ]
+
+[[licenses.clarify]]
+name = "firewood-storage"
+version = "0.7.0"
+expression = "LicenseRef-Firewood-Ecosystem"
+license-files = [ { path = "../LICENSE.md", hash = 0xf3f18e53 } ]
 
 [bans]
 multiple-versions = "warn" # tighten to "deny" once the tree stabilizes
