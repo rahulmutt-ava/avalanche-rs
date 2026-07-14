@@ -243,7 +243,15 @@ impl Server {
     /// `503`). The node-id header is outermost so it is set on **every**
     /// response, including the allowed-hosts `403` short-circuit (mirror Go,
     /// where the node-id wrapper is the outermost handler; 14 §16.3).
-    pub(crate) fn build_router(&self) -> Result<Router> {
+    ///
+    /// Public so in-process integration tests (e.g. the `avalanchers`
+    /// chain-route registration test, M9.15 rung 2) can drive the exact router
+    /// [`ApiServer::serve`] would bind, via `tower::ServiceExt::oneshot`,
+    /// without opening a socket.
+    ///
+    /// # Errors
+    /// Propagates a malformed accumulated route / listener-config failure.
+    pub fn build_router(&self) -> Result<Router> {
         let registry = self.registry.lock();
 
         let mut router = Router::new();

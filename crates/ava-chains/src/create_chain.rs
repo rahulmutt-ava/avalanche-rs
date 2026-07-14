@@ -576,6 +576,13 @@ pub struct SnowmanChain<V: ChainVm, S, M> {
     /// VM's `toEngine` channel. The caller keeps this to issue blocks through the
     /// genuine engine path (M9.15 STEP (m)); the handler owns the receiver.
     pub vm_tx: mpsc::Sender<VmEvent>,
+    /// The **shared** fully-wrapped VM (the same `Arc<Mutex<..>>` the engines
+    /// hold), type-erased to the [`Vm`] object the API server's chain
+    /// registration takes. The chain creator passes this to
+    /// `ApiServer::register_chain` so the VM's `create_handlers` /
+    /// `new_http_handler` mount at `/ext/bc/<chainID>/<ext>` (Go
+    /// `chains/manager.go` → `server.RegisterChain`; M9.15 rung 2).
+    pub vm: Arc<AsyncMutex<dyn Vm>>,
     /// Carries the generic `V`/`S`/`M` parameters (the concrete engines moved
     /// into the type-erased `EngineManager` inside the handler).
     _vm: std::marker::PhantomData<(V, S, M)>,
@@ -756,6 +763,9 @@ where
         handler,
         last_accepted_height,
         vm_tx,
+        // The same shared mutex the engines hold, unsized to the `dyn Vm` the
+        // API server's `register_chain` takes (M9.15 rung 2).
+        vm,
         _vm: std::marker::PhantomData,
     })
 }

@@ -179,6 +179,11 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
             Arc::clone(&node.chain_router),
             node.networking.on_sufficiently_connected.clone(),
             beacons,
+            // Mount each booted chain's HTTP handlers on the node's API server
+            // (M9.15 rung 2), so the live node serves /ext/bc/P, /ext/bc/X and
+            // /ext/bc/C/rpc. Registration happens before `dispatch` starts
+            // `serve()`, so the composed router carries the chain routes.
+            Some(&node.api_server),
         )
         .await
         .context("failed to drive the startup chains")?;

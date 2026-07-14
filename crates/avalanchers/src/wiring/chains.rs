@@ -32,6 +32,7 @@ use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
+use ava_api::server::{ApiServer, Server as HttpApiServer};
 use ava_chains::create_snowman_chain;
 use ava_chains::manager::{DynProbe, Factory, ProbeableVm, VmManager};
 use ava_crypto::staking;
@@ -696,6 +697,11 @@ pub struct PChainBootHandle {
     /// The handler sink, kept alive for the handler's lifetime (dropping it
     /// would unregister the chain from the router).
     pub _sink: ava_engine::networking::handler::ChainHandlerSink,
+    /// The **shared** fully-wrapped VM (the same mutex the engines hold),
+    /// type-erased for the API server's chain registration
+    /// (`ApiServer::register_chain` mounts its `create_handlers` at
+    /// `/ext/bc/<chainID>/<ext>`; M9.15 rung 2).
+    pub vm: Arc<tokio::sync::Mutex<dyn ava_vm::vm::Vm>>,
     /// The chain's on-disk scratch dir (the C-Chain Firewood state db), kept
     /// alive for the booted chain's lifetime; dropping it would delete the state
     /// db out from under the running VM. `None` for chains with no on-disk state
@@ -1132,6 +1138,7 @@ where
         beacons: assembled.beacons,
         vm_tx: assembled.vm_tx,
         _sink: assembled.sink,
+        vm: assembled.vm,
         _data_dir: data_dir,
     })
 }
@@ -1178,6 +1185,9 @@ struct AssembledChain {
     beacons: Vec<NodeId>,
     vm_tx: mpsc::Sender<ava_vm::vm::VmEvent>,
     sink: ChainHandlerSink,
+    /// The shared fully-wrapped VM, type-erased for API-server chain
+    /// registration (M9.15 rung 2).
+    vm: Arc<tokio::sync::Mutex<dyn ava_vm::vm::Vm>>,
 }
 
 /// The shared in-process chain-assembly core, generic over the inner
@@ -1321,6 +1331,7 @@ where
     let vm_tx = chain.vm_tx.clone();
     let last_accepted_height = chain.last_accepted_height;
     let sink = chain.sink.clone();
+    let vm = Arc::clone(&chain.vm);
 
     // Sender-specific post-create hook (the `RecordingSender` self-loopback
     // install; a no-op for the production `OutboundSender`). Runs before the
@@ -1366,6 +1377,7 @@ where
         beacons: beacon_nodes,
         vm_tx,
         sink,
+        vm,
     })
 }
 
@@ -1416,6 +1428,11 @@ pub struct NetworkChainBootHandle {
     /// The handler sink, kept alive for the handler's lifetime (dropping it
     /// would unregister the chain from the router).
     pub _sink: ChainHandlerSink,
+    /// The **shared** fully-wrapped VM (the same mutex the engines hold),
+    /// type-erased for the API server's chain registration
+    /// (`ApiServer::register_chain` mounts its `create_handlers` at
+    /// `/ext/bc/<chainID>/<ext>`; M9.15 rung 2).
+    pub vm: Arc<tokio::sync::Mutex<dyn ava_vm::vm::Vm>>,
     /// The chain's on-disk scratch dir (e.g. a C-Chain Firewood state db), kept
     /// alive for the booted chain's lifetime; dropping it would delete the state
     /// db out from under the running VM. `None` for chains with no on-disk state.
@@ -1497,6 +1514,7 @@ where
         router: router_handle,
         vm_tx: assembled.vm_tx,
         _sink: assembled.sink,
+        vm: assembled.vm,
         _data_dir: None,
     })
 }
@@ -1745,13 +1763,37 @@ pub async fn run_queued_chains(
     manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
     network_id: u32,
 ) -> Result<Vec<PChainBootHandle>> {
-    run_queued_chains_with_db(manager, network_id, fresh_mem_db()).await
+    run_queued_chains_with_db(manager, network_id, fresh_mem_db(), None).await
+}
+
+/// Register a freshly booted chain's HTTP handlers with the node's API server,
+/// when one was supplied (Go parity: `chains/manager.go` calls
+/// `server.RegisterChain` after chain creation; M9.15 rung 2). Mount paths
+/// (`/ext/bc/<chainID>/<ext>`), the `bc/P`-style primary alias, and the
+/// not-bootstrapped `503` layer all come from the `ava-api` register seam
+/// (M8.22) — failures are logged and skipped inside it, never propagated,
+/// exactly like Go's `RegisterChain`. `None` (tests / probe boots without an
+/// HTTP server) is a no-op.
+async fn register_chain_api(
+    api_server: Option<&Arc<HttpApiServer>>,
+    ctx: &Arc<ava_snow::ConsensusContext>,
+    vm: &Arc<tokio::sync::Mutex<dyn ava_vm::vm::Vm>>,
+) {
+    if let Some(server) = api_server {
+        ApiServer::register_chain(server.as_ref(), &ctx.primary_alias, ctx, Arc::clone(vm)).await;
+    }
 }
 
 /// Like [`run_queued_chains`], but driving every queued chain over the
 /// caller-supplied persistent `base_db` (shared across chains, prefixed per
 /// chain by `build_db_stack`). This is the persistence-bearing path the live
 /// node uses; see [`run_queued_chains`] for the dispatch semantics.
+///
+/// When `api_server` is supplied, each booted chain's HTTP handlers are
+/// registered with it (`ApiServer::register_chain` — `/ext/bc/<chainID>/<ext>`
+/// mounts + the `bc/P`-style alias + the not-bootstrapped `503` layer), so a
+/// live node serves `/ext/bc/P`, `/ext/bc/X`, `/ext/bc/C/rpc` (M9.15 rung 2).
+/// `None` keeps the pre-existing no-HTTP behavior for probe/test boots.
 ///
 /// # Errors
 /// Propagates a chain boot failure (genesis / DB / VM-init / consensus /
@@ -1760,6 +1802,7 @@ pub async fn run_queued_chains_with_db(
     manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
     network_id: u32,
     base_db: Arc<dyn DynDatabase>,
+    api_server: Option<&Arc<HttpApiServer>>,
 ) -> Result<Vec<PChainBootHandle>> {
     use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
@@ -1847,6 +1890,10 @@ pub async fn run_queued_chains_with_db(
             Box::new(move || matches!(**ctx.state.load(), EngineState::NormalOp)),
         );
 
+        // Mount the chain's HTTP handlers on the node's API server (Go parity:
+        // chain creation → server.RegisterChain; M9.15 rung 2).
+        register_chain_api(api_server, &handle.ctx, &handle.vm).await;
+
         handles.push(handle);
     }
 
@@ -1889,13 +1936,14 @@ pub async fn drive_startup_chains(
     network_id: u32,
     beaconless: bool,
 ) -> Result<Vec<PChainBootHandle>> {
-    drive_startup_chains_with_db(manager, network_id, beaconless, fresh_mem_db()).await
+    drive_startup_chains_with_db(manager, network_id, beaconless, fresh_mem_db(), None).await
 }
 
 /// Like [`drive_startup_chains`], but driving the queued chains over the
 /// assembled node's real persistent `base_db` (so consensus / VM state survives
 /// a restart). This is the path the live `avalanchers` binary calls with
-/// `node.db`; see [`drive_startup_chains`] for the beacon-gating semantics.
+/// `node.db`; see [`drive_startup_chains`] for the beacon-gating semantics and
+/// [`run_queued_chains_with_db`] for the `api_server` registration seam.
 ///
 /// # Errors
 /// Propagates a chain boot failure from [`run_queued_chains_with_db`].
@@ -1904,6 +1952,7 @@ pub async fn drive_startup_chains_with_db(
     network_id: u32,
     beaconless: bool,
     base_db: Arc<dyn DynDatabase>,
+    api_server: Option<&Arc<HttpApiServer>>,
 ) -> Result<Vec<PChainBootHandle>> {
     if !beaconless {
         tracing::info!(
@@ -1912,7 +1961,7 @@ pub async fn drive_startup_chains_with_db(
         );
         return Ok(Vec::new());
     }
-    run_queued_chains_with_db(manager, network_id, base_db).await
+    run_queued_chains_with_db(manager, network_id, base_db, api_server).await
 }
 
 /// Production multi-node analogue of [`run_queued_chains_with_db`]: drive every
@@ -1922,6 +1971,9 @@ pub async fn drive_startup_chains_with_db(
 /// peers. Uses `RealClock`. `beacons` is the bootstrap beacon set applied to every
 /// critical chain — **empty** ⇒ beaconless short-circuit `Bootstrapping →
 /// NormalOp` (solo / beacon role); **non-empty** ⇒ frontier from those peers.
+///
+/// When `api_server` is supplied, each booted chain's HTTP handlers are
+/// registered with it (see [`run_queued_chains_with_db`]; M9.15 rung 2).
 ///
 /// # Errors
 /// Propagates a chain boot failure (genesis / DB / VM-init / consensus / identity
@@ -1935,6 +1987,7 @@ pub async fn run_queued_chains_over_network(
     router: Arc<ChainRouter>,
     gate: watch::Receiver<bool>,
     beacons: BTreeMap<NodeId, u64>,
+    api_server: Option<&Arc<HttpApiServer>>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
@@ -2042,6 +2095,10 @@ pub async fn run_queued_chains_over_network(
             Box::new(move || matches!(**ctx.state.load(), EngineState::NormalOp)),
         );
 
+        // Mount the chain's HTTP handlers on the node's API server (Go parity:
+        // chain creation → server.RegisterChain; M9.15 rung 2).
+        register_chain_api(api_server, &handle.ctx, &handle.vm).await;
+
         handles.push(handle);
     }
 
@@ -2057,6 +2114,10 @@ pub async fn run_queued_chains_over_network(
 /// `Bootstrapping → NormalOp` (the beacon role). Non-empty ⇒ the node bootstraps
 /// from those beacons (the follower path), gated on `gate`.
 ///
+/// `api_server` is the node's HTTP server: each booted chain's handlers are
+/// registered on it so the live node serves `/ext/bc/P`, `/ext/bc/X`,
+/// `/ext/bc/C/rpc` (M9.15 rung 2; `None` for probe boots without HTTP).
+///
 /// # Errors
 /// Propagates a chain boot failure from [`run_queued_chains_over_network`].
 #[allow(clippy::too_many_arguments)]
@@ -2068,7 +2129,10 @@ pub async fn drive_startup_chains_over_network(
     router: Arc<ChainRouter>,
     gate: watch::Receiver<bool>,
     beacons: BTreeMap<NodeId, u64>,
+    api_server: Option<&Arc<HttpApiServer>>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
-    run_queued_chains_over_network(manager, network_id, base_db, network, router, gate, beacons)
-        .await
+    run_queued_chains_over_network(
+        manager, network_id, base_db, network, router, gate, beacons, api_server,
+    )
+    .await
 }

@@ -465,7 +465,7 @@ async fn node_restart_resumes_persisted_tip_over_shared_base_db() {
 
     // ---- Boot 1: a fresh node over the empty base db ----
     let manager1 = fresh_manager(&genesis_bytes);
-    let handles1 = run_queued_chains_with_db(&manager1, network_id, Arc::clone(&base))
+    let handles1 = run_queued_chains_with_db(&manager1, network_id, Arc::clone(&base), None)
         .await
         .expect("boot 1: the queued P-, X- and C-Chains over the empty base db");
     assert_eq!(handles1.len(), 3, "boot 1: P, X and C all boot");
@@ -491,7 +491,7 @@ async fn node_restart_resumes_persisted_tip_over_shared_base_db() {
 
     // ---- Boot 2: restart — a FRESH chain manager over the SAME base db ----
     let manager2 = fresh_manager(&genesis_bytes);
-    let handles2 = run_queued_chains_with_db(&manager2, network_id, Arc::clone(&base))
+    let handles2 = run_queued_chains_with_db(&manager2, network_id, Arc::clone(&base), None)
         .await
         .expect("boot 2: re-open the persisted (non-empty) base db");
     assert_eq!(handles2.len(), 3, "boot 2: P, X and C all re-boot");
@@ -800,7 +800,7 @@ async fn run_queued_chains_persists_into_supplied_base_db() {
         "run_queued_chains_with_db(): the base db is empty before any chain boots"
     );
 
-    let handles = run_queued_chains_with_db(&manager, network_id, Arc::clone(&base))
+    let handles = run_queued_chains_with_db(&manager, network_id, Arc::clone(&base), None)
         .await
         .expect("boot the queued P-, X- and C-Chains over the supplied base db");
     assert_eq!(

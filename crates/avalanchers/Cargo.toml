@@ -35,6 +35,11 @@ serde_json = { workspace = true }
 # `TestVm` reused as the inner VM (no production no-op VM exists yet).
 ava-chains = { path = "../ava-chains" }
 ava-engine = { path = "../ava-engine" }
+# Chain HTTP-handler registration (M9.15 rung 2): after each chain boots, the
+# chain creator registers its `create_handlers` with the node's
+# `ava_api::server::Server` (the M8.22 register seam), so a live node serves
+# /ext/bc/P, /ext/bc/X, /ext/bc/C/rpc.
+ava-api = { path = "../ava-api" }
 # Production multi-node `Sender` wire-out (M9.15 STEP-q): `boot_chain_over_network`
 # builds the real ava-network-backed `OutboundSender` (engine `send_*` →
 # `proto/p2p` → `ava_network::network::Network::send`/`gossip`), replacing the
@@ -90,6 +95,12 @@ libc = "0.2"
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# Chain API-route registration test (M9.15 rung 2): drives the API server's
+# composed axum router in-process (tower `oneshot`) to prove the booted chains'
+# handlers are mounted at /ext/bc/P, /ext/bc/X, /ext/bc/C/rpc.
+# (Pinned per-crate like `ava-api` — axum/tower are not workspace deps.)
+axum = "0.7"
+tower = { version = "0.5", features = [ "util" ] }
 tokio = { workspace = true, features = [ "rt", "rt-multi-thread", "sync", "macros", "time", "signal" ] }
 # Production `OutboundSender` boot test (M9.15 STEP-q): a recording mock
 # `Network` + an allow-all `Allower` observe the bootstrapper's frontier
