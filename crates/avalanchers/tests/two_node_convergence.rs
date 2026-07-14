@@ -196,3 +196,124 @@ async fn follower_node_bootstraps_from_beacon_node_to_normalop() {
     let _ = tokio::time::timeout(Duration::from_secs(10), bd).await;
     let _ = tokio::time::timeout(Duration::from_secs(10), fd).await;
 }
+
+/// M9.15 `*Failed`-delivery escalation test at the **full node-assembly** layer
+/// (frontier stall rung; see
+/// `docs/superpowers/specs/2026-07-14-m9.15-frontier-failed-delivery-design.md`).
+///
+/// The live 5-beacon failure: one beacon (go1) raced `Network::send`'s
+/// connected-peer snapshot, never received `GetAcceptedFrontier`, and no
+/// `GetAcceptedFrontierFailed` was ever synthesized — frontier discovery
+/// stalled forever. Here the follower's engine beacon set contains the live
+/// beacon (weight 3) **plus a phantom node id that never connects** (weight 1),
+/// while the node-level connectivity gate keys on the live beacon only (in the
+/// live run the gate fired legitimately at 4/5). Every phantom request must
+/// resolve via the node's own `AdaptiveTimeoutManager` (built by
+/// `init_chain_manager` inside `Node::new`, 5s production initial timeout) into
+/// a timer-synthesized `*Failed`, and the follower's P-Chain must still reach
+/// `NormalOp`.
+#[tokio::test]
+async fn follower_node_bootstraps_despite_unreachable_beacon() {
+    let beacon_dir = tempfile::tempdir().unwrap();
+    let follower_dir = tempfile::tempdir().unwrap();
+
+    // ---- Beacon node: no bootstrappers ⇒ beaconless. ----
+    let beacon_cfg = Arc::new(build_config(beacon_dir.path(), None));
+    let log_factory = ava_node::logging_test_factory(&beacon_cfg);
+    let beacon = Arc::new(
+        Node::new(
+            Arc::clone(&beacon_cfg),
+            Arc::clone(&log_factory),
+            tokio::runtime::Handle::current(),
+        )
+        .await
+        .expect("beacon Node::new"),
+    );
+    let beacon_id = beacon.id;
+    let beacon_addr = beacon.networking.staking_address;
+    let beacon_handles = boot(&beacon, BTreeMap::new()).await;
+
+    // ---- Follower node: the live beacon is its sole *configured* bootstrapper
+    // (the connectivity gate keys on it), but its engine beacon set also
+    // carries the phantom. ----
+    let follower_cfg = Arc::new(build_config(
+        follower_dir.path(),
+        Some((beacon_id, beacon_addr)),
+    ));
+    let follower = Arc::new(
+        Node::new(
+            Arc::clone(&follower_cfg),
+            Arc::clone(&log_factory),
+            tokio::runtime::Handle::current(),
+        )
+        .await
+        .expect("follower Node::new"),
+    );
+    let phantom = NodeId::from([0xEE; 20]);
+    let mut beacons = BTreeMap::new();
+    beacons.insert(beacon_id, 3u64);
+    beacons.insert(phantom, 1u64);
+    let follower_handles = boot(&follower, beacons).await;
+
+    // ---- Pump both network loops. ----
+    let beacon_net = Arc::clone(&beacon.networking.net);
+    let follower_net = Arc::clone(&follower.networking.net);
+    let bd = tokio::spawn(async move { beacon_net.dispatch().await });
+    let fd = tokio::spawn(async move { follower_net.dispatch().await });
+
+    // ---- The follower connects to the live beacon; the phantom never dials. ----
+    let connected = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if follower
+                .networking
+                .net
+                .connected_peers()
+                .contains(&beacon_id)
+            {
+                break true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        connected,
+        "follower established a TLS peer connection to the live beacon"
+    );
+
+    // ---- Follower P-Chain must reach NormalOp: the live beacon answers each
+    // phase; the phantom's registered requests must each yield a
+    // timer-synthesized *Failed (production 5s initial timeout; the 90s budget
+    // covers frontier + agreement + a phantom-routed ancestor-fetch retry). A
+    // stall here is precisely the live mixed_network silence. ----
+    let fp = pchain_handle(&follower_handles);
+    let finished = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            if matches!(**fp.ctx.state.load(), EngineState::NormalOp) {
+                break true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        finished,
+        "follower P-Chain must bootstrap despite the unreachable beacon: every \
+         registered request to the phantom must yield a timer-synthesized \
+         *Failed (the live mixed_network stall rung)"
+    );
+
+    let bp = pchain_handle(&beacon_handles);
+    assert_eq!(
+        fp.last_accepted_height, bp.last_accepted_height,
+        "follower converged on the beacon's P-Chain tip height"
+    );
+
+    // ---- Teardown. ----
+    beacon.networking.net.start_close();
+    follower.networking.net.start_close();
+    let _ = tokio::time::timeout(Duration::from_secs(10), bd).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), fd).await;
+}

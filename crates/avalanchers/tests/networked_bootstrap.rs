@@ -292,3 +292,135 @@ async fn follower_bootstraps_from_beacon_to_finished() {
     let _ = tokio::time::timeout(Duration::from_secs(5), a_handle.join).await;
     let _ = tokio::time::timeout(Duration::from_secs(5), b_handle.join).await;
 }
+
+/// M9.15 `*Failed`-delivery escalation test (frontier stall rung; see
+/// `docs/superpowers/specs/2026-07-14-m9.15-frontier-failed-delivery-design.md`).
+///
+/// The live 5-beacon failure mode: one beacon (go1) raced the connect snapshot
+/// in `Network::send`'s connected-peer filter, so it never received the
+/// `GetAcceptedFrontier` — and no `GetAcceptedFrontierFailed` was ever
+/// delivered, stalling frontier discovery forever.
+///
+/// Reproduced here over the **real** stack (`NetworkImpl` + `RouterBridge` +
+/// `boot_chain_over_network`, `RealClock` timers): follower B has TWO beacons —
+/// the live node A (weight 3) and a **phantom** beacon (weight 1) whose node id
+/// never connects, so every send to it is reported unsent, exactly like go1.
+/// The adaptive-timeout backstop must synthesize `GetAcceptedFrontierFailed` /
+/// `GetAcceptedFailed` (and `GetAncestorsFailed` if the round-robin fetch picks
+/// the phantom) for the phantom at every phase, and B must still reach
+/// `NormalOp` converged on A's tip.
+#[tokio::test]
+async fn follower_bootstraps_despite_unreachable_beacon() {
+    const TIP_HEIGHT: u64 = 3;
+    let allower: Arc<dyn Allower> = Arc::new(AllowAll);
+
+    let a = Node::start().await;
+    let b = Node::start().await;
+
+    b.network.manually_track(a.node_id, a.listen_addr);
+
+    // ---- Boot A (the live beacon), beaconless ⇒ NormalOp, Getter answers. ----
+    let a_token = CancellationToken::new();
+    let a_vm = TestVm::resuming_at_height(TIP_HEIGHT);
+    let a_obs: TestVmObserver = a_vm.observer();
+    let a_handle: NetworkChainBootHandle = boot_chain_over_network(
+        Id::EMPTY,
+        ava_types::constants::PRIMARY_NETWORK_ID,
+        Arc::clone(&a.network) as Arc<dyn Network>,
+        Arc::clone(&allower),
+        a_vm,
+        b"genesis",
+        Arc::new(MemDb::new()),
+        a_token.clone(),
+        None,
+        Some(BTreeMap::new()),
+    )
+    .await
+    .expect("boot A");
+    a.bridge.set_engine_router(Arc::clone(&a_handle.router));
+
+    // ---- Boot B with TWO beacons: live A (weight 3) + a phantom node id that
+    // never connects (weight 1). Weights make A's tip clear the strict
+    // `> total/2` frontier-agreement quorum (3 > 2) even with the phantom's
+    // opinion recorded empty. ----
+    let b_token = CancellationToken::new();
+    let b_vm = TestVm::new();
+    let b_obs: TestVmObserver = b_vm.observer();
+
+    let phantom = NodeId::from([0xEE; 20]);
+    let mut beacons = BTreeMap::new();
+    beacons.insert(a.node_id, 3u64);
+    beacons.insert(phantom, 1u64);
+
+    let (connected_tx, connected_rx) = tokio::sync::watch::channel(false);
+
+    let b_handle: NetworkChainBootHandle = boot_chain_over_network(
+        Id::EMPTY,
+        ava_types::constants::PRIMARY_NETWORK_ID,
+        Arc::clone(&b.network) as Arc<dyn Network>,
+        Arc::clone(&allower),
+        b_vm,
+        b"genesis",
+        Arc::new(MemDb::new()),
+        b_token.clone(),
+        Some(connected_rx),
+        Some(beacons),
+    )
+    .await
+    .expect("boot B");
+    b.bridge.set_engine_router(Arc::clone(&b_handle.router));
+
+    let a_dispatch = {
+        let net = Arc::clone(&a.network);
+        tokio::spawn(async move { net.dispatch().await })
+    };
+    let b_dispatch = {
+        let net = Arc::clone(&b.network);
+        tokio::spawn(async move { net.dispatch().await })
+    };
+
+    // Fire the gate once A is connected — the phantom never will be (the live
+    // go1 case: the request to it is registered but reported unsent).
+    let handshaken = wait_until_timeout(Duration::from_secs(20), || {
+        b.network.connected_peers().contains(&a.node_id)
+    })
+    .await;
+    assert!(handshaken, "B handshakes to live beacon A");
+    connected_tx.send(true).expect("fire connectivity gate");
+
+    // B must reach Finished: A answers each phase; the phantom's requests must
+    // each resolve to a timer-synthesized `*Failed` (2s initial timeout; the
+    // 30s budget covers frontier + agreement + a phantom-routed ancestor fetch
+    // retry). A stall here is precisely the live mixed_network silence.
+    let finished = wait_until_timeout(Duration::from_secs(30), || {
+        matches!(**b_handle.ctx.state.load(), EngineState::NormalOp)
+    })
+    .await;
+    assert!(
+        finished,
+        "follower B must bootstrap despite the unreachable beacon: every \
+         registered request to the phantom must yield a timer-synthesized \
+         *Failed (the live mixed_network stall rung)"
+    );
+
+    assert_eq!(
+        b_obs.last_accepted_height(),
+        TIP_HEIGHT,
+        "follower B accepted up to the live beacon's tip height"
+    );
+    assert_eq!(
+        b_obs.last_accepted_id(),
+        a_obs.last_accepted_id(),
+        "follower B converged on live beacon A's tip"
+    );
+
+    // ---- Clean shutdown. ----
+    a.network.start_close();
+    b.network.start_close();
+    a_token.cancel();
+    b_token.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(10), a_dispatch).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), b_dispatch).await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), a_handle.join).await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), b_handle.join).await;
+}
