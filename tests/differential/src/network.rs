@@ -468,10 +468,39 @@ fn spawn_node(
     })
 }
 
+/// Among `candidates`, the existing path with the newest modification time;
+/// earlier candidates win mtime ties (so the caller's preference order is the
+/// tie-breaker). `None` when no candidate exists.
+///
+/// Guards the live arms against silently running a STALE binary: `test-live`
+/// rebuilds `target/release/avalanchers`, but direct `cargo nextest`
+/// invocations of the live tests do not — a fixed release-first preference
+/// once picked a release binary built a day before the ava-logging chain-slot
+/// Interest fixes, reproducing an already-fixed "zero native tracing events"
+/// defect in every captured node log (M9.15, 2026-07-14).
+fn newest_existing(candidates: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let mut best: Option<(std::time::SystemTime, &std::path::PathBuf)> = None;
+    for candidate in candidates {
+        let Ok(meta) = std::fs::metadata(candidate) else {
+            continue;
+        };
+        let Ok(mtime) = meta.modified() else {
+            continue;
+        };
+        // Strictly-newer only: on a tie the earlier (preferred) candidate stays.
+        if best.is_none_or(|(best_mtime, _)| mtime > best_mtime) {
+            best = Some((mtime, candidate));
+        }
+    }
+    best.map(|(_, path)| path.clone())
+}
+
 /// Locate the built Rust `avalanchers` binary.
 ///
-/// Honors `$AVALANCHERS_PATH`; otherwise falls back to the conventional Cargo
-/// target locations relative to this crate.
+/// Honors `$AVALANCHERS_PATH` (explicit override, taken verbatim); otherwise
+/// picks the NEWEST (by mtime) of the conventional Cargo target locations
+/// relative to this crate — never a stale sibling — and prints the choice so
+/// captured live-run output pins which binary actually ran.
 fn locate_rust_binary() -> Result<String, NetworkError> {
     if let Ok(path) = std::env::var("AVALANCHERS_PATH") {
         if std::path::Path::new(&path).exists() {
@@ -479,15 +508,26 @@ fn locate_rust_binary() -> Result<String, NetworkError> {
         }
         return Err(NetworkError::RustBinaryMissing(path));
     }
-    for candidate in [
+    let candidates: Vec<std::path::PathBuf> = [
         "target/release/avalanchers",
         "target/debug/avalanchers",
         "../../target/release/avalanchers",
         "../../target/debug/avalanchers",
-    ] {
-        if std::path::Path::new(candidate).exists() {
-            return Ok(candidate.to_owned());
-        }
+    ]
+    .iter()
+    .map(std::path::PathBuf::from)
+    .collect();
+    if let Some(chosen) = newest_existing(&candidates) {
+        let age = std::fs::metadata(&chosen)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|mtime| std::time::SystemTime::now().duration_since(mtime).ok());
+        eprintln!(
+            "locate_rust_binary: {} (built {} ago)",
+            chosen.display(),
+            age.map_or_else(|| "<unknown>".to_owned(), |d| format!("{}s", d.as_secs())),
+        );
+        return Ok(chosen.to_string_lossy().into_owned());
     }
     Err(NetworkError::RustBinaryMissing(
         "set $AVALANCHERS_PATH or build `avalanchers`".to_owned(),
@@ -923,6 +963,77 @@ mod tests {
         };
         assert!(net.go_beacon().is_none(), "empty net has no beacon");
         assert!(net.rust_follower().is_none(), "empty net has no follower");
+    }
+
+    /// Regression (M9.15): `locate_rust_binary` used to return the FIRST
+    /// existing conventional candidate (`target/release` before
+    /// `target/debug`), so a stale release binary silently rode every live
+    /// run — a 2026-07-14 mixed_network run executed a release binary built
+    /// one day BEFORE the chain-slot Interest fixes (f7e2f43/32ff8e8) and
+    /// produced the "only rustls log-bridge lines, zero native tracing"
+    /// symptom the fixes had already cured. The picker must choose the
+    /// NEWEST (by mtime) existing candidate, preferring earlier candidates
+    /// on a tie.
+    #[test]
+    fn newest_existing_picks_freshest_candidate() {
+        let dir = std::env::temp_dir().join(format!(
+            "ava-newest-existing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let release = dir.join("release-avalanchers");
+        let debug = dir.join("debug-avalanchers");
+        let missing = dir.join("missing-avalanchers");
+        std::fs::write(&release, b"old").expect("write release");
+        std::fs::write(&debug, b"new").expect("write debug");
+
+        // release is one hour OLDER than debug.
+        let now = std::time::SystemTime::now();
+        let hour = std::time::Duration::from_secs(3600);
+        std::fs::File::options()
+            .append(true)
+            .open(&release)
+            .expect("open release")
+            .set_modified(now - hour)
+            .expect("age release");
+        std::fs::File::options()
+            .append(true)
+            .open(&debug)
+            .expect("open debug")
+            .set_modified(now)
+            .expect("touch debug");
+
+        // Stale-preferred order (release first) must still yield the newer debug.
+        let picked = newest_existing(&[release.clone(), debug.clone(), missing.clone()])
+            .expect("one candidate exists");
+        assert_eq!(picked, debug, "the newest existing candidate wins");
+
+        // Tie on mtime → the earlier (preferred) candidate wins.
+        std::fs::File::options()
+            .append(true)
+            .open(&release)
+            .expect("reopen release")
+            .set_modified(now)
+            .expect("tie release");
+        let picked = newest_existing(&[release.clone(), debug, missing]).expect("tie pick");
+        assert_eq!(picked, release, "ties keep the preference order");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn newest_existing_none_when_nothing_exists() {
+        assert!(
+            newest_existing(&[std::path::PathBuf::from(
+                "/nonexistent/ava-test/avalanchers"
+            )])
+            .is_none(),
+            "no existing candidate must yield None"
+        );
     }
 
     #[test]
