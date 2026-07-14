@@ -42,6 +42,18 @@
 //! manager uses a [`std::sync::Mutex`] (its critical section holds no `.await`),
 //! so a fast response can never `remove` a pending entry the registration has
 //! not yet inserted.
+//!
+//! ## Unsent ⇒ immediate `*Failed` (Go parity)
+//!
+//! `Network::send` returns the set of nodes the message was actually queued
+//! to. For the fetch/query/app request ops (`Get`, `GetAncestors`,
+//! `PushQuery`/`PullQuery`, `AppRequest`) every registered recipient missing
+//! from that set is failed **immediately** via
+//! [`Router::fail_request`] — Go `sender.go:457-467,525-535,610-626,691-707,
+//! 812-828` (@ 96897293a2). The bootstrap broadcast ops
+//! (`GetAcceptedFrontier`, `GetAccepted`, and the state-summary pair) are
+//! deliberately excluded, exactly as in Go: they rely on the request timer
+//! alone, "to avoid busy looping when disconnected from the internet".
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -129,28 +141,54 @@ impl OutboundSender {
     }
 
     /// Marshal `inner` and dispatch it to `node_ids` over the targeted-send
-    /// path. Fire-and-forget: a marshal failure is logged, not returned
-    /// (matching the Go sender, which swallows enqueue errors and surfaces
-    /// non-delivery through the `*Failed` handler callbacks).
-    fn send_to(&self, inner: p2p::message::Message, node_ids: HashSet<NodeId>) {
+    /// path, returning the set of nodes the network reports it actually queued
+    /// the message to (Go `sender.sendUnlessError`, `sender.go:917-935`). A
+    /// marshal failure is logged and returns the empty set — Go's
+    /// `sendUnlessError` returns `nil` on a build error, so every registered
+    /// recipient is then treated as unsent.
+    fn send_to(&self, inner: p2p::message::Message, node_ids: HashSet<NodeId>) -> HashSet<NodeId> {
         let cfg = NetSendConfig {
             node_ids,
             ..Default::default()
         };
-        self.dispatch(inner, cfg);
+        self.dispatch(inner, cfg)
     }
 
-    fn dispatch(&self, inner: p2p::message::Message, cfg: NetSendConfig) {
+    fn dispatch(&self, inner: p2p::message::Message, cfg: NetSendConfig) -> HashSet<NodeId> {
         let m = p2p::Message {
             message: Some(inner),
         };
         match self.mb.create_outbound(&m, self.compression, false) {
-            Ok(out) => {
-                let _ = self.network.send(out, cfg, self.subnet_id, &*self.allower);
-            }
+            Ok(out) => self.network.send(out, cfg, self.subnet_id, &*self.allower),
             Err(e) => {
                 tracing::warn!(error = %e, "outbound message marshal failed; dropping");
+                HashSet::new()
             }
+        }
+    }
+
+    /// The Go-parity "unsent ⇒ immediate `*Failed`" leg for the fetch/query/app
+    /// request ops: for every registered recipient in `requested` missing from
+    /// the network's `sent` set, cancel the timer and synthesize the failure
+    /// now (Go `SendGet` sender.go:525-535, `SendGetAncestors` :457-467,
+    /// `SendPushQuery` :610-626, `SendPullQuery` :691-707, `SendAppRequest`
+    /// :812-828 @ 96897293a2).
+    ///
+    /// Deliberately NOT applied to the bootstrap broadcast ops
+    /// (`GetAcceptedFrontier` / `GetAccepted` / the state-summary pair): Go
+    /// relies on the request timer alone there, "to avoid busy looping when
+    /// disconnected from the internet" — an immediate all-beacons failure would
+    /// spin frontier discovery in a tight re-broadcast loop.
+    fn fail_unsent(
+        &self,
+        requested: &HashSet<NodeId>,
+        sent: &HashSet<NodeId>,
+        request_id: u32,
+        op_tag: u8,
+    ) {
+        for &node in requested.difference(sent) {
+            self.router
+                .fail_request(node, self.chain_id, request_id, op_tag);
         }
     }
 
@@ -298,21 +336,25 @@ impl Sender for OutboundSender {
     fn send_get(&self, node: NodeId, req: u32, container_id: Id) {
         self.router
             .register_request(node, self.chain_id, req, op::GET);
-        self.send_to(
+        let requested = HashSet::from([node]);
+        let sent = self.send_to(
             p2p::message::Message::Get(p2p::Get {
                 chain_id: self.chain_bytes(),
                 request_id: req,
                 deadline: self.deadline_nanos(),
                 container_id: id_bytes(container_id),
             }),
-            HashSet::from([node]),
+            requested.clone(),
         );
+        // Go SendGet sender.go:525-535: an unsent Get fails immediately.
+        self.fail_unsent(&requested, &sent, req, op::GET);
     }
 
     fn send_get_ancestors(&self, node: NodeId, req: u32, container_id: Id) {
         self.router
             .register_request(node, self.chain_id, req, op::GET_ANCESTORS);
-        self.send_to(
+        let requested = HashSet::from([node]);
+        let sent = self.send_to(
             p2p::message::Message::GetAncestors(p2p::GetAncestors {
                 chain_id: self.chain_bytes(),
                 request_id: req,
@@ -322,8 +364,10 @@ impl Sender for OutboundSender {
                 // is not used by this port's linear chains.
                 engine_type: p2p::EngineType::Chain as i32,
             }),
-            HashSet::from([node]),
+            requested.clone(),
         );
+        // Go SendGetAncestors sender.go:457-467: an unsent fetch fails immediately.
+        self.fail_unsent(&requested, &sent, req, op::GET_ANCESTORS);
     }
 
     fn send_put(&self, node: NodeId, req: u32, container: Vec<u8>) {
@@ -358,7 +402,7 @@ impl Sender for OutboundSender {
         requested_height: u64,
     ) {
         self.register(nodes, req, op::QUERY);
-        self.send_to(
+        let sent = self.send_to(
             p2p::message::Message::PushQuery(p2p::PushQuery {
                 chain_id: self.chain_bytes(),
                 request_id: req,
@@ -368,6 +412,8 @@ impl Sender for OutboundSender {
             }),
             nodes.clone(),
         );
+        // Go SendPushQuery sender.go:610-626: unsent recipients fail immediately.
+        self.fail_unsent(nodes, &sent, req, op::QUERY);
     }
 
     fn send_pull_query(
@@ -378,7 +424,7 @@ impl Sender for OutboundSender {
         requested_height: u64,
     ) {
         self.register(nodes, req, op::QUERY);
-        self.send_to(
+        let sent = self.send_to(
             p2p::message::Message::PullQuery(p2p::PullQuery {
                 chain_id: self.chain_bytes(),
                 request_id: req,
@@ -388,6 +434,8 @@ impl Sender for OutboundSender {
             }),
             nodes.clone(),
         );
+        // Go SendPullQuery sender.go:691-707: unsent recipients fail immediately.
+        self.fail_unsent(nodes, &sent, req, op::QUERY);
     }
 
     fn send_chits(
@@ -436,7 +484,9 @@ impl Sender for OutboundSender {
             node_ids: nodes.clone(),
             ..Default::default()
         };
-        let _ = self.network.send(msg, cfg, self.subnet_id, &*self.allower);
+        let sent = self.network.send(msg, cfg, self.subnet_id, &*self.allower);
+        // Go SendAppRequest sender.go:812-828: unsent recipients fail immediately.
+        self.fail_unsent(nodes, &sent, req, op::APP_REQUEST);
         Ok(())
     }
 

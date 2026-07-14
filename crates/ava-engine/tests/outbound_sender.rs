@@ -28,11 +28,12 @@ use ava_network::network::{
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 
-/// A `Router` that records every `register_request` call (the only method the
-/// `OutboundSender` drives) and no-ops the rest.
+/// A `Router` that records every `register_request` / `fail_request` call (the
+/// only methods the `OutboundSender` drives) and no-ops the rest.
 #[derive(Default)]
 struct RecordingRouter {
     registered: Mutex<Vec<(NodeId, Id, u32, u8)>>,
+    failed: Mutex<Vec<(NodeId, Id, u32, u8)>>,
 }
 
 #[async_trait::async_trait]
@@ -41,6 +42,12 @@ impl Router for RecordingRouter {
     async fn handle_inbound(&self, _msg: InboundMessage) {}
     fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
         self.registered
+            .lock()
+            .unwrap()
+            .push((node, chain, request_id, op_tag));
+    }
+    fn fail_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
+        self.failed
             .lock()
             .unwrap()
             .push((node, chain, request_id, op_tag));

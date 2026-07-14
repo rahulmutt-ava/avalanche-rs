@@ -25,6 +25,7 @@ use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
+use ava_engine::common::sender::Sender;
 use ava_engine::networking::router::op;
 use ava_engine::networking::{
     AdaptiveTimeoutConfig, AdaptiveTimeoutManager, BootstrapperEngineAdapter, ChainHandler,
@@ -67,19 +68,12 @@ impl Allower for AllowAll {
     }
 }
 
-/// One recorded outbound dispatch from the mock network.
-#[derive(Clone)]
-struct Recorded {
-    msg: OutboundMessage,
-    recipients: HashSet<NodeId>,
-}
-
 /// A recording mock `Network` implementing the production `send` contract: the
 /// returned set is the nodes the message was actually queued to. Nodes listed
 /// in `unsent` are reported as NOT sent (the live go1 connect-snapshot race).
 #[derive(Default)]
 struct MockNetwork {
-    sent: Mutex<Vec<Recorded>>,
+    sent: Mutex<Vec<OutboundMessage>>,
     unsent: HashSet<NodeId>,
 }
 
@@ -91,13 +85,14 @@ impl MockNetwork {
         }
     }
 
-    fn snapshot(&self) -> Vec<Recorded> {
-        self.sent.lock().expect("mock network lock").clone()
-    }
-
     /// Decoded p2p variants of everything recorded so far.
     fn decoded(&self) -> Vec<p2p::message::Message> {
-        self.snapshot().iter().map(|r| decode(&r.msg)).collect()
+        self.sent
+            .lock()
+            .expect("mock network lock")
+            .iter()
+            .map(decode)
+            .collect()
     }
 }
 
@@ -127,10 +122,7 @@ impl Network for MockNetwork {
             .filter(|n| allower.is_allowed(n) && !self.unsent.contains(n))
             .copied()
             .collect();
-        self.sent.lock().expect("mock network lock").push(Recorded {
-            msg,
-            recipients: recipients.clone(),
-        });
+        self.sent.lock().expect("mock network lock").push(msg);
         recipients
     }
     fn gossip(
@@ -385,4 +377,153 @@ async fn frontier_discovery_completes_when_one_beacon_never_answers() {
     halt.cancel();
     token.cancel();
     join.await.expect("handler join");
+}
+
+// ---------------------------------------------------------------------------
+// Task 2 — Go-parity: unsent ⇒ immediate `*Failed` (fetch/query/app ops only)
+// ---------------------------------------------------------------------------
+//
+// Go oracle (`snow/networking/sender/sender.go` @ 96897293a2): after
+// `network.Send` returns the sent-set, `SendGet` (:525), `SendGetAncestors`
+// (:457), `SendPushQuery` (:610), `SendPullQuery` (:691) and `SendAppRequest`
+// (:812) immediately hand the pre-built `*Failed` message to the router for
+// every registered recipient missing from the set. The bootstrap broadcasts
+// (`SendGetAcceptedFrontier` & co.) deliberately do NOT — they rely on the
+// timer alone, "to avoid busy looping when disconnected from the internet".
+//
+// Every test here uses a 60s timeout, so an observed `*Failed` can only have
+// come from the immediate leg, never the timer.
+
+/// Builds the long-timeout router + a recording sink + an `OutboundSender`
+/// over a mock network that reports `unsent` nodes as not sent.
+fn immediate_leg_harness(unsent: HashSet<NodeId>) -> (Arc<RecordingSink>, Arc<OutboundSender>) {
+    let clock: Arc<dyn Clock> = Arc::new(RealClock);
+    let mgr =
+        Arc::new(AdaptiveTimeoutManager::new(&long_timeout_config(), clock).expect("manager"));
+    let router = ChainRouter::new(mgr);
+    let sink = Arc::new(RecordingSink::default());
+    router.add_chain(chain_id(), sink.clone());
+    let net = Arc::new(MockNetwork::with_unsent(unsent));
+    let sender = Arc::new(OutboundSender::new(
+        net,
+        Arc::new(AllowAll),
+        Arc::clone(&router) as Arc<dyn Router>,
+        chain_id(),
+        subnet_id(),
+        router.current_timeout(),
+    ));
+    (sink, sender)
+}
+
+/// Go `SendGet` sender.go:525-535 / `SendGetAncestors` :457-467: a fetch the
+/// network reports unsent must synthesize the matching `*Failed` immediately
+/// (no timer wait).
+#[tokio::test]
+async fn unsent_get_and_get_ancestors_fail_immediately() {
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+    let cid = Id::from([9u8; 32]);
+
+    sender.send_get(b, 3, cid);
+    sender.send_get_ancestors(b, 4, cid);
+
+    let delivered = wait_until(Duration::from_secs(1), || {
+        let seen = sink.snapshot();
+        seen.iter()
+            .any(|(n, o)| *n == b && matches!(o, InboundOp::GetFailed { request_id: 3 }))
+            && seen.iter().any(|(n, o)| {
+                *n == b && matches!(o, InboundOp::GetAncestorsFailed { request_id: 4 })
+            })
+    })
+    .await;
+    assert!(
+        delivered,
+        "unsent Get/GetAncestors must synthesize GetFailed/GetAncestorsFailed \
+         immediately (Go sender.go:525-535 / :457-467); sink saw {:?}",
+        sink.snapshot()
+    );
+}
+
+/// Go `SendPullQuery` sender.go:691-707: only the recipients missing from the
+/// sent-set fail immediately; the delivered recipient gets no failure.
+#[tokio::test]
+async fn unsent_pull_query_fails_only_the_unsent_recipient() {
+    let a = node(1);
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+    let cid = Id::from([9u8; 32]);
+
+    sender.send_pull_query(&[a, b].into_iter().collect(), 9, cid, 1);
+
+    let b_failed = wait_until(Duration::from_secs(1), || {
+        sink.snapshot()
+            .iter()
+            .any(|(n, o)| *n == b && matches!(o, InboundOp::QueryFailed { request_id: 9 }))
+    })
+    .await;
+    assert!(
+        b_failed,
+        "unsent PullQuery recipient must fail immediately (Go sender.go:691-707); \
+         sink saw {:?}",
+        sink.snapshot()
+    );
+    assert!(
+        !sink
+            .snapshot()
+            .iter()
+            .any(|(n, o)| *n == a && matches!(o, InboundOp::QueryFailed { .. })),
+        "the delivered recipient must NOT be failed; sink saw {:?}",
+        sink.snapshot()
+    );
+}
+
+/// Go `SendAppRequest` sender.go:812-828: the per-node immediate leg also
+/// covers the app path.
+#[tokio::test]
+async fn unsent_app_request_fails_immediately() {
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+
+    sender
+        .send_app_request(&[b].into_iter().collect(), 21, vec![1, 2])
+        .await
+        .expect("send_app_request");
+
+    let delivered = wait_until(Duration::from_secs(1), || {
+        sink.snapshot()
+            .iter()
+            .any(|(n, o)| *n == b && matches!(o, InboundOp::AppRequestFailed { request_id: 21 }))
+    })
+    .await;
+    assert!(
+        delivered,
+        "unsent AppRequest must synthesize AppRequestFailed immediately \
+         (Go sender.go:812-828); sink saw {:?}",
+        sink.snapshot()
+    );
+}
+
+/// Go-parity pin: the bootstrap broadcasts have NO immediate leg — an unsent
+/// `GetAcceptedFrontier` is covered by the request timer alone
+/// (`SendGetAcceptedFrontier` sender.go:248-297 registers per-node timeouts
+/// then `sendUnlessError` with no sent-set diff; the historical comment:
+/// "to avoid busy looping when disconnected from the internet"). This pins the
+/// divergence-shaped-like-a-fix out: adding an immediate leg here would make
+/// a fully-disconnected node spin frontier discovery in a tight loop.
+#[tokio::test]
+async fn unsent_frontier_broadcast_has_no_immediate_failed_leg() {
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+
+    sender.send_get_accepted_frontier(&[b].into_iter().collect(), 5);
+
+    // Give any (wrong) immediate leg ample time to deliver; the timer cannot
+    // fire (60s config).
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        sink.snapshot().is_empty(),
+        "an unsent GetAcceptedFrontier must NOT fail immediately (Go relies on \
+         the timer to avoid a disconnected-node busy loop); sink saw {:?}",
+        sink.snapshot()
+    );
 }

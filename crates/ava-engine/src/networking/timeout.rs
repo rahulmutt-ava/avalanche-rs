@@ -321,6 +321,17 @@ impl AdaptiveTimeoutManager {
         let _ = self.wake.send(());
     }
 
+    /// Remove the timeout for `id` **without** observing latency — used when a
+    /// request is failed early (the network reported it unsent), which is not a
+    /// response and must not feed the latency averager (Go's early internal
+    /// failures never call `RegisterResponse`; `chain_router.go:349-361`).
+    pub fn cancel(&self, id: RequestId) {
+        {
+            lock(&self.state).pending.remove(&id);
+        }
+        let _ = self.wake.send(());
+    }
+
     /// Manually register a response latency (e.g. to pretend a benched validator
     /// timed out without sending it a request). Mirrors Go `ObserveLatency`.
     pub fn observe_latency(&self, latency: Duration) {

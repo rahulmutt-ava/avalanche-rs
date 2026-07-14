@@ -253,6 +253,19 @@ pub trait Router: Send + Sync {
     /// registration has not yet inserted.
     fn register_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8);
 
+    /// Immediately fail a registered request: cancel its pending timer and
+    /// synthesize the matching `*Failed` op into the chain handler. This is the
+    /// sender's "unsent ⇒ fail now" leg (Go `sender.Send*` handing the pre-built
+    /// failure to `router.HandleInternal` for each recipient missing from
+    /// `network.Send`'s sent-set; `sender.go:525-535` and
+    /// `chain_router.go:349-375` @ 96897293a2).
+    ///
+    /// Mechanism note: Go leaves the timer registered and suppresses the later
+    /// duplicate via a `handled` flag; cancelling the timer here yields the same
+    /// observable (exactly one `*Failed`, no latency observation) without the
+    /// flag.
+    fn fail_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8);
+
     /// Whether the router is healthy (no chain is unknown / over its limit).
     fn health_check(&self) -> bool;
 }
@@ -322,6 +335,27 @@ impl Router for ChainRouter {
         };
 
         self.timeouts.put(id, true, Box::new(timeout_handler));
+    }
+
+    fn fail_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
+        // Cancel the pending timer WITHOUT observing latency: an early failure
+        // is not a response and must not shrink the averaged timeout.
+        self.timeouts.cancel(RequestId {
+            node,
+            chain,
+            request_id,
+            op: op_tag,
+        });
+        if let Some(handler) = self.handler_for(chain) {
+            let failed = InboundOp::failed(op_tag, request_id);
+            // Fire-and-forget on a detached task, mirroring the timer path (and
+            // Go's `HandleInternal`, which runs `handleMessage` on its own
+            // goroutine): the synchronous sender must not block on handler
+            // back-pressure.
+            tokio::spawn(async move {
+                handler.push(node, failed).await;
+            });
+        }
     }
 
     fn health_check(&self) -> bool {

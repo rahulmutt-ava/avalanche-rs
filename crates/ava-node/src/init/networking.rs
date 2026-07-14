@@ -816,6 +816,8 @@ mod tests {
 
         fn register_request(&self, _node: NodeId, _chain: Id, _request_id: u32, _op_tag: u8) {}
 
+        fn fail_request(&self, _node: NodeId, _chain: Id, _request_id: u32, _op_tag: u8) {}
+
         fn health_check(&self) -> bool {
             true
         }
