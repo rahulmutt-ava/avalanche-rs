@@ -75,7 +75,7 @@ pub(crate) async fn call(
         )));
     }
 
-    let envelope: Value = serde_json::from_str(json_body)
+    let envelope: Value = serde_json::from_str(&json_body)
         .map_err(|e| ObsError::Rpc(format!("decode {method} response: {e}")))?;
     if let Some(err) = envelope.get("error")
         && !err.is_null()
@@ -89,7 +89,7 @@ pub(crate) async fn call(
 }
 
 /// Split a raw HTTP/1.1 response into `(status_is_2xx, body)`.
-fn split_http(text: &str) -> Result<(bool, &str), ObsError> {
+fn split_http(text: &str) -> Result<(bool, String), ObsError> {
     let (head, body) = text
         .split_once("\r\n\r\n")
         .ok_or_else(|| ObsError::BadResponse("no header/body separator".to_owned()))?;
@@ -98,12 +98,75 @@ fn split_http(text: &str) -> Result<(bool, &str), ObsError> {
         .next()
         .ok_or_else(|| ObsError::BadResponse("empty response".to_owned()))?;
     let status_ok = status_line.contains(" 200 ") || status_line.contains(" 2");
+
+    // Go's net/http emits `Transfer-Encoding: chunked` once a response
+    // outgrows its write buffer (e.g. platform.getCurrentValidators with a
+    // full validator set), so the raw body must be de-chunked before JSON
+    // decoding. Content-Length responses pass through unchanged.
+    let chunked = head
+        .lines()
+        .any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.contains("chunked"));
+    let body = if chunked {
+        dechunk(body)?
+    } else {
+        body.to_owned()
+    };
     Ok((status_ok, body))
+}
+
+/// Decode an HTTP/1.1 chunked body: `<hex-size>\r\n<chunk>\r\n ... 0\r\n\r\n`.
+fn dechunk(raw: &str) -> Result<String, ObsError> {
+    let mut out = String::new();
+    let mut rest = raw;
+    loop {
+        let (size_line, tail) = rest
+            .split_once("\r\n")
+            .ok_or_else(|| ObsError::BadResponse("chunked body: missing size line".to_owned()))?;
+        let size = usize::from_str_radix(size_line.trim().split(';').next().unwrap_or(""), 16)
+            .map_err(|e| ObsError::BadResponse(format!("chunked body: bad size line: {e}")))?;
+        if size == 0 {
+            return Ok(out);
+        }
+        if tail.len() < size {
+            return Err(ObsError::BadResponse(
+                "chunked body: truncated chunk".to_owned(),
+            ));
+        }
+        let (chunk, after) = tail.split_at(size);
+        out.push_str(chunk);
+        rest = after
+            .strip_prefix("\r\n")
+            .ok_or_else(|| ObsError::BadResponse("chunked body: missing CRLF".to_owned()))?;
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Endpoint;
+    use super::{Endpoint, split_http};
+
+    #[test]
+    fn split_http_dechunks_transfer_encoding_chunked() {
+        // Shape Go's net/http produces for large bodies (run-6 live failure:
+        // platform.getCurrentValidators from real avalanchego validators).
+        let body = r#"{"jsonrpc":"2.0","result":{"validators":[]},"id":1}"#;
+        let (a, b) = body.split_at(20);
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{a}\r\n{:x}\r\n{b}\r\n0\r\n\r\n",
+            a.len(),
+            b.len(),
+        );
+        let (ok, out) = split_http(&raw).expect("split_http(chunked)");
+        assert!(ok, "status parsed");
+        assert_eq!(out, body, "de-chunked body must be the exact JSON");
+    }
+
+    #[test]
+    fn split_http_passes_content_length_body_through() {
+        let raw = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
+        let (ok, out) = split_http(raw).expect("split_http(plain)");
+        assert!(ok);
+        assert_eq!(out, "{}");
+    }
 
     #[test]
     fn parses_host_and_port_dropping_path() {

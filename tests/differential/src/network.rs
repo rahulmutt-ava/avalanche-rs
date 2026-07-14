@@ -331,25 +331,26 @@ impl Network {
             .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
         let want = self.nodes.len().saturating_sub(1);
         loop {
-            let mut all_ok = true;
+            // Per-node diagnosis of the most recent poll, so the timeout error
+            // names the node and the failing call instead of a bare count.
+            let mut lagging: Vec<String> = Vec::new();
             for node in &self.nodes {
-                let peers = crate::observation::Observation::collect(&node.api_base)
-                    .await
-                    .ok()
-                    .map(|o| o.fields.len())
-                    .unwrap_or(0);
-                if peers < want {
-                    all_ok = false;
-                    break;
-                }
+                let status = match crate::observation::Observation::collect(&node.api_base).await
+                {
+                    Ok(o) if o.fields.len() >= want => continue,
+                    Ok(o) => format!("{} fields {:?}", o.fields.len(), o.fields),
+                    Err(e) => format!("collect error: {e}"),
+                };
+                lagging.push(format!("{} ({:?}): {status}", node.api_base, node.binary));
             }
-            if all_ok {
+            if lagging.is_empty() {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(NetworkError::Timeout(format!(
-                    "only some of {} nodes connected",
-                    self.nodes.len()
+                    "only some of {} nodes connected; lagging: [{}]",
+                    self.nodes.len(),
+                    lagging.join("; ")
                 )));
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
