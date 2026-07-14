@@ -260,10 +260,20 @@ pub trait Router: Send + Sync {
     /// `network.Send`'s sent-set; `sender.go:525-535` and
     /// `chain_router.go:349-375` @ 96897293a2).
     ///
-    /// Mechanism note: Go leaves the timer registered and suppresses the later
-    /// duplicate via a `handled` flag; cancelling the timer here yields the same
-    /// observable (exactly one `*Failed`, no latency observation) without the
-    /// flag.
+    /// Mechanism note (recorded, deliberate divergence from Go — not full
+    /// parity): Go leaves the still-armed timer registered and suppresses the
+    /// *delivery* of its later firing via a `handled` flag, but that firing
+    /// still runs the normal timeout path first, which **does** observe the
+    /// full configured timeout as latency (`adaptive_timeout_manager.go:192-205,255-266`;
+    /// `measureLatency=true` is set unconditionally per request at
+    /// registration, `chain_router.go:199`) — so under sustained unsent
+    /// conditions Go's average timeout grows even though no `*Failed` is
+    /// delivered twice. Rust instead cancels the timer outright here (claiming
+    /// the entry so the background dispatch loop can never also fire it),
+    /// which skips that latency observation entirely: the average stays clean
+    /// at the cost of not modeling the "requests we're failing early are also
+    /// slow" signal Go's average captures. This is a liveness-only,
+    /// intentional divergence (follow-up, not yet revisited).
     fn fail_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8);
 
     /// Whether the router is healthy (no chain is unknown / over its limit).
@@ -339,13 +349,23 @@ impl Router for ChainRouter {
 
     fn fail_request(&self, node: NodeId, chain: Id, request_id: u32, op_tag: u8) {
         // Cancel the pending timer WITHOUT observing latency: an early failure
-        // is not a response and must not shrink the averaged timeout.
-        self.timeouts.cancel(RequestId {
+        // is not a response and must not shrink the averaged timeout. `cancel`
+        // returns `true` only if THIS call actually removed the pending entry —
+        // that is the exactly-once claim point. If the background timer won the
+        // race and already fired (and removed the entry) between
+        // `register_request` and this call, `cancel` returns `false` and we
+        // must NOT synthesize a second `*Failed`: the engine treats `*Failed`
+        // (e.g. `QueryFailed`) as a one-shot event, not idempotent — a duplicate
+        // re-enters the `chits()` self-vote path (`engine.rs:545-560`).
+        let claimed = self.timeouts.cancel(RequestId {
             node,
             chain,
             request_id,
             op: op_tag,
         });
+        if !claimed {
+            return;
+        }
         if let Some(handler) = self.handler_for(chain) {
             let failed = InboundOp::failed(op_tag, request_id);
             // Fire-and-forget on a detached task, mirroring the timer path (and

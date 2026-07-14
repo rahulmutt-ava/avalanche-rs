@@ -527,3 +527,57 @@ async fn unsent_frontier_broadcast_has_no_immediate_failed_leg() {
         sink.snapshot()
     );
 }
+
+/// Same Go-parity pin as `unsent_frontier_broadcast_has_no_immediate_failed_leg`,
+/// extended to the other three bootstrap broadcasts Go also leaves timer-only
+/// (`SendGetAccepted` sender.go:571-586, `SendGetStateSummaryFrontier`
+/// sender.go:174-192, `SendGetAcceptedStateSummary` sender.go:341-361 @
+/// 96897293a2 — none diff against the sent-set the way `SendGet`/`SendPushQuery`/
+/// `SendPullQuery`/`SendAppRequest` do).
+#[tokio::test]
+async fn unsent_get_accepted_has_no_immediate_failed_leg() {
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+
+    sender.send_get_accepted(&[b].into_iter().collect(), 6, &[Id::from([9u8; 32])]);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        sink.snapshot().is_empty(),
+        "an unsent GetAccepted must NOT fail immediately (Go relies on the \
+         timer alone, sender.go:571-586); sink saw {:?}",
+        sink.snapshot()
+    );
+}
+
+#[tokio::test]
+async fn unsent_get_state_summary_frontier_has_no_immediate_failed_leg() {
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+
+    sender.send_get_state_summary_frontier(&[b].into_iter().collect(), 7);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        sink.snapshot().is_empty(),
+        "an unsent GetStateSummaryFrontier must NOT fail immediately (Go \
+         relies on the timer alone, sender.go:174-192); sink saw {:?}",
+        sink.snapshot()
+    );
+}
+
+#[tokio::test]
+async fn unsent_get_accepted_state_summary_has_no_immediate_failed_leg() {
+    let b = node(2);
+    let (sink, sender) = immediate_leg_harness([b].into_iter().collect());
+
+    sender.send_get_accepted_state_summary(&[b].into_iter().collect(), 8, &[100]);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        sink.snapshot().is_empty(),
+        "an unsent GetAcceptedStateSummary must NOT fail immediately (Go \
+         relies on the timer alone, sender.go:341-361); sink saw {:?}",
+        sink.snapshot()
+    );
+}

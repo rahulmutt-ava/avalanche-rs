@@ -325,11 +325,20 @@ impl AdaptiveTimeoutManager {
     /// request is failed early (the network reported it unsent), which is not a
     /// response and must not feed the latency averager (Go's early internal
     /// failures never call `RegisterResponse`; `chain_router.go:349-361`).
-    pub fn cancel(&self, id: RequestId) {
-        {
-            lock(&self.state).pending.remove(&id);
-        }
+    ///
+    /// Returns `true` iff an entry was actually removed here — the exactly-once
+    /// claim point shared with [`fire_expired`]'s own `pending.remove`. The two
+    /// race for the same entry (the timer can fire between `put` and `cancel`);
+    /// whichever call observes `Some` from `remove` is the one that "owns" this
+    /// request's terminal `*Failed`, and callers MUST only synthesize it when
+    /// this returns `true` — otherwise a request that the timer already claimed
+    /// gets a second, duplicate `*Failed` (not idempotent on the engine side;
+    /// see `Router::fail_request`).
+    #[must_use]
+    pub fn cancel(&self, id: RequestId) -> bool {
+        let removed = { lock(&self.state).pending.remove(&id).is_some() };
         let _ = self.wake.send(());
+        removed
     }
 
     /// Manually register a response latency (e.g. to pretend a benched validator
