@@ -1,13 +1,21 @@
 {
-  "_comment": "Go-authoritative C-Chain genesis state root + block ID, captured from coreth core.Genesis.ToBlock(). See _provenance.md. Mainnet and Fuji share identical genesis state-root + block-ID: the only config difference (chainId 43114 vs 43113) is not a header field, and the alloc + all header fields are identical.",
+  "_comment": "Go-authoritative C-Chain genesis state root + block ID, captured from coreth core.Genesis.ToBlock(). See _provenance.md. Mainnet and Fuji share identical genesis state-root + block-ID: the only config difference (chainId 43114 vs 43113) is not a header field, and the alloc + all header fields are identical. Local (network-id=12345) differs in BOTH: its genesis timestamp is InitiallyActiveTime, so the warp activation account joins the state and the fork-gated header tail (baseFee/Etna/Cancun/Granite fields) is present.",
   "mainnet": {
+    "network_id": 1,
     "chain_id": 43114,
     "genesis_state_root": "0xd65eb1b8604a7aa497d41cd6372663785a5f809a17bd192edb86658ef24e29cc",
     "genesis_block_id": "0x31ced5b9beb7f8782b014660da0cb18cc409f121f408186886e1ca3e8eeca96b"
   },
   "fuji": {
+    "network_id": 5,
     "chain_id": 43113,
     "genesis_state_root": "0xd65eb1b8604a7aa497d41cd6372663785a5f809a17bd192edb86658ef24e29cc",
     "genesis_block_id": "0x31ced5b9beb7f8782b014660da0cb18cc409f121f408186886e1ca3e8eeca96b"
+  },
+  "local": {
+    "network_id": 12345,
+    "chain_id": 43112,
+    "genesis_state_root": "0x3283022557b0e7ad755ac1739dbff2937186a2ed160772ba6c6009cb327a638f",
+    "genesis_block_id": "0x608ddbd611241719b64642d8e152537e2a5bdf46b6ddb9e8f15340c5e007b8b1"
   }
 }

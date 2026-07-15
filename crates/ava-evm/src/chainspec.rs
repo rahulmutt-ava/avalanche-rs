@@ -781,6 +781,17 @@ struct RawGenesis {
     gas_used: Option<String>,
     #[serde(rename = "parentHash", default)]
     parent_hash: Option<String>,
+    /// `baseFeePerGas` (EIP-1559) — Go `Genesis.BaseFee`. Absent in every
+    /// embedded network genesis; when AP3 is active at the genesis timestamp,
+    /// an absent value defaults to `ap3.InitialBaseFee` (coreth `toBlock`).
+    #[serde(rename = "baseFeePerGas", default)]
+    base_fee_per_gas: Option<String>,
+    /// `excessBlobGas` (EIP-4844) — Go `Genesis.ExcessBlobGas`.
+    #[serde(rename = "excessBlobGas", default)]
+    excess_blob_gas: Option<String>,
+    /// `blobGasUsed` (EIP-4844) — Go `Genesis.BlobGasUsed`.
+    #[serde(rename = "blobGasUsed", default)]
+    blob_gas_used: Option<String>,
 }
 
 /// A parsed C-Chain genesis (spec 10 §11.1): the chain id, the header scalar
@@ -813,6 +824,13 @@ pub struct CChainGenesis {
     coinbase: Address,
     /// Genesis parent hash (zero).
     parent_hash: B256,
+    /// Genesis `baseFeePerGas` (`None` in every embedded network genesis; the
+    /// AP3-active default is applied in [`CChainGenesis::genesis_header`]).
+    base_fee: Option<U256>,
+    /// Genesis `excessBlobGas` (`None` ⇒ `0` when Cancun is active).
+    excess_blob_gas: Option<u64>,
+    /// Genesis `blobGasUsed` (`None` ⇒ `0` when Cancun is active).
+    blob_gas_used: Option<u64>,
     /// The genesis `alloc` as a revm [`BundleState`]: feed it through
     /// [`FirewoodStateProvider::propose_from_bundle`](crate::state::FirewoodStateProvider::propose_from_bundle)
     /// to obtain the genesis state root. The bundle path materializes accounts
@@ -946,6 +964,21 @@ impl CChainGenesis {
             .map(parse_b256)
             .transpose()?
             .unwrap_or(B256::ZERO);
+        let base_fee = raw
+            .base_fee_per_gas
+            .as_deref()
+            .map(parse_u256_hex)
+            .transpose()?;
+        let excess_blob_gas = raw
+            .excess_blob_gas
+            .as_deref()
+            .map(parse_u64_hex)
+            .transpose()?;
+        let blob_gas_used = raw
+            .blob_gas_used
+            .as_deref()
+            .map(parse_u64_hex)
+            .transpose()?;
 
         // Materialize the alloc into a revm `BundleState`: each account becomes a
         // present `AccountInfo` (balance, nonce, code_hash) + its storage slots.
@@ -1052,6 +1085,9 @@ impl CChainGenesis {
             mix_digest,
             coinbase,
             parent_hash,
+            base_fee,
+            excess_blob_gas,
+            blob_gas_used,
             alloc_bundle,
             bytecode,
             precompile_upgrades,
@@ -1096,16 +1132,38 @@ impl CChainGenesis {
     }
 
     /// Builds the coreth genesis [`AvaHeader`] given the computed genesis
-    /// `state_root` (spec 10 §9.3 / §11.1, coreth `Genesis.toBlock`).
+    /// `state_root` and the network's activation schedule (spec 10 §9.3 /
+    /// §11.1, coreth `Genesis.toBlock`).
     ///
-    /// For the embedded Mainnet/Fuji genesis (timestamp 0, no AP3+/Cancun/Granite
-    /// active at genesis), the header carries **no optional tail**: just the 15
-    /// standard Ethereum fields + `ext_data_hash`. `tx_root`/`receipt_root` are
-    /// the empty-trie root; `uncle_hash` is the empty-ommers hash; `ext_data_hash`
-    /// is the zero hash (coreth leaves the genesis header `ExtDataHash` unset —
-    /// it is the zero value, NOT `EmptyExtDataHash`).
+    /// coreth's `toBlock` fills the fork-gated optional header tail for every
+    /// upgrade **active at the genesis timestamp** (`core/genesis.go`):
+    ///
+    /// * AP3 ⇒ `BaseFee` (`g.BaseFee`, else `ap3.InitialBaseFee` = 225 gwei);
+    /// * Etna ⇒ `ExtDataGasUsed = 0`, `BlockGasCost = 0`;
+    /// * Cancun (aligned to Etna, `SetEthUpgrades`) ⇒ `ParentBeaconRoot =
+    ///   0x0…0`, `ExcessBlobGas`/`BlobGasUsed` (`g.…`, else `0`);
+    /// * Granite ⇒ `TimeMilliseconds = timestamp * 1000`, `MinDelayExcess =
+    ///   acp226.InitialDelayExcess`.
+    ///
+    /// For the embedded Mainnet/Fuji genesis (timestamp 0, nothing active at
+    /// genesis) the tail is empty — the 15 standard Ethereum fields +
+    /// `ext_data_hash` only. For `network-id=local` (genesis timestamp ==
+    /// `InitiallyActiveTime`, AP1→Granite all active **at** genesis) every tail
+    /// field above is present — omitting them was the M9.15 rung-4 C-Chain
+    /// genesis identity divergence. Helicon would append further fields
+    /// (coreth `IsHelicon` branch) but is unscheduled on every network and
+    /// [`AvaHeader`] carries no Helicon fields yet.
+    ///
+    /// `tx_root`/`receipt_root` are the empty-trie root; `uncle_hash` is the
+    /// empty-ommers hash; `ext_data_hash` is the zero hash (coreth leaves the
+    /// genesis header `ExtDataHash` unset — it is the zero value, NOT
+    /// `EmptyExtDataHash`).
     #[must_use]
-    pub fn genesis_header(&self, state_root: B256) -> AvaHeader {
+    pub fn genesis_header(&self, state_root: B256, upgrades: &NetworkUpgrades) -> AvaHeader {
+        let ts = self.timestamp;
+        let ap3 = upgrades.activation(AvaPhase::ApricotPhase3) <= ts;
+        let etna = upgrades.activation(AvaPhase::Etna) <= ts;
+        let granite = upgrades.activation(AvaPhase::Granite) <= ts;
         AvaHeader {
             parent_hash: self.parent_hash,
             uncle_hash: EMPTY_OMMER_ROOT_HASH,
@@ -1118,22 +1176,73 @@ impl CChainGenesis {
             number: self.number,
             gas_limit: self.gas_limit,
             gas_used: self.gas_used,
-            time: self.timestamp,
+            time: ts,
             extra: self.extra.clone(),
             mix_digest: self.mix_digest,
             nonce: self.nonce,
             // coreth's genesis header leaves ExtDataHash as the zero value (the
             // genesis block has no ExtData and toBlock never computes the hash).
             ext_data_hash: B256::ZERO,
-            base_fee: None,
-            ext_data_gas_used: None,
-            block_gas_cost: None,
-            blob_gas_used: None,
-            excess_blob_gas: None,
-            parent_beacon_root: None,
-            time_milliseconds: None,
-            min_delay_excess: None,
+            // AP3: the genesis `baseFeePerGas`, defaulting to ap3.InitialBaseFee
+            // (== ap3.MaxBaseFee, 225 gwei).
+            base_fee: ap3.then(|| {
+                self.base_fee
+                    .unwrap_or(crate::feerules::window::BaseFeeParams::ap3().max_base_fee)
+            }),
+            // Etna: decoded-genesis consistency zeros (coreth toBlock).
+            ext_data_gas_used: etna.then_some(U256::ZERO),
+            block_gas_cost: etna.then_some(U256::ZERO),
+            // Cancun is aligned to Etna (`SetEthUpgrades`).
+            blob_gas_used: etna.then(|| self.blob_gas_used.unwrap_or(0)),
+            excess_blob_gas: etna.then(|| self.excess_blob_gas.unwrap_or(0)),
+            parent_beacon_root: etna.then_some(B256::ZERO),
+            // Granite: millisecond timestamp + the ACP-226 initial delay excess.
+            time_milliseconds: granite.then(|| ts.saturating_mul(1000)),
+            min_delay_excess: granite.then_some(crate::feerules::acp226::INITIAL_DELAY_EXCESS.0),
         }
+    }
+
+    /// The complete genesis **state** for a network: the `alloc` bundle plus
+    /// the stateful-precompile **activation accounts** coreth writes before
+    /// computing the genesis state root, and the full `code_hash -> bytecode`
+    /// side-store seed list (spec 10 §11.1; coreth `toBlock` →
+    /// `ApplyPrecompileActivations`).
+    ///
+    /// coreth's `parseGenesis` schedules the Warp precompile at the Durango
+    /// timestamp; when Durango is active **at** the genesis timestamp (every
+    /// `network-id=local` network — never Mainnet/Fuji, whose genesis is
+    /// timestamp 0), activation writes the "deployed contract" marker into the
+    /// genesis state: `nonce = 1`, `code = [0x01]` at the warp precompile
+    /// address (`core/state_processor_ext.go`; warp's `Configure` writes no
+    /// further state). Omitting that account was the other half of the M9.15
+    /// rung-4 C-Chain genesis divergence (state root).
+    ///
+    /// JSON-scheduled `precompileUpgrades` (§8.3) are a subnet-evm surface; the
+    /// C-Chain registers only the warp module, so they never activate at the
+    /// C-Chain genesis and are not materialized here.
+    #[must_use]
+    pub fn genesis_alloc(&self, upgrades: &NetworkUpgrades) -> (BundleState, Vec<(B256, Vec<u8>)>) {
+        let mut bundle = self.alloc_bundle.clone();
+        let mut bytecode = self.bytecode.clone();
+        if upgrades.activation(AvaPhase::Durango) <= self.timestamp {
+            let warp_code = vec![0x01u8];
+            let warp_code_hash = keccak256(&warp_code);
+            let activation = BundleState::builder(0..=0)
+                .state_present_account_info(
+                    crate::precompile::warp::WARP_PRECOMPILE_ADDRESS,
+                    AccountInfo {
+                        balance: U256::ZERO,
+                        nonce: 1,
+                        code_hash: warp_code_hash,
+                        code: Some(Bytecode::new_raw(Bytes::from(warp_code.clone()))),
+                        ..Default::default()
+                    },
+                )
+                .build();
+            bundle.extend(activation);
+            bytecode.push((warp_code_hash, warp_code));
+        }
+        (bundle, bytecode)
     }
 }
 

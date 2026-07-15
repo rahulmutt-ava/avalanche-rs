@@ -373,7 +373,12 @@ impl EvmVm {
 
         // Fork schedule from the chosen network; chain id from the genesis config.
         let chain_spec = AvaChainSpec::c_chain(network_id, Chain::from_id(genesis.chain_id()));
-        let config = AvaEvmConfig::new(chain_spec);
+
+        // The genesis state = alloc + precompile activation accounts (warp at
+        // Durango when active at the genesis timestamp — network-id=local), and
+        // the full bytecode side-store seed list (M9.15 rung 4).
+        let (genesis_bundle, genesis_bytecode) =
+            genesis.genesis_alloc(chain_spec.network_upgrades());
 
         // Open the Firewood-ethhash state db at the chain's data dir. The bytecode
         // + block-hash side stores are in-memory (real-DB threading deferred).
@@ -383,22 +388,23 @@ impl EvmVm {
 
         // Seed contract bytecode (the state root commits only the code_hash; the
         // bytecode lives in the side KV — spec 10 §5.1).
-        for (code_hash, code) in genesis.bytecode() {
+        for (code_hash, code) in &genesis_bytecode {
             provider
                 .bytecode_store()
                 .put(code_hash.as_slice(), code)
                 .map_err(|e| Error::GenesisParse(format!("seed genesis bytecode: {e}")))?;
         }
 
-        // Materialize + commit the alloc on a fresh db (the empty-trie tip); a
-        // re-opened db keeps its persisted tip.
+        // Materialize + commit the genesis state on a fresh db (the empty-trie
+        // tip); a re-opened db keeps its persisted tip.
         if provider.root() == EMPTY_ROOT_HASH {
-            let root = provider.propose_from_bundle(genesis.alloc_bundle())?;
+            let root = provider.propose_from_bundle(&genesis_bundle)?;
             provider.commit(root)?;
         }
         let genesis_root = provider.root();
-        let genesis_header = genesis.genesis_header(genesis_root);
+        let genesis_header = genesis.genesis_header(genesis_root, chain_spec.network_upgrades());
         let genesis_id = id_of(genesis_header.hash());
+        let config = AvaEvmConfig::new(chain_spec);
 
         let canonical = Arc::new(CanonicalStore::new(Arc::new(MemDb::new())));
         let vm = Self::new(provider, config, canonical, genesis_id);
