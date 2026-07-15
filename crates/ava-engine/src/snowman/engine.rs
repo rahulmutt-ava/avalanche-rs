@@ -175,7 +175,16 @@ where
         let blk = match blk {
             Ok(blk) => blk,
             // Failed to parse: treat as a Get failure to abandon the request.
-            Err(_) => return self.get_failed(node, req).await,
+            Err(e) => {
+                tracing::warn!(
+                    %node,
+                    req,
+                    len = container.len(),
+                    error = %e,
+                    "put: failed to parse block container; abandoning request"
+                );
+                return self.get_failed(node, req).await;
+            }
         };
 
         // If this matches an outstanding Get and the id mismatches, abandon.
@@ -288,8 +297,14 @@ where
         if self.cfg.token.is_cancelled() {
             return Err(Error::Halted);
         }
-        if blk.verify(&self.cfg.token).await.is_err() {
+        if let Err(e) = blk.verify(&self.cfg.token).await {
             // Verification failed: all descendants are also invalid.
+            tracing::warn!(
+                block = %blk.id(),
+                height = blk.height(),
+                error = %e,
+                "block verification failed; dropping block and descendants"
+            );
             return Ok(false);
         }
         // Bridge the async VM block into the synchronous consensus block.
