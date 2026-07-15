@@ -169,6 +169,54 @@ fn genesis_p_chain_bytes_byte_identical() {
     }
 }
 
+/// M9.15 rung-4 live-parity pin: the **advanced** local config (startTime
+/// moved to the most recent 9-month chunk, as the live node computes it via
+/// `get_recent_start_time`) produces exactly the P-chain genesis the Go oracle
+/// (`avalanchego@96897293a2`) ran with in mixed-net run 7 (2026-07-15):
+/// every Go validator's P `initializing last accepted` blkID is
+/// `2Z95KpsdZCEfwFHYybU6wyn9s3fbYnn92ZtnBnPWZEAtQMjqnq` (go1/logs/P.log), and
+/// the live Rust follower's P preference matched it on the wire.
+///
+/// `NOW` is frozen inside the chunk `[2026-01-06, 2026-10-03)` so the test is
+/// deterministic forever; when Go's live chunk advances past 2026-10-03 the
+/// live id changes with it on BOTH sides (same `getRecentStartTime`), and this
+/// pin keeps guarding the frozen chunk.
+#[test]
+fn genesis_p_chain_advanced_local_matches_live_go() {
+    /// 2026-07-15 00:00:00 UTC — inside the run-7 chunk.
+    const NOW: u64 = 1_784_073_600;
+    /// The chunk start `getRecentStartTime` selects for `NOW`
+    /// (2026-01-06 04:00:00 UTC).
+    const CHUNK_START: u64 = 1_767_672_000;
+
+    let mut config = UNMODIFIED_LOCAL_CONFIG.clone();
+    config.start_time = ava_genesis::recent_start::get_recent_start_time(
+        config.start_time,
+        NOW,
+        ava_genesis::recent_start::LOCAL_NETWORK_UPDATE_START_TIME_PERIOD_SECS,
+    );
+    assert_eq!(config.start_time, CHUNK_START, "advanced startTime chunk");
+
+    let (p_bytes, _) = from_config(&config).expect("advanced local build");
+    // sha256(p_bytes) — Go probe `genesis.FromConfig(GetConfig(local))` prints
+    // the identical hash for this chunk.
+    assert_eq!(
+        hex::encode(ava_crypto::hashing::sha256(&p_bytes)),
+        "5c23e336aa6dc99a5e5424d005a439193f25b434fb62d815dc3c224e132c4310",
+        "live-local P genesis bytes hash vs Go oracle (96897293a2)"
+    );
+    // The height-0 ApricotCommit genesis **block** id (the network's live P
+    // last-accepted id — what peers gossip on the wire).
+    assert_eq!(
+        ava_platformvm::genesis::genesis_block(&p_bytes)
+            .expect("genesis block")
+            .id()
+            .to_string(),
+        "2Z95KpsdZCEfwFHYybU6wyn9s3fbYnn92ZtnBnPWZEAtQMjqnq",
+        "live-local P genesis block id vs Go oracle (96897293a2)"
+    );
+}
+
 /// `vm_genesis` finds the CreateChainTx per VM id and errors on unknown ids.
 #[test]
 fn vm_genesis_unknown_vm() {
