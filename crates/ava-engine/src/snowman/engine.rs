@@ -42,6 +42,16 @@ use crate::snowman::adaptor::BlockAdaptor;
 use crate::snowman::getter::Getter;
 use crate::snowman::poll::{EarlyTermFactory, PollSet};
 
+/// Lowercase-hex render of `bytes` (capture instrumentation; no `hex` dep).
+fn hex_of(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 /// `snow/engine/snowman.Config` — the Snowman engine's dependencies.
 pub struct Config<V, S, M> {
     /// The subnet this chain belongs to (sampling key).
@@ -187,10 +197,32 @@ where
             }
         };
 
+        // M9.15 rung-5 capture seam: at trace level, hex-dump the parsed
+        // container so a live run's exact wire bytes can be lifted into an
+        // offline vector (`--log-level=trace`; see
+        // crates/ava-evm/tests/vectors/cchain/block_wire/live_local_block1.json).
+        tracing::debug!(
+            %node,
+            req,
+            block = %blk.id(),
+            height = blk.height(),
+            parent = %blk.parent(),
+            len = container.len(),
+            "put: parsed block container"
+        );
+        tracing::trace!(container_hex = %hex_of(container), "put: container bytes");
+
         // If this matches an outstanding Get and the id mismatches, abandon.
         if let Some(expected) = self.blk_reqs.get(&(node, req)).copied()
             && blk.id() != expected
         {
+            tracing::warn!(
+                %node,
+                req,
+                parsed = %blk.id(),
+                %expected,
+                "put: parsed block id does not match the requested id; abandoning"
+            );
             return self.get_failed(node, req).await;
         }
 
@@ -214,12 +246,27 @@ where
     /// # Errors
     /// Propagates a fatal VM/consensus error.
     pub async fn issue_from(&mut self, node: NodeId, blk: Arc<dyn ava_snow::Block>) -> Result<()> {
+        tracing::debug!(
+            block = %blk.id(),
+            height = blk.height(),
+            parent = %blk.parent(),
+            last_accepted = %self.consensus.last_accepted().0,
+            last_accepted_height = self.consensus.last_accepted().1,
+            "issue_from: walking ancestry"
+        );
         // Walk the ancestry, issuing each block whose parent is already issuable.
         // Collect the chain root-first so we add parents before children.
         let mut chain: Vec<Arc<dyn ava_snow::Block>> = Vec::new();
         let mut current = blk;
         loop {
             if !self.should_issue_block(current.as_ref()) {
+                tracing::debug!(
+                    block = %current.id(),
+                    height = current.height(),
+                    decided = self.is_decided(current.as_ref()),
+                    processing = self.consensus.processing(current.id()),
+                    "issue_from: stop walk (should_issue_block=false)"
+                );
                 break;
             }
             let parent_id = current.parent();
@@ -237,6 +284,11 @@ where
                 Err(_) => {
                     // Parent is unknown: request it from the providing node and
                     // stop (the chain can't be issued yet).
+                    tracing::debug!(
+                        %parent_id,
+                        %node,
+                        "issue_from: parent unknown locally; requesting from peer"
+                    );
                     self.send_request(node, parent_id);
                     return Ok(());
                 }
@@ -261,6 +313,12 @@ where
             }
             // The parent must be issuable for verification to be valid.
             if !self.can_issue_child_on(block.parent()) {
+                tracing::debug!(
+                    block = %blk_id,
+                    parent = %block.parent(),
+                    last_accepted = %self.consensus.last_accepted().0,
+                    "issue_from: skipping block (parent not issuable)"
+                );
                 continue;
             }
             // Clear any outstanding request for this block.
@@ -271,6 +329,11 @@ where
                 .add_unverified_block_to_consensus(node, Arc::clone(&block))
                 .await?;
             if added {
+                tracing::debug!(
+                    block = %blk_id,
+                    height = block.height(),
+                    "issue_from: block verified and added to consensus"
+                );
                 any_added = true;
                 // Update preference and query if the new block is preferred.
                 self.set_vm_preference().await?;
@@ -544,6 +607,16 @@ where
         if applied.is_none() && preferred_id != preferred_id_at_height {
             applied = self.apply_vote(req, node, preferred_id_at_height);
         }
+        tracing::debug!(
+            %node,
+            req,
+            %preferred_id,
+            %accepted_id,
+            accepted_height,
+            applied = applied.is_some(),
+            processing = self.consensus.num_processing(),
+            "chits: vote application"
+        );
         let results = match applied {
             Some(results) => results,
             None => self.polls.drop(req, node),
@@ -603,8 +676,17 @@ where
         if results.is_empty() {
             return Ok(());
         }
+        let before = self.consensus.last_accepted();
         for result in results {
             self.consensus.record_poll(&result)?;
+        }
+        let after = self.consensus.last_accepted();
+        if before != after {
+            tracing::debug!(
+                accepted = %after.0,
+                height = after.1,
+                "consensus accepted a new block"
+            );
         }
         self.set_vm_preference().await?;
 
