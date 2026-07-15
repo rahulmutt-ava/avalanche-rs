@@ -61,6 +61,7 @@ pub mod nftfx;
 pub mod propertyfx;
 pub mod service;
 pub mod state;
+pub mod stop_vertex;
 pub mod txs;
 pub mod vm;
 

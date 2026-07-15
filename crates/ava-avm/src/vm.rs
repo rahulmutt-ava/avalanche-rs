@@ -718,8 +718,19 @@ impl Vm for AvmVm {
         // NOT the genesis bytes. `initialize_chain_state` builds + persists the
         // height-0 Snowman block and commits the buffered asset seeds in one
         // batch (idempotent on re-open via the same `is_initialized` marker).
+        //
+        // An **empty** configured stop-vertex id (local/custom networks) is NOT
+        // linearized off as-is: Go's avalanche bootstrapper builds a stop vertex
+        // over the (empty) DAG edge and linearizes off that vertex's id — see
+        // [`crate::stop_vertex`] (M9.15 rung 4: a Rust node must byte-match the
+        // Go network's genesis Snowman block or a mixed local network forks at
+        // genesis).
         let upgrades = ava_version::upgrade::get_config(chain_ctx.network_id);
-        let stop_vertex_id = upgrades.cortina_x_chain_stop_vertex_id;
+        let stop_vertex_id = if upgrades.cortina_x_chain_stop_vertex_id == Id::EMPTY {
+            crate::stop_vertex::fresh_stop_vertex_id(chain_ctx.chain_id)
+        } else {
+            upgrades.cortina_x_chain_stop_vertex_id
+        };
         let genesis_ts = systemtime_from_unix_secs(upgrades.cortina_time.timestamp());
         let c = codec().map_err(|e| VmError::from(Error::from(e)))?;
         state

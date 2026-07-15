@@ -811,7 +811,9 @@ async fn boot_pchain(
 /// index-0 genesis asset id, and the handle's `genesis_id` is the Cortina
 /// stop-vertex id the genesis block linearizes off (from the upgrade config — Go
 /// `Upgrades.CortinaXChainStopVertexID`, the same source `AvmVm::initialize`
-/// reads, not the inner Snowman block id it computes during `initialize`).
+/// reads, not the inner Snowman block id it computes during `initialize`; an
+/// empty configured id resolves to the fresh-network stop vertex —
+/// `ava_avm::stop_vertex`, M9.15 rung 4).
 ///
 /// # Errors
 /// Propagates genesis-parse / DB / VM-init / consensus-construction / identity /
@@ -825,10 +827,10 @@ pub async fn boot_xchain(
     token: CancellationToken,
 ) -> Result<PChainBootHandle> {
     // The AVAX asset id is the index-0 genesis asset (specs 09 §1); the X-Chain
-    // genesis block linearizes off the Cortina stop-vertex id from the upgrade
-    // config (the same value `AvmVm::initialize` uses), not the genesis bytes.
+    // genesis block linearizes off the Cortina stop-vertex id (the same value
+    // `AvmVm::initialize` resolves), not the genesis bytes.
     let avax_asset_id = ava_genesis::avax_asset_id(genesis_bytes)?;
-    let genesis_id = ava_version::upgrade::get_config(network_id).cortina_x_chain_stop_vertex_id;
+    let genesis_id = x_stop_vertex_id(network_id, chain_id);
     boot_chain(
         BootSpec {
             network_id,
@@ -912,14 +914,28 @@ fn resolve_pchain_vm(network_id: u32) -> Result<(ava_platformvm::vm::PlatformVm,
     ))
 }
 
+/// The Cortina stop-vertex id the X-Chain genesis Snowman block linearizes off:
+/// the upgrade-config value, or — when that is empty (local/custom networks) —
+/// the fresh-network stop vertex over the empty DAG edge, exactly as
+/// `AvmVm::initialize` resolves it (`ava_avm::stop_vertex`, M9.15 rung 4).
+fn x_stop_vertex_id(network_id: u32, chain_id: Id) -> Id {
+    let configured = ava_version::upgrade::get_config(network_id).cortina_x_chain_stop_vertex_id;
+    if configured == Id::EMPTY {
+        ava_avm::stop_vertex::fresh_stop_vertex_id(chain_id)
+    } else {
+        configured
+    }
+}
+
 /// Resolve the production X-Chain VM + genesis identity (mirrors `boot_xchain`).
 /// Returns `(vm, avax_asset_id, genesis_id)`.
 fn resolve_xchain_vm(
     network_id: u32,
+    chain_id: Id,
     genesis_bytes: &[u8],
 ) -> Result<(ava_avm::vm::AvmVm, Id, Id)> {
     let avax_asset_id = ava_genesis::avax_asset_id(genesis_bytes)?;
-    let genesis_id = ava_version::upgrade::get_config(network_id).cortina_x_chain_stop_vertex_id;
+    let genesis_id = x_stop_vertex_id(network_id, chain_id);
     Ok((ava_avm::vm::AvmVm::new(), avax_asset_id, genesis_id))
 }
 
@@ -2028,7 +2044,7 @@ pub async fn run_queued_chains_over_network(
             let (chain_token, _tasks) =
                 manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
             let (vm, avax_asset_id, genesis_id) =
-                resolve_xchain_vm(network_id, &params.genesis_data)?;
+                resolve_xchain_vm(network_id, params.id, &params.genesis_data)?;
             boot_chain_over_network_core(
                 NetBootSpec {
                     network_id,
