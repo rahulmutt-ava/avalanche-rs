@@ -527,11 +527,35 @@ fn locate_rust_binary() -> Result<String, NetworkError> {
             chosen.display(),
             age.map_or_else(|| "<unknown>".to_owned(), |d| format!("{}s", d.as_secs())),
         );
-        return Ok(chosen.to_string_lossy().into_owned());
+        let path = chosen.to_string_lossy().into_owned();
+        prewarm_binary(&path);
+        return Ok(path);
     }
     Err(NetworkError::RustBinaryMissing(
         "set $AVALANCHERS_PATH or build `avalanchers`".to_owned(),
     ))
+}
+
+/// Eat macOS's first-exec system scan of a freshly linked binary.
+///
+/// The first exec after every relink stalls tens of seconds with zero CPU
+/// (Gatekeeper/XProtect + unified-logging registration), which under a
+/// six-node boot exceeds the bootstrap window and yields an empty node log
+/// (observed live 2026-07-15: 37s solo, >180s under load). One synchronous
+/// `--version` here makes every subsequent spawn instant. Best-effort: a
+/// failure just means the spawn path pays the stall instead.
+fn prewarm_binary(path: &str) {
+    let start = std::time::Instant::now();
+    let status = std::process::Command::new(path)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    eprintln!(
+        "prewarm_binary: {path} ({}s, {})",
+        start.elapsed().as_secs(),
+        status.map_or_else(|e| format!("spawn error: {e}"), |s| s.to_string()),
+    );
 }
 
 /// Resolve the configured Go `avalanchego` binary path, or [`NetworkError::GoBinaryMissing`].
