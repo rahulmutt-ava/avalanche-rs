@@ -1934,6 +1934,80 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 
 ---
 
+> **★ AS-BUILT — M9.15 LIVE `mixed_network` GREEN END-TO-END (2026-07-15, branch
+> `m9.15-live-mixed-net-v07`, 19 commits `9dd80d7..e32e65d`).** The live two-binary arm —
+> 5 real Go `avalanchego` genesis validators + 1 Rust `avalanchers` follower — now passes
+> reproducibly (`cargo test -p ava-differential --features live --test mixed_network`,
+> ~38s): the follower bootstraps P/X/C from the Go quorum, follows a Go-issued C-chain
+> transfer to the same tip, and its normalized `Observation` matches the Go node's (no
+> fork). Single-beacon bisection arm also green. Controller-confirmed on the dev machine,
+> not just the implementer. **This closes the last open arm of M9 interop.**
+>
+> Reached by a five-rung live debug ladder (each rung its own design→plan→TDD-fix under
+> `docs/superpowers/{specs,plans}/2026-07-{05,14,15}-*`); every fix is Go-oracle-cited
+> against `~/avalanchego@96897293a2` (firewood ffi v0.7.0, rpcchainvm=45):
+> - **Firewood v0.6.0→v0.7.0** (`917e45f`/`2ef6718`): pin bump to match the oracle; all
+>   ethhash + C-root goldens unchanged; `deny.toml` policy for v0.7.0's dropped SPDX
+>   license fields + documented pre-existing advisory drift.
+> - **Rung 1 — `*Failed` delivery** (`bf2bc04`/`08ff771`/`505c750`): ported Go's
+>   "unsent ⇒ immediate `*Failed`" sender leg + exactly-once cancel-claim. (The live stall
+>   this targeted turned out to be a stale binary — see below — but the delivery gap was
+>   real and is now closed with regression guards at 3 assembly layers.)
+> - **Stale-binary + macOS first-exec** (`ece6932`/`1943a81`): the live harness ran a
+>   2-week-old `target/release/avalanchers` (predating the RealClock/failure-accounting/
+>   Interest-logging fixes) → frozen-clock wedge masquerading as a new bug. Fixed with
+>   mtime-newest binary selection + a `--version` pre-warm that eats macOS's ~40s
+>   first-exec scan of a freshly relinked binary (which otherwise blows the 180s bootstrap
+>   window and yields an empty node log — a red herring that cost 2 runs).
+> - **Rung 2 — chain API routes** (`afcfb95`): the live boot path booted VMs to NormalOp
+>   but never registered their HTTP handlers, so `/ext/bc/P|X|C` returned 404 (the
+>   M8.31-deferred wiring). Now registers each chain through the existing `ava-api` seam.
+> - **Rung 3 — harness chunked HTTP** (`12250d3`): `Observation::collect`'s raw HTTP client
+>   didn't de-chunk Go's `Transfer-Encoding: chunked` responses (`platform.getCurrentValidators`
+>   with 5 validators exceeds Go's auto-`Content-Length` buffer) → connectivity gate never
+>   satisfied. Test-harness-only.
+> - **Rung 4 — genesis identity parity** (`aa1c469`/`d9d0f5f`/`97348a5`): the local network's
+>   genesis timestamp equals `InitiallyActiveTime`, so all upgrades (through Granite/Etna=
+>   Cancun) are active AT genesis. Rust built a bare mainnet-shaped genesis; Go builds a
+>   fork-shaped one. Fixed the C genesis header tail (8 fields incl. baseFee 225 gwei,
+>   `timestampMilliseconds`, `minDelayExcess`=acp226 constant), the warp precompile
+>   activation account (nonce=1, code=`[0x01]` at `0x02..05`, Durango-gated), and the X
+>   fresh-network stop-vertex parent. Firewood **exonerated** — reproduces coreth's root
+>   exactly given the correct input state. P was never divergent. Gating is upgrade-schedule-
+>   keyed (not network-id-keyed); mainnet/fuji shapes unchanged. Go-oracle goldens, all
+>   re-extracted from a live oracle in review.
+> - **Rung 5 — Cancun execution + clamp** (`338b963`/`d58a604`/`6540888`/`e32e65d`): the
+>   follower fetched Go's block 1 but silently failed `verify` — `eth_env_header` built the
+>   EVM env with `..Default::default()`, dropping the decoded `parentBeaconRoot`/blob fields,
+>   so EIP-4788 rejected every Cancun-active block; plus a missing coreth blob schedule.
+>   Fixed to carry the header tail + coreth blob params. Then ported coreth's **syntactic
+>   header clamp** (`wrapped_block.go:493-518`: `parentBeaconRoot==0`/`blobGasUsed==0`/
+>   `excessBlobGas==0` at Cancun, absent pre-Cancun; `ValidateBody` blob-count parity) so
+>   Rust fail-closes exactly where Go does — closing a consensus-split vector where a
+>   proposer crafts a self-consistent block Go rejects and Rust accepts. Also added the
+>   engine parse/verify failure logging that made this diagnosable, and a `decode_b256_opt`
+>   fix (consume the `0x80` empty-string placeholder → `None`, Go rlp pointer-nil parity).
+>
+> **Test additions:** `ava-engine` frontier `*Failed`-delivery + exactly-once guards;
+> `ava-evm` `live_block_adopt` + `cancun_clamp` (6, coreth-cited) + Go-oracle genesis goldens;
+> `avalanchers` chain-API-route registration; harness `split_http` de-chunk. Verified green:
+> `ava-evm` 193/193, `ava-engine` 60/60, live single-beacon + `mixed_network`.
+>
+> **Intentional deferred follow-ups (non-blocking for a follower-only mixed net; each bites
+> only an unimplemented scenario):** (1) `ava-evm/src/builder.rs` stamps `difficulty:0` +
+> no Cancun header tail on Rust-**built** blocks — Go peers will reject them the moment the
+> Rust node PROPOSES in a mixed net (matters for a validating, not following, Rust node);
+> (2) PREVRANDAO divergence (coreth `Random=Difficulty(1)` vs reth `mix_hash(0)`) — a state
+> split on the first contract reading PREVRANDAO; (3) per-block `ApplyUpgrades` (activation
+> crossing parent→block, e.g. mainnet Durango replay) unimplemented — only genesis-time
+> activation; (4) `eth_getBlockByNumber` not implemented in the C-chain RPC; (5)
+> `ChainRouter::on_response` reply-cancel dead code; (6) per-chain log-file wiring
+> (`add_chain_logger` never called in prod); (7) the documented `deny.toml` advisory ignores
+> (pre-existing on main). The nightly live two-binary arm remains operator/nightly-gated by
+> design (needs `$AVALANCHEGO_PATH` + a built Go node).
+
+---
+
 ## Spec coverage check
 
 | Acceptance / surface item | Source | Task(s) |
