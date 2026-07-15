@@ -117,6 +117,14 @@ pub enum Error {
     #[error("invalid excessBlobGas before cancun")]
     ExcessBlobGasBeforeCancun,
 
+    /// coreth `wrapped_block.go:420-421` — a C-Chain header's `MixDigest` must
+    /// be the zero hash (Avalanche has no beacon randomness). Ungated: applies to
+    /// every non-genesis block. Carries the offending digest. Guarding it closes
+    /// an adversarial PREVRANDAO fail-open (a Byzantine block with a nonzero
+    /// mix digest + a PREVRANDAO-reading tx that Go rejects and Rust would run).
+    #[error("invalid mix digest: {0}")]
+    InvalidMixDigest(B256),
+
     /// `ValidateBody` blob-count parity (coreth `core/block_validator.go:100-104`):
     /// the body's blob hashes × `DATA_GAS_PER_BLOB` must equal the header's
     /// `blobGasUsed` — with the Cancun clamp forcing 0, any type-3 blob tx

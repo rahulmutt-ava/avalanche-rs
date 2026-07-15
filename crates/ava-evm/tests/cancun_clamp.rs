@@ -148,6 +148,23 @@ async fn nonzero_parent_beacon_root_is_rejected() {
     );
 }
 
+/// coreth `wrapped_block.go:420-421` (ungated): a nonzero header `MixDigest`
+/// is rejected on the C-Chain. Guarding it closes an adversarial PREVRANDAO
+/// fail-open (a Byzantine block with a nonzero mix digest that Go rejects but
+/// pre-guard Rust would execute). Honest Go blocks and Rust-built blocks both
+/// carry mix == 0, so this never fires on the live follower arm.
+#[tokio::test]
+async fn nonzero_mix_digest_is_rejected() {
+    let bytes = mutated_live_block(|p| p.header.mix_digest = B256::repeat_byte(1));
+    let err = parse_and_verify(&bytes)
+        .await
+        .expect_err("nonzero mixDigest must fail syntactic verification");
+    assert!(
+        err.contains("invalid mix digest"),
+        "expected coreth invalid-mix-digest parity, got: {err}"
+    );
+}
+
 /// coreth `wrapped_block.go:495-496`: at Cancun `ParentBeaconRoot == nil` →
 /// `errMissingParentBeaconRoot`. Pre-clamp this was rejected only by the
 /// EIP-4788 system call deep inside execution (an alloy-evm error, not the

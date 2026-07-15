@@ -2005,6 +2005,24 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > (`add_chain_logger` never called in prod); (7) the documented `deny.toml` advisory ignores
 > (pre-existing on main). The nightly live two-binary arm remains operator/nightly-gated by
 > design (needs `$AVALANCHEGO_PATH` + a built Go node).
+>
+> **Whole-branch review (opus, 19-commit range): Ready-with-nits — no Critical, no
+> follower-arm regression.** The one "decide before merge" item (I1) was fixed in the same
+> pass: the Cancun exec-env change carried `mix_hash` into execution with no `mixDigest==0`
+> syntactic guard, slightly widening an adversarial PREVRANDAO fail-open (a Byzantine block
+> with nonzero mixDigest + a PREVRANDAO-reading tx that Go rejects, Rust would run). Added
+> the ungated `mixDigest==0` header check (coreth `wrapped_block.go:420-421`) + the
+> `nonzero_mix_digest_is_rejected` test (`ava-evm` clamp suite now 7/7). Safe on the honest
+> arm and for Rust-built blocks (both stamp mix=0). Additional tracked follow-ups the review
+> surfaced (none block a follower-only merge): **L1** — the C-Chain verify path still checks
+> only ~4 of coreth's ~12 header syntactic invariants (this branch adds the Cancun clamp +
+> mixDigest; the remaining difficulty==1 / nonce==0 / tx-root / coinbase / uncles checks are
+> the biggest residual "match Go under adversarial input" port, and difficulty==1
+> specifically must be reconciled with `builder.rs`'s `difficulty:0` first); **L2** — dead
+> `ChainRouter::on_response` means the adaptive timeout never adapts downward + a spurious
+> `*Failed` per answered request (liveness-only); **L4** — test-only: the differential
+> harness `dechunk` can panic on a multi-byte UTF-8 char split across an HTTP chunk boundary
+> (bounded — JSON-RPC responses are ASCII in practice).
 
 ---
 

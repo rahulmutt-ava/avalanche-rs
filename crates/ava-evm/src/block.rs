@@ -639,6 +639,17 @@ impl EvmBlock {
     /// on the C-Chain exactly as in Go.
     fn syntactic_verify_cancun_clamp(&self, spec: &AvaChainSpec) -> Result<()> {
         let h = self.header();
+
+        // Ungated header invariant (coreth `wrapped_block.go:420-421`, applied to
+        // every non-genesis block): MixDigest must be the zero hash. Closes an
+        // adversarial PREVRANDAO fail-open. (coreth also fixes Difficulty==1 and
+        // Nonce==0 here; those are deferred with the wider `syntacticVerify` port
+        // because `builder.rs` currently stamps difficulty 0 on Rust-built blocks
+        // — porting them requires reconciling the builder first.)
+        if h.mix_digest != B256::ZERO {
+            return Err(Error::InvalidMixDigest(h.mix_digest));
+        }
+
         if spec.fork_at(h.time) >= AvaPhase::Etna {
             match h.parent_beacon_root {
                 None => return Err(Error::MissingParentBeaconRoot),
