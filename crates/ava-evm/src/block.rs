@@ -423,13 +423,32 @@ impl EvmBlock {
         };
         Ok(Header {
             parent_hash: h.parent_hash,
+            ommers_hash: h.uncle_hash,
+            beneficiary: h.coinbase,
+            state_root: h.state_root,
+            transactions_root: h.tx_root,
+            receipts_root: h.receipt_root,
+            difficulty: h.difficulty,
             number: h.number,
-            timestamp: h.time,
             gas_limit: h.gas_limit,
             gas_used: h.gas_used,
-            base_fee_per_gas,
-            beneficiary: h.coinbase,
+            timestamp: h.time,
             extra_data: h.extra.clone(),
+            mix_hash: h.mix_digest,
+            base_fee_per_gas,
+            // The Cancun tail (EIP-4844 blob fields + the EIP-4788 parent beacon
+            // root) MUST be carried through to the execution env: alloy-evm's
+            // beacon-root system call errors with `MissingParentBeaconBlockRoot`
+            // for a Cancun-active block whose env header lacks the root (coreth
+            // activates Cancun with Etna, so every local-network block ≥ 1
+            // carries `parentBeaconRoot = 0x0`; coreth runs
+            // `ProcessBeaconBlockRoot` on it — `core/state_processor.go`).
+            // Dropping these fields made the follower reject every live Go
+            // block with "EIP-4788 parent beacon block root missing" (M9.15
+            // rung 5).
+            blob_gas_used: h.blob_gas_used,
+            excess_blob_gas: h.excess_blob_gas,
+            parent_beacon_block_root: h.parent_beacon_root,
             ..Default::default()
         })
     }

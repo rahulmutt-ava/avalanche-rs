@@ -643,7 +643,20 @@ impl EthChainSpec for AvaChainSpec {
     }
 
     fn blob_params_at_timestamp(&self, timestamp: u64) -> Option<BlobParams> {
-        EthChainSpec::blob_params_at_timestamp(&self.eth_spec, timestamp)
+        // coreth executes every Cancun-active block through libevm
+        // `eip4844.CalcBlobFee(*header.ExcessBlobGas)` (`core/evm.go:159`) with
+        // the fixed CANCUN constants (min blob gas price 1, update fraction
+        // 3338477) — no Prague/BPO reschedule exists on Avalanche, and headers
+        // carry `ExcessBlobGas` from Cancun (== Etna, `SetEthUpgrades`) on.
+        // Mirror that here: revm refuses to execute a Cancun-active block whose
+        // env has no blob params (`excess_blob_gas not set`), which stalled the
+        // live follower on Go's block 1 (M9.15 rung 5). Blob *transactions*
+        // remain invalid on the C-Chain; these params only price the (always
+        // zero) excess blob gas.
+        self.inner
+            .fork(AvaHardfork::Eth(EthereumHardfork::Cancun))
+            .active_at_timestamp(timestamp)
+            .then(BlobParams::cancun)
     }
 
     fn deposit_contract(&self) -> Option<&DepositContract> {

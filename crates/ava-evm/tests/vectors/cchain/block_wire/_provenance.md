@@ -63,3 +63,28 @@ to coreth, run with
 `go test ./plugin/evm/customtypes/ -run 'TestScratchDecodeBlock1|TestScratchAtomicBlock' -v`,
 its `SCRATCH …` stdout captured here, then **deleted**. `../avalanchego` was
 left git-clean (verified with `git -C ../avalanchego status`).
+
+## `live_local_block1.json` (M9.15 rung 5 — live mixed_network capture)
+
+- Captured **2026-07-15** from the live `mixed_network` differential harness
+  (`tests/differential/tests/mixed_network.rs`, `--features live`): a
+  5-validator **Go** local network (oracle binary
+  `~/avalanchego/build/avalanchego` @ `96897293a2249cbce94411466618924ec24199c8`,
+  rpcchainvm=45) built and accepted C-Chain block 1 from one legacy transfer
+  tx; the Rust follower fetched it via `Get`→`Put` and the engine's rung-5
+  capture instrumentation (`SnowmanEngine::put` `container_hex` debug line)
+  hex-dumped the exact wire bytes from `<workdir>/rust/logs/main.log`.
+- The 791-byte container is a proposervm **unsigned post-fork** block
+  (codec v0: parentID `608ddb…07b8b1` = the local C genesis ethhash, timestamp,
+  pChainHeight 0, empty cert/signature) wrapping the 725-byte inner coreth
+  block (`RLP([Header, Txs, Uncles, Version, ExtData])`). Container id
+  (`sha256`) = `2vWVdmMroWuCZxU3YJ1gQzRVfMwTWT38SajCTEcuSfn5eNuisE` — the id
+  every Go validator's chits named.
+- Cancun is active at the local genesis timestamp (Etna alignment), so the
+  inner header's optional tail carries `parentBeaconRoot = 0x0` (and Granite's
+  `timestampMs`/`minDelayExcess`); coreth executes the block through
+  `ProcessBeaconBlockRoot` (`core/state_processor.go:97`).
+- Regression pinned by `tests/live_block_adopt.rs` (and the engine-level
+  `avalanchers` test `c_chain_follower_adopts_live_go_block`): the follower
+  must parse, verify (execute to the header state root
+  `0feb3745…850576f3`), and accept this container over the local genesis.
