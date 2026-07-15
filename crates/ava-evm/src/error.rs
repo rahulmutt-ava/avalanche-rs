@@ -76,6 +76,58 @@ pub enum Error {
     /// (`handlePrecompileAccept`, M6.31, spec 20 §3.1).
     #[error("warp precompile accept: {0}")]
     Warp(#[from] ava_warp::Error),
+
+    // --- Cancun syntactic header clamp (coreth `wrapped_block.go:493-518`;
+    // M9.15 task 8f). Messages mirror coreth's sentinels so mixed-net
+    // operators see the same rejection text from both implementations.
+    /// `errMissingParentBeaconRoot` — Cancun header lacks `parentBeaconRoot`.
+    #[error("header is missing parentBeaconRoot")]
+    MissingParentBeaconRoot,
+
+    /// `errParentBeaconRootNonEmpty` — Cancun `parentBeaconRoot` must be the
+    /// zero hash on Avalanche (no beacon chain). Carries the offending root.
+    #[error("invalid non-empty parentBeaconRoot: have {0}, expected empty hash")]
+    ParentBeaconRootNonEmpty(B256),
+
+    /// `errInvalidParentBeaconRootBeforeCancun` — the field must be absent
+    /// pre-Cancun.
+    #[error("invalid parentBeaconRoot before cancun")]
+    ParentBeaconRootBeforeCancun,
+
+    /// `errBlobGasUsedNilInCancun` — Cancun header lacks `blobGasUsed`.
+    #[error("blob gas used must not be nil in Cancun")]
+    BlobGasUsedNilInCancun,
+
+    /// `errBlobsNotEnabled` — Cancun `blobGasUsed` must be 0 (blob txs are not
+    /// supported on Avalanche networks). Carries the declared blob gas.
+    #[error("blobs not enabled on avalanche networks: used {0} blob gas, expected 0")]
+    BlobsNotEnabled(u64),
+
+    /// `errInvalidBlobGasUsedBeforeCancun` — the field must be absent pre-Cancun.
+    #[error("invalid blobGasUsed before cancun")]
+    BlobGasUsedBeforeCancun,
+
+    /// `errInvalidExcessBlobGas` — Cancun `excessBlobGas` must be present and 0.
+    /// Carries the offending value (`None` = missing).
+    #[error("invalid excessBlobGas: have {0:?}, expected 0")]
+    InvalidExcessBlobGas(Option<u64>),
+
+    /// `errInvalidExcessBlobGasBeforeCancun` — the field must be absent
+    /// pre-Cancun.
+    #[error("invalid excessBlobGas before cancun")]
+    ExcessBlobGasBeforeCancun,
+
+    /// `ValidateBody` blob-count parity (coreth `core/block_validator.go:100-104`):
+    /// the body's blob hashes × `DATA_GAS_PER_BLOB` must equal the header's
+    /// `blobGasUsed` — with the Cancun clamp forcing 0, any type-3 blob tx
+    /// mismatches and the block is rejected before execution.
+    #[error("blob gas used mismatch (header {header}, calculated {calculated})")]
+    BlobGasUsedMismatch {
+        /// The header-declared blob gas (0 under the clamp).
+        header: u64,
+        /// The blob gas implied by the body's blob hashes.
+        calculated: u64,
+    },
 }
 
 /// C-Chain VM result alias.

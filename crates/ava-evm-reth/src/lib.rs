@@ -221,7 +221,16 @@ pub use alloy_consensus::Transaction as ConsensusTx;
 // `signature_hash`, attach an `EvmSignature` via `into_signed`. The EIP-2930
 // `AccessList`/`AccessListItem` carry the warp predicate chunks (spec 20 §7.2).
 pub use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
+// EIP-4844 blob-tx type + per-blob gas constant for the Cancun syntactic
+// clamp (M9.15 task 8f): coreth counts the body's blob hashes against
+// `header.BlobGasUsed / BlobTxBlobGasPerBlob`
+// (`core/block_validator.go:100-104`); `DATA_GAS_PER_BLOB` is that per-blob
+// constant (131072). `TxEip4844` is exported for the clamp's negative tests
+// (blob txs are syntactically invalid on the C-Chain —
+// `plugin/evm/wrapped_block.go:499-506`).
+pub use alloy_consensus::TxEip4844;
 pub use alloy_eips::eip2930::{AccessList, AccessListItem};
+pub use alloy_eips::eip4844::DATA_GAS_PER_BLOB;
 pub use alloy_primitives::Signature as EvmSignature;
 // EIP-2718 typed-envelope decode for a single signed tx (`TransactionSigned`)
 // — used by `ava-evm::block` to decode the txs out of a block body (spec 10

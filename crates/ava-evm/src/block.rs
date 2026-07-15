@@ -34,9 +34,9 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, Decodable2718, Header, RLP_EMPTY_STRING_CODE, RecoveredTx, RlpDecodable,
-    RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, State, StateBuilder,
-    StateProviderDatabase, TransactionSigned, U256, keccak256,
+    Address, B256, Bytes, ConsensusTx as _, Decodable2718, Header, RLP_EMPTY_STRING_CODE,
+    RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, State,
+    StateBuilder, StateProviderDatabase, TransactionSigned, U256, keccak256,
 };
 
 use crate::atomic::backend::AtomicBackend;
@@ -626,12 +626,83 @@ impl EvmBlock {
     ///
     /// # Errors
     /// As [`EvmBlock::verify`].
+    /// Cancun syntactic header clamp + body blob-count parity (M9.15 task 8f).
+    ///
+    /// Mirrors coreth `wrappedBlock.syntacticVerify`
+    /// (`plugin/evm/wrapped_block.go:493-518`): at Cancun (== Etna on
+    /// Avalanche) the header must carry `parentBeaconRoot == 0x0`,
+    /// `blobGasUsed == 0`, and `excessBlobGas == 0` exactly; pre-Cancun all
+    /// three must be absent. `ValidateBody` parity
+    /// (`core/block_validator.go:100-104`) then counts the body's blob hashes
+    /// against `blobGasUsed / DATA_GAS_PER_BLOB` — with the clamp forcing 0,
+    /// every type-3 blob tx mismatches, so blob txs are syntactically invalid
+    /// on the C-Chain exactly as in Go.
+    fn syntactic_verify_cancun_clamp(&self, spec: &AvaChainSpec) -> Result<()> {
+        let h = self.header();
+        if spec.fork_at(h.time) >= AvaPhase::Etna {
+            match h.parent_beacon_root {
+                None => return Err(Error::MissingParentBeaconRoot),
+                Some(root) if root != B256::ZERO => {
+                    return Err(Error::ParentBeaconRootNonEmpty(root));
+                }
+                Some(_) => {}
+            }
+            match h.blob_gas_used {
+                None => return Err(Error::BlobGasUsedNilInCancun),
+                Some(0) => {}
+                Some(used) => return Err(Error::BlobsNotEnabled(used)),
+            }
+            match h.excess_blob_gas {
+                Some(0) => {}
+                other => return Err(Error::InvalidExcessBlobGas(other)),
+            }
+        } else {
+            if h.parent_beacon_root.is_some() {
+                return Err(Error::ParentBeaconRootBeforeCancun);
+            }
+            if h.excess_blob_gas.is_some() {
+                return Err(Error::ExcessBlobGasBeforeCancun);
+            }
+            if h.blob_gas_used.is_some() {
+                return Err(Error::BlobGasUsedBeforeCancun);
+            }
+        }
+
+        // Body blob-count parity (`ValidateBody`): the header's blobGasUsed
+        // (clamped to 0 above at Cancun; absent == 0 pre-Cancun) must equal
+        // the blob gas implied by the body's blob hashes.
+        let blobs: u64 = self
+            .parts()
+            .transactions
+            .iter()
+            .map(|tx| {
+                tx.blob_versioned_hashes()
+                    .map_or(0, |hashes| hashes.len() as u64)
+            })
+            .sum();
+        let calculated = blobs.saturating_mul(ava_evm_reth::DATA_GAS_PER_BLOB);
+        let declared = h.blob_gas_used.unwrap_or(0);
+        if declared != calculated {
+            return Err(Error::BlobGasUsedMismatch {
+                header: declared,
+                calculated,
+            });
+        }
+        Ok(())
+    }
+
     pub fn verify_with_predicates(
         &self,
         ctx: &EvmBlockContext,
         parent_state_root: B256,
         exec_ctx: &AvaExecCtx,
     ) -> Result<B256> {
+        // Cancun syntactic header clamp — runs before any execution work
+        // (coreth fail-closes these in `wrappedBlock.syntacticVerify` before
+        // the state transition; a violating block is invalid regardless of its
+        // declared state root).
+        self.syntactic_verify_cancun_clamp(ctx.chain_spec())?;
+
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
         // or a still-processing ancestor's atomic inputs. Linear-accept is the
@@ -1020,6 +1091,17 @@ fn decode_u64_opt(buf: &mut &[u8]) -> Result<Option<u64>> {
 /// Decodes one optional `B256` if bytes remain.
 fn decode_b256_opt(buf: &mut &[u8]) -> Result<Option<B256>> {
     if buf.is_empty() {
+        return Ok(None);
+    }
+    // A later optional field (Granite time-ms / min-delay-excess) present with
+    // this one nil forces coreth to emit an empty-string placeholder (`0x80`)
+    // in the pointer slot; Go's `rlp:"optional"` pointer decodes it back to nil.
+    // Match that: consume the empty string and yield `None` rather than failing
+    // `B256::decode` (which expects 32 bytes). A block with this shape is then
+    // cleanly rejected by the Cancun clamp with the coreth `errMissingParentBeaconRoot`,
+    // exactly as Go rejects it — rather than erroring one layer too early.
+    if buf[0] == RLP_EMPTY_STRING_CODE {
+        *buf = &buf[1..];
         return Ok(None);
     }
     Ok(Some(B256::decode(buf).map_err(rlp_err)?))
