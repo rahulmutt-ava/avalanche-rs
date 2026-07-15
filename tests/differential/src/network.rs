@@ -335,8 +335,7 @@ impl Network {
             // names the node and the failing call instead of a bare count.
             let mut lagging: Vec<String> = Vec::new();
             for node in &self.nodes {
-                let status = match crate::observation::Observation::collect(&node.api_base).await
-                {
+                let status = match crate::observation::Observation::collect(&node.api_base).await {
                     Ok(o) if o.fields.len() >= want => continue,
                     Ok(o) => format!("{} fields {:?}", o.fields.len(), o.fields),
                     Err(e) => format!("collect error: {e}"),
