@@ -384,16 +384,21 @@ fn built_header_carries_go_shape_fields() {
     // coreth `customheader/extra.go:46-53` — Etna is in the AP3 window regime
     // (Fortuna is far-future here), so the extra prefix is the 80-byte fee
     // window. Building on a genesis (number-0) parent, coreth's `feeWindow`
-    // returns the empty window (`dynamic_fee_windower.go:156-158`).
+    // returns the empty window (`dynamic_fee_windower.go:156-158`). Etna is
+    // also Durango+ here, so a 6-byte predicate-results suffix follows the
+    // prefix (`core/evm.go:187` `SetPredicateBytesInExtra`; M9.15 Task 6 —
+    // `builder.rs::EMPTY_BLOCK_PREDICATE_RESULTS`); it happens to be all-zero
+    // too (the empty-`BlockResults` encoding), so the content check below is
+    // unaffected.
     assert_eq!(
         header.extra.len(),
-        WINDOW_SIZE,
-        "Etna (Window regime) extra prefix is the 80-byte fee window"
+        WINDOW_SIZE + 6,
+        "Etna (Window regime) extra prefix is the 80-byte fee window + the 6-byte empty predicate-results suffix"
     );
     assert_eq!(
         header.extra.as_ref(),
-        &[0u8; WINDOW_SIZE][..],
-        "first block on genesis carries the empty (all-zero) fee window"
+        &[0u8; WINDOW_SIZE + 6][..],
+        "first block on genesis carries the empty (all-zero) fee window + empty predicate results"
     );
     // Pre-Granite: no millisecond timestamp / min-delay-excess tail.
     assert_eq!(header.time_milliseconds, None);
@@ -470,12 +475,16 @@ fn built_header_carries_acp176_extra_prefix() {
         .expect("build_on");
     let header = built.header();
 
-    // The extra prefix is exactly the 24-byte ACP-176 fee state (the builder adds
-    // no predicate bytes, so the whole extra IS the prefix).
+    // The extra is the 24-byte ACP-176 fee state prefix plus the 6-byte
+    // Durango+ empty predicate-results suffix (`core/evm.go:187`
+    // `SetPredicateBytesInExtra`; M9.15 Task 6 —
+    // `builder.rs::EMPTY_BLOCK_PREDICATE_RESULTS`). `Acp176State::from_bytes`
+    // below only reads the leading `STATE_SIZE` bytes, so the round-trip check
+    // is unaffected by the trailing suffix.
     assert_eq!(
         header.extra.len(),
-        STATE_SIZE,
-        "Fortuna+ extra prefix is the 24-byte ACP-176 fee state"
+        STATE_SIZE + 6,
+        "Fortuna+ extra is the 24-byte ACP-176 fee state + the 6-byte empty predicate-results suffix"
     );
 
     // Round-trip: the built block's extra must parse back to the exact post-block

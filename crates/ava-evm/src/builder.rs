@@ -66,6 +66,29 @@ use crate::state::FirewoodStateProvider;
 /// no-op) if asked to re-build the same parent sooner.
 pub const MIN_BLOCK_BUILD_DELAY: Duration = Duration::from_millis(500);
 
+/// The avalanchego-linearcodec encoding of an **empty** `predicate.BlockResults`
+/// map (`vms/evm/predicate/results.go` `BlockResults.Bytes()`): a 2-byte codec
+/// version (`0`) followed by a 4-byte big-endian element count (`0`) — 6 zero
+/// bytes. Post-Durango, coreth's `core/evm.go:187` (`SetPredicateBytesInExtra`)
+/// always appends this suffix to `header.Extra` (after the ACP-176/window
+/// prefix), even when the block has no warp-predicated EVM txs at all — an
+/// absent suffix is a syntactic-verification rejection
+/// (`wrapped_block.go:556-560`, `errInvalidHeaderPredicateResults`), not merely
+/// a missed optimization.
+///
+/// M9.15 Task 6's live differential (coreth judging a Rust-built block) caught
+/// this: the driver did not append any suffix, so Go rejected an otherwise
+/// honest block. Real per-tx warp-predicate verification
+/// ([`crate::precompile::warp::build_block_predicates`]) needs a
+/// [`ava_validators::state::ValidatorState`] handle this driver does not hold
+/// (it is wired only into the verify path today, M6.31); until that pass is
+/// threaded into `build_on` (deferred: M6.23 reth-txpool EVM-tx inclusion,
+/// which is the only way an EVM tx reaches a built block today, carries no
+/// warp-predicated access lists), every block this driver can build has zero
+/// predicated results, so this constant is the byte-exact CORRECT value, not a
+/// placeholder.
+const EMPTY_BLOCK_PREDICATE_RESULTS: [u8; 6] = [0u8; 6];
+
 /// The block-gas-cost regime the AP4+ surcharge runs under for the next block,
 /// resolved from the active phase at the build timestamp.
 struct BlockGasCostParams {
@@ -390,7 +413,7 @@ impl BlockBuilderDriver {
         // no `GasTarget`/`MinDelayTarget` override, so both desired values are
         // `nil` (coreth `vm.go:535-543`).
         let time_ms_field = spec.is_granite(ctx.timestamp).then_some(ctx.timestamp_ms);
-        let extra = crate::feerules::extra_prefix(
+        let mut extra = crate::feerules::extra_prefix(
             spec,
             parent,
             ctx.timestamp,
@@ -399,6 +422,13 @@ impl BlockBuilderDriver {
             atomic_gas_used,
             None,
         )?;
+        // coreth `core/evm.go:187` (`SetPredicateBytesInExtra`) — post-Durango,
+        // the header's `Extra` carries a fixed-offset warp-predicate-results
+        // suffix after the ACP-176/window prefix (see
+        // [`EMPTY_BLOCK_PREDICATE_RESULTS`]).
+        if spec.is_durango(ctx.timestamp) {
+            extra.extend_from_slice(&EMPTY_BLOCK_PREDICATE_RESULTS);
+        }
         let min_delay_excess =
             crate::feerules::min_delay_excess_of(spec, parent, ctx.timestamp, None)?;
 
@@ -439,7 +469,8 @@ impl BlockBuilderDriver {
             time: ctx.timestamp,
             // coreth `customheader/extra.go:30` (`ExtraPrefix`) — the exact
             // Fortuna+ 24-byte ACP-176 fee state (or AP3 window / empty pre-AP3)
-            // Go's dummy-engine `VerifyExtraPrefix` checks byte-for-byte.
+            // Go's dummy-engine `VerifyExtraPrefix` checks byte-for-byte, plus
+            // the Durango+ predicate-results suffix appended above.
             extra: Bytes::from(extra),
             mix_digest: B256::ZERO,
             nonce: [0u8; 8],

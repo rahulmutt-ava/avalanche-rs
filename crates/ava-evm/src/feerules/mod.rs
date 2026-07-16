@@ -145,17 +145,34 @@ pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Re
 
 /// `gas_limit` — the per-fork block gas-limit dispatch (spec 10 §7.2/§17.3).
 ///
-/// Pre-Cortina coreth uses the static `ApricotPhase1GasLimit`; Cortina raised it
-/// to `CortinaGasLimit`. The builder may override via `ctx.gas_limit_hint`
-/// (clamped to the active ceiling). For the ACP-176 regime the gas limit is the
-/// dynamic max-capacity, but coreth keeps a fixed header `GasLimit`; we honour
-/// the hint when present, else the phase default.
+/// Pre-Fortuna coreth uses a static ceiling: `ApricotPhase1GasLimit` pre-Cortina,
+/// `CortinaGasLimit` from Cortina on (`customheader/gas_limit.go:29-58`
+/// `GasLimit`). At Fortuna+ the header `GasLimit` IS the ACP-176 dynamic
+/// `MaxCapacity()` off the parent fee state — coreth does NOT keep it fixed
+/// there (`gas_limit.go:36-45`). The builder may override via
+/// `ctx.gas_limit_hint` in every regime.
 ///
 /// # Errors
-/// Currently infallible, but returns `Result` to match the spec §17.3 signature
-/// and leave room for the ACP-176 max-capacity gate.
+/// Returns [`Error::NilBaseFee`] if `ctx.parent_fee_state` carries a `Window`
+/// state at Fortuna+ (a builder wiring error: [`parent_fee_state_of`] always
+/// resolves the regime matching `cs.fork_at`, so this is unreachable for a
+/// correctly wired caller — mirrors [`base_fee`]'s identical regime-mismatch
+/// convention above).
 pub fn gas_limit(cs: &AvaChainSpec, _parent: &Header, ctx: &AvaNextBlockCtx) -> Result<u64, Error> {
     let phase = cs.fork_at(ctx.timestamp);
+    if phase >= AvaPhase::Fortuna {
+        // coreth `customheader/gas_limit.go:36-45` (`GasLimit`, Fortuna arm):
+        // `state.MaxCapacity()` off the (pre-block) parent fee state. Unlike
+        // `base_fee` above, there is no elapsed-time-advance nuance to defer:
+        // `MaxCapacity` depends only on `TargetExcess`, which
+        // `feeStateBeforeBlock`'s time-advance never touches (only
+        // `Gas.{Capacity,Excess}` change — `acp176.rs::AdvanceSeconds`), so
+        // reading the raw `ctx.parent_fee_state` gives the byte-exact value.
+        return match &ctx.parent_fee_state {
+            AvaFeeState::Acp176(state) => Ok(ctx.gas_limit_hint.unwrap_or(state.max_capacity().0)),
+            AvaFeeState::Window { .. } => Err(Error::NilBaseFee),
+        };
+    }
     // coreth `params/avalanche_params.go`: ApricotPhase1GasLimit = 8_000_000,
     // CortinaGasLimit = 15_000_000.
     const APRICOT_PHASE1_GAS_LIMIT: u64 = 8_000_000;

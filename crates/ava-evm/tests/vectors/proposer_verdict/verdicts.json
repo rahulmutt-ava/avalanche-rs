@@ -1,0 +1,35 @@
+{
+  "_comment": "LIVE Go-oracle verdict leg for avalanche-rs M9.15 Task 6: coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 5 adversarial header mutations) over the genesis.json committed beside this corpus.",
+  "go_commit": "a4290dc0f47f2694572e156cadb94ef43e2eab22",
+  "verdicts": [
+    {
+      "name": "bad_coinbase",
+      "accepted": false,
+      "error": "syntactic block verification failed: invalid coinbase 0x3333333333333333333333333333333333333333 does not match required blackhole address 0x0100000000000000000000000000000000000000"
+    },
+    {
+      "name": "honest",
+      "accepted": true
+    },
+    {
+      "name": "missing_cancun_tail",
+      "accepted": false,
+      "error": "rlp: input string too short for common.Hash, decoding into (types.Block)(types.extblock)(*types.Header)(customtypes.HeaderSerializable).ParentBeaconRoot"
+    },
+    {
+      "name": "nonzero_nonce",
+      "accepted": false,
+      "error": "syntactic block verification failed: expected nonce to be 0 but got 1: invalid nonce"
+    },
+    {
+      "name": "wrong_tx_root",
+      "accepted": false,
+      "error": "syntactic block verification failed: invalid txs hash 0x1111111111111111111111111111111111111111111111111111111111111111 does not match calculated txs hash 0x10b185a556f26c58a3b9ec54fd02f2a2fcf3b7989cee690ed6ee0df053657eb5"
+    },
+    {
+      "name": "zero_difficulty",
+      "accepted": false,
+      "error": "syntactic block verification failed: invalid difficulty: 0"
+    }
+  ]
+}

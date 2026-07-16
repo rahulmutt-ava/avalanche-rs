@@ -13,6 +13,7 @@ a normal `go test` never runs it:
 | `precompile_configkey_golden_emitter_test.go` | (none — plain `go test -run TestM631EmitGoldens`) | `ava-evm precompile_golden.rs` (M6.31) | `crates/ava-evm/tests/vectors/cchain/precompile/configkey_golden.json` |
 | `precompile_selectors_emitter_test.go` + `precompile_nativeminter_selectors_emitter_test.go` | (none — plain `go test`) | constants pinned in `ava-evm src/precompile/{feemanager,rewardmanager,gaspricemanager,nativeminter}.rs` (M6.31) | (stdout only) |
 | `atomic_tx_gas_emitter_test.go` | `AVAX_RS_EMIT_ATOMIC_GAS` | `ava-evm atomic_mempool.rs::gas_used_matches_coreth_oracle` (M6.29) | `gas_used` block in `crates/ava-evm/tests/vectors/cchain/atomic/atomic_txs.json` |
+| `rust_built_block_verdict_test.go` | `RUST_BLOCK_VERDICT_DIR` (judge; the Rust side emits via `EMIT_PROPOSER_CANDIDATES`) | `ava-evm proposer_candidates.rs::proposer_verdicts_hold` (M9.15 Task 6) | `crates/ava-evm/tests/vectors/proposer_verdict/` |
 
 > The two SAE emitters redeclare a few shared helper names (`observe*Frontier`,
 > `*HexBytes`) under distinct prefixes, but to be safe drop **one emitter at a
@@ -130,6 +131,87 @@ cargo nextest run -p ava-differential -E 'test(sae_streaming)'
 
 Without `SAE_EMIT_STREAMING_VECTORS` set, `TestEmitStreamingVectors` is skipped,
 so the emitter never runs during a normal `go test`.
+
+## Rust-built-block verdict judge (M9.15 Task 6)
+
+`rust_built_block_verdict_test.go` is the **reverse shape** of the SAE emitters
+above: instead of a Go emitter feeding a Rust reader, the **Rust side emits**
+candidate C-Chain block RLPs and this Go test **judges** them — REAL coreth
+code (`vm.ParseBlock` + `blk.Verify`) decides whether a Rust-**built** block is
+accepted, closing the loop the M9.15 live differentials opened (which only
+proved Go blocks parse/verify in Rust; this proves the reverse).
+
+Two-step recording:
+
+1. `ava-evm/tests/proposer_candidates.rs::emit_proposer_candidates`
+   (env-gated on `EMIT_PROPOSER_CANDIDATES=<dir>`) builds the "honest"
+   candidate — a real block the Task 2-5 `BlockBuilderDriver` produces on the
+   committed `vectors/cchain/genesis/local.json` C-Chain genesis, carrying one
+   signed EVM tx — plus five adversarial header mutations
+   (`zero_difficulty`, `missing_cancun_tail`, `wrong_tx_root`, `bad_coinbase`,
+   `nonzero_nonce`), and writes each as `<name>.rlp.hex` plus a copy of the
+   genesis JSON into the output directory.
+2. `rust_built_block_verdict_test.go` (env-gated on `RUST_BLOCK_VERDICT_DIR`,
+   dropped into `graft/coreth/plugin/evm/` to run — it needs the package's own
+   unexported `newDefaultTestVM` helper) boots a real coreth test VM
+   (`vmtest.SetupTestVM`) over that SAME genesis JSON, `ParseBlock`s + `Verify`s
+   each `*.rlp.hex` candidate, and writes `verdicts.json` (with
+   `$AVALANCHEGO_COMMIT` provenance) back into the directory.
+
+The per-PR reader (`proposer_verdicts_hold`) loads the committed
+`verdicts.json`, asserts the honest verdict is `accepted == true`, and for each
+adversarial candidate asserts BOTH the recorded Go verdict is a rejection
+naming the expected sentinel AND that Rust's own `EvmVm::parse_block` →
+`Block::verify` entry rejects the identical bytes with the matching sentinel —
+Go and Rust reject the SAME candidate for the SAME reason (see
+`proposer_candidates.rs::REJECTION_CLASSES` for the name -> (go, rust)
+substring table, including the one asymmetric pair: `missing_cancun_tail` fails
+at Go's wire decoder — a shorter RLP shape, not the semantic check — while
+Rust's decoder tolerates it and rejects at the semantic `syntactic_verify`
+check instead; both are correct rejections of the same malformed candidate).
+
+### Re-recording (operator, live mode)
+
+```sh
+./scripts/check_oracle_binary.sh   # must print OK before recording
+
+EMIT_PROPOSER_CANDIDATES=$PWD/crates/ava-evm/tests/vectors/proposer_verdict \
+  cargo test -p ava-evm --test proposer_candidates -- --exact emit_proposer_candidates
+
+cp tests/differential/go-oracle/rust_built_block_verdict_test.go \
+   ~/avalanchego/graft/coreth/plugin/evm/
+
+cd ~/avalanchego && AVALANCHEGO_COMMIT=$(git rev-parse HEAD) \
+RUST_BLOCK_VERDICT_DIR=$OLDPWD/crates/ava-evm/tests/vectors/proposer_verdict \
+  go test -run TestRustBuiltBlockVerdicts ./graft/coreth/plugin/evm/ -v -count=1 && \
+  rm graft/coreth/plugin/evm/rust_built_block_verdict_test.go
+```
+
+Then re-run the Rust per-PR test to confirm parity:
+
+```sh
+cargo nextest run -p ava-evm -E 'test(proposer_verdicts_hold)'
+```
+
+Expected: `honest` `accepted=true`. If Go rejects the honest candidate, that IS
+the differential working — the error names the failed check; M9.15 Task 6's
+own recording session hit this twice against a completely honest builder and
+fixed two real Go-shape gaps this way: the builder was not appending the
+Durango+ empty-predicate-results suffix to `header.Extra`
+(`builder.rs::EMPTY_BLOCK_PREDICATE_RESULTS`), and `feerules::gas_limit` had no
+Fortuna+ (ACP-176 `MaxCapacity`) branch at all (it fell through to the stale
+Cortina constant). Neither fix required implementing new consensus logic — both
+were small, previously-incomplete Go-shape ports the live judge surfaced.
+
+`go vet ./graft/coreth/plugin/evm/` is a fast standalone syntax/type check for
+the copied file before running the real judge (it cannot compile as part of
+the avalanche-rs CI — it needs the coreth package's own unexported test
+helpers, so it lives only as this source-of-truth copy plus the note that
+`go vet`/`go build ./graft/coreth/plugin/evm/...` is how to sanity-check it
+after editing, from an avalanchego checkout).
+
+Without `RUST_BLOCK_VERDICT_DIR` set, `TestRustBuiltBlockVerdicts` is skipped,
+so the judge never runs during a normal `go test`.
 
 ## Rust-plugin-in-Go-host live harness (M9.3 live arm)
 
