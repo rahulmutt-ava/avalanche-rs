@@ -98,3 +98,31 @@ impl IpSigner {
         Ok(signed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use ava_crypto::bls::LocalSigner;
+
+    use super::*;
+    use crate::identity::Identity;
+
+    #[test]
+    fn get_signed_ip_succeeds_with_rsa_identity() {
+        // Task 8: the live validator's genesis staker slot presents an RSA
+        // staking identity. `get_signed_ip` calls `Identity::tls_signing_key`
+        // on the node's own connect path — it must succeed for RSA
+        // identities, not just the ECDSA template `Identity::generate` uses.
+        let cert = include_str!("../../tests/testdata/rsa_staker.crt");
+        let key = include_str!("../../tests/testdata/rsa_staker.key");
+        let identity = Identity::from_pem(cert, key).expect("rsa identity");
+        let bls_signer = Arc::new(LocalSigner::generate().expect("bls signer"));
+        let signer = IpSigner::new(identity, bls_signer, Arc::new(SystemClock));
+
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        signer
+            .get_signed_ip(ip, 9651)
+            .expect("get_signed_ip must succeed for an rsa staking identity");
+    }
+}
