@@ -42,8 +42,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ava_evm_reth::{
-    B256, Bytes, ConsensusTx, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH, ExternalConsensusExecutor,
-    Header, RecoveredTx, State, StateBuilder, StateProviderDatabase, U256, keccak256,
+    B256, Bloom, Bytes, ConsensusTx, EMPTY_OMMER_ROOT_HASH, EthReceipt, ExternalConsensusExecutor,
+    Header, RecoveredTx, State, StateBuilder, StateProviderDatabase, TransactionSigned, TxReceipt,
+    U256, calculate_transaction_root, keccak256,
 };
 use parking_lot::Mutex;
 
@@ -56,6 +57,7 @@ use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
 use crate::feerules::atomic_fee;
 use crate::feerules::blockgas::{BLOCK_GAS_COST_STEP_AP4, BLOCK_GAS_COST_STEP_AP5, block_gas_cost};
+use crate::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use crate::state::FirewoodStateProvider;
 
 /// coreth `block_builder.go::minBlockBuildingRetryDelay` — the minimum wall-clock
@@ -228,6 +230,27 @@ impl BlockBuilderDriver {
         //    pre-hook already moved the balances.
         let _atomic_fee = atomic_fee(atomic_gas_used, U256::from(base_fee))?;
 
+        // 9b. coreth `customtypes/block_ext.go:189` — `NewBlockWithExtData`
+        //     derives TxHash/ReceiptHash/Bloom from the body, never sentinels.
+        //     `transactions` is collected here (moving `included.txs`) so it can
+        //     feed BOTH the tx-root calculation below and `AvaBlockParts` at
+        //     assembly without a clone.
+        let transactions: Vec<TransactionSigned> = included
+            .txs
+            .into_iter()
+            .map(RecoveredTx::into_inner)
+            .collect();
+        let tx_root = calculate_transaction_root(&transactions);
+        // Same bloom-recomputing ordered-trie helper `ava-saevm-exec::driver.rs:269`
+        // uses for its `receipt_root` (mirrors it exactly — see the facade
+        // re-export comment in `ava-evm-reth::lib.rs`).
+        let receipt_root = EthReceipt::calculate_receipt_root_no_memo(&outcome.result.receipts);
+        let bloom = outcome
+            .result
+            .receipts
+            .iter()
+            .fold(Bloom::ZERO, |acc, r| acc | TxReceipt::bloom(r));
+
         // 10. Assemble the byte-exact coreth block (§9.3) whose header.state_root
         //     is the Firewood root, so the self-built block re-verifies to it.
         let header = self.build_header(BuildHeaderArgs {
@@ -242,14 +265,13 @@ impl BlockBuilderDriver {
             ap4_active: bgc.active,
             atomic_gas_used,
             atomic_batch: &atomic_batch,
+            tx_root,
+            receipt_root,
+            bloom,
         })?;
         let parts = AvaBlockParts {
             header,
-            transactions: included
-                .txs
-                .into_iter()
-                .map(RecoveredTx::into_inner)
-                .collect(),
+            transactions,
             atomic_txs: atomic_batch.clone(),
             ext_data: ext_data_of(&atomic_batch)?,
             version: 0,
@@ -292,6 +314,16 @@ impl BlockBuilderDriver {
             included.push(tx);
         }
 
+        // The Cancun tail MUST be carried into the execution env header, not
+        // just the assembled `AvaHeader`: alloy-evm's beacon-root system call
+        // errors with `MissingParentBeaconBlockRoot` for a Cancun-active block
+        // whose env header lacks the root (the same requirement the verify
+        // path's `eth_env_header` documents — coreth activates Cancun with
+        // Etna, so every such block carries `parentBeaconRoot = 0x0` and runs
+        // `ProcessBeaconBlockRoot`, `core/state_processor.go`).
+        let phase = self.evm_config.chain_spec().fork_at(ctx.timestamp);
+        let (blob_gas_used, excess_blob_gas, parent_beacon_block_root) = cancun_tail(phase);
+
         let env_header = Header {
             parent_hash: parent.hash(),
             number: parent.number.saturating_add(1),
@@ -303,7 +335,14 @@ impl BlockBuilderDriver {
                 .max(used)
                 .max(gas_budget.saturating_add(used)),
             base_fee_per_gas: Some(base_fee),
-            beneficiary: ctx.suggested_fee_recipient,
+            // coreth executes with the etherbase (= blackhole) as coinbase, so
+            // priority fees accrue to the blackhole (`plugin/evm/vm.go:565`);
+            // leaving `suggested_fee_recipient` here would diverge the state
+            // root from what Go computes for the same block.
+            beneficiary: BLACKHOLE_ADDRESS,
+            blob_gas_used,
+            excess_blob_gas,
+            parent_beacon_block_root,
             ..Default::default()
         };
         PackedEvm {
@@ -329,6 +368,9 @@ impl BlockBuilderDriver {
             ap4_active,
             atomic_gas_used,
             atomic_batch,
+            tx_root,
+            receipt_root,
+            bloom,
         } = args;
 
         let phase = self.evm_config.chain_spec().fork_at(ctx.timestamp);
@@ -350,19 +392,23 @@ impl BlockBuilderDriver {
         } else {
             (None, None)
         };
+        // coreth `miner/worker.go:186-197` — the Cancun tail (== Etna on
+        // Avalanche).
+        let (blob_gas_used, excess_blob_gas, parent_beacon_root) = cancun_tail(phase);
 
         Ok(AvaHeader {
             parent_hash,
             uncle_hash: EMPTY_OMMER_ROOT_HASH,
-            coinbase: ctx.suggested_fee_recipient,
+            // coreth `plugin/evm/vm.go:565` — the miner's etherbase is pinned
+            // to the blackhole address (rewards disabled/burned at the
+            // consensus layer, not a per-block suggestion).
+            coinbase: BLACKHOLE_ADDRESS,
             state_root,
-            // The tx/receipt roots are reth's responsibility on the verify path;
-            // the builder leaves the standard empty-trie sentinels here (the
-            // self-verify only asserts state_root + gas_used parity, §3.2). The
-            // RPC/history task (M6.23/M6.24) wires the full receipt-root path.
-            tx_root: EMPTY_ROOT_HASH,
-            receipt_root: EMPTY_ROOT_HASH,
-            bloom: Bytes::from(vec![0u8; 256]),
+            // coreth `customtypes/block_ext.go:189` — `NewBlockWithExtData`
+            // derives TxHash/ReceiptHash/Bloom from the body at assembly.
+            tx_root,
+            receipt_root,
+            bloom: Bytes::copy_from_slice(bloom.as_slice()),
             difficulty: U256::ZERO,
             number: parent.number.saturating_add(1),
             gas_limit,
@@ -375,9 +421,9 @@ impl BlockBuilderDriver {
             base_fee: base_fee_field,
             ext_data_gas_used,
             block_gas_cost: block_gas_cost_field,
-            blob_gas_used: None,
-            excess_blob_gas: None,
-            parent_beacon_root: None,
+            blob_gas_used,
+            excess_blob_gas,
+            parent_beacon_root,
             time_milliseconds: None,
             min_delay_excess: None,
         })
@@ -408,6 +454,23 @@ struct PackedEvm {
     env_header: Header,
 }
 
+/// The Cancun (== Etna on Avalanche) header tail for a block resolved at
+/// `phase`: `(blob_gas_used, excess_blob_gas, parent_beacon_root)`. All three
+/// are `Some` (clamped to the zero/empty value — the C-Chain has no real blobs
+/// or beacon chain) at Etna+ and `None` pre-Etna (coreth `miner/worker.go:186-197`;
+/// `syntactic_verify_cancun_clamp` in `block.rs` enforces exactly this shape on
+/// the verify path). Shared by [`BlockBuilderDriver::pack_evm_txs`] (the
+/// execution env header — reth's beacon-root system call requires this even
+/// before the coreth `AvaHeader` is assembled) and
+/// [`BlockBuilderDriver::build_header`] (the assembled header).
+fn cancun_tail(phase: AvaPhase) -> (Option<u64>, Option<u64>, Option<B256>) {
+    if phase >= AvaPhase::Etna {
+        (Some(0), Some(0), Some(B256::ZERO))
+    } else {
+        (None, None, None)
+    }
+}
+
 /// Grouped arguments for [`BlockBuilderDriver::build_header`] (the coreth header
 /// has many fork-gated fields; a struct keeps the call site readable).
 struct BuildHeaderArgs<'a> {
@@ -422,6 +485,15 @@ struct BuildHeaderArgs<'a> {
     ap4_active: bool,
     atomic_gas_used: u64,
     atomic_batch: &'a [SignedAtomicTx],
+    /// The ordered-trie transactions root over the block body (coreth
+    /// `customtypes/block_ext.go:189`).
+    tx_root: B256,
+    /// The typed-receipt trie root over the batch's executed receipts (the
+    /// SAME `EthReceipt::calculate_receipt_root_no_memo` mechanism
+    /// `ava-saevm-exec::driver.rs:269` uses).
+    receipt_root: B256,
+    /// The OR-fold of every receipt's logs bloom.
+    bloom: Bloom,
 }
 
 /// The unsigned bodies of the atomic batch (the form [`AtomicStateHook`] and the

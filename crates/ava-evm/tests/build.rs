@@ -29,8 +29,12 @@ use ava_evm::builder::{BlockBuilderDriver, MIN_BLOCK_BUILD_DELAY};
 use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, NetworkUpgrades};
 use ava_evm::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use ava_evm::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use ava_evm::state::FirewoodStateProvider;
-use ava_evm_reth::{Address, B256, BundleState, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH, U256};
+use ava_evm_reth::{
+    Address, B256, BundleState, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH, U256,
+    calculate_transaction_root,
+};
 use parking_lot::Mutex;
 
 #[derive(serde::Deserialize)]
@@ -84,10 +88,38 @@ fn block1_bytes(fx: &Fixture) -> Vec<u8> {
     hex::decode(fx.block1_rlp.trim_start_matches("0x")).expect("block1 hex")
 }
 
+/// The same schedule as [`ap3_chain_spec`] but with Etna (and every upgrade up
+/// to it) active from genesis — used by the Cancun-tail assertions in
+/// [`built_header_carries_go_shape_fields`] (coreth activates Cancun with Etna,
+/// `miner/worker.go:186-197`).
+fn etna_chain_spec(chain_id: u64) -> AvaChainSpec {
+    const FAR_FUTURE: u64 = u64::MAX;
+    let upgrades = NetworkUpgrades {
+        apricot_phase_1: 0,
+        apricot_phase_2: 0,
+        apricot_phase_3: 0,
+        apricot_phase_4: 0,
+        apricot_phase_5: 0,
+        apricot_phase_pre_6: 0,
+        apricot_phase_6: 0,
+        apricot_phase_post_6: 0,
+        banff: 0,
+        cortina: 0,
+        durango: 0,
+        etna: 0,
+        fortuna: FAR_FUTURE,
+        granite: FAR_FUTURE,
+        helicon: u64::MAX,
+    };
+    AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(chain_id), false)
+}
+
 /// Opens a fresh Firewood db with the genesis alloc committed; returns the
-/// provider, the EVM config, a canonical store, and the committed genesis root.
+/// provider, the EVM config (built over `spec`), a canonical store, and the
+/// committed genesis root.
 fn setup(
     fx: &Fixture,
+    spec: AvaChainSpec,
 ) -> (
     tempfile::TempDir,
     Arc<FirewoodStateProvider>,
@@ -125,7 +157,7 @@ fn setup(
     );
 
     let canonical: Arc<CanonicalStore> = Arc::new(CanonicalStore::new(Arc::new(MemDb::new())));
-    let config = AvaEvmConfig::new(ap3_chain_spec(fx.chain_id));
+    let config = AvaEvmConfig::new(spec);
     (dir, provider, config, canonical, genesis_root)
 }
 
@@ -174,7 +206,7 @@ fn next_ctx() -> AvaNextBlockCtx {
 #[test]
 fn build_then_verify_same_root() {
     let fx = load_fixture();
-    let (_dir, provider, config, canonical, genesis_root) = setup(&fx);
+    let (_dir, provider, config, canonical, genesis_root) = setup(&fx, ap3_chain_spec(fx.chain_id));
 
     // The candidate EVM tx: block-1's single transfer (recovered).
     let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
@@ -229,7 +261,8 @@ fn build_then_verify_same_root() {
 #[test]
 fn respects_min_build_delay() {
     let fx = load_fixture();
-    let (_dir, provider, config, _canonical, genesis_root) = setup(&fx);
+    let (_dir, provider, config, _canonical, genesis_root) =
+        setup(&fx, ap3_chain_spec(fx.chain_id));
 
     let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
     let evm_txs = decoded.recover_senders().expect("recover senders");
@@ -272,5 +305,74 @@ fn respects_min_build_delay() {
     assert!(
         driver.can_build_on(B256::repeat_byte(0x99), Instant::now()),
         "the guard is keyed per-parent; a different parent is buildable now"
+    );
+}
+
+/// M9.15 task 2: the builder stamps Go-shaped header fields on a built block —
+/// blackhole coinbase, the Cancun (== Etna) tail, and real tx/receipt roots +
+/// bloom derived from the body, not the previous sentinels/`suggested_fee_recipient`.
+///
+/// Reuses the `genesis_to_1` fixture's committed genesis (genesis-root parity
+/// is alloc-only, independent of the fork schedule) but over [`etna_chain_spec`]
+/// so the built block is Cancun-active and the tail assertions below apply.
+#[test]
+fn built_header_carries_go_shape_fields() {
+    let fx = load_fixture();
+    let (_dir, provider, config, _canonical, genesis_root) =
+        setup(&fx, etna_chain_spec(fx.chain_id));
+
+    let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
+    let evm_txs = decoded.recover_senders().expect("recover senders");
+    assert_eq!(evm_txs.len(), 1, "fixture block-1 has one EVM tx");
+
+    let parent = genesis_header(&fx, genesis_root);
+    let txpool = Arc::new(Mutex::new(ava_evm::atomic::mempool::AtomicMempool::new(
+        64,
+        ava_types::id::Id::EMPTY,
+    )));
+    let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
+
+    let built = driver
+        .build_on(&parent, genesis_root, &next_ctx(), evm_txs)
+        .expect("build_on");
+    let header = built.header();
+    let txs = built.transactions();
+    assert_eq!(
+        txs.len(),
+        1,
+        "the candidate EVM tx was packed into the block"
+    );
+
+    // coreth `plugin/evm/vm.go:565` — coinbase is the blackhole address, not
+    // the per-block `suggested_fee_recipient`.
+    assert_eq!(header.coinbase, BLACKHOLE_ADDRESS, "build_header coinbase");
+
+    // coreth `miner/worker.go:186-197` — the Cancun tail at Etna+.
+    assert_eq!(header.parent_beacon_root, Some(B256::ZERO));
+    assert_eq!(header.blob_gas_used, Some(0));
+    assert_eq!(header.excess_blob_gas, Some(0));
+
+    // coreth `customtypes/block_ext.go:189` — tx/receipt roots + bloom are
+    // derived from the body at assembly.
+    assert_eq!(
+        header.tx_root,
+        calculate_transaction_root(txs),
+        "tx_root == the ordered-trie root over the built block's own transactions \
+         (computed independently here, not read back off the builder)"
+    );
+    assert_ne!(
+        header.receipt_root, EMPTY_ROOT_HASH,
+        "real receipt root, not the empty-trie sentinel"
+    );
+    // The fixture's single tx is a plain value transfer — it emits no logs, so
+    // the CORRECTLY OR-folded bloom over its (empty) receipt bloom is the zero
+    // bloom. This still exercises the real per-receipt `bloom()`/fold path (as
+    // opposed to the removed hardcoded `Bytes::from(vec![0u8; 256])` sentinel);
+    // it happens to coincide byte-for-byte with that sentinel only because
+    // there is nothing to fold in.
+    assert_eq!(
+        header.bloom.as_ref(),
+        &[0u8; 256][..],
+        "no logs in the batch ⇒ the OR-fold of receipt blooms is the zero bloom"
     );
 }

@@ -207,6 +207,23 @@ pub use alloy_primitives::{Address, B256, Bytes, U256};
 pub use reth_ethereum_primitives::{
     Block as RethBlock, EthPrimitives, Receipt as EthReceipt, TransactionSigned,
 };
+// M9.15 task 2: real tx/receipt roots + logs bloom on built blocks (coreth
+// `customtypes/block_ext.go:189` — `NewBlockWithExtData` derives
+// `TxHash`/`ReceiptHash`/`Bloom` from the body, never sentinels).
+// `calculate_transaction_root` is alloy's ordered-trie tx-root helper (EIP-2718
+// per-tx encoding, the exact inverse of the trie `EthReceipt::
+// calculate_receipt_root_no_memo` above builds for receipts). `TxReceipt` is
+// the accessor trait `EthReceipt` implements; its `bloom()` computes a single
+// receipt's logs bloom (OR-folded into the header bloom by
+// `BlockBuilderDriver::build_on`) and its inherent
+// `calculate_receipt_root_no_memo` (see `EthReceipt` above) is the SAME
+// bloom-recomputing ordered-trie helper `ava-saevm-exec::driver.rs:269` already
+// uses for `receipt_root` — reused here for builder/executor parity. `Bloom`
+// is the 256-byte logs-bloom type `AvaHeader::bloom` (an alloy `Bytes`) is
+// built from.
+pub use alloy_consensus::TxReceipt;
+pub use alloy_consensus::proofs::calculate_transaction_root;
+pub use alloy_primitives::Bloom;
 // `Recovered<T>` (sender-attached tx) + the `SignerRecoverable` recovery trait
 // used by `ava-evm::block` to recover senders before execution (spec 10 §9.3).
 pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
