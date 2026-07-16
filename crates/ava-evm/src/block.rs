@@ -46,6 +46,8 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaExecCtx, NoopPreHook};
+use crate::feerules::acp176;
+use crate::feerules::window;
 use crate::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use crate::precompile::warp::{WarpBackend, WarpLog, WarpPrecompile, handle_precompile_accept};
 use crate::state::{FirewoodStateProvider, FirewoodStateView};
@@ -57,6 +59,11 @@ const AP0_MIN_GAS_PRICE: u128 = 470_000_000_000;
 /// coreth `plugin/evm/upgrade/ap1/params.go` `MinGasPrice` — 225 gwei, the
 /// minimum tx gas price enforced pre-ApricotPhase3 (`wrapped_block.go:466-472`).
 const AP1_MIN_GAS_PRICE: u128 = 225_000_000_000;
+
+/// coreth `plugin/evm/upgrade/ap0/params.go:25` `MaximumExtraDataSize` — the
+/// pre-ApricotPhase1 ceiling on `header.Extra` (`customheader/extra.go:158-166`,
+/// `VerifyExtra`'s default arm).
+const AP0_MAX_EXTRA_DATA_SIZE: usize = 64;
 
 /// `customtypes.EmptyExtDataHash` = `keccak256(rlp(nil))` — the `ExtDataHash` of
 /// a block with no atomic txs (coreth `hashes_ext.go`).
@@ -636,16 +643,16 @@ impl EvmBlock {
     ///
     /// # Errors
     /// As [`EvmBlock::verify`].
-    /// Full `wrappedBlock.syntacticVerify` port (M9.15 task L1, structural
-    /// checks only — Difficulty==1 and `VerifyExtra` are deferred to Task 5
-    /// because the builder still stamps difficulty 0).
+    /// Full `wrappedBlock.syntacticVerify` port (M9.15 task L1 + task 5 —
+    /// every structural check, including `Difficulty == 1` and `VerifyExtra`).
     ///
     /// Mirrors coreth `wrappedBlock.syntacticVerify`
     /// (`plugin/evm/wrapped_block.go:398-527`) **in Go's check order**, so the
     /// first error a malformed block hits matches Go's rejection exactly:
-    /// number → nonce → mixDigest → version → txsHash → uncleHash → coinbase →
-    /// min-gas-price → BaseFee → BlockGasCost → the Cancun header clamp +
-    /// body blob-count parity (`core/block_validator.go:100-104`).
+    /// number → difficulty → nonce → mixDigest → VerifyExtra → version →
+    /// txsHash → uncleHash → coinbase → min-gas-price → BaseFee →
+    /// BlockGasCost → the Cancun header clamp + body blob-count parity
+    /// (`core/block_validator.go:100-104`).
     fn syntactic_verify(&self, spec: &AvaChainSpec) -> Result<()> {
         let h = self.header();
 
@@ -658,19 +665,79 @@ impl EvmBlock {
             return Err(Error::InvalidBlockNumber(U256::from(h.number)));
         }
 
+        // coreth wrapped_block.go:415 — difficulty must be exactly 1 (the
+        // dummy consensus engine's `Prepare` stamps every header this way,
+        // `consensus/dummy/consensus.go:233-235`).
+        if h.difficulty != U256::from(1) {
+            return Err(Error::InvalidDifficulty(h.difficulty));
+        }
+
         // coreth wrapped_block.go:418 — nonce must be 0.
         if h.nonce != [0u8; 8] {
             return Err(Error::InvalidNonce(u64::from_be_bytes(h.nonce)));
         }
 
-        // Ungated header invariant (coreth `wrapped_block.go:420-421`, applied to
-        // every non-genesis block): MixDigest must be the zero hash. Closes an
-        // adversarial PREVRANDAO fail-open. (coreth also fixes Difficulty==1
-        // here; deferred with `VerifyExtra` to Task 5 because `builder.rs`
-        // currently stamps difficulty 0 on Rust-built blocks — porting it
-        // requires reconciling the builder first.)
+        // Ungated header invariant (coreth `wrapped_block.go:420-421`, applied
+        // to every non-genesis block): MixDigest must be the zero hash.
+        // Closes an adversarial PREVRANDAO fail-open.
         if h.mix_digest != B256::ZERO {
             return Err(Error::InvalidMixDigest(h.mix_digest));
+        }
+
+        // The phase is needed here (VerifyExtra) and again below (min-gas-price
+        // / BaseFee / BlockGasCost); resolved once and reused.
+        let phase = spec.fork_at(h.time);
+
+        // coreth `customheader/extra.go:115-168` (`VerifyExtra`) — fork-keyed
+        // header.Extra length rules.
+        //
+        // upstream-delta: coreth's `IsHelicon` arm (extra.go:120-121) skips
+        // this check entirely; `AvaPhase` has no Helicon variant yet (it maps
+        // to `None`, see `chainspec.rs`'s `AvaPhase::from_version_fork`), so
+        // this port cannot express that arm. Fold it in when `AvaPhase` grows
+        // Helicon.
+        let extra_len = h.extra.len();
+        match phase {
+            p if p >= AvaPhase::Fortuna => {
+                if extra_len < acp176::STATE_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: ">= 24",
+                        got: extra_len,
+                    });
+                }
+            }
+            p if p >= AvaPhase::Durango => {
+                if extra_len < window::WINDOW_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: ">= 80",
+                        got: extra_len,
+                    });
+                }
+            }
+            p if p >= AvaPhase::ApricotPhase3 => {
+                if extra_len != window::WINDOW_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: "== 80",
+                        got: extra_len,
+                    });
+                }
+            }
+            p if p >= AvaPhase::ApricotPhase1 => {
+                if extra_len != 0 {
+                    return Err(Error::InvalidExtraLength {
+                        expected: "== 0",
+                        got: extra_len,
+                    });
+                }
+            }
+            _ => {
+                if extra_len > AP0_MAX_EXTRA_DATA_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: "<= 64",
+                        got: extra_len,
+                    });
+                }
+            }
         }
 
         // coreth wrapped_block.go:434 — body extension version must be 0.
@@ -704,7 +771,7 @@ impl EvmBlock {
 
         // coreth wrapped_block.go:458-473 — pre-AP1/pre-AP3 minimum gas
         // prices, enforced before dynamic fees (AP3+) go into effect.
-        let phase = spec.fork_at(h.time);
+        // (`phase` was already resolved above, for VerifyExtra.)
         if phase < AvaPhase::ApricotPhase1 {
             self.check_min_gas_price(AP0_MIN_GAS_PRICE)?;
         } else if phase < AvaPhase::ApricotPhase3 {
@@ -1265,13 +1332,16 @@ mod tests {
 
     /// A self-consistent, minimal test header: every check `syntactic_verify`
     /// runs *before* the one under test in a given case is satisfied
-    /// (mixDigest/nonce/version zero, uncleHash/coinbase correct, `tx_root`
-    /// derived from `transactions`), so a case only needs to vary the field(s)
-    /// its check inspects.
+    /// (difficulty/mixDigest/nonce/version zero-or-one, uncleHash/coinbase
+    /// correct, `tx_root` derived from `transactions`), so a case only needs
+    /// to vary the field(s) its check inspects. `extra` must be sized for the
+    /// caller's active phase (`VerifyExtra` now runs before every check this
+    /// helper is used for) — callers pass a phase-appropriate length.
     fn test_header(
         transactions: &[TransactionSigned],
         base_fee: Option<U256>,
         block_gas_cost: Option<U256>,
+        extra: Bytes,
     ) -> AvaHeader {
         AvaHeader {
             parent_hash: B256::ZERO,
@@ -1281,12 +1351,12 @@ mod tests {
             tx_root: calculate_transaction_root(transactions),
             receipt_root: B256::ZERO,
             bloom: Bytes::from(vec![0u8; 256]),
-            difficulty: U256::ZERO,
+            difficulty: U256::from(1),
             number: 1,
             gas_limit: 8_000_000,
             gas_used: 0,
             time: 0,
-            extra: Bytes::new(),
+            extra,
             mix_digest: B256::ZERO,
             nonce: [0u8; 8],
             ext_data_hash: empty_ext_data_hash(),
@@ -1344,7 +1414,9 @@ mod tests {
             ava_evm_reth::Chain::from_id(43112),
             false,
         );
-        let header = test_header(&[], None, None);
+        // Phase is ApricotPhase3 (ap3=0, durango=FAR_FUTURE): VerifyExtra's
+        // ApricotPhase3 arm requires extra_len == window::WINDOW_SIZE (80).
+        let header = test_header(&[], None, None, Bytes::from(vec![0u8; window::WINDOW_SIZE]));
         let block = build_block(header, Vec::new());
         let err = block
             .syntactic_verify(&spec)
@@ -1362,8 +1434,15 @@ mod tests {
             false,
         );
         // AP3 is active too (AP4 implies AP3 chronologically), so BaseFee
-        // must be present for that earlier check to pass.
-        let header = test_header(&[], Some(U256::ZERO), None);
+        // must be present for that earlier check to pass. Phase is
+        // ApricotPhase4 (durango=FAR_FUTURE): VerifyExtra's ApricotPhase3 arm
+        // (the highest one that matches) requires extra_len == 80.
+        let header = test_header(
+            &[],
+            Some(U256::ZERO),
+            None,
+            Bytes::from(vec![0u8; window::WINDOW_SIZE]),
+        );
         let block = build_block(header, Vec::new());
         let err = block
             .syntactic_verify(&spec)
@@ -1382,7 +1461,9 @@ mod tests {
         );
         let low_price = AP0_MIN_GAS_PRICE - 1;
         let tx = legacy_tx(low_price);
-        let header = test_header(std::slice::from_ref(&tx), None, None);
+        // Pre-ApricotPhase1: VerifyExtra's default arm requires
+        // extra_len <= AP0_MAX_EXTRA_DATA_SIZE (64); empty extra satisfies it.
+        let header = test_header(std::slice::from_ref(&tx), None, None, Bytes::new());
         let block = build_block(header, vec![tx]);
         let err = block
             .syntactic_verify(&spec)

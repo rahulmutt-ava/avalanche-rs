@@ -533,15 +533,15 @@ impl AvaEvmConfig {
         }
 
         // 4. coreth `core/evm.go:86-95`: at Durango+ Random = THIS (built)
-        //    header's difficulty, difficulty = 0. The builder stamps difficulty
-        //    0 on every block it builds until Task 5 wires the coreth-parity
-        //    difficulty-1 stamp, so build/verify stay self-consistent
-        //    (0 -> prevrandao 0) for Rust-built blocks; Go-built blocks
-        //    (difficulty 1) are handled on the `evm_env_for_header` verify path.
+        //    header's difficulty, difficulty = 0. The builder stamps every
+        //    built header's difficulty to 1 (`consensus.go:233-235`, wired in
+        //    Task 5), so build-exec here runs with prevrandao 1 — matching
+        //    what the verify path (`evm_env_for_header`) derives from the same
+        //    built header once it round-trips through decode.
         apply_coreth_random_rule(
             &mut evm_env.block_env,
             &self.chain_spec,
-            U256::ZERO,
+            U256::from(1),
             ctx.timestamp,
         );
 

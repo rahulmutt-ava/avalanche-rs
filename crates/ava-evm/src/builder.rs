@@ -430,7 +430,9 @@ impl BlockBuilderDriver {
             tx_root,
             receipt_root,
             bloom: Bytes::copy_from_slice(bloom.as_slice()),
-            difficulty: U256::ZERO,
+            // coreth `consensus/dummy/consensus.go:233-235` (`Prepare`) —
+            // every header's difficulty is stamped to exactly 1.
+            difficulty: U256::from(1),
             number: parent.number.saturating_add(1),
             gas_limit,
             gas_used,

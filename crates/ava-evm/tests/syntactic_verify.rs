@@ -32,7 +32,7 @@
 use ava_evm::block::{AvaBlockParts, assemble_ava_block, decode_ava_evm_block};
 use ava_evm::chainspec::AvaChainSpec;
 use ava_evm::vm::EvmVm;
-use ava_evm_reth::{Address, B256, Chain};
+use ava_evm_reth::{Address, B256, Bytes, Chain, U256};
 use ava_types::constants::LOCAL_ID;
 use ava_vm::block::ChainVm;
 use tokio_util::sync::CancellationToken;
@@ -185,4 +185,35 @@ async fn unmutated_reassembled_live_block_still_verifies() {
     parse_and_verify(&bytes)
         .await
         .expect("unmutated live block 1 verifies (harness regression)");
+}
+
+/// coreth `wrapped_block.go:415`: `Difficulty.Cmp(common.Big1) != 0` ->
+/// `errInvalidDifficulty` (`consensus.go:233-235`'s `Prepare` stamps every
+/// built header's difficulty to exactly 1; anything else is invalid).
+#[tokio::test]
+async fn zero_difficulty_is_rejected() {
+    let bytes = mutated_live_block(|p| p.header.difficulty = U256::ZERO);
+    let err = parse_and_verify(&bytes)
+        .await
+        .expect_err("difficulty must be 1");
+    assert!(
+        err.contains("invalid difficulty"),
+        "coreth wrapped_block.go:415 parity, got: {err}"
+    );
+}
+
+/// coreth `customheader/extra.go:122-130` (`VerifyExtra`, Fortuna arm): the
+/// live local-network block 1 is Fortuna-active (the local schedule activates
+/// every phase but Helicon at genesis), so a 3-byte extra — well short of the
+/// 24-byte `acp176.StateSize` floor — is rejected here.
+#[tokio::test]
+async fn truncated_extra_is_rejected_at_fortuna() {
+    let bytes = mutated_live_block(|p| p.header.extra = Bytes::from(vec![0u8; 3]));
+    let err = parse_and_verify(&bytes)
+        .await
+        .expect_err("extra shorter than acp176 state");
+    assert!(
+        err.contains("invalid header.Extra length"),
+        "coreth extra.go:122-130 parity, got: {err}"
+    );
 }

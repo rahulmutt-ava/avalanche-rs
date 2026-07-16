@@ -513,3 +513,65 @@ fn built_header_carries_acp176_extra_prefix() {
         "Granite header carries the parent's ACP-226 min-delay-excess"
     );
 }
+
+/// M9.15 task 5 — the offline exit gate of Phases 1+2 (builder + verify): a
+/// Rust-built block must satisfy the FULL ported `syntacticVerify`
+/// (`wrapped_block.go:398-527`), including the two checks this task adds
+/// (`Difficulty == 1`, `VerifyExtra`) — driven through the SAME
+/// [`ava_evm::block::EvmBlock::verify`] entry the `ChainVm` adapter uses, not
+/// a bespoke check. Built on the all-forks-active-from-genesis (Granite)
+/// spec so every fork-gated check in `syntactic_verify` is exercised.
+#[test]
+fn built_block_passes_full_syntactic_verify() {
+    let fx = load_fixture();
+    let (_dir, provider, config, canonical, genesis_root) =
+        setup(&fx, granite_chain_spec(fx.chain_id));
+
+    let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
+    let evm_txs = decoded.recover_senders().expect("recover senders");
+    assert_eq!(evm_txs.len(), 1, "fixture block-1 has >= 1 EVM tx");
+
+    let mut parent = genesis_header(&fx, genesis_root);
+    parent.time_milliseconds = Some(0);
+    parent.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+
+    let ctx = AvaNextBlockCtx {
+        timestamp: 10,
+        timestamp_ms: 10_000,
+        suggested_fee_recipient: Address::ZERO,
+        parent_fee_state: parent_fee_state_of(config.chain_spec(), &parent)
+            .expect("parent fee state"),
+        ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
+    };
+
+    let txpool = Arc::new(Mutex::new(ava_evm::atomic::mempool::AtomicMempool::new(
+        64,
+        ava_types::id::Id::EMPTY,
+    )));
+    let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
+
+    let built = driver
+        .build_on(&parent, genesis_root, &ctx, evm_txs)
+        .expect("build_on");
+
+    // consensus.go:233-235 — `Prepare` stamps every built header's difficulty
+    // to exactly 1.
+    assert_eq!(
+        built.header().difficulty,
+        U256::from(1),
+        "builder must stamp difficulty 1 (coreth consensus.go:233-235)"
+    );
+
+    // build_on stashed the proposal (commit-on-accept); drop it so the verify
+    // path below owns the proposal it re-stashes and commits (mirrors
+    // `build_then_verify_same_root`).
+    let built_root = *built.header_state_root();
+    provider.discard(built_root);
+
+    let block_ctx = EvmBlockContext::new(Arc::clone(&provider), config, canonical);
+    // The full `syntacticVerify` port + semantic execute — the SAME entry the
+    // `ChainVm` adapter drives.
+    built
+        .verify(&block_ctx, genesis_root)
+        .expect("a Rust-built block must pass its own full syntactic_verify");
+}

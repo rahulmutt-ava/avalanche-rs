@@ -146,9 +146,9 @@ pub enum Error {
     },
 
     // --- Remaining coreth `wrappedBlock.syntacticVerify` port (M9.15 task L1,
-    // `wrapped_block.go:398-527`). Difficulty==1 and `VerifyExtra` are
-    // deliberately NOT ported yet (Task 5) — the builder still stamps
-    // difficulty 0, so enforcing them now would reject Rust's own blocks.
+    // `wrapped_block.go:398-527`). Difficulty==1 and `VerifyExtra` land with
+    // this task (Task 5), coupled with the builder's difficulty-1 flip so no
+    // commit boundary ever has verify reject Rust's own blocks.
     /// coreth `wrapped_block.go:412` — block number exceeds uint64.
     /// `AvaHeader::number` already decodes as a Rust `u64` (never a wider
     /// integer), so this can never fire in practice; kept for Go check-order
@@ -199,6 +199,24 @@ pub enum Error {
     /// AP4+. Carries the offending value (`None` = missing).
     #[error("invalid block gas cost: {0:?}")]
     InvalidBlockGasCost(Option<U256>),
+
+    /// coreth `wrapped_block.go:415` — `Difficulty` must be exactly 1 (the
+    /// `dummy` consensus engine's `Prepare` stamps every header this way,
+    /// `consensus/dummy/consensus.go:233-235`). Carries the offending value.
+    #[error("invalid difficulty: {0}")]
+    InvalidDifficulty(U256),
+
+    /// coreth `customheader/extra.go:115-168` (`VerifyExtra`) — the header's
+    /// `Extra` length violates the active fork's rule. `expected` is a short
+    /// human-readable description of the rule that fired (`">= 24"`, `"== 80"`,
+    /// …); `got` is the header's actual extra length.
+    #[error("invalid header.Extra length: expected {expected}, got {got}")]
+    InvalidExtraLength {
+        /// A description of the length rule that fired (e.g. `">= 24"`).
+        expected: &'static str,
+        /// The header's actual `extra` length.
+        got: usize,
+    },
 }
 
 /// C-Chain VM result alias.
@@ -317,6 +335,19 @@ mod tests {
         assert_matches!(
             Error::InvalidBlockGasCost(None),
             Error::InvalidBlockGasCost(_)
+        );
+
+        // Task 5: difficulty==1 + VerifyExtra sentinels.
+        assert_matches!(
+            Error::InvalidDifficulty(U256::ZERO),
+            Error::InvalidDifficulty(_)
+        );
+        assert_matches!(
+            Error::InvalidExtraLength {
+                expected: ">= 24",
+                got: 3
+            },
+            Error::InvalidExtraLength { .. }
         );
     }
 }
