@@ -458,7 +458,7 @@ struct PackedEvm {
 /// `phase`: `(blob_gas_used, excess_blob_gas, parent_beacon_root)`. All three
 /// are `Some` (clamped to the zero/empty value — the C-Chain has no real blobs
 /// or beacon chain) at Etna+ and `None` pre-Etna (coreth `miner/worker.go:186-197`;
-/// `syntactic_verify_cancun_clamp` in `block.rs` enforces exactly this shape on
+/// `EvmBlock::syntactic_verify` in `block.rs` enforces exactly this shape on
 /// the verify path). Shared by [`BlockBuilderDriver::pack_evm_txs`] (the
 /// execution env header — reth's beacon-root system call requires this even
 /// before the coreth `AvaHeader` is assembled) and

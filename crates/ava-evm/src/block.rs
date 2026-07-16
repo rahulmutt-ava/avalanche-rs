@@ -34,9 +34,10 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, ConsensusTx as _, Decodable2718, Header, RLP_EMPTY_STRING_CODE,
-    RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, State,
-    StateBuilder, StateProviderDatabase, TransactionSigned, U256, keccak256,
+    Address, B256, Bytes, ConsensusTx as _, Decodable2718, EMPTY_OMMER_ROOT_HASH, Header,
+    RLP_EMPTY_STRING_CODE, RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader,
+    SignerRecoverable, State, StateBuilder, StateProviderDatabase, TransactionSigned, U256,
+    calculate_transaction_root, keccak256,
 };
 
 use crate::atomic::backend::AtomicBackend;
@@ -45,8 +46,17 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaExecCtx, NoopPreHook};
+use crate::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use crate::precompile::warp::{WarpBackend, WarpLog, WarpPrecompile, handle_precompile_accept};
 use crate::state::{FirewoodStateProvider, FirewoodStateView};
+
+/// coreth `plugin/evm/upgrade/ap0/params.go` `MinGasPrice` — 470 gwei, the
+/// minimum tx gas price enforced pre-ApricotPhase1 (`wrapped_block.go:460-465`).
+const AP0_MIN_GAS_PRICE: u128 = 470_000_000_000;
+
+/// coreth `plugin/evm/upgrade/ap1/params.go` `MinGasPrice` — 225 gwei, the
+/// minimum tx gas price enforced pre-ApricotPhase3 (`wrapped_block.go:466-472`).
+const AP1_MIN_GAS_PRICE: u128 = 225_000_000_000;
 
 /// `customtypes.EmptyExtDataHash` = `keccak256(rlp(nil))` — the `ExtDataHash` of
 /// a block with no atomic txs (coreth `hashes_ext.go`).
@@ -626,31 +636,99 @@ impl EvmBlock {
     ///
     /// # Errors
     /// As [`EvmBlock::verify`].
-    /// Cancun syntactic header clamp + body blob-count parity (M9.15 task 8f).
+    /// Full `wrappedBlock.syntacticVerify` port (M9.15 task L1, structural
+    /// checks only — Difficulty==1 and `VerifyExtra` are deferred to Task 5
+    /// because the builder still stamps difficulty 0).
     ///
     /// Mirrors coreth `wrappedBlock.syntacticVerify`
-    /// (`plugin/evm/wrapped_block.go:493-518`): at Cancun (== Etna on
-    /// Avalanche) the header must carry `parentBeaconRoot == 0x0`,
-    /// `blobGasUsed == 0`, and `excessBlobGas == 0` exactly; pre-Cancun all
-    /// three must be absent. `ValidateBody` parity
-    /// (`core/block_validator.go:100-104`) then counts the body's blob hashes
-    /// against `blobGasUsed / DATA_GAS_PER_BLOB` — with the clamp forcing 0,
-    /// every type-3 blob tx mismatches, so blob txs are syntactically invalid
-    /// on the C-Chain exactly as in Go.
-    fn syntactic_verify_cancun_clamp(&self, spec: &AvaChainSpec) -> Result<()> {
+    /// (`plugin/evm/wrapped_block.go:398-527`) **in Go's check order**, so the
+    /// first error a malformed block hits matches Go's rejection exactly:
+    /// number → nonce → mixDigest → version → txsHash → uncleHash → coinbase →
+    /// min-gas-price → BaseFee → BlockGasCost → the Cancun header clamp +
+    /// body blob-count parity (`core/block_validator.go:100-104`).
+    fn syntactic_verify(&self, spec: &AvaChainSpec) -> Result<()> {
         let h = self.header();
+
+        // coreth wrapped_block.go:412 — block number must fit uint64.
+        // `AvaHeader::number` already decodes as a Rust `u64` (never a wider
+        // integer, see `AvaHeader::decode_rlp`), so this can never fire; kept
+        // to preserve Go's check order + sentinel for Task 6's
+        // rejection-class mapping.
+        if U256::from(h.number) > U256::from(u64::MAX) {
+            return Err(Error::InvalidBlockNumber(U256::from(h.number)));
+        }
+
+        // coreth wrapped_block.go:418 — nonce must be 0.
+        if h.nonce != [0u8; 8] {
+            return Err(Error::InvalidNonce(u64::from_be_bytes(h.nonce)));
+        }
 
         // Ungated header invariant (coreth `wrapped_block.go:420-421`, applied to
         // every non-genesis block): MixDigest must be the zero hash. Closes an
-        // adversarial PREVRANDAO fail-open. (coreth also fixes Difficulty==1 and
-        // Nonce==0 here; those are deferred with the wider `syntacticVerify` port
-        // because `builder.rs` currently stamps difficulty 0 on Rust-built blocks
-        // — porting them requires reconciling the builder first.)
+        // adversarial PREVRANDAO fail-open. (coreth also fixes Difficulty==1
+        // here; deferred with `VerifyExtra` to Task 5 because `builder.rs`
+        // currently stamps difficulty 0 on Rust-built blocks — porting it
+        // requires reconciling the builder first.)
         if h.mix_digest != B256::ZERO {
             return Err(Error::InvalidMixDigest(h.mix_digest));
         }
 
-        if spec.fork_at(h.time) >= AvaPhase::Etna {
+        // coreth wrapped_block.go:434 — body extension version must be 0.
+        if self.version() != 0 {
+            return Err(Error::InvalidBlockVersion(self.version()));
+        }
+
+        // coreth wrapped_block.go:439 — header txsHash matches the body.
+        let calculated_tx_root = calculate_transaction_root(&self.parts().transactions);
+        if calculated_tx_root != h.tx_root {
+            return Err(Error::TxRootMismatch {
+                header: h.tx_root,
+                calculated: calculated_tx_root,
+            });
+        }
+
+        // coreth wrapped_block.go:444/:453 — uncle hash matches the
+        // (structurally empty) body; the RLP decode (`decode_uncle_list`)
+        // admits only an empty uncle list, so `CalcUncleHash(uncles)` is
+        // always the empty-ommer sentinel and `errUnclesUnsupported`
+        // (:453-455) can never separately fire.
+        if h.uncle_hash != EMPTY_OMMER_ROOT_HASH {
+            return Err(Error::InvalidUncleHash(h.uncle_hash));
+        }
+
+        // coreth wrapped_block.go:449 — C-Chain coinbase is the blackhole
+        // address.
+        if h.coinbase != BLACKHOLE_ADDRESS {
+            return Err(Error::InvalidCoinbase(h.coinbase));
+        }
+
+        // coreth wrapped_block.go:458-473 — pre-AP1/pre-AP3 minimum gas
+        // prices, enforced before dynamic fees (AP3+) go into effect.
+        let phase = spec.fork_at(h.time);
+        if phase < AvaPhase::ApricotPhase1 {
+            self.check_min_gas_price(AP0_MIN_GAS_PRICE)?;
+        } else if phase < AvaPhase::ApricotPhase3 {
+            self.check_min_gas_price(AP1_MIN_GAS_PRICE)?;
+        }
+
+        // coreth wrapped_block.go:476-483 — BaseFee non-nil at AP3+ (the
+        // `BitLen() <= 256` half is structurally guaranteed: `base_fee` is a
+        // `U256`).
+        if phase >= AvaPhase::ApricotPhase3 && h.base_fee.is_none() {
+            return Err(Error::NilBaseFee);
+        }
+
+        // coreth wrapped_block.go:486-495 — BlockGasCost non-nil + uint64 at
+        // AP4+ (header verification already checks `BlockGasCost`
+        // correctness upstream in Go; here only nil-ness/range is enforced).
+        if phase >= AvaPhase::ApricotPhase4 {
+            match h.block_gas_cost {
+                Some(v) if v <= U256::from(u64::MAX) => {}
+                other => return Err(Error::InvalidBlockGasCost(other)),
+            }
+        }
+
+        if phase >= AvaPhase::Etna {
             match h.parent_beacon_root {
                 None => return Err(Error::MissingParentBeaconRoot),
                 Some(root) if root != B256::ZERO => {
@@ -702,17 +780,33 @@ impl EvmBlock {
         Ok(())
     }
 
+    /// coreth `wrapped_block.go:458-473` — rejects the block if any tx's
+    /// `GasPrice()` (the fee cap, for dynamic-fee txs) is below `min`.
+    fn check_min_gas_price(&self, min: u128) -> Result<()> {
+        for tx in &self.parts().transactions {
+            let have = tx.max_fee_per_gas();
+            if have < min {
+                return Err(Error::GasPriceTooLow {
+                    tx: *tx.hash(),
+                    have,
+                    min,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn verify_with_predicates(
         &self,
         ctx: &EvmBlockContext,
         parent_state_root: B256,
         exec_ctx: &AvaExecCtx,
     ) -> Result<B256> {
-        // Cancun syntactic header clamp — runs before any execution work
+        // Structural syntacticVerify port — runs before any execution work
         // (coreth fail-closes these in `wrappedBlock.syntacticVerify` before
         // the state transition; a violating block is invalid regardless of its
         // declared state root).
-        self.syntactic_verify_cancun_clamp(ctx.chain_spec())?;
+        self.syntactic_verify(ctx.chain_spec())?;
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
@@ -886,8 +980,8 @@ pub fn decode_ava_evm_block(bytes: &[u8], spec: &AvaChainSpec) -> Result<EvmBloc
     // 2) Txs — a list of EIP-2718 typed-envelope items.
     let transactions = decode_tx_list(body)?;
 
-    // 3) Uncles — always empty on the C-Chain, but consume the list.
-    let _uncles = decode_uncle_list(body)?;
+    // 3) Uncles — always empty on the C-Chain; a non-empty list is rejected.
+    decode_uncle_list(body)?;
 
     // 4) Version (uint32).
     let version = u32::decode(body).map_err(rlp_err)?;
@@ -1018,9 +1112,13 @@ fn decode_tx_list(buf: &mut &[u8]) -> Result<Vec<TransactionSigned>> {
     Ok(txs)
 }
 
-/// Decodes (and discards) the `Uncles` list; the C-Chain never has uncles, but
-/// the list framing must be consumed. Returns the count for sanity.
-fn decode_uncle_list(buf: &mut &[u8]) -> Result<usize> {
+/// Decodes the `Uncles` list; the C-Chain never has uncles (coreth
+/// `wrapped_block.go:452-455`, `errUnclesUnsupported`), so a non-empty list is
+/// rejected here at decode time — the Go-parity fix (M9.15 task L1): a
+/// well-formed C-Chain block can only ever carry an empty uncle list, which is
+/// what lets [`EvmBlock::syntactic_verify`]'s uncle-hash check collapse to a
+/// single comparison against the empty-ommer sentinel.
+fn decode_uncle_list(buf: &mut &[u8]) -> Result<()> {
     let list = RlpListHeader::decode(buf).map_err(rlp_err)?;
     if !list.list {
         return Err(rlp_err(RlpError::UnexpectedString));
@@ -1030,9 +1128,10 @@ fn decode_uncle_list(buf: &mut &[u8]) -> Result<usize> {
     }
     let (uncles, rest) = buf.split_at(list.payload_length);
     *buf = rest;
-    // Uncles are headers; the C-Chain forbids them, so a non-empty list is
-    // invalid. We only need to skip the bytes for round-trip parity.
-    Ok(usize::from(!uncles.is_empty()))
+    if !uncles.is_empty() {
+        return Err(rlp_err(RlpError::UnexpectedLength));
+    }
+    Ok(())
 }
 
 /// Encodes a `Txs` list (each tx as its EIP-2718 typed envelope).
@@ -1128,4 +1227,191 @@ fn rlp_err(_e: RlpError) -> Error {
 #[must_use]
 pub fn empty_ext_data_hash() -> B256 {
     B256::from(EMPTY_EXT_DATA_HASH)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_matches::assert_matches;
+    use ava_evm_reth::{EvmSignature, SignableTransaction, TxLegacy};
+
+    use super::*;
+    use crate::chainspec::NetworkUpgrades;
+
+    /// A `NetworkUpgrades` schedule with AP1/AP3/AP4 activated at the given
+    /// unix seconds (`u64::MAX` == never); every later phase (AP5..Granite,
+    /// Helicon) is parked far in the future so the header stays pre-Etna (the
+    /// Cancun clamp then requires the blob/beacon-root fields to stay
+    /// `None`, which the test headers below already satisfy).
+    fn upgrades(ap1: u64, ap3: u64, ap4: u64) -> NetworkUpgrades {
+        const FAR_FUTURE: u64 = u64::MAX;
+        NetworkUpgrades {
+            apricot_phase_1: ap1,
+            apricot_phase_2: ap1,
+            apricot_phase_3: ap3,
+            apricot_phase_4: ap4,
+            apricot_phase_5: FAR_FUTURE,
+            apricot_phase_pre_6: FAR_FUTURE,
+            apricot_phase_6: FAR_FUTURE,
+            apricot_phase_post_6: FAR_FUTURE,
+            banff: FAR_FUTURE,
+            cortina: FAR_FUTURE,
+            durango: FAR_FUTURE,
+            etna: FAR_FUTURE,
+            fortuna: FAR_FUTURE,
+            granite: FAR_FUTURE,
+            helicon: FAR_FUTURE,
+        }
+    }
+
+    /// A self-consistent, minimal test header: every check `syntactic_verify`
+    /// runs *before* the one under test in a given case is satisfied
+    /// (mixDigest/nonce/version zero, uncleHash/coinbase correct, `tx_root`
+    /// derived from `transactions`), so a case only needs to vary the field(s)
+    /// its check inspects.
+    fn test_header(
+        transactions: &[TransactionSigned],
+        base_fee: Option<U256>,
+        block_gas_cost: Option<U256>,
+    ) -> AvaHeader {
+        AvaHeader {
+            parent_hash: B256::ZERO,
+            uncle_hash: EMPTY_OMMER_ROOT_HASH,
+            coinbase: BLACKHOLE_ADDRESS,
+            state_root: B256::ZERO,
+            tx_root: calculate_transaction_root(transactions),
+            receipt_root: B256::ZERO,
+            bloom: Bytes::from(vec![0u8; 256]),
+            difficulty: U256::ZERO,
+            number: 1,
+            gas_limit: 8_000_000,
+            gas_used: 0,
+            time: 0,
+            extra: Bytes::new(),
+            mix_digest: B256::ZERO,
+            nonce: [0u8; 8],
+            ext_data_hash: empty_ext_data_hash(),
+            base_fee,
+            ext_data_gas_used: None,
+            block_gas_cost,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_root: None,
+            time_milliseconds: None,
+            min_delay_excess: None,
+        }
+    }
+
+    /// Assembles `header` + `transactions` into an [`EvmBlock`] via the same
+    /// path the wire codec uses, so `syntactic_verify` sees a block shaped
+    /// exactly as `decode_ava_evm_block` would hand it one.
+    fn build_block(header: AvaHeader, transactions: Vec<TransactionSigned>) -> EvmBlock {
+        let parts = AvaBlockParts {
+            header,
+            transactions,
+            atomic_txs: Vec::new(),
+            ext_data: Vec::new(),
+            version: 0,
+        };
+        assemble_ava_block(
+            parts,
+            &AvaChainSpec::c_chain(1, ava_evm_reth::Chain::from_id(43112)),
+        )
+        .expect("assemble test block")
+    }
+
+    /// A signed legacy tx with the given `gas_price` (signature is bogus —
+    /// `syntactic_verify` never recovers senders, only reads `GasPrice()`).
+    fn legacy_tx(gas_price: u128) -> TransactionSigned {
+        let tx = TxLegacy {
+            chain_id: Some(43112),
+            nonce: 0,
+            gas_price,
+            gas_limit: 21_000,
+            to: ava_evm_reth::TxKind::Call(Address::ZERO),
+            value: U256::ZERO,
+            input: Bytes::new(),
+        };
+        let sig = EvmSignature::new(U256::from(1), U256::from(1), false);
+        TransactionSigned::Legacy(tx.into_signed(sig))
+    }
+
+    /// coreth `wrapped_block.go:476-483`: `BaseFee == nil` at AP3+ is
+    /// rejected with `errNilBaseFeeApricotPhase3`.
+    #[test]
+    fn nil_base_fee_at_apricot_phase3_is_rejected() {
+        let spec = AvaChainSpec::from_parts(
+            upgrades(0, 0, u64::MAX),
+            ava_evm_reth::Chain::from_id(43112),
+            false,
+        );
+        let header = test_header(&[], None, None);
+        let block = build_block(header, Vec::new());
+        let err = block
+            .syntactic_verify(&spec)
+            .expect_err("nil BaseFee at AP3+ must be rejected");
+        assert_matches!(err, Error::NilBaseFee);
+    }
+
+    /// coreth `wrapped_block.go:486-495`: `BlockGasCost == nil` at AP4+ is
+    /// rejected with `errNilBlockGasCostApricotPhase4`.
+    #[test]
+    fn nil_block_gas_cost_at_apricot_phase4_is_rejected() {
+        let spec = AvaChainSpec::from_parts(
+            upgrades(0, 0, 0),
+            ava_evm_reth::Chain::from_id(43112),
+            false,
+        );
+        // AP3 is active too (AP4 implies AP3 chronologically), so BaseFee
+        // must be present for that earlier check to pass.
+        let header = test_header(&[], Some(U256::ZERO), None);
+        let block = build_block(header, Vec::new());
+        let err = block
+            .syntactic_verify(&spec)
+            .expect_err("nil BlockGasCost at AP4+ must be rejected");
+        assert_matches!(err, Error::InvalidBlockGasCost(None));
+    }
+
+    /// coreth `wrapped_block.go:458-465`: pre-ApricotPhase1, every tx's
+    /// `GasPrice()` must be >= `ap0.MinGasPrice` (470 gwei).
+    #[test]
+    fn gas_price_below_ap0_minimum_is_rejected() {
+        let spec = AvaChainSpec::from_parts(
+            upgrades(u64::MAX, u64::MAX, u64::MAX),
+            ava_evm_reth::Chain::from_id(43112),
+            false,
+        );
+        let low_price = AP0_MIN_GAS_PRICE - 1;
+        let tx = legacy_tx(low_price);
+        let header = test_header(std::slice::from_ref(&tx), None, None);
+        let block = build_block(header, vec![tx]);
+        let err = block
+            .syntactic_verify(&spec)
+            .expect_err("gas price below ap0.MinGasPrice must be rejected");
+        assert_matches!(
+            err,
+            Error::GasPriceTooLow { have, min, .. }
+                if have == low_price && min == AP0_MIN_GAS_PRICE
+        );
+    }
+
+    /// `decode_uncle_list` (the Go-parity fix, `wrapped_block.go:452-455`):
+    /// a non-empty uncle list must be rejected at wire decode, not silently
+    /// admitted and stripped.
+    #[test]
+    fn decode_uncle_list_rejects_non_empty_list() {
+        // `[0xc1, 0x80]` — a one-item RLP list whose single element is the
+        // empty string (`0x80`); a well-formed (if bogus) single-uncle list.
+        let mut buf: &[u8] = &[0xc1, 0x80];
+        let err = decode_uncle_list(&mut buf).expect_err("non-empty uncle list must be rejected");
+        assert_matches!(err, Error::NilTx);
+    }
+
+    /// `decode_uncle_list` still accepts the empty list (`0xc0`) — the only
+    /// shape a well-formed C-Chain block ever carries.
+    #[test]
+    fn decode_uncle_list_accepts_empty_list() {
+        let mut buf: &[u8] = &[0xc0];
+        decode_uncle_list(&mut buf).expect("empty uncle list must decode");
+        assert!(buf.is_empty(), "the empty list's bytes must be consumed");
+    }
 }

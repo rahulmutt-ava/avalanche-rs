@@ -23,6 +23,7 @@ use ava_evm::block::{EvmBlock, EvmBlockContext, assemble_ava_block, decode_ava_e
 use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, NetworkUpgrades};
 use ava_evm::evmconfig::{AvaEvmConfig, NoopPreHook};
+use ava_evm::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use ava_evm::state::FirewoodStateProvider;
 use ava_evm::vm::EvmVm;
 use ava_evm_reth::{
@@ -152,7 +153,11 @@ fn verifiable_block1(fx: &Fixture, ctx: &EvmBlockContext, parent_root: B256) -> 
         base_fee_per_gas: h
             .base_fee
             .map(|bf| u64::try_from(bf).expect("base fee fits")),
-        beneficiary: h.coinbase,
+        // The dry-run beneficiary MUST match the coinbase the final header
+        // is stamped with (BLACKHOLE_ADDRESS, below) so the fee credit lands on
+        // the same account the real verify-time re-execution uses; otherwise the
+        // dry-run root and the syntacticVerify-checked header disagree.
+        beneficiary: BLACKHOLE_ADDRESS,
         ..Default::default()
     };
     let view = ctx
@@ -174,8 +179,15 @@ fn verifiable_block1(fx: &Fixture, ctx: &EvmBlockContext, parent_root: B256) -> 
         .expect("propose");
     ctx.state().discard(root);
 
+    // Re-assemble with the header's state root set to the produced root. The
+    // fixture is a raw `core.GenerateChainWithGenesis` EVM-execution artifact
+    // (state-root/fee-mechanics parity only — see `genesis_to_1.json`'s
+    // `description`), not a block produced through `wrappedBlock`'s consensus
+    // wrapping, so its `coinbase` is the zero address; stamp the blackhole
+    // address `syntacticVerify`'s coinbase check (M9.15 task L1) now requires.
     let mut parts = decoded.into_parts();
     parts.header.state_root = root;
+    parts.header.coinbase = BLACKHOLE_ADDRESS;
     assemble_ava_block(parts, ctx.chain_spec()).expect("assemble")
 }
 

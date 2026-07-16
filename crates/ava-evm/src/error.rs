@@ -12,7 +12,7 @@
 //! error, never silent wrap — overview §6.1); [`Error::FeeOverflow`] is the
 //! sentinel that surfaces such a failure.
 
-use ava_evm_reth::{AvaEvmError, B256, BlockExecutionError, ProviderError};
+use ava_evm_reth::{Address, AvaEvmError, B256, BlockExecutionError, ProviderError, U256};
 
 /// C-Chain VM error. Sentinel variants mirror coreth's `errors.Is` targets so
 /// callers can `assert_matches!` / `matches!` on them exactly as Go does.
@@ -136,6 +136,61 @@ pub enum Error {
         /// The blob gas implied by the body's blob hashes.
         calculated: u64,
     },
+
+    // --- Remaining coreth `wrappedBlock.syntacticVerify` port (M9.15 task L1,
+    // `wrapped_block.go:398-527`). Difficulty==1 and `VerifyExtra` are
+    // deliberately NOT ported yet (Task 5) — the builder still stamps
+    // difficulty 0, so enforcing them now would reject Rust's own blocks.
+    /// coreth `wrapped_block.go:412` — block number exceeds uint64.
+    /// `AvaHeader::number` already decodes as a Rust `u64` (never a wider
+    /// integer), so this can never fire in practice; kept for Go check-order
+    /// parity and Task 6's rejection-class mapping.
+    #[error("invalid block number: {0}")]
+    InvalidBlockNumber(U256),
+
+    /// coreth `wrapped_block.go:418` — header nonce must be 0.
+    #[error("expected nonce to be 0 but got {0}: invalid nonce")]
+    InvalidNonce(u64),
+
+    /// coreth `wrapped_block.go:434` — block body extension version must be 0.
+    #[error("invalid version: {0}")]
+    InvalidBlockVersion(u32),
+
+    /// coreth `wrapped_block.go:439` — header txsHash vs body mismatch.
+    #[error("invalid txs hash {header} does not match calculated txs hash {calculated}")]
+    TxRootMismatch {
+        /// The header-declared transactions root.
+        header: B256,
+        /// The root recomputed from the body's transaction list.
+        calculated: B256,
+    },
+
+    /// coreth `wrapped_block.go:444`/`:453` — header uncleHash vs the
+    /// (structurally empty, block.rs decode-enforced) body uncle list.
+    #[error("invalid uncle hash {0} does not match calculated uncle hash")]
+    InvalidUncleHash(B256),
+
+    /// coreth `wrapped_block.go:449` — coinbase must be the blackhole address.
+    #[error("invalid coinbase {0} does not match required blackhole address")]
+    InvalidCoinbase(Address),
+
+    /// coreth `wrapped_block.go:458-473` — tx gas price below the phase
+    /// minimum (pre-AP1: `ap0.MinGasPrice`; pre-AP3: `ap1.MinGasPrice`).
+    #[error("block contains tx {tx} with gas price too low ({have} < {min})")]
+    GasPriceTooLow {
+        /// The offending transaction's hash.
+        tx: B256,
+        /// Its declared gas price (`tx.GasPrice()` — the fee cap for
+        /// dynamic-fee txs).
+        have: u128,
+        /// The phase-minimum gas price it fell below.
+        min: u128,
+    },
+
+    /// coreth `wrapped_block.go:486-495` — `BlockGasCost` nil/oversized at
+    /// AP4+. Carries the offending value (`None` = missing).
+    #[error("invalid block gas cost: {0:?}")]
+    InvalidBlockGasCost(Option<U256>),
 }
 
 /// C-Chain VM result alias.
@@ -220,5 +275,40 @@ mod tests {
         // `#[from]` wrap of a facade BlockExecutionError.
         let e: Error = BlockExecutionError::msg("boom").into();
         assert_matches!(e, Error::Execution(_));
+
+        // Remaining `syntacticVerify` port sentinels (M9.15 task L1).
+        assert_matches!(
+            Error::InvalidBlockNumber(U256::ZERO),
+            Error::InvalidBlockNumber(_)
+        );
+        assert_matches!(Error::InvalidNonce(1), Error::InvalidNonce(_));
+        assert_matches!(Error::InvalidBlockVersion(1), Error::InvalidBlockVersion(_));
+        assert_matches!(
+            Error::TxRootMismatch {
+                header: B256::ZERO,
+                calculated: B256::ZERO
+            },
+            Error::TxRootMismatch { .. }
+        );
+        assert_matches!(
+            Error::InvalidUncleHash(B256::ZERO),
+            Error::InvalidUncleHash(_)
+        );
+        assert_matches!(
+            Error::InvalidCoinbase(Address::ZERO),
+            Error::InvalidCoinbase(_)
+        );
+        assert_matches!(
+            Error::GasPriceTooLow {
+                tx: B256::ZERO,
+                have: 0,
+                min: 1
+            },
+            Error::GasPriceTooLow { .. }
+        );
+        assert_matches!(
+            Error::InvalidBlockGasCost(None),
+            Error::InvalidBlockGasCost(_)
+        );
     }
 }
