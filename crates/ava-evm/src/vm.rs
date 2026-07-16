@@ -714,13 +714,22 @@ impl ChainVm for EvmVm {
         // The next-block build/fee context (§17.3). The build-time timestamp comes
         // from the injectable clock (specs/24 hazard #5: never read the wall clock
         // directly — this header time is consensus state), clamped to >
-        // parent.time so the header is strictly monotonic. The fee state defaults
-        // to the genesis/first-AP3 window (the parent-extra fee-state extraction is
-        // M6.7's follow-up — see the build report). The atomic gas budget is the
-        // post-AP5 limit the mempool packs against.
+        // parent.time so the header is strictly monotonic. The parent's real
+        // dynamic-fee state is parsed from its extra prefix (coreth
+        // `feeStateBeforeBlock`/`feeWindow` initial state) so the child base fee is
+        // derived from the actual parent state, not a default. The atomic gas
+        // budget is the post-AP5 limit the mempool packs against.
         let now_secs = self.clock.unix().max(parent_header.time.saturating_add(1));
+        let parent_fee_state =
+            crate::feerules::parent_fee_state_of(self.evm_config.chain_spec(), &parent_header)
+                .map_err(VmError::from)?;
         let ctx = AvaNextBlockCtx {
             timestamp: now_secs,
+            // The header carries `Time` (seconds) and, at Granite, a millisecond
+            // `TimeMilliseconds`; we build at whole-second precision so the two
+            // stay consistent (`time_ms / 1000 == time`).
+            timestamp_ms: now_secs.saturating_mul(1000),
+            parent_fee_state,
             ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
         };
 

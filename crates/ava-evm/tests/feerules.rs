@@ -138,3 +138,84 @@ fn ap4_ap5_step_constants_distinct() {
     assert_eq!(BLOCK_GAS_COST_STEP_AP4, 50_000);
     assert_eq!(BLOCK_GAS_COST_STEP_AP5, 200_000);
 }
+
+// ─── ACP-176 fee-state extra prefix golden (M9.15 task 4) ─────────────────────
+
+/// The strongest ground truth for `fee_state_after_block`: the recorded live Go
+/// C-Chain block 1 carries, in its header `Extra` prefix, the exact 24-byte
+/// ACP-176 fee state Go itself computed via `customheader.ExtraPrefix` →
+/// `feeStateAfterBlock`. Recompute that state from the (genesis) parent + block-1
+/// header fields in Rust and assert the bytes match coreth's byte-for-byte.
+///
+/// The recorded fixture is the local network (Etna→Granite all active at
+/// genesis), so block 1 is Granite-active and its extra opens with the 24-byte
+/// state (30 bytes total: 24 state + 6 predicate/padding bytes coreth appends).
+#[test]
+fn fee_state_after_block_matches_live_go_block_extra() {
+    use ava_evm::block::decode_ava_evm_block;
+    use ava_evm::chainspec::{AvaChainSpec, CChainGenesis};
+    use ava_evm::feerules::acp176::STATE_SIZE;
+    use ava_evm::feerules::fee_state_after_block;
+    use ava_evm_reth::{B256, Chain};
+    use ava_types::constants::LOCAL_ID;
+
+    // The unsigned post-fork proposervm container: cert length at [54..58] (0),
+    // inner coreth block length at [58..62], then the block bytes.
+    fn inner_block_of(container: &[u8]) -> &[u8] {
+        let block_len =
+            u32::from_be_bytes(container[58..62].try_into().expect("block len")) as usize;
+        &container[62..62 + block_len]
+    }
+
+    let vector: Value = serde_json::from_str(include_str!(
+        "vectors/cchain/block_wire/live_local_block1.json"
+    ))
+    .expect("live_local_block1.json parses");
+    let container = hex::decode(vector["container_hex"].as_str().expect("container_hex"))
+        .expect("container hex decodes");
+    let inner = inner_block_of(&container);
+
+    let genesis = CChainGenesis::parse(include_str!("vectors/cchain/genesis/local.json"))
+        .expect("parse local genesis");
+    let spec = AvaChainSpec::c_chain(LOCAL_ID, Chain::from_id(genesis.chain_id()));
+
+    // Block 1's parent is the genesis header. `fee_state_after_block` seeds the
+    // zero ACP-176 state for a genesis (number-0) parent, so the genesis state
+    // root passed here is irrelevant to the fee state — only its time / number
+    // matter. (This is exactly coreth `feeStateBeforeBlock`'s `parent.Number ==
+    // 0 => zero state` branch.)
+    let genesis_header = genesis.genesis_header(B256::ZERO, spec.network_upgrades());
+    assert_eq!(genesis_header.number, 0, "genesis parent is height 0");
+
+    let block1 = decode_ava_evm_block(inner, &spec).expect("decode live inner block 1");
+    let h = block1.header();
+    assert_eq!(h.number, 1, "fixture inner block is height 1");
+    assert!(
+        h.extra.len() >= STATE_SIZE,
+        "Fortuna+ block extra carries at least the 24-byte fee state (got {})",
+        h.extra.len()
+    );
+
+    let expected = &h.extra[..STATE_SIZE];
+    let ext_data_gas_used = h
+        .ext_data_gas_used
+        .map(|v| u64::try_from(v).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    let got = fee_state_after_block(
+        &spec,
+        &genesis_header,
+        h.time,
+        h.time_milliseconds,
+        h.gas_used,
+        ext_data_gas_used,
+        None,
+    )
+    .expect("fee_state_after_block");
+
+    assert_eq!(
+        got.to_bytes().as_slice(),
+        expected,
+        "coreth feeStateAfterBlock parity: recomputed ACP-176 state must equal the \
+         live Go block's extra prefix (Go computed this via customheader.ExtraPrefix)"
+    );
+}

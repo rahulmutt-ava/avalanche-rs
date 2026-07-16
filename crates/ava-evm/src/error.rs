@@ -47,6 +47,14 @@ pub enum Error {
     #[error("fee overflow")]
     FeeOverflow,
 
+    /// The ACP-176 / AP3 dynamic-fee state transition could not be computed —
+    /// a malformed parent extra prefix, a child timestamp before its parent
+    /// (`errInvalidTimestamp`), or a nil parent min-delay-excess. Mirrors the
+    /// coreth `customheader` fee-state errors (`dynamic_fee_state.go`,
+    /// `dynamic_fee_windower.go`, `min_delay_excess.go`).
+    #[error("invalid fee state: {0}")]
+    InvalidFeeState(String),
+
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.
     #[error("conflicting atomic inputs")]

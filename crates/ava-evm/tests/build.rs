@@ -29,6 +29,10 @@ use ava_evm::builder::{BlockBuilderDriver, MIN_BLOCK_BUILD_DELAY};
 use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, NetworkUpgrades};
 use ava_evm::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use ava_evm::feerules::acp176::{Acp176State, STATE_SIZE};
+use ava_evm::feerules::acp226::INITIAL_DELAY_EXCESS;
+use ava_evm::feerules::window::WINDOW_SIZE;
+use ava_evm::feerules::{fee_state_after_block, parent_fee_state_of};
 use ava_evm::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use ava_evm::state::FirewoodStateProvider;
 use ava_evm_reth::{
@@ -109,6 +113,31 @@ fn etna_chain_spec(chain_id: u64) -> AvaChainSpec {
         etna: 0,
         fortuna: FAR_FUTURE,
         granite: FAR_FUTURE,
+        helicon: u64::MAX,
+    };
+    AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(chain_id), false)
+}
+
+/// The same schedule as [`etna_chain_spec`] but with Fortuna **and** Granite
+/// active from genesis — used by [`built_header_carries_acp176_extra_prefix`] so
+/// the built block is in the ACP-176 regime (24-byte fee-state extra prefix +
+/// the Granite millisecond/min-delay-excess tail).
+fn granite_chain_spec(chain_id: u64) -> AvaChainSpec {
+    let upgrades = NetworkUpgrades {
+        apricot_phase_1: 0,
+        apricot_phase_2: 0,
+        apricot_phase_3: 0,
+        apricot_phase_4: 0,
+        apricot_phase_5: 0,
+        apricot_phase_pre_6: 0,
+        apricot_phase_6: 0,
+        apricot_phase_post_6: 0,
+        banff: 0,
+        cortina: 0,
+        durango: 0,
+        etna: 0,
+        fortuna: 0,
+        granite: 0,
         helicon: u64::MAX,
     };
     AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(chain_id), false)
@@ -352,6 +381,24 @@ fn built_header_carries_go_shape_fields() {
     assert_eq!(header.blob_gas_used, Some(0));
     assert_eq!(header.excess_blob_gas, Some(0));
 
+    // coreth `customheader/extra.go:46-53` — Etna is in the AP3 window regime
+    // (Fortuna is far-future here), so the extra prefix is the 80-byte fee
+    // window. Building on a genesis (number-0) parent, coreth's `feeWindow`
+    // returns the empty window (`dynamic_fee_windower.go:156-158`).
+    assert_eq!(
+        header.extra.len(),
+        WINDOW_SIZE,
+        "Etna (Window regime) extra prefix is the 80-byte fee window"
+    );
+    assert_eq!(
+        header.extra.as_ref(),
+        &[0u8; WINDOW_SIZE][..],
+        "first block on genesis carries the empty (all-zero) fee window"
+    );
+    // Pre-Granite: no millisecond timestamp / min-delay-excess tail.
+    assert_eq!(header.time_milliseconds, None);
+    assert_eq!(header.min_delay_excess, None);
+
     // coreth `customtypes/block_ext.go:189` — tx/receipt roots + bloom are
     // derived from the body at assembly.
     assert_eq!(
@@ -374,5 +421,95 @@ fn built_header_carries_go_shape_fields() {
         header.bloom.as_ref(),
         &[0u8; 256][..],
         "no logs in the batch ⇒ the OR-fold of receipt blooms is the zero bloom"
+    );
+}
+
+/// M9.15 task 4: at Fortuna+ the builder stamps the exact 24-byte ACP-176 fee
+/// state as the header extra prefix (coreth `customheader/extra.go:36-44`
+/// `ExtraPrefix` → `feeStateAfterBlock`), and at Granite the millisecond
+/// timestamp + ACP-226 min-delay-excess tail (`consensus/dummy/consensus.go:334-352`).
+///
+/// The built block's extra must round-trip as the exact post-block fee state
+/// recomputed from the parent + built-header fields — the invariant Go's
+/// dummy-engine `VerifyExtraPrefix` checks byte-for-byte on every node.
+#[test]
+fn built_header_carries_acp176_extra_prefix() {
+    let fx = load_fixture();
+    let (_dir, provider, config, _canonical, genesis_root) =
+        setup(&fx, granite_chain_spec(fx.chain_id));
+
+    let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
+    let evm_txs = decoded.recover_senders().expect("recover senders");
+    assert_eq!(evm_txs.len(), 1, "fixture block-1 has one EVM tx");
+
+    // A Granite genesis parent carries the ACP-226 initial min-delay-excess and a
+    // millisecond timestamp (coreth `Genesis.toBlock` at Granite; the real local
+    // genesis does the same) — `minDelayExcess` parity requires the parent to
+    // carry it. The extra stays empty: a number-0 parent seeds the zero fee state.
+    let mut parent = genesis_header(&fx, genesis_root);
+    parent.time_milliseconds = Some(0);
+    parent.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+
+    let ctx = AvaNextBlockCtx {
+        timestamp: 10,
+        timestamp_ms: 10_000,
+        suggested_fee_recipient: Address::ZERO,
+        parent_fee_state: parent_fee_state_of(config.chain_spec(), &parent)
+            .expect("parent fee state"),
+        ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
+    };
+
+    let txpool = Arc::new(Mutex::new(ava_evm::atomic::mempool::AtomicMempool::new(
+        64,
+        ava_types::id::Id::EMPTY,
+    )));
+    let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
+
+    let built = driver
+        .build_on(&parent, genesis_root, &ctx, evm_txs)
+        .expect("build_on");
+    let header = built.header();
+
+    // The extra prefix is exactly the 24-byte ACP-176 fee state (the builder adds
+    // no predicate bytes, so the whole extra IS the prefix).
+    assert_eq!(
+        header.extra.len(),
+        STATE_SIZE,
+        "Fortuna+ extra prefix is the 24-byte ACP-176 fee state"
+    );
+
+    // Round-trip: the built block's extra must parse back to the exact post-block
+    // fee state recomputed from the parent + this header's own fields.
+    let ext_data_gas_used = header
+        .ext_data_gas_used
+        .map(|v| u64::try_from(v).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    let reparsed = Acp176State::from_bytes(&header.extra).expect("parse built extra prefix");
+    assert_eq!(
+        reparsed,
+        fee_state_after_block(
+            config.chain_spec(),
+            &parent,
+            header.time,
+            header.time_milliseconds,
+            header.gas_used,
+            ext_data_gas_used,
+            None,
+        )
+        .expect("fee_state_after_block"),
+        "builder extra prefix == coreth ExtraPrefix (feeStateAfterBlock)"
+    );
+
+    // Granite tail: the millisecond timestamp we built at + the ACP-226
+    // min-delay-excess (carried from the Granite parent, no desired override).
+    assert_eq!(
+        header.time_milliseconds,
+        Some(10_000),
+        "Granite header stamps the millisecond timestamp"
+    );
+    assert_eq!(
+        header.min_delay_excess,
+        Some(INITIAL_DELAY_EXCESS.0),
+        "Granite header carries the parent's ACP-226 min-delay-excess"
     );
 }

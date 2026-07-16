@@ -373,13 +373,34 @@ impl BlockBuilderDriver {
             bloom,
         } = args;
 
-        let phase = self.evm_config.chain_spec().fork_at(ctx.timestamp);
+        let spec = self.evm_config.chain_spec();
+        let phase = spec.fork_at(ctx.timestamp);
         let ext_data = ext_data_of(atomic_batch)?;
         let ext_data_hash = if ext_data.is_empty() {
             empty_ext_data_hash()
         } else {
             keccak256(&ext_data)
         };
+
+        // coreth `consensus/dummy/consensus.go:334-352` — the dummy engine
+        // finalizes the header by prepending the ACP-176/AP3 extra prefix and, at
+        // Granite, stamping the millisecond timestamp + ACP-226 min-delay-excess.
+        // A Granite header reports `TimeMilliseconds`; earlier headers derive it
+        // from `Time × 1000` (so `time_ms_field` is `None` there). We build with
+        // no `GasTarget`/`MinDelayTarget` override, so both desired values are
+        // `nil` (coreth `vm.go:535-543`).
+        let time_ms_field = spec.is_granite(ctx.timestamp).then_some(ctx.timestamp_ms);
+        let extra = crate::feerules::extra_prefix(
+            spec,
+            parent,
+            ctx.timestamp,
+            time_ms_field,
+            gas_used,
+            atomic_gas_used,
+            None,
+        )?;
+        let min_delay_excess =
+            crate::feerules::min_delay_excess_of(spec, parent, ctx.timestamp, None)?;
 
         // AP3+ carries an explicit base fee; pre-AP3 leaves it absent.
         let base_fee_field = (phase >= AvaPhase::ApricotPhase3).then(|| U256::from(base_fee));
@@ -414,7 +435,10 @@ impl BlockBuilderDriver {
             gas_limit,
             gas_used,
             time: ctx.timestamp,
-            extra: Bytes::new(),
+            // coreth `customheader/extra.go:30` (`ExtraPrefix`) — the exact
+            // Fortuna+ 24-byte ACP-176 fee state (or AP3 window / empty pre-AP3)
+            // Go's dummy-engine `VerifyExtraPrefix` checks byte-for-byte.
+            extra: Bytes::from(extra),
             mix_digest: B256::ZERO,
             nonce: [0u8; 8],
             ext_data_hash,
@@ -424,8 +448,10 @@ impl BlockBuilderDriver {
             blob_gas_used,
             excess_blob_gas,
             parent_beacon_root,
-            time_milliseconds: None,
-            min_delay_excess: None,
+            // coreth `consensus/dummy/consensus.go:334-352` — the Granite header
+            // tail (millisecond timestamp + ACP-226 min-delay-excess).
+            time_milliseconds: time_ms_field,
+            min_delay_excess,
         })
     }
 

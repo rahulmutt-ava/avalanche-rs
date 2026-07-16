@@ -16,6 +16,13 @@ use ruint::aliases::U256;
 /// `ap3.WindowLen` — the rolling window length in seconds (= number of slots).
 pub const WINDOW_LEN: u64 = 10;
 
+/// `ap3.WindowSize` — the byte length of a serialized window (`WindowLen × 8`).
+pub const WINDOW_SIZE: usize = WINDOW_LEN as usize * 8;
+
+/// `ap3.IntrinsicBlockGas` — gas always folded into the AP3 fee window for the
+/// parent block (coreth `plugin/evm/upgrade/ap3/window.go:49`).
+pub const INTRINSIC_BLOCK_GAS: u64 = 1_000_000;
+
 /// `ap3.Window` — a 10-second rolling window of gas consumed.
 ///
 /// Slot `9` (the last) is the "current second"; [`Window::shift`] ages the
@@ -56,6 +63,35 @@ impl Window {
     #[must_use]
     pub fn sum(&self) -> u64 {
         self.0.iter().fold(0u64, |acc, &v| acc.saturating_add(v))
+    }
+
+    /// `ap3.ParseWindow` — deserialize from at least [`WINDOW_SIZE`] bytes
+    /// (10 × big-endian `u64`; slot 0 is the oldest). Extra trailing bytes are
+    /// ignored. Returns `None` if `bytes.len() < WINDOW_SIZE`. Mirrors coreth
+    /// `plugin/evm/upgrade/ap3/window.go:68` (`ParseWindow`).
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < WINDOW_SIZE {
+            return None;
+        }
+        let mut w = [0u64; 10];
+        for (i, slot) in w.iter_mut().enumerate() {
+            let off = i * 8;
+            *slot = u64::from_be_bytes(bytes[off..off + 8].try_into().ok()?);
+        }
+        Some(Window(w))
+    }
+
+    /// `Window.Bytes()` — 80-byte big-endian serialization (slot 0 first).
+    /// Mirrors coreth `plugin/evm/upgrade/ap3/window.go:113` (`Bytes`).
+    #[must_use]
+    pub fn to_bytes(self) -> [u8; WINDOW_SIZE] {
+        let mut out = [0u8; WINDOW_SIZE];
+        for (i, v) in self.0.iter().enumerate() {
+            let off = i * 8;
+            out[off..off + 8].copy_from_slice(&v.to_be_bytes());
+        }
+        out
     }
 }
 
