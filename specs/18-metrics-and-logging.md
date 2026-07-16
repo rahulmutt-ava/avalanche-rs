@@ -399,6 +399,27 @@ under `avalanche_evm_*` with `[chain]` and are diffed by the same golden test.
 > > (`snowCtx.Metrics` / `MakeAndRegister`) through `ChainContext` and call the two
 > > `register_into` at chain init — the only un-wired piece.
 
+> **Upstream delta (avalanchego `1f3a9ffe58` #5634 + `24e6ebdadc` #5635 — folded 2026-07-16).**
+> Two more SAE metric-parity additions on the registries above (same pattern as
+> the #5500→#5535 sweep; extend `SaexecMetrics` / register at the same seams):
+>
+> | Namespace | Name | Type | Meaning |
+> |---|---|---|---|
+> | `saexec` | `last_executed_gas_time_seconds` | G | gas time reached by the latest executed block, as a Unix timestamp |
+> | `saexec` | `gas_time_wall_time_gap_seconds` | G | gas time − wall time at execution completion (negative ⇒ gas time lags the wall clock) |
+> | `saexec` | `worst_case_base_fee` / `worst_case_gas_excess` | G | worst-case pricing admitted by consensus for the latest **enqueued** block |
+> | `saexec` | `executed_base_fee` / `executed_gas_excess` | G | pricing realized by execution of the latest **executed** block |
+> | `saexec` | `gas_target` | G | gas target of the latest enqueued block (no worst-case/executed pair — execution never moves it) |
+> | `cchain` | `min_block_delay_seconds` | G | ACP-226 minimum block delay, set from `delayExponent(header).DelayDuration()` in `AfterExecutingBlock` (the `cchain` VM now creates its own `MakeAndRegister(snowCtx.Metrics, "cchain")` registry) |
+>
+> Structural knock-on folded in `11`: #5634 extracts a public
+> **`blocks.Block.WorstCaseGasTime(hooks)`** (+ `headerBaseFee()`, base fee
+> capped at `MaxUint64`) out of `synchronousExecutionResults`, and
+> `saexec.newMetrics` now takes `(reg, lastExecuted *blocks.Block, hooks, log)`
+> to derive the enqueue-side worst-case values from headers. The `cchain` gauge
+> rides the M7.63 ACP-226 delta (`11` §8). Pure metric-name parity otherwise;
+> non-gating (Helicon unscheduled).
+
 ### 2.12 API server — `avalanche_api_*` (`api/server/metrics.go`)
 
 | Name | Type | Labels | Meaning |

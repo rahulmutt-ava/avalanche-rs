@@ -10,11 +10,11 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `96897293a2` (2026-07-07) have been reviewed and folded in as **"Upstream
+> `a4290dc0f4` (2026-07-16) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `13`,
 > `14`, `18`, `21`, `27`) and plan files (`plan/M1`, `plan/M4`, `plan/M7`,
 > `plan/M8`). When re-syncing against newer avalanchego, start the review from
-> `96897293a2`.
+> `a4290dc0f4`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -168,6 +168,44 @@ from these documents.
 > (unset ⇒ empty accepted set) instead of an open-ended canonical scan.
 > **Irrelevant (Go-only dep chore, no spec surface):** bump `golang.org/x/net`
 > 0.52.0 → 0.55.0 (`96897293a2`, #5628).
+>
+> The `96897293a2 → a4290dc0f4` sync (reviewed 2026-07-16) folded fifteen
+> spec-relevant commits of twenty-four. **P-Chain (Helicon-gated / dormant) →
+> `plan/M4` M4.32–M4.33:** (1) **ACP-285 min-consumption-rate 7.5% + 90-day ramp**
+> (`317f7fd1d6`, #5527) → `08` §5 / **M4.32** (also `Calculate`/`GetRewardsCalculator`
+> signature changes); (2) **ACP-267 90% uptime commit-preference** (`25c1aa3dcf`,
+> #5531) → `08` §4.2 / **M4.33** (preference only, no validity change). **SAE
+> C-Chain (Helicon-dormant, non-gating) → `plan/M7` M7.60–M7.66:**
+> (3) **TransitionVM** — in-process coreth→SAE swap at `HeliconTime − 10s`, wired
+> into `node.go` for the C-Chain, + `BuildHeader` Helicon gate (`ac7452d86c`,
+> #5563) → `11` §8 / **M7.60**; (4) **EIP-4788 parent-beacon-root pre-tx call**
+> (`cc5f26b533`, #5586) → `11` §6.1 / **M7.61**; (5) **`AfterExecutingTransaction`
+> hook + base-fee burn to the blackhole** (`8aa33048c8`, #5619) → `11` §6.1 /
+> **M7.62**; (6) **ACP-226 min-block-delay enforcement** — `InitialDelayExponent
+> = 7_970_124`, `BuildHeader` min-delay rejection + `MinDelayExcess` vote,
+> `min-delay-target` config, `GetPreference`/`WaitForEvent` pacing (`e9a4e710d5`,
+> #5631) + the **≥100ms `WaitForEvent` throttle** (`43794f3545`, #5650) → `11` §8
+> + `21` §6.x / **M7.63**; (7) **saedb `Config` restructure + production
+> commit-interval guard** (`c2cca3096a`, #5479) + **HashDB memory-pressure `Cap`
+> flush** (`296e4c1560`, #5495 — a Rust no-op, Firewood-direct) → `11` §7.1 /
+> **M7.64**; (8) **Helicon drops the ACP-176 state space from `header.Extra`**
+> (predicate offset 0) (`1e7dc7f098`, #5659) → `10` §9 + `11` §8 / **M7.65**;
+> (9) **warp precompile activated at the Durango boundary** +
+> `BeforeExecutingBlock` gains the parent header (`a4290dc0f4`, #5668) → `11`
+> §6.1 / **M7.66**. **Metrics (name-parity, no new plan task):** SAE gas-time /
+> pricing gauges + `Block.WorstCaseGasTime` knock-on (`1f3a9ffe58`, #5634) and
+> the `cchain` registry's `min_block_delay_seconds` (`24e6ebdadc`, #5635) → `18`
+> §2.11. **Reference-input / no Rust work:** Go's `vms/saevm/firewood` TrieDB
+> (`ef0f0b18db`, #5433 — unconsumed at Go HEAD; Rust is already Firewood-direct)
+> → `11` §7.1 + `04` §4.2. **Non-gating (test-infra / refactor / docs, noted
+> without callout):** ACP-236 e2e tests (`43886e148e`, #5106), Helicon in
+> antithesis (`1920294d47`, #5649), header-copy refactor (`312b39914e`, #5660 —
+> no behavior change), saexec log level Debug→Trace (`5fff462781`, #5653),
+> `cchain` design README (`ebda271577`, #5342), subnet-evm ACP-226 genesis seed
+> (`87312a5e5c`, #5593 — subnet-evm is a reference input). **Irrelevant:**
+> CI packaging (`1457ae8f18` #5180, `fc3bdf3d77` #5412), unused-constant removal
+> `NetworkHRPToNetworkID` (`48d6831ed2`, #5621 — not referenced by any spec),
+> x/crypto dep bump (`9ea99ca6ca`, #5633).
 
 ## Read this first
 

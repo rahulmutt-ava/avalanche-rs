@@ -628,7 +628,13 @@ commit thread / `spawn_blocking` (§1.2).
 > existing goldens); it must land before the live arm can compare Rust roots
 > against the rebuilt oracle at `d8a8473b`.
 
-Sketch (updated to the real API):
+> **Upstream delta (avalanchego `ef0f0b18db`, #5433 — folded 2026-07-16).** Go
+> gains **`vms/saevm/firewood`** — a Firewood-backed `triedb` override for the
+> SAE EVM (linear proposal chain only, prefix-delete `SELFDESTRUCT`,
+> ancestor-first batched `Commit` with a `DeferredCommitInterval`).
+> **Unconsumed at Go HEAD** and **no Rust work** — the Rust port is already
+> Firewood-direct exactly as this section prescribes; the Go package is Go
+> converging on the same architecture. Details + parity notes in `11` §7.1.
 
 ```rust
 use firewood::db::{Db, DbConfig, BatchOp};

@@ -882,6 +882,58 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.60: TransitionVM — in-process coreth→SAE C-Chain swap at Helicon **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** new `ava-transitionvm` (or an `ava-chains`-level wrapper) + ava-saevm-cchain (BuildHeader gate)  ·  **Depends on:** M6 (synchronous C-Chain VM), M7.23 (SAE cchain VM), M3 (Snowman `ChainVm` trait)  ·  **Spec:** `11` §8 upstream-delta (Go `ac7452d86c` #5563)
+> **Upstream parity (Go `ac7452d86c`, #5563).** Go adds `vms/transitionvm` — a generic `block.ChainVM` wrapping a pre- and post-transition VM over one shared database/block history, switching in-process at `transitionTime` (first block with timestamp ≥ transitionTime is the last pre-VM block; descendants are refused until the transition, then re-parsed by the post VM; the switch is durably recorded so restarts resume on the right VM). `node.go` registers the C-Chain as `transitionvm.Factory{Pre: coreth, Post: saevm/cchain, TransitionTime: HeliconTime − 10s, APIDrainTimeout: 15s}`. Same commit: `cchain.BuildHeader` returns `errHeliconUnactivated` pre-Helicon.
+> **Rust task:** a transition wrapper VM over the M6 synchronous C-Chain and the SAE cchain VM implementing the same block-boundary state machine (pre parses post blocks; post serves pre history; durable transition marker), registered for the C-Chain in `ava-chains`/`avalanchers` with the same `HeliconTime − 10s` lead; plus the `build_header` Helicon gate in `ava-saevm-cchain`. **Non-gating** (Helicon unscheduled) but the architectural prerequisite for ever activating SAE on the C-Chain — design before code (the Go `vms/transitionvm/README.md` is the reference).
+**Files (anticipated):** `crates/ava-transitionvm/src/`, `crates/ava-saevm/cchain/src/hooks.rs`, `crates/ava-chains/src/`.
+
+---
+
+### Task M7.61: saexec applies EIP-4788 parent-beacon-root before txs **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** ava-saevm-exec (+ ava-evm reuse)  ·  **Depends on:** M7.14/M7.15 (execute step)  ·  **Spec:** `11` §6.1 upstream-delta (Go `cc5f26b533` #5586)
+> **Upstream parity (Go `cc5f26b533`, #5586).** `saexec.Execute` now calls `core.SetBeaconBlockRoot(stateDB, header)` before processing transactions (mirroring `core.StateProcessor.Process`), writing `ParentBeaconRoot` into the EIP-4788 beacon-roots system contract. State-affecting: changes every post-execution root. **Rust task:** apply the same pre-tx system call in the `saexec` execute step (reth/revm's `apply_beacon_root_contract_call` via `ava-evm`), with a differential/golden test on the resulting root. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/exec/src/execution.rs`, `tests/`.
+
+---
+
+### Task M7.62: per-tx hook + base-fee burn to the blackhole address **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** ava-saevm-hook + ava-saevm-exec + ava-saevm-cchain  ·  **Depends on:** M7.9 (hooks), M7.14/M7.15 (execute step)  ·  **Spec:** `11` §6.1 upstream-delta (Go `8aa33048c8` #5619)
+> **Upstream parity (Go `8aa33048c8`, #5619).** `hook.Points` gains `AfterExecutingTransaction(db, baseFee, receipt)`, called by `Execute` after each tx and followed by `stateDB.Finalise(rules.IsEIP158)`. The cchain impl credits `receipt.GasUsed × baseFee` to `constants.BlackholeAddr` — preserving the historical C-Chain behavior of the *full* fee accruing to the blackhole (libevm/reth only credit the priority fee to the coinbase and discard the base fee). State-affecting (blackhole balance is in the root). **Rust task:** add the per-tx hook point to `hook::Points` + `saexec`, implement the cchain burn, and cover with a root-parity test (a block with non-zero base fee must move the blackhole balance exactly as Go). **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/hook/src/lib.rs`, `crates/ava-saevm/exec/src/execution.rs`, `crates/ava-saevm/cchain/src/hooks.rs`, `tests/`.
+
+---
+
+### Task M7.63: `cchain` enforces the ACP-226 minimum block delay **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (`dynamic` + hooks/builder + VM) + ava-saevm-core (`GetPreference`)  ·  **Depends on:** M7.34 (`dynamic` integrators), M7.52 (operator config), M7.44 (ms block time)  ·  **Spec:** `11` §8 + `21` §6.x upstream-deltas (Go `e9a4e710d5` #5631 + `43794f3545` #5650); metrics in `18` §2.11
+> **Upstream parity (Go `e9a4e710d5` #5631 + `43794f3545` #5650).** (1) `dynamic::DelayExponent` gains `INITIAL_DELAY_EXPONENT = 7_970_124` (smallest exponent whose floored decode reaches the 2000ms initial min delay) + `delay_duration()`. (2) `BuildHeader` rejects builds earlier than `block_time(parent) + delay` (`errBelowMinBlockDelay`) and advances the child `MinDelayExcess` via `toward(desired)` from a new `min-delay-target` (ms) operator-config key. (3) `sae::Vm` exposes `get_preference()`; the cchain `wait_for_event` paces on `earliest_build_time(preference)` and throttles successive returns to ≥100ms (`minWaitForEventDelay`, busy-loop fix — engine pacing, not consensus). Plus the `cchain`-registry `min_block_delay_seconds` gauge (#5635, `18` §2.11).
+> **Rust task:** extend the M7.34 `DelayExponent` with the initial-exponent constant (+ unit test inverting the formula) and `delay_duration`; add the builder min-delay validity check + `MinDelayExcess` vote; add the `min-delay-target` config key; expose `get_preference` on the SAE VM and pace/throttle `wait_for_event`; register the gauge. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/{dynamic/delay.rs,hooks.rs,config.rs,vm.rs}`, `crates/ava-saevm/core/src/consensus.rs`, `tests/`.
+
+---
+
+### Task M7.64: `saedb` config surface — cache sizes, `Verify`, production commit-interval guard **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** ava-saevm-db + ava-saevm-cchain (config)  ·  **Depends on:** M7.12 (Tracker), M7.52 (operator config)  ·  **Spec:** `11` §7.1 upstream-delta (Go `c2cca3096a` #5479 + `296e4c1560` #5495)
+> **Upstream parity (Go `c2cca3096a` #5479 + `296e4c1560` #5495).** `saedb.Config` becomes `{TrieCacheMiB, SnapshotCacheMiB, Archival, CommitInterval}` with `Verify()` (non-zero commit interval; cache-size overflow bounds) and exported defaults (4096 / 512 MiB / 256 MiB); cchain config un-comments `trie-clean-cache` + `snapshot-cache`; `parseConfig(b, networkID)` rejects a non-default `commit-interval` on production networks. #5495's HashDB memory-pressure `Cap` flush is a **no-op in Rust** (Firewood-direct Tracker, no HashDB dirty cache).
+> **Rust task:** the config-surface half only — add the two cache keys (map onto whatever cache knobs the Firewood provider exposes; document any that don't apply), a `verify()` on the DB config, and the production-network commit-interval guard in the cchain config decode. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/db/src/lib.rs`, `crates/ava-saevm/cchain/src/config.rs`, `tests/`.
+
+---
+
+### Task M7.65: Helicon drops the ACP-176 state space from `header.Extra` (predicate offset 0) **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (builder/predicate placement)  ·  **Depends on:** M7.50 (warp predicate bytes in `Extra`)  ·  **Spec:** `10` §9 header-tail + `11` §8 upstream-deltas (Go `1e7dc7f098` #5659)
+> **Upstream parity (Go `1e7dc7f098`, #5659).** A wire/header-format change: under Helicon rules `VerifyExtra` accepts any `Extra` length (the ACP-176 fee state now lives in dedicated header fields) and warp-predicate bytes start at offset **0** (`predicateBytesOffset`: 0 Helicon / `acp176.StateSize` Fortuna / `ap3.WindowSize` before) — so `BuildBlock` no longer pads a zeroed ACP-176 prefix before the predicate bytes. **Rust task:** key the M7.50 predicate placement (and any `Extra` length checks) on the fork; byte-parity test on a built Helicon header vs Go. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/cchain/src/hooks.rs` (+ header codec tests).
+
+---
+
+### Task M7.66: activate the warp precompile at the Durango boundary **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Sub-crate:** ava-saevm-cchain (genesis + hooks) + ava-saevm-hook (signature)  ·  **Depends on:** M7.43 (genesis path), M7.9 (hooks), M7.62 (hook-call Finalise pattern)  ·  **Spec:** `11` §6.1 upstream-delta (Go `a4290dc0f4` #5668)
+> **Upstream parity (Go `a4290dc0f4`, #5668).** `hook.Points.BeforeExecutingBlock` gains the **parent header** param and `Execute` finalises state after the hook; the cchain impl activates the warp precompile account (nonce 1, code `0x01` — survives EIP-161 pruning, reads as a contract) on the **first Durango block** (`rules.IsDurango && !IsDurango(parent.Time)`), sharing the `activatePrecompile` helper with the genesis writer (genesis-already-post-Durango case = M7.43). Only fires on custom networks with a pre-Durango genesis, but state-affecting where it does. **Rust task:** mirror the hook-signature change (parent header through `before_executing_block` + post-hook finalise), the first-Durango activation in the cchain hooks, and the shared genesis-side helper. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/hook/src/lib.rs`, `crates/ava-saevm/exec/src/execution.rs`, `crates/ava-saevm/cchain/src/{genesis.rs,hooks.rs}`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -898,10 +950,10 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §3 | Crate layout / sub-workspace + lint bar | M7.1 |
 | `11` §4 | Blocks: byte-exact format, codec, lifecycle, parse | M7.11, M7.8 (canoto), M7.31 (fuzz) |
 | `11` §5 | Adaptor → Snowman `ChainVm` | M7.10, M7.18 |
-| `11` §6 / §6.1 | saexec streaming engine; pure execute step | M7.14, M7.15 |
+| `11` §6 / §6.1 | saexec streaming engine; pure execute step | M7.14, M7.15, **M7.61** (EIP-4788 beacon-root pre-tx call), **M7.62** (per-tx hook + blackhole base-fee burn), **M7.66** (warp precompile at the Durango boundary) |
 | `11` §6.2 | Backpressure, ordering, recovery | M7.26, M7.24 |
-| `11` §7 | saedb: consensus-vs-execution state, Firewood-revision Tracker | M7.12 |
-| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta), **M7.38** (warp/ICM lifecycle package delta), **M7.45** (settled-marker header fields), **M7.47** (pre-AP1/genesis parse), **M7.48** (`getAtomicTxStatus`), **M7.49** (RPC header/block extras) |
+| `11` §7 | saedb: consensus-vs-execution state, Firewood-revision Tracker | M7.12, **M7.64** (config surface: cache keys, `Verify`, production commit-interval guard) |
+| `11` §8 | cchain-on-SAE (hooks/state/tx/txpool/api) + reuse decision | M7.21, M7.22, M7.23, **M7.37** (`ParseBlock` extData-hash verify delta), **M7.38** (warp/ICM lifecycle package delta), **M7.45** (settled-marker header fields), **M7.47** (pre-AP1/genesis parse), **M7.48** (`getAtomicTxStatus`), **M7.49** (RPC header/block extras), **M7.60** (TransitionVM coreth→SAE swap), **M7.63** (ACP-226 min block delay), **M7.65** (Helicon `Extra` predicate offset 0) |
 | `11` §9.1 | Hooks (`Points`/`PointsG`, `Op`, `Settled`, `BlockBuilder`) | M7.9 |
 | `11` §9.2 | txgossip (mempool + push/pull + priority) | M7.20 |
 | `11` §9.3 | worst-case analysis + assertions | M7.13, M7.27 |

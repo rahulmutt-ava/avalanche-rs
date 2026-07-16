@@ -756,6 +756,47 @@ function of `(ordered block, parent state, chain config, hooks)` — no wall-clo
 in any consensus output (`FinishBy.Wall` is metrics-only), no map iteration over
 unsorted collections.
 
+> **Upstream delta (avalanchego `cc5f26b533`, #5586 — folded 2026-07-16).**
+> `Execute` gains an **EIP-4788** step between steps 5 and 6 above: before
+> processing any transactions it calls `core.SetBeaconBlockRoot(stateDB, header)`
+> (mirroring `core.StateProcessor.Process`), writing the header's
+> `ParentBeaconRoot` into the beacon-roots system contract. **State-affecting**
+> (changes the post-execution root for every block). Rust seam: `saexec`'s
+> execute step must apply the same pre-tx system call (revm/reth's
+> `apply_beacon_root_contract_call`). **Non-gating** (Helicon unscheduled);
+> staged as `plan/M7` **M7.61**.
+
+> **Upstream delta (avalanchego `8aa33048c8`, #5619 — folded 2026-07-16).**
+> `hook.Points` gains **`AfterExecutingTransaction(db *state.StateDB, baseFee
+> uint256.Int, r *types.Receipt) error`**, called by `Execute` immediately after
+> each tx (between steps 6 and 7 above) and followed by a
+> `stateDB.Finalise(rules.IsEIP158)` (mirroring `core.ApplyTransaction`). The
+> `cchain` implementation **credits the burned base fee to
+> `constants.BlackholeAddr`**: `AddBalance(Blackhole, r.GasUsed × baseFee)` —
+> historically the C-Chain credits the *full* fee (base + priority) to the
+> blackhole address, but libevm's state transition only credits the priority fee
+> to the coinbase and discards the base fee. **State-affecting** (blackhole
+> balance is part of the state root). Rust seam: a per-tx hook point in
+> `saexec` + the cchain hook impl (reth/revm also discards the base fee by
+> default). Cross-ref `21` §4 (fee destination). **Non-gating** (Helicon
+> unscheduled); staged as `plan/M7` **M7.62**.
+
+> **Upstream delta (avalanchego `a4290dc0f4`, #5668 — folded 2026-07-16).**
+> `hook.Points.BeforeExecutingBlock` (step 4 above) changes signature to
+> `BeforeExecutingBlock(rules params.Rules, statedb *state.StateDB, parent
+> *types.Header, block *types.Block)` — it now receives the **parent header** —
+> and `Execute` follows the hook with a `stateDB.Finalise(rules.IsEIP158)`. The
+> `cchain` implementation uses it to **activate the warp precompile on the first
+> Durango block**: if `rules.IsDurango && !config.IsDurango(parent.Time)`, it
+> runs `activatePrecompile(statedb, warp.ContractAddress)` — set nonce 1 + code
+> `0x01` so the account survives EIP-161 empty-account pruning and reads as a
+> contract to `EXTCODESIZE`/`EXTCODEHASH`. The same helper is factored out of
+> the genesis writer (`cchain/genesis.go`, which handles the
+> genesis-already-post-Durango case — the M7.43 path). Only reachable on custom
+> networks whose genesis is pre-Durango (mainnet/Fuji history predates SAE), but
+> **state-affecting** where it fires. **Non-gating** (Helicon unscheduled);
+> staged as `plan/M7` **M7.66**.
+
 ### 6.2 Backpressure, ordering, recovery
 
 - **FIFO + bounded queue:** `mpsc` with capacity `2 * commit_interval`; `enqueue`
@@ -846,6 +887,43 @@ settled-by height for that block), or the head if archival.
 > rather than re-implemented — so `saedb` presents the full §7 storage surface.
 > This task does **not** depend on `ava-saevm-blocks` (keyed on roots/heights,
 > not the `Block` type) and was built in parallel with M7.11.
+
+> **Upstream delta (avalanchego `c2cca3096a` #5479 + `296e4c1560` #5495 — folded 2026-07-16).**
+> `saedb.Config` is restructured: `{TrieDBConfig *triedb.Config, Archival,
+> TrieCommitInterval}` → **`{TrieCacheMiB, SnapshotCacheMiB, Archival,
+> CommitInterval}`** with a `Verify()` (`CommitInterval` MUST be non-zero;
+> caches ≤ `MaxInt/MiB`) and exported defaults `DefaultCommitInterval = 4096`,
+> `DefaultTrieCacheSizeMiB = 512`, `DefaultSnapshotCacheSizeMiB = 256` (snapshot
+> cache was a 128 MiB constant; `SnapshotCacheMiB = 0` now disables snapshots).
+> The cchain operator config (M7.52) un-comments **`trie-clean-cache`** and
+> **`snapshot-cache`**, and `parseConfig(b, networkID)` now **rejects a
+> non-default `commit-interval` on production networks**
+> (`errProductionCommitInterval`, keyed on `constants.ProductionNetworkIDs`).
+> #5495 additionally adds a **memory-pressure `Cap` flush** to
+> `Tracker.MaybeCommit`'s no-commit branch (`maybeCap`): when the HashDB's dirty
+> size exceeds a budget derived from `maxCap = 512 MiB` / `targetCommitSize =
+> 20 MiB` and the position within the commit interval, the oldest trie nodes are
+> flushed to disk. Rust seam: the config-surface half (new keys, `Verify`,
+> production commit-interval guard) maps onto the M7.52 config decode; the
+> HashDB `Cap` half is a **no-op in Rust** — the AS-BUILT M7.12 Tracker is
+> Firewood-direct with no HashDB dirty cache. Staged as `plan/M7` **M7.64**.
+> **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `ef0f0b18db`, #5433 — folded 2026-07-16).** Go
+> gains a **`vms/saevm/firewood`** package: a Firewood-backed
+> `triedb.DBOverride`/`HashDB`-compatible `TrieDB` for the SAE EVM (CGo ffi;
+> **strictly linear proposal chain** — one child per proposal, no branching,
+> matching SAE's sequential execution; `SELFDESTRUCT` via
+> `ffi.PrefixDelete(accountKey)`; `Commit(root)` walks and commits all
+> uncommitted ancestors, batched by a `DeferredCommitInterval`; defaults:
+> 1 MiB cache, 128 revisions in memory, deferred-commit 64). **Unconsumed at Go
+> HEAD** (the saedb Tracker still constructs HashDB) — it stages Go's move of
+> SAE execution state onto Firewood. **No Rust work**: this is Go catching up to
+> the architecture the Rust port already has (`04` §4.2/§4.3 — the M7.12
+> Tracker is Firewood-direct via `ava_evm::FirewoodStateProvider`). Worth
+> re-reading when Go wires it in, as its linear-chain/deferred-commit semantics
+> will then define the differential-parity surface (state roots stay
+> ethhash-identical either way). See `04` §4.2.
 
 ---
 
@@ -1179,6 +1257,65 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > now also `Verify()`s the resulting `RPCConfig` at decode time. **Rust seam:** extend
 > the M7.52 config decode with these two RPC keys + the decode-time verify. Staged as
 > `plan/M7` **M7.57**. **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `ac7452d86c`, #5563 — folded 2026-07-16).**
+> **`vms/transitionvm` — the coreth→SAE migration vehicle.** A new generic
+> `block.ChainVM` that wraps a *pre-transition* and a *post-transition* VM
+> sharing one database/block history, forwarding every call to whichever is
+> active and switching **in-process, once, durably recorded** at
+> `transitionTime`: the transition block is the first block whose timestamp ≥
+> `transitionTime` (built/executed by the *pre* VM); descendants are refused
+> until the node transitions on its accept, then re-parsed and served by the
+> *post* VM. The pre VM must parse post-format blocks (bootstrap from switched
+> peers); the post VM must serve all pre-format history. `node.go` now registers
+> the C-Chain (`constants.EVMID`) as `transitionvm.Factory{Pre: coreth, Post:
+> saevm/cchain, TransitionTime: HeliconTime − 10s, APIDrainTimeout: 15s}` — the
+> 10s lead lets coreth build a final pre-Helicon block despite its ~1s minimum
+> block time (otherwise a pre-transition block could force its child across the
+> Helicon rules boundary and halt the chain). Same commit adds the matching
+> guard on the SAE side: `cchain.BuildHeader` returns `errHeliconUnactivated`
+> when `!IsHeliconActivated(now)` (SAE never builds pre-Helicon). Rust seam: an
+> `ava-saevm-adaptor`-level (or `ava-chains`-level) transition wrapper over the
+> M6 synchronous C-Chain and the M7.23 SAE cchain VM — see `vms/transitionvm/README.md`
+> for the block-boundary state machine. **Non-gating** (Helicon unscheduled) but
+> architecturally load-bearing for the eventual C-Chain migration; staged as
+> `plan/M7` **M7.60**.
+
+> **Upstream delta (avalanchego `e9a4e710d5` #5631 + `43794f3545` #5650 — folded 2026-07-16).**
+> **ACP-226 minimum block delay is now enforced in the SAE C-Chain.** (1)
+> `dynamic.DelayExponent` (the `21` §6.x integrator) gains
+> **`InitialDelayExponent = 7_970_124`** — the smallest exponent whose floored
+> `Delay()` decode reaches the 2000ms initial minimum
+> (`⌊2²⁰·ln(2000)⌋ + 1`) — and `DelayDuration()` (`Delay()` ms as a
+> `time.Duration`). (2) `BuildHeader` **rejects** a build whose time is before
+> `blockTime(parent) + delayExponent(parent).DelayDuration()`
+> (`errBelowMinBlockDelay`) and advances the child's **`MinDelayExcess`** header
+> field via `de.Toward(desired)` (was a zero placeholder), with the node's vote
+> from a new operator-config key **`min-delay-target`** (ms,
+> `DesiredDelayExponent`; nil follows the parent — completing the M7.52 config
+> tri-set with `gas-target`/`min-price-target`). `delayExponent(header)` reads
+> `MinDelayExcess`, defaulting to `InitialDelayExponent`. (3) The engine seam:
+> `sae.VM` gains **`GetPreference() *blocks.Block`**, and the cchain
+> `VM.WaitForEvent` paces block building on
+> `earliestBuildTime(preference) = blockTime(h) + delay` before consulting the
+> event sources; #5650 additionally **throttles successive `WaitForEvent`
+> returns to ≥100ms apart** (`minWaitForEventDelay`, a `utils.Atomic[time.Time]`
+> stamped on success) because txpools only clear after *execution*, so pending
+> txs re-signal while their block is still processing (busy-loop fix; the
+> throttle is engine-pacing only, not consensus). `BlockTime`'s
+> seconds-anchoring survives as `blockTime()` (M7.44 invariant unchanged).
+> Rust seam: `dynamic::DelayExponent` (M7.34) + builder/min-delay check +
+> `wait_for_event` pacing in `ava-saevm-cchain`. **Non-gating** (Helicon
+> unscheduled); staged as `plan/M7` **M7.63**. Metrics counterpart: `18` §2.11
+> (`min_block_delay_seconds`).
+
+> **Upstream delta (avalanchego `1e7dc7f098`, #5659 — folded 2026-07-16).**
+> Helicon **removes the ACP-176 state-space padding from `header.Extra`**:
+> `VerifyExtra` accepts any length under Helicon and warp-predicate bytes start
+> at offset **0** (`predicateBytesOffset`), so `BuildBlock` no longer pads a
+> zeroed `acp176.StateSize` prefix before the predicate bytes. Wire details in
+> `10` §9 (header-tail delta); staged as `plan/M7` **M7.65**. **Non-gating**
+> (Helicon unscheduled).
 
 ### Reuse decision (binding cross-ref to `10`)
 

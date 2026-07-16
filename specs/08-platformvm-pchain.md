@@ -552,6 +552,20 @@ when a staker's end time is reached); `AdvanceTimeTx` is forbidden (time advance
 block timestamp instead). `block/executor/` ports `Verify`/`Accept`/`Reject`/`Options` and the
 acceptor that flushes diffs and notifies `validators::Manager::on_accepted_block_id`.
 
+> **Upstream delta (avalanchego `25c1aa3dcf`, #5531 — folded 2026-07-16).**
+> **ACP-267 raises the expected uptime for primary-network validators to 90%**
+> — but only as a **block-builder/voting preference**, not a validity rule: the
+> proposal-block `options.prefersCommit` (`block/executor/options.go`) now uses
+> `expectedUptimePercentage = 0.9` when
+> `IsHeliconActivated(primaryNetworkValidator.StartTime)`, keeping the
+> configured `UptimePercentage` (80%) for validators that started pre-Helicon
+> (transformed-subnet stakers keep their `TransformSubnetTx.UptimeRequirement`).
+> `options` gains an `upgradeConfig` field, threaded from
+> `txExecutorBackend.Config.UpgradeConfig`. No wire/state change; a node
+> preferring differently cannot fork, only vote differently. **Helicon-gated /
+> dormant.** Rust seam: the M4.20 options/`prefers_commit` — staged as
+> `plan/M4` **M4.33**.
+
 ### 4.3 Block builder + mempool
 
 `txs/mempool` is a `gossip::Gossipable` tx pool (FIFO + drop-on-full, deduped by tx ID), shared
@@ -622,6 +636,29 @@ pub fn calculate(&self, staked_duration: Duration, staked_amount: u64, current_s
 "delay-rounding" optimization: try `shares * total / 1e6` via checked mul; on overflow fall back to
 `(PercentDenominator - shares) * (total / PercentDenominator)`. **Reward math has zero tolerance**
 — differential + proptest against Go (§9).
+
+> **Upstream delta (avalanchego `317f7fd1d6`, #5527 — folded 2026-07-16).**
+> **ACP-285 lowers the primary-network `MinConsumptionRate` to 7.5%**
+> (`75_000/PercentDenominator`), ramped in linearly over **90 days** from
+> `HeliconTime`. Go restructures the calculator seam: `Calculator.Calculate`
+> gains a leading **`stakeStartTime time.Time`** param (ignored by the base
+> `calculator` above — its formula is unchanged); a new
+> **`NewPrimaryNetworkCalculator(rewardConfig, upgradeConfig)`** wrapper derives
+> an effective config per staker via `configForStakeStart`: if
+> `!IsHeliconActivated(stakeStartTime)` or already at the target (or the
+> network's `MaxConsumptionRate` is below the target), the config is unchanged;
+> otherwise `MinConsumptionRate` moves toward `75_000` by
+> `fullChange·elapsed/90d` (big.Int, floor) until the ramp ends, then jumps to
+> the target — moving *up* toward the target for custom networks configured
+> below it. Knock-ons: `GetRewardsCalculator(backend, …)` becomes
+> `GetRewardsCalculator(rewardConfig, upgradeConfig, parentState, subnetID)`
+> (primary network now constructs the wrapper per call; `Backend.Rewards` is
+> deleted, `state.New` takes `RewardConfig` not a `Calculator`), and
+> `rewards.Calculate` is called with `stakerToRemove.StartTime`. Subnet
+> (transformed) stakers are untouched. **Helicon-gated / dormant** (keyed on the
+> staker's *start time*, so pre-Helicon stakers keep the old rate). Rust seam:
+> the M4.7 `calculate` above + the M4.17 reward path — staged as `plan/M4`
+> **M4.32**.
 
 ---
 

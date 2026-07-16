@@ -893,6 +893,21 @@ coreth header is not plain-`alloy::Header`-decodable — the extras above are wh
 > `plan/M7` M7.46. **Non-gating** (Helicon unscheduled), but a wire/header-format
 > parity constraint. Append to the header-tail table above as a Helicon row.
 
+> **Upstream delta (avalanchego `1e7dc7f098`, #5659 — folded 2026-07-16).**
+> **Helicon drops the ACP-176 state space from `header.Extra`** — a
+> wire/header-format change. `customheader.VerifyExtra` gains a leading
+> `case rules.IsHelicon: return nil` (any `Extra` length is syntactically valid;
+> the ACP-176 fee state now lives in the dedicated Helicon header fields, e.g.
+> `TargetExponent`), and predicate placement is factored into
+> `predicateBytesOffset(rules)`: **0 under Helicon** (predicate bytes start at
+> `Extra[0]`), `acp176.StateSize` under Fortuna, `ap3.WindowSize` before. So the
+> SAE C-Chain's `BuildBlock` no longer pads `Extra` with a zeroed ACP-176 state
+> before the warp-predicate bytes (the `SetPredicateBytesInExtra` call survives
+> only until coreth removal). Rust seam: the M7.50 predicate-bytes placement in
+> the `ava-saevm-cchain` builder + any `Extra` syntactic checks must key the
+> offset on the fork. **Non-gating** (Helicon unscheduled); staged as `plan/M7`
+> **M7.65**. See `11` §8.
+
 > **Upstream delta (avalanchego `dbf0f71dc1`, #5573 — folded 2026-06-24).** Four
 > further optional header-tail fields — **`SettledHeight`, `SettledGasUnix`,
 > `SettledGasNumerator`, `SettledExcess`** (all `*uint64`) — are appended after

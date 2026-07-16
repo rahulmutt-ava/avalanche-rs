@@ -827,6 +827,22 @@ Wave 7 (differential sync-to-tip + gate)
 
 ---
 
+### Task M4.32: ACP-285 — reduce the primary-network min consumption rate to 7.5% **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Crate:** ava-platformvm (`reward` + `txs/executor`)  ·  **Depends on:** M4.7 (reward calculator), M4.17 (reward path)  ·  **Spec:** 08 §5 upstream-delta (Go `317f7fd1d6` #5527)
+> **Upstream parity (Go `317f7fd1d6`, #5527).** ACP-285 lowers the primary-network `MinConsumptionRate` to `75_000/PercentDenominator` (7.5%), ramped in linearly over 90 days from `HeliconTime`, keyed on the **staker's start time**. Seam changes: `Calculator.Calculate` gains a leading `stakeStartTime` param (base formula unchanged); a `NewPrimaryNetworkCalculator(rewardConfig, upgradeConfig)` wrapper derives the effective config per staker (`configForStakeStart` — unchanged pre-Helicon / at-target / max-below-target; otherwise `fullChange·elapsed/90d` big.Int floor toward the target, in either direction); `GetRewardsCalculator(rewardConfig, upgradeConfig, parentState, subnetID)` replaces the `Backend.Rewards` singleton; `state.New` takes the config, not a calculator. Subnet stakers untouched.
+> **Rust task:** mirror on the M4.7 `calculate` (add `stake_start_time`; primary-network wrapper deriving the ramped config) and thread the upgrade config through the M4.17 reward path. Reward math has **zero tolerance** — extend the Go-vector differential with pre-Helicon / mid-ramp / post-ramp / custom-network-below-target cases. **Helicon-gated / dormant** — non-gating for the milestone.
+**Files (anticipated):** `crates/ava-platformvm/src/reward/calculator.rs`, `crates/ava-platformvm/src/txs/executor/state_changes.rs`, `tests/`.
+
+---
+
+### Task M4.33: ACP-267 — prefer commit only at 90% uptime for post-Helicon primary validators **[UPSTREAM DELTA — added 2026-07-16]** ⬜ TODO
+**Crate:** ava-platformvm (`block/executor` options)  ·  **Depends on:** M4.20 (options/oracle blocks)  ·  **Spec:** 08 §4.2 upstream-delta (Go `25c1aa3dcf` #5531)
+> **Upstream parity (Go `25c1aa3dcf`, #5531).** The proposal-block `options.prefersCommit` uses `expectedUptimePercentage = 0.9` for primary-network validators whose `StartTime` is at/after Helicon activation (pre-Helicon starters keep the configured 80%; transformed-subnet stakers keep their `UptimeRequirement`). A **voting preference only** — no validity/wire/state change, so no fork risk; nodes just vote against rewarding low-uptime post-Helicon validators. `options` gains an `upgradeConfig` field.
+> **Rust task:** thread the upgrade config into the M4.20 `prefers_commit` and apply the 90% threshold keyed on the validator's start time; unit tests around the Helicon boundary (start just-before vs just-after). **Helicon-gated / dormant** — non-gating for the milestone.
+**Files (anticipated):** `crates/ava-platformvm/src/block/executor/options.rs`, `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Covered by task(s) | Notes / deferrals |
@@ -842,9 +858,9 @@ Wave 7 (differential sync-to-tip + gate)
 | 08 §3.4 ValidatorMetadata codec v2 + L1Validator | M4.11, M4.12 | |
 | 08 §3.5 supply & reward state | M4.13, M4.17 | |
 | 08 §4.1 Block enum + byte-exact codec + block_id | M4.5 | |
-| 08 §4.2 proposal/commit/abort oracle | M4.17, M4.20 | |
+| 08 §4.2 proposal/commit/abort oracle | M4.17, M4.20, **M4.33** (ACP-267 90% uptime preference) | |
 | 08 §4.3 block builder + mempool | M4.25, M4.26 | |
-| 08 §5 reward formula (exact) + Split | M4.7 | |
+| 08 §5 reward formula (exact) + Split | M4.7, **M4.32** (ACP-285 min-consumption-rate ramp) | |
 | 08 §6 dynamic gas fees (Etna) + ACP-77 L1 lifecycle | M4.8, M4.9, M4.19 | |
 | 08 §7 ValidatorState serving | M4.21 | |
 | 08 §7.1 validator-diff windowing (inverseHeight) | M4.14, M4.21 | the marquee differential M4.23 |

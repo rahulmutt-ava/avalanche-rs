@@ -899,6 +899,23 @@ impl GasTime {
 > are the §6.x math; this is the integrator→gas-target wiring. See `11` §8
 > upstream-delta; ported as `plan/M7` **M7.54**. **Non-gating** (Helicon unscheduled).
 
+> **Upstream delta (avalanchego `e9a4e710d5`, #5631 — folded 2026-07-16).** The
+> `DelayExponent` integrator (row 2 of the table above, **ACP-226**) is now
+> *consumed* in the SAE C-Chain block lifecycle — the min-block-delay analog of
+> the #5441/#5587 price/target consumptions. Two additions to the row's math
+> surface: **`InitialDelayExponent = 7_970_124`** — unlike the other two
+> integrators' `0` floors, this is the smallest exponent whose floored `Delay()`
+> decode reaches the **2000ms initial minimum block delay**, i.e.
+> `⌊K·ln(2000/minimum)⌋ + 1 = ⌊2²⁰·ln(2000)⌋ + 1` (genesis + absent-field
+> default) — and **`DelayDuration()`**, the ms `Delay()` as a `time.Duration`.
+> `BuildHeader` enforces child-time ≥ parent-time + delay, advances the child's
+> `MinDelayExcess` via `Toward(desired)` from operator config
+> `min-delay-target` → `DesiredDelayExponent`, and the engine paces building on
+> the same delay (`WaitForEvent`). Still **no formula change** —
+> `Delay()`/`Toward`/`Desired*` are the §6.x math; this is the
+> integrator→min-delay wiring. See `11` §8 upstream-delta; ported as `plan/M7`
+> **M7.63**. **Non-gating** (Helicon unscheduled).
+
 ## 7. Mechanism → fork → crate
 
 Fork gating uses the shared `Fork`/`UpgradeConfig` model in §03 / §11.
