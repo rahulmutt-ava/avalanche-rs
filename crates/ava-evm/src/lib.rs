@@ -45,6 +45,10 @@ pub mod builder;
 // ChainVm adapter (§3) — M6.10.
 pub mod vm;
 
+// EVM mempool: coreth-parity admission validation, storage, eviction
+// (cchain-tx-pipeline design doc 2026-07-17, task 1).
+pub mod mempool;
+
 // Atomic X<->C txs: types/codec, mempool, backend, atomic trie, state hook,
 // semantic verify (G3, §6) — M6.14..M6.18.
 pub mod atomic;
