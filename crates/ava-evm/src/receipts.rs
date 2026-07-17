@@ -81,6 +81,17 @@ pub struct TxReceiptRecord {
     pub logs: Vec<Log>,
     /// The EIP-2718 tx type byte.
     pub tx_type: u8,
+    /// This tx's first log's block-wide index: the total count of logs
+    /// emitted by every earlier tx in the same block (0 for the block's
+    /// first tx, or any tx whose predecessors emitted no logs). Mirrors
+    /// go-ethereum's `core/types.Receipts.DeriveFields`, which walks a
+    /// block's receipts in order and stamps each log's `Index` as a running
+    /// block-wide counter (`logIndex += 1` per log, carried across tx
+    /// boundaries) rather than restarting per tx — `eth_getTransactionReceipt`
+    /// (`crate::rpc::eth::EthRpc::get_transaction_receipt`) adds this to a
+    /// log's position within [`Self::logs`] to report the true block-wide
+    /// `logIndex` coreth/geth clients expect.
+    pub first_log_index: u64,
 }
 
 /// The accepted-tx index: `tx_hash -> TxReceiptRecord`, the seam Task 4's
@@ -253,6 +264,7 @@ mod tests {
             success: true,
             logs: Vec::new(),
             tx_type: 2,
+            first_log_index: 0,
         };
 
         assert_eq!(index.get(&hash), None, "unrecorded hash misses");
@@ -262,6 +274,65 @@ mod tests {
             index.get(&B256::repeat_byte(0x99)),
             None,
             "unknown hash still misses"
+        );
+    }
+
+    /// `first_log_index` running-offset arithmetic (the block-wide
+    /// `logIndex` semantics `block.rs::index_accepted_receipts` computes):
+    /// tx 0 emits 2 logs, tx 1 emits 0, tx 2 emits 3 -> first_log_index is
+    /// [0, 2, 2] and the block's total log count is 5. Mirrors go-ethereum
+    /// `core/types.Receipts.DeriveFields`'s running `logIndex` counter,
+    /// carried across tx boundaries rather than reset per tx.
+    #[test]
+    fn first_log_index_accumulates_across_txs_block_wide() {
+        fn logs(n: usize) -> Vec<Log> {
+            (0..n)
+                .map(|_| Log::new_unchecked(Address::ZERO, Vec::new(), Bytes::new()))
+                .collect()
+        }
+        let per_tx_log_counts = [2usize, 0, 3];
+        let mut running = 0u64;
+        let mut first_log_indices = Vec::new();
+        for &n in &per_tx_log_counts {
+            first_log_indices.push(running);
+            running = running
+                .checked_add(u64::try_from(n).expect("log count fits u64"))
+                .expect("running log count must not overflow u64");
+        }
+        assert_eq!(
+            first_log_indices,
+            vec![0, 2, 2],
+            "first_log_index is the running block-wide log count BEFORE this tx's own logs"
+        );
+        assert_eq!(running, 5, "block-wide total log count across all 3 txs");
+
+        // Sanity: a record built with the computed offset reports the
+        // expected block-wide logIndex for each of its own logs (offset +
+        // local position), matching what `EthRpc::get_transaction_receipt`
+        // computes.
+        let record = TxReceiptRecord {
+            tx_hash: B256::repeat_byte(0x01),
+            block_hash: B256::repeat_byte(0x02),
+            block_number: 7,
+            tx_index: 2,
+            from: Address::repeat_byte(0x03),
+            to: None,
+            contract_address: Some(Address::repeat_byte(0x04)),
+            gas_used: 50_000,
+            cumulative_gas_used: 90_000,
+            effective_gas_price: 1,
+            success: true,
+            logs: logs(3),
+            tx_type: 0,
+            first_log_index: first_log_indices[2],
+        };
+        let block_wide_indices: Vec<u64> = (0..record.logs.len())
+            .map(|i| record.first_log_index + u64::try_from(i).expect("fits u64"))
+            .collect();
+        assert_eq!(
+            block_wide_indices,
+            vec![2, 3, 4],
+            "tx 2's 3 logs must report block-wide logIndex 2,3,4 (after tx 0's 2 logs)"
         );
     }
 }

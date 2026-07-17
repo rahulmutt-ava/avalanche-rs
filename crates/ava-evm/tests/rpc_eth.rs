@@ -403,7 +403,11 @@ fn get_transaction_receipt_null_when_unknown_then_served_after_accept() {
     );
 
     // Seed the AcceptedTxIndex directly with a full TxReceiptRecord (a
-    // contract-creation success, 2 logs) and assert the full JSON shape.
+    // contract-creation success, 2 logs, preceded in the (simulated) block by
+    // 3 logs from earlier txs) and assert the full JSON shape — including
+    // that `logIndex` is block-wide (go-ethereum `DeriveFields` semantics:
+    // `first_log_index` + this log's position within the tx), not reset to 0
+    // per tx.
     let tx_hash = B256::repeat_byte(0x42);
     let block_hash = B256::repeat_byte(0x05);
     let contract_address = Address::repeat_byte(0x09);
@@ -432,6 +436,7 @@ fn get_transaction_receipt_null_when_unknown_then_served_after_accept() {
         success: true,
         logs: vec![log0.clone(), log1.clone()],
         tx_type: 0,
+        first_log_index: 3,
     }]);
 
     let got = rpc
@@ -466,9 +471,15 @@ fn get_transaction_receipt_null_when_unknown_then_served_after_accept() {
     assert_eq!(logs[0]["transactionHash"], data_hex(tx_hash.as_slice()));
     assert_eq!(logs[0]["transactionIndex"], "0x2");
     assert_eq!(logs[0]["blockNumber"], "0x5");
-    assert_eq!(logs[0]["logIndex"], "0x0");
+    assert_eq!(
+        logs[0]["logIndex"], "0x3",
+        "block-wide logIndex = first_log_index (3) + local position (0)"
+    );
     assert_eq!(logs[0]["removed"], false);
-    assert_eq!(logs[1]["logIndex"], "0x1");
+    assert_eq!(
+        logs[1]["logIndex"], "0x4",
+        "block-wide logIndex = first_log_index (3) + local position (1)"
+    );
     assert_eq!(
         logs[1]["topics"],
         json!([

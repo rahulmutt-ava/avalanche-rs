@@ -327,11 +327,11 @@ impl EthRpc {
     /// same `Bloom::accrue_log` fold [`crate::builder`] uses for the
     /// block-level bloom, scoped to this one tx's logs.
     ///
-    /// Each `logs[]` entry's `logIndex` is numbered from 0 within this tx's
-    /// own log list — [`crate::receipts::TxReceiptRecord`] does not carry the
-    /// block-wide starting log offset (out of Task 3's scope), so this is a
-    /// documented simplification versus coreth/geth's true block-wide
-    /// `logIndex`.
+    /// Each `logs[]` entry's `logIndex` is the true block-wide index
+    /// (go-ethereum `core/types.Receipts.DeriveFields` semantics):
+    /// [`crate::receipts::TxReceiptRecord::first_log_index`] (the running
+    /// count of logs emitted by every earlier tx in the block) plus this
+    /// log's position within [`crate::receipts::TxReceiptRecord::logs`].
     ///
     /// # Errors
     /// Currently infallible (a lookup miss returns `Ok(Value::Null)`), but
@@ -346,7 +346,11 @@ impl EthRpc {
             .iter()
             .enumerate()
             .map(|(i, log)| {
-                let log_index = u64::try_from(i).unwrap_or(u64::MAX);
+                let local_index = u64::try_from(i).unwrap_or(u64::MAX);
+                // Block-wide logIndex (go-ethereum DeriveFields semantics):
+                // the running count of every earlier tx's logs, plus this
+                // log's position within its own tx.
+                let log_index = rec.first_log_index.saturating_add(local_index);
                 let topics: Vec<Value> = log.topics().iter().map(|t| data(t.as_slice())).collect();
                 json!({
                     "address": data(log.address.as_slice()),

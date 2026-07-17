@@ -1124,6 +1124,11 @@ impl EvmBlock {
         let block_number = self.number();
 
         let mut cumulative_before = 0u64;
+        // Block-wide running log counter (go-ethereum `core/types.Receipts.
+        // DeriveFields`: each log's `Index` is a running count across the
+        // WHOLE block, not reset per tx). `first_log_index` for tx N is this
+        // counter's value BEFORE tx N's own logs are added.
+        let mut log_count_before = 0u64;
         for (idx, (tx, receipt)) in txs.iter().zip(receipts.iter()).enumerate() {
             let tx_hash = *tx.tx_hash();
 
@@ -1132,6 +1137,13 @@ impl EvmBlock {
                 .checked_sub(cumulative_before)
                 .ok_or(Error::FeeOverflow)?;
             cumulative_before = receipt.cumulative_gas_used;
+
+            let first_log_index = log_count_before;
+            let this_tx_log_count =
+                u64::try_from(receipt.logs.len()).map_err(|_| Error::FeeOverflow)?;
+            log_count_before = log_count_before
+                .checked_add(this_tx_log_count)
+                .ok_or(Error::FeeOverflow)?;
 
             // coreth/geth `types.Receipt.ContractAddress`: the CREATE address
             // derived from the sender + the tx's OWN nonce (alloy
@@ -1170,6 +1182,7 @@ impl EvmBlock {
                 success: receipt.success,
                 logs: receipt.logs.clone(),
                 tx_type: receipt.ty(),
+                first_log_index,
             };
 
             // Write the KV row THEN record into the in-memory index for the

@@ -336,6 +336,17 @@ fn accept_persists_receipts_and_indexes_txs() {
         "effective_gas_price ({}) >= base_fee ({base_fee})",
         record.effective_gas_price
     );
+    // `first_log_index` (cchain-tx-pipeline task 4 follow-up, go-ethereum
+    // `DeriveFields` block-wide logIndex semantics): this fixture's block1
+    // carries exactly one EVM tx, so its first_log_index is trivially 0 (no
+    // earlier tx in the block to have emitted logs). The cross-tx running-sum
+    // accumulation itself is unit-tested directly in
+    // `receipts::tests::first_log_index_accumulates_across_txs_block_wide`
+    // (no multi-tx fixture is available here).
+    assert_eq!(
+        record.first_log_index, 0,
+        "the block's only (first) tx has no earlier tx's logs to offset past"
+    );
 }
 
 /// cchain-tx-pipeline task 3, I1 review fix: a post-append indexing failure
