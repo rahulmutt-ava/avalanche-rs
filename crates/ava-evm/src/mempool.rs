@@ -28,7 +28,8 @@
 //! precedent), so a block-builder driver can park on `notified()` and wake
 //! when the pool gains work.
 
-use std::collections::{BTreeMap, HashMap};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use ava_evm_reth::{Address, B256, ConsensusTx, RecoveredTx, TransactionSigned, U256};
@@ -144,8 +145,9 @@ pub enum EvmMempoolError {
     #[error("txpool is full")]
     PoolFull,
     /// Same-nonce replacement without a strictly higher fee cap (coreth
-    /// `legacypool` `ErrReplaceUnderpriced`, simplified to strict-greater —
-    /// coreth's real price-bump percentage is not modeled here).
+    /// `core/txpool/errors.go:44-46` `ErrReplaceUnderpriced`, simplified to
+    /// strict-greater — coreth's real price-bump percentage is not modeled
+    /// here).
     #[error("replacement transaction underpriced")]
     ReplaceUnderpriced,
     /// coreth `core/txpool/validation.go` max-init-code-size (EIP-3860).
@@ -208,6 +210,42 @@ impl Default for AdmissionRules {
 struct PoolEntry {
     tx: RecoveredTx,
     arrival: u64,
+}
+
+/// One sender's current head-of-run priority, as tracked by the
+/// [`EvmMempool::best_txs`] merge heap: ordered by `fee_cap` descending, ties
+/// broken by `arrival` ascending (earlier arrival wins). `address` is carried
+/// along purely as a payload (which per-sender run to advance on pop) and
+/// does not participate in ordering.
+struct HeapItem {
+    fee_cap: u128,
+    arrival: u64,
+    address: Address,
+}
+
+impl PartialEq for HeapItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.fee_cap == other.fee_cap && self.arrival == other.arrival
+    }
+}
+
+impl Eq for HeapItem {}
+
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Higher fee cap first; on a tie, earlier arrival (smaller sequence
+        // number) first — `BinaryHeap` is a max-heap, so ties compare
+        // `Reverse(arrival)` to make the smaller arrival the "greater" item.
+        self.fee_cap
+            .cmp(&other.fee_cap)
+            .then_with(|| Reverse(self.arrival).cmp(&Reverse(other.arrival)))
+    }
 }
 
 /// The C-Chain EVM mempool. Single-threaded by design (mirrors
@@ -312,6 +350,104 @@ impl EvmMempool {
             }
             if pooled.is_empty() {
                 self.by_sender.remove(address);
+            }
+        }
+    }
+
+    /// A snapshot of currently pooled txs, in priority order for block
+    /// building: each sender's pooled nonces form a contiguous run (by
+    /// construction — [`Self::add_local`] rejects gaps), and this merges
+    /// those per-sender runs by descending `max_fee_per_gas`, ties broken by
+    /// earlier arrival, while preserving each sender's own nonce order.
+    ///
+    /// DIVERGENCE (documented): coreth's `miner/ordering.go`
+    /// `TransactionsByPriceAndNonce` orders by *effective tip at the block's
+    /// base fee* (`GasFeeCap - baseFee`, capped at `GasTipCap`), which needs a
+    /// base fee to evaluate. This pool orders by raw fee cap instead, because
+    /// the base fee here is only known inside `build_on`, whose
+    /// `pack_evm_txs` re-filters each candidate for base-fee affordability as
+    /// it packs (`builder.rs:313-330`) — an underpriced-at-the-actual-base-fee
+    /// tx is dropped there, not admitted into the block, regardless of the
+    /// order `best_txs` hands it out in. For txs from the same sender, both
+    /// orderings agree: nonce order is preserved either way.
+    ///
+    /// Clones the txs out; the pool itself is unchanged (retains everything
+    /// until [`Self::on_block_accepted`]).
+    #[must_use]
+    pub fn best_txs(&self) -> Vec<RecoveredTx> {
+        let mut runs: HashMap<Address, VecDeque<&PoolEntry>> =
+            HashMap::with_capacity(self.by_sender.len());
+        let mut heap: BinaryHeap<HeapItem> = BinaryHeap::with_capacity(self.by_sender.len());
+        for (address, pooled) in &self.by_sender {
+            let run: VecDeque<&PoolEntry> = pooled.values().collect();
+            if let Some(head) = run.front() {
+                heap.push(HeapItem {
+                    fee_cap: ConsensusTx::max_fee_per_gas(head.tx.inner()),
+                    arrival: head.arrival,
+                    address: *address,
+                });
+            }
+            runs.insert(*address, run);
+        }
+
+        let mut out = Vec::with_capacity(self.by_hash.len());
+        while let Some(item) = heap.pop() {
+            let Some(run) = runs.get_mut(&item.address) else {
+                continue;
+            };
+            let Some(entry) = run.pop_front() else {
+                continue;
+            };
+            out.push(entry.tx.clone());
+            if let Some(next) = run.front() {
+                heap.push(HeapItem {
+                    fee_cap: ConsensusTx::max_fee_per_gas(next.tx.inner()),
+                    arrival: next.arrival,
+                    address: item.address,
+                });
+            }
+        }
+        out
+    }
+
+    /// Maintenance after a block is accepted: for each `(sender, nonce,
+    /// hash)` of an included tx, drops that exact hash if still pooled, and
+    /// then drops every pooled tx from `sender` with nonce <= that nonce
+    /// (sender-local stale eviction — a nonce at or below one the chain just
+    /// consumed can never execute, whether or not it is the exact tx that
+    /// landed). Keeps `by_sender` and `by_hash` in sync throughout.
+    ///
+    /// DIVERGENCE (documented): coreth's `legacypool` has no equivalent
+    /// direct call — it demotes stale/executed nonces via a state-driven pool
+    /// reorg on each new head (`legacypool.reset` ->
+    /// `demoteUnexecutables`/`promoteExecutables`,
+    /// `core/txpool/legacypool/legacypool.go`), re-reading account nonces
+    /// from the new head's state. This pool has no chain-state hook, so the
+    /// eviction is performed directly here, keyed off the block's own
+    /// included-tx list rather than a fresh state read.
+    pub fn on_block_accepted(&mut self, included: &[(Address, u64, B256)]) {
+        for (address, nonce, hash) in included {
+            // Drop the included tx by its exact hash, wherever it is
+            // currently indexed (normally at `(address, *nonce)`, but looked
+            // up independently for robustness).
+            if let Some((hash_address, hash_nonce)) = self.by_hash.get(hash).copied() {
+                self.remove_entry(&hash_address, hash_nonce);
+            }
+
+            // Sender-local stale eviction: every pooled nonce <= the included
+            // nonce is no longer valid regardless of hash.
+            let stale_nonces: Vec<u64> = self
+                .by_sender
+                .get(address)
+                .map(|pooled| {
+                    pooled
+                        .range(..=*nonce)
+                        .map(|(pooled_nonce, _)| *pooled_nonce)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for stale_nonce in stale_nonces {
+                self.remove_entry(address, stale_nonce);
             }
         }
     }
@@ -842,5 +978,181 @@ mod tests {
             "B must be evicted (pool-wide cheapest)"
         );
         assert_eq!(pool.len(), 2, "eviction keeps the pool at max_size");
+    }
+
+    #[test]
+    fn best_txs_orders_across_senders_by_fee_cap_nonce_within_sender() {
+        // sender A (key 0x11): nonces 0,1 at 5 gwei; sender B (key 0x22):
+        // nonce 0 at 10 gwei. Expect [B0, A0, A1] — B first (higher fee cap),
+        // then A's nonces strictly in order.
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+
+        let a0 = signed_legacy_tx_from(0x11, 0, 5_000_000_000, 21_000, 1);
+        let a1 = signed_legacy_tx_from(0x11, 1, 5_000_000_000, 21_000, 1);
+        let b0 = signed_legacy_tx_from(0x22, 0, 10_000_000_000, 21_000, 1);
+        let hash_a0 = *a0.hash();
+        let hash_a1 = *a1.hash();
+        let hash_b0 = *b0.hash();
+
+        pool.add_local(a0, &sender, &rules).expect("admit a0");
+        pool.add_local(a1, &sender, &rules).expect("admit a1");
+        pool.add_local(b0, &sender, &rules).expect("admit b0");
+
+        let ordered = pool.best_txs();
+        let hashes: Vec<_> = ordered.iter().map(|tx| *tx.hash()).collect();
+        assert_eq!(
+            hashes,
+            vec![hash_b0, hash_a0, hash_a1],
+            "EvmMempool::best_txs() must order B (higher fee cap) before A, \
+             and A's own nonces strictly in order"
+        );
+        assert_eq!(pool.len(), 3, "best_txs() clones out, pool retains txs");
+    }
+
+    #[test]
+    fn best_txs_preserves_contiguous_nonce_run_within_sender() {
+        // Contiguity invariant: gaps cannot exist by construction (rejected at
+        // admission), so add_local of 0,1,2 must yield all three, in order,
+        // from best_txs().
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+
+        let tx0 = signed_legacy_tx(0, 5_000_000_000, 21_000, 1);
+        let tx1 = signed_legacy_tx(1, 5_000_000_000, 21_000, 1);
+        let tx2 = signed_legacy_tx(2, 5_000_000_000, 21_000, 1);
+        let hash0 = *tx0.hash();
+        let hash1 = *tx1.hash();
+        let hash2 = *tx2.hash();
+
+        pool.add_local(tx0, &sender, &rules).expect("admit 0");
+        pool.add_local(tx1, &sender, &rules).expect("admit 1");
+        pool.add_local(tx2, &sender, &rules).expect("admit 2");
+
+        let ordered = pool.best_txs();
+        let hashes: Vec<_> = ordered.iter().map(|tx| *tx.hash()).collect();
+        assert_eq!(
+            hashes,
+            vec![hash0, hash1, hash2],
+            "EvmMempool::best_txs() must emit a sender's contiguous nonce run in order"
+        );
+    }
+
+    #[test]
+    fn best_txs_ties_broken_by_earlier_arrival() {
+        // Two senders at the SAME fee cap: the earlier-arriving head tx must
+        // come first (arrival tie-break, not sender-address order).
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+
+        // 0x22 arrives first, then 0x11 — both at the same fee cap.
+        let first = signed_legacy_tx_from(0x22, 0, 5_000_000_000, 21_000, 1);
+        let second = signed_legacy_tx_from(0x11, 0, 5_000_000_000, 21_000, 1);
+        let hash_first = *first.hash();
+        let hash_second = *second.hash();
+
+        pool.add_local(first, &sender, &rules).expect("admit first");
+        pool.add_local(second, &sender, &rules)
+            .expect("admit second");
+
+        let ordered = pool.best_txs();
+        let hashes: Vec<_> = ordered.iter().map(|tx| *tx.hash()).collect();
+        assert_eq!(
+            hashes,
+            vec![hash_first, hash_second],
+            "EvmMempool::best_txs() must break fee-cap ties by earlier arrival, not address order"
+        );
+    }
+
+    #[test]
+    fn on_block_accepted_drops_included_and_stale() {
+        // Pool: A nonces 0,1,2. Block includes (A, 1, hash_of_1). Expect
+        // nonces 0 AND 1 gone (<= included), nonce 2 retained.
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+        let tx0 = signed_legacy_tx(0, 5_000_000_000, 21_000, 1);
+        let tx1 = signed_legacy_tx(1, 5_000_000_000, 21_000, 1);
+        let tx2 = signed_legacy_tx(2, 5_000_000_000, 21_000, 1);
+        let address = tx0.signer();
+        let hash0 = *tx0.hash();
+        let hash1 = *tx1.hash();
+        let hash2 = *tx2.hash();
+
+        pool.add_local(tx0, &sender, &rules).expect("admit 0");
+        pool.add_local(tx1, &sender, &rules).expect("admit 1");
+        pool.add_local(tx2, &sender, &rules).expect("admit 2");
+        assert_eq!(pool.len(), 3);
+
+        pool.on_block_accepted(&[(address, 1, hash1)]);
+
+        assert!(
+            !pool.contains(&hash0),
+            "nonce 0 <= included nonce 1 must be dropped"
+        );
+        assert!(
+            !pool.contains(&hash1),
+            "the included tx itself must be dropped"
+        );
+        assert!(
+            pool.contains(&hash2),
+            "nonce 2 > included nonce 1 must be retained"
+        );
+        assert_eq!(pool.len(), 1, "EvmMempool::len() after on_block_accepted");
+    }
+
+    #[test]
+    fn on_block_accepted_bookkeeping_stays_coherent() {
+        // Plain bookkeeping assertions across two senders: len()/is_empty()/
+        // contains() must stay coherent (by_hash and by_sender in sync) after
+        // a partial removal.
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+        let a0 = signed_legacy_tx_from(0x11, 0, 5_000_000_000, 21_000, 1);
+        let b0 = signed_legacy_tx_from(0x22, 0, 5_000_000_000, 21_000, 1);
+        let address_a = a0.signer();
+        let address_b = b0.signer();
+        let hash_a0 = *a0.hash();
+        let hash_b0 = *b0.hash();
+        pool.add_local(a0, &sender, &rules).expect("admit a0");
+        pool.add_local(b0, &sender, &rules).expect("admit b0");
+        assert_eq!(pool.len(), 2);
+        assert!(!pool.is_empty());
+
+        // Removing A's only pooled tx must fully clear A's by_sender entry
+        // while leaving B untouched: no dangling empty per-sender maps, no
+        // orphaned by_hash entries.
+        pool.on_block_accepted(&[(address_a, 0, hash_a0)]);
+
+        assert!(!pool.contains(&hash_a0));
+        assert!(pool.contains(&hash_b0));
+        assert_eq!(pool.len(), 1, "EvmMempool::len() must reflect by_hash size");
+        assert!(!pool.is_empty());
+
+        pool.on_block_accepted(&[(address_b, 0, hash_b0)]);
+        assert!(
+            pool.is_empty(),
+            "EvmMempool::is_empty() after draining both senders"
+        );
+        assert_eq!(pool.len(), 0);
     }
 }
