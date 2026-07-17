@@ -10,6 +10,8 @@ use std::process::Command;
 
 use ava_genesis::Chain;
 use ava_snow::EngineState;
+use ava_types::id::Id;
+use ava_validators::state::ValidatorState;
 use avalanchers::wiring::chains::{
     Sent, boot_in_process_pchain, boot_in_process_pchain_to_normalop, build_in_process_chain,
     register_test_vm_factory,
@@ -60,6 +62,28 @@ async fn boots_real_pchain_to_bootstrapping() {
         handle.genesis_id, expected_genesis,
         "VM initialized at the real P-Chain genesis"
     );
+
+    // Regression pin for the loopback/network windower-state switch (M9.15
+    // proposal initiation P2 nested-insert #2): this in-process
+    // `RecordingSender` boot has no real genesis staker identity, so the
+    // windower must stay on the synthetic self-only `FixedState` — exactly
+    // ONE entry (the freshly-generated self node, weight 1) — even though
+    // `network_id` here (Mainnet) has a real (much larger) genesis validator
+    // set of its own. If `boot_chain`'s `use_genesis_validator_state` literal
+    // were ever flipped to `true`, this would instead see Mainnet's genesis
+    // validators and fail.
+    let windower_set = handle
+        .validator_state
+        .get_validator_set(0, Id::EMPTY)
+        .await
+        .expect("loopback windower validator set");
+    assert_eq!(
+        windower_set.len(),
+        1,
+        "loopback boot keeps the synthetic self-only FixedState, not the network's genesis set"
+    );
+    let self_output = windower_set.values().next().expect("the single self entry");
+    assert_eq!(self_output.weight, 1, "loopback self weight is the flat 1");
 
     // Poll the shared ConsensusContext until the handler flips the engine into
     // `Bootstrapping` (virtual time; bounded yield loop, no wall-clock sleep).

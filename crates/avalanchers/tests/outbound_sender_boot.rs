@@ -31,6 +31,7 @@ use ava_network::network::{
 };
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_validators::state::ValidatorState;
 use ava_vm::testutil::TestVm;
 use tokio_util::sync::CancellationToken;
 
@@ -150,6 +151,30 @@ async fn boot_over_network_carries_frontier_broadcast_out_to_the_network() {
     )
     .await
     .expect("boot_chain_over_network");
+
+    // Regression pin for the loopback/network windower-state switch (M9.15
+    // proposal initiation P2 nested-insert #2): the production network boot
+    // must use the REAL genesis validator set (`GenesisValidatorState`), not
+    // the synthetic self-only `FixedState` the loopback boot uses. This chain
+    // boots against the Local network id internally (`boot_chain_over_network`),
+    // whose genesis stakes exactly 5 validators with real (non-flat) weights —
+    // if `boot_chain_over_network_core`'s `use_genesis_validator_state` literal
+    // were ever flipped to `false`, this would instead see a single
+    // self-node, weight-1 entry and fail.
+    let windower_set = handle
+        .validator_state
+        .get_validator_set(0, subnet_id)
+        .await
+        .expect("network windower validator set");
+    assert_eq!(
+        windower_set.len(),
+        5,
+        "network boot uses the real Local genesis validator set, not the loopback self-only FixedState"
+    );
+    assert!(
+        windower_set.values().all(|v| v.weight != 1),
+        "genesis weights are the real split_allocations-derived stake, not the flat loopback placeholder"
+    );
 
     // Poll the mock network's recorded sends until the frontier broadcast lands
     // (bounded, non-blocking — the handler task flips the engine asynchronously).
