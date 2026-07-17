@@ -39,11 +39,13 @@ pub mod recent_start;
 pub mod split;
 pub mod unparsed;
 pub mod validate;
+pub mod validators;
 
 pub use bootstrappers::{Bootstrapper, bootstrappers, sample_bootstrappers};
 pub use build::{VmChain, avax_asset_id, from_config, vm_chain, vm_genesis};
 pub use config::{Allocation, Config, LockedAmount, Staker, get_config};
 pub use error::{GenesisError, Result};
+pub use validators::{GenesisValidatorEntry, genesis_validator_set};
 
 /// A chain whose genesis identity can be derived from the network genesis
 /// (specs 23 §4).

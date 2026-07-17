@@ -1119,6 +1119,9 @@ where
             // The in-process `RecordingSender` paths frontier only from the self
             // beacon (or no beacon); no remote bootstrap peers.
             extra_beacons: BTreeMap::new(),
+            // Loopback boot: no real genesis staker identity to match, so the
+            // windower stays on the synthetic self+beacons `FixedState`.
+            use_genesis_validator_state: false,
         },
         Arc::clone(&recording),
         router,
@@ -1175,6 +1178,19 @@ struct ChainAssemblySpec {
     /// the [`Bootstrapper`] queries. Empty for the solo / self-beacon paths
     /// (M9.15 G5 — real follower bootstrap from a remote beacon).
     extra_beacons: BTreeMap<NodeId, u64>,
+    /// `true` ⇒ the windower's [`ValidatorState`] is [`GenesisValidatorState`]
+    /// (the network's real genesis validator set, so proposer-window order
+    /// agrees with Go); `false` ⇒ [`FixedState`] (self + `extra_beacons` at a
+    /// synthetic weight of 1). The in-process loopback boot ([`boot_chain`],
+    /// `Sender = RecordingSender`) has no real genesis staker identity to
+    /// match, so it stays `false`; the production network boot
+    /// ([`boot_chain_over_network_core`], `Sender = OutboundSender`) sets
+    /// `true` — a follower verifying real Go validators' proposed blocks must
+    /// window-sample over the SAME set Go derives from the same genesis
+    /// (specs 06 §6.1). The self+`extra_beacons` [`DefaultManager`]
+    /// registration below is unaffected either way — that is a separate
+    /// connectedness/gossip concern, not the windower.
+    use_genesis_validator_state: bool,
 }
 
 /// The full chain identity a production network boot needs (the analogue of the
@@ -1287,7 +1303,22 @@ where
             },
         );
     }
-    let validator_state = FixedState { set };
+    // The windower's ValidatorState: the real genesis validator set on the
+    // network path (so proposer-window order agrees with Go), else the
+    // synthetic self+beacons FixedState (loopback boot; M9.15 proposal
+    // initiation P2 nested-insert #2). `Arc<dyn ValidatorState>` unifies both
+    // arms behind the blanket `impl<T: ValidatorState + ?Sized> ValidatorState
+    // for Arc<T>` (ava-validators/src/state.rs), so `create_snowman_chain`'s
+    // `S` generic is the same concrete type either way.
+    let validator_state: Arc<dyn ValidatorState> = if spec.use_genesis_validator_state {
+        Arc::new(
+            crate::wiring::genesis_validator_state::GenesisValidatorState::from_network(
+                spec.network_id,
+            )?,
+        )
+    } else {
+        Arc::new(FixedState { set })
+    };
 
     // A per-network ChainContext (network id + fork schedule from the chosen
     // network), so the VM initializes with the production identity surface.
@@ -1507,6 +1538,9 @@ where
             avax_asset_id: spec.avax_asset_id,
             include_self_beacon,
             extra_beacons,
+            // Production network boot: the windower must agree with Go on
+            // proposer-window order, so it uses the real genesis validator set.
+            use_genesis_validator_state: true,
         },
         sender,
         router,

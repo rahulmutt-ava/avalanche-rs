@@ -8,3 +8,4 @@
 //! one Snowman chain through the full `create_snowman_chain` pipeline).
 
 pub mod chains;
+pub mod genesis_validator_state;
