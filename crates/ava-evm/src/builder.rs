@@ -163,8 +163,9 @@ impl BlockBuilderDriver {
     /// `parent_state_root` is the committed Firewood root the EVM executes
     /// against; `ctx` carries the next-block fee/timestamp/atomic-gas inputs
     /// ([`AvaNextBlockCtx`], §17.3); `evm_txs` are candidate EVM txs ordered by
-    /// effective tip (the reth-txpool `best_transactions` integration is M6.23 —
-    /// until then the caller supplies the ordered candidates).
+    /// fee cap (the caller supplies them — `vm.rs::build_block` drains the
+    /// purpose-built `crate::mempool::EvmMempool` via `best_txs()`; there is no
+    /// reth `TransactionPool` in ava-evm).
     ///
     /// # Errors
     /// Returns [`Error::MissingProposal`] (the "nothing to build" no-op) when the

@@ -64,7 +64,7 @@ use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
 
 use ava_database::{DynDatabase, MemDb};
-use ava_evm_reth::{B256, Chain, EMPTY_ROOT_HASH};
+use ava_evm_reth::{Address, B256, Chain, ConsensusTx, EMPTY_ROOT_HASH};
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
@@ -187,6 +187,31 @@ impl VmBlock for VerifiedEvmBlock {
         self.shared
             .last_accepted
             .store(Arc::new((self.id, self.block.number())));
+        // EVM mempool maintenance (cchain-tx-pipeline task 5): drop the txs this
+        // block just consumed, keyed off the txs ACTUALLY IN THE BLOCK (recovered
+        // here, not the build-time pool snapshot — a block adopted from a peer was
+        // never in our pool, and even a self-built block may have packed a subset).
+        // Never-fail posture (mirrors `EvmBlock::accept`'s swallow-and-warn after
+        // `append_canonical`, N3): a recovery hiccup here must NOT fail an
+        // already-committed block — the sender was already recovered at verify time,
+        // so this is defensive.
+        match self.block.recover_senders() {
+            Ok(recovered) => {
+                let included: Vec<(Address, u64, B256)> = recovered
+                    .iter()
+                    .map(|tx| (tx.signer(), ConsensusTx::nonce(tx.inner()), *tx.hash()))
+                    .collect();
+                if !included.is_empty() {
+                    self.shared.evm_mempool.lock().on_block_accepted(&included);
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                block_number = self.block.number(),
+                "could not recover senders for accepted-block EVM mempool maintenance; \
+                 the pool will self-correct on the next admission/build"
+            ),
+        }
         Ok(())
     }
 
@@ -223,6 +248,12 @@ struct Shared {
     /// The committed last-accepted `(id, height)` (Go `vm.lastAcceptedBlock`),
     /// seeded from the canonical tip on init.
     last_accepted: ArcSwap<(Id, u64)>,
+    /// The C-Chain EVM mempool (cchain-tx-pipeline task 5). The same `Arc` the
+    /// [`EvmVm`] holds; kept here so [`VerifiedEvmBlock::accept`] can run
+    /// accept-time pool maintenance ([`EvmMempool::on_block_accepted`]) over the
+    /// txs the just-accepted block included, without threading the handle
+    /// through every block.
+    evm_mempool: Arc<parking_lot::Mutex<EvmMempool>>,
 }
 
 impl Shared {
@@ -285,13 +316,14 @@ pub struct EvmVm {
     /// block's [`crate::receipts::TxReceiptRecord`]s here; Task 4's `eth_*` RPC
     /// handlers read it via [`EvmVm::accepted_tx_index`].
     accepted_tx_index: Arc<AcceptedTxIndex>,
-    /// The C-Chain EVM mempool (cchain-tx-pipeline task 1/4): `create_handlers`
-    /// hands this to [`EthRpc::new`] so `eth_sendRawTransaction` admits into
-    /// it. Held behind a [`parking_lot::Mutex`] (the same convention as the
-    /// atomic `txpool` above — `EvmMempool::add_local` takes `&mut self`).
-    /// NOT YET drained by `build_block`/`wait_for_event` — that wiring is
-    /// task 5's scope; this field only exists so the RPC surface has
-    /// somewhere real to admit txs into.
+    /// The C-Chain EVM mempool (cchain-tx-pipeline tasks 1/4/5):
+    /// `create_handlers` hands this to [`EthRpc::new`] so
+    /// `eth_sendRawTransaction` admits into it; `wait_for_event` wakes on its
+    /// admission notify and `build_block` drains [`EvmMempool::best_txs`] into
+    /// the block (task 5). The same `Arc` lives on [`Shared`] so
+    /// [`VerifiedEvmBlock::accept`] can run pool maintenance. Held behind a
+    /// [`parking_lot::Mutex`] (the same convention as the atomic `txpool`
+    /// above — `EvmMempool::add_local` takes `&mut self`).
     evm_mempool: Arc<parking_lot::Mutex<EvmMempool>>,
     /// The immutable chain identity/handles received at `initialize`.
     ctx: Option<Arc<ChainContext>>,
@@ -330,21 +362,25 @@ impl EvmVm {
             _ => (genesis_id, 0),
         };
         let avax_asset_id = Id::EMPTY;
+        // Same capacity as the atomic `txpool` below (4096; coreth
+        // legacypool `globalSlots` default order — the exact capacity is not
+        // consensus). No admission rules are baked in here — `create_handlers`
+        // builds per-call `AdmissionRules` from the VM's configured chain id
+        // (task 4 scope). The `Arc` is shared with `Shared` so accept-time pool
+        // maintenance can reach it (task 5).
+        let evm_mempool = Arc::new(parking_lot::Mutex::new(EvmMempool::new(4096)));
         let shared = Arc::new(Shared {
             state: Arc::clone(&state),
             blocks,
             verified: DashMap::new(),
             last_accepted: ArcSwap::from_pointee(tip),
+            evm_mempool: Arc::clone(&evm_mempool),
         });
         let txpool = Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
             4096,
             avax_asset_id,
         )));
         let builder = BlockBuilderDriver::new(evm_config.clone(), state, Arc::clone(&txpool));
-        // Same capacity as the atomic `txpool` above (4096); no admission
-        // rules are baked in here — `create_handlers` builds per-call
-        // `AdmissionRules` from the VM's configured chain id (task 4 scope).
-        let evm_mempool = Arc::new(parking_lot::Mutex::new(EvmMempool::new(4096)));
         Self {
             shared,
             evm_config,
@@ -717,17 +753,31 @@ impl Vm for EvmVm {
     }
 
     async fn wait_for_event(&self, token: &CancellationToken) -> VmResult<VmEvent> {
-        // Report PendingTxs when the atomic mempool is non-empty; otherwise block
-        // until cancellation. `VmEvent` has no cancellation variant, so on
-        // shutdown we return `PendingTxs` (the engine re-checks emptiness and
-        // re-parks — harmless when tearing down). Matches the avm precedent.
-        let pending = !self.txpool.lock().is_empty();
+        // Report PendingTxs when EITHER pool (atomic X<->C or EVM) is non-empty;
+        // otherwise park until the first admission notify from either pool, or
+        // cancellation. The engine's notification forwarder re-invokes
+        // `wait_for_event` after each event (Go `common.NotificationForwarder`
+        // loop; the C-Chain rpcchainvm host drives this over gRPC), re-checking
+        // emptiness each round, so a spurious wake is harmless.
+        //
+        // Register on BOTH notifies BEFORE the emptiness check so a tx admitted
+        // between the check and the `select!` still wakes us (tokio `Notify`
+        // stores one permit): the `.notified()` future created here observes a
+        // `notify_one` that fires after this line. `VmEvent` has no cancellation
+        // variant, so on shutdown we return `PendingTxs` — the engine re-checks
+        // emptiness and re-parks, harmless when tearing down.
+        let atomic_notify = self.txpool.lock().subscribe();
+        let evm_notify = self.evm_mempool.lock().subscribe();
+        let pending = !self.txpool.lock().is_empty() || !self.evm_mempool.lock().is_empty();
         if pending {
-            Ok(VmEvent::PendingTxs)
-        } else {
-            token.cancelled().await;
-            Ok(VmEvent::PendingTxs)
+            return Ok(VmEvent::PendingTxs);
         }
+        tokio::select! {
+            () = atomic_notify.notified() => {}
+            () = evm_notify.notified() => {}
+            () = token.cancelled() => {}
+        }
+        Ok(VmEvent::PendingTxs)
     }
 }
 
@@ -778,16 +828,44 @@ impl ChainVm for EvmVm {
             ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
         };
 
-        // The reth-txpool `best_transactions` integration is M6.23; until then the
-        // VM contributes no EVM txs (atomic-only blocks build from the mempool).
+        // Pull the fee-cap-ordered EVM candidates from the mempool (M6.23:
+        // purpose-built `EvmMempool` in place of reth's pool — design doc
+        // `crates/ava-evm/src/mempool.rs`). `build_on` re-filters each for
+        // base-fee affordability and gas budget as it packs (`builder.rs`
+        // `pack_evm_txs`); the atomic batch (if any) is drained inside `build_on`.
+        // Snapshot `(signer, nonce, hash)` BEFORE moving the candidates into
+        // `build_on` so a batch-execution failure can evict exactly them.
+        let evm_candidates = self.evm_mempool.lock().best_txs();
+        let stale: Vec<(Address, u64, B256)> = evm_candidates
+            .iter()
+            .map(|tx| (tx.signer(), ConsensusTx::nonce(tx.inner()), *tx.hash()))
+            .collect();
+        let had_candidates = !stale.is_empty();
         match self
             .builder
-            .build_on(&parent_header, parent_state_root, &ctx, Vec::new())
+            .build_on(&parent_header, parent_state_root, &ctx, evm_candidates)
         {
             Ok(block) => Ok(self.wrap(block)),
             // "Nothing to build" / min-retry-delay guard -> no pending block.
+            // This is the benign path (no atomic batch AND no includable EVM
+            // tx); NEVER evict here — the candidates were simply not packable
+            // (e.g. underpriced at the real base fee), not poison.
             Err(Error::MissingProposal(_)) => Err(VmError::NotFound),
-            Err(e) => Err(VmError::from(e)),
+            Err(e) => {
+                // Admission pre-validates nonce/balance/gas, so a batch-execution
+                // failure with candidates present is exceptional. Evict the whole
+                // snapshotted batch (design §Component 3 — no per-tx bisection) so
+                // a poisoned tx can never wedge block building, and say so loudly.
+                if had_candidates {
+                    self.evm_mempool.lock().on_block_accepted(&stale);
+                    tracing::warn!(
+                        error = %e,
+                        evicted = stale.len(),
+                        "build_on failed with EVM candidates present; evicted the batch"
+                    );
+                }
+                Err(VmError::from(e))
+            }
         }
     }
 
