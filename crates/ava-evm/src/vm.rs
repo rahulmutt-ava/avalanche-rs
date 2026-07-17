@@ -76,7 +76,7 @@ use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
-use ava_vm::vm::{HttpHandler, LockOptions, Vm, VmEvent, VmHttpService};
+use ava_vm::vm::{HttpHandler, LockOptions, PendingWorkWaiter, Vm, VmEvent, VmHttpService};
 
 use crate::atomic::mempool::AtomicMempool;
 use crate::block::{
@@ -646,6 +646,52 @@ impl Connector for EvmVm {
 // Vm.
 // ---------------------------------------------------------------------------
 
+/// A lock-free [`PendingWorkWaiter`] over `EvmVm`'s two mempools (the atomic
+/// X<->C pool and the EVM pool). Holds only the pool `Arc`s the VM already
+/// owns — NEVER the outer `Arc<Mutex<dyn Vm>>` a proposal forwarder would
+/// otherwise have to hold to call `wait_for_event` (the M7.18 lock-parking
+/// hazard this seam exists to avoid).
+struct EvmPendingWorkWaiter {
+    atomic: Arc<parking_lot::Mutex<AtomicMempool>>,
+    evm: Arc<parking_lot::Mutex<EvmMempool>>,
+}
+
+impl EvmPendingWorkWaiter {
+    /// True iff either pool currently holds work.
+    fn pending(&self) -> bool {
+        !self.atomic.lock().is_empty() || !self.evm.lock().is_empty()
+    }
+}
+
+#[async_trait]
+impl PendingWorkWaiter for EvmPendingWorkWaiter {
+    fn has_pending(&self) -> bool {
+        self.pending()
+    }
+
+    async fn wait(&self) {
+        // Mirrors `EvmVm::wait_for_event` below: register on BOTH pools'
+        // notify BEFORE the emptiness check so a tx admitted between the
+        // check and the `select!` is never lost (tokio `Notify` stores one
+        // permit — the `.notified()` future created here observes a
+        // `notify_one` that fires after this line).
+        loop {
+            let atomic_notify = self.atomic.lock().subscribe();
+            let evm_notify = self.evm.lock().subscribe();
+            if self.pending() {
+                return;
+            }
+            tokio::select! {
+                () = atomic_notify.notified() => {}
+                () = evm_notify.notified() => {}
+            }
+            // Loop back: re-subscribe and re-check. A spurious wake (e.g. the
+            // admission that woke us was immediately drained by a concurrent
+            // `build_block`) simply re-arms instead of returning early.
+        }
+    }
+}
+
 #[async_trait]
 impl Vm for EvmVm {
     async fn initialize(
@@ -778,6 +824,13 @@ impl Vm for EvmVm {
             () = token.cancelled() => {}
         }
         Ok(VmEvent::PendingTxs)
+    }
+
+    fn pending_work_waiter(&self) -> Option<Arc<dyn PendingWorkWaiter>> {
+        Some(Arc::new(EvmPendingWorkWaiter {
+            atomic: Arc::clone(&self.txpool),
+            evm: Arc::clone(&self.evm_mempool),
+        }))
     }
 }
 
