@@ -39,10 +39,11 @@ use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, NetworkUpgrades};
 use ava_evm::evmconfig::{AvaEvmConfig, NoopPreHook};
 use ava_evm::precompile::rewardmanager::BLACKHOLE_ADDRESS;
+use ava_evm::receipts::decode_block_receipts;
 use ava_evm::state::FirewoodStateProvider;
 use ava_evm_reth::{
-    Address, B256, BundleState, ExternalConsensusExecutor, Header, State, StateProviderDatabase,
-    U256,
+    Address, B256, BundleState, EthReceipt, ExternalConsensusExecutor, Header, State,
+    StateProviderDatabase, TxHashRef, TxType, U256,
 };
 
 #[derive(serde::Deserialize)]
@@ -261,6 +262,163 @@ fn reject_drops_proposal_without_commit() {
 
     // Accept after reject must fail: the proposal was dropped.
     assert!(block.accept(&ctx, precommit).is_err());
+}
+
+/// cchain-tx-pipeline task 3 (verify-time stash, accept-time persist +
+/// `AcceptedTxIndex`): `accept_commits_and_advances_tip` above only checks the
+/// tip pointer; this asserts the receipts payload itself — persisted bytes
+/// decode to the fixture's tx count, `tx_number` resolves the fixture tx to
+/// this height, and the `AcceptedTxIndex` record carries real (not placeholder)
+/// gas/price/sender values.
+#[test]
+fn accept_persists_receipts_and_indexes_txs() {
+    let fx = load_fixture();
+    let (_dir, ctx, genesis_root) = setup(&fx);
+    let block = verifiable_block1(&fx, &ctx, genesis_root);
+
+    let txs = block.recover_senders().expect("recover senders");
+    assert!(!txs.is_empty(), "fixture block1 carries >= 1 EVM tx");
+    let tx_hash = *txs[0].tx_hash();
+    let expected_from = txs[0].signer();
+
+    let precommit = block.verify(&ctx, genesis_root).expect("verify");
+    block.accept(&ctx, precommit).expect("accept");
+
+    // (a) receipts bytes persisted in the canonical store, non-empty, and
+    // decode back to exactly the fixture's tx count.
+    let receipts_bytes = ctx
+        .canonical()
+        .receipts_at(block.number())
+        .expect("receipts_at")
+        .expect("receipts row present after accept");
+    assert!(!receipts_bytes.is_empty(), "persisted receipts non-empty");
+    let decoded = decode_block_receipts(&receipts_bytes).expect("decode_block_receipts");
+    assert_eq!(
+        decoded.len(),
+        txs.len(),
+        "decoded receipt count matches the block's tx count"
+    );
+
+    // (b) tx_hash -> block number row.
+    assert_eq!(
+        ctx.canonical().tx_number(tx_hash).expect("tx_number"),
+        Some(block.number()),
+        "tx_number resolves to this block's height"
+    );
+
+    // (c) AcceptedTxIndex carries a real record, not placeholder zeros.
+    let record = ctx
+        .accepted_tx_index()
+        .get(&tx_hash)
+        .expect("accepted tx index record present");
+    assert_eq!(record.block_number, block.number());
+    assert_eq!(record.block_hash, block.hash());
+    assert_eq!(record.from, expected_from);
+    assert!(
+        record.gas_used > 0,
+        "gas_used > 0, have {}",
+        record.gas_used
+    );
+    assert!(record.success, "the fixture's transfer tx succeeds");
+    assert!(
+        record.cumulative_gas_used >= record.gas_used,
+        "cumulative ({}) >= own gas_used ({})",
+        record.cumulative_gas_used,
+        record.gas_used
+    );
+    let base_fee = block
+        .header()
+        .base_fee
+        .map(|bf| u64::try_from(bf).expect("base fee fits"))
+        .expect("AP3-active block carries a base fee");
+    assert!(
+        record.effective_gas_price >= u128::from(base_fee),
+        "effective_gas_price ({}) >= base_fee ({base_fee})",
+        record.effective_gas_price
+    );
+}
+
+/// cchain-tx-pipeline task 3, I1 review fix: a post-append indexing failure
+/// (here, a corrupted verify-time stash whose receipt count disagrees with
+/// the block's real tx count) must NEVER fail `accept` — the block is already
+/// durably committed (state + canonical tip) by the time indexing runs.
+/// `accept` must log the inconsistency and return `Ok(())`, leaving the
+/// `tx_number`/`AcceptedTxIndex` rows for this block simply absent rather than
+/// half-written or propagating an error to the caller.
+#[test]
+fn accept_never_fails_on_receipt_tx_count_mismatch() {
+    let fx = load_fixture();
+    let (_dir, ctx, genesis_root) = setup(&fx);
+    let block = verifiable_block1(&fx, &ctx, genesis_root);
+    let real_txs = block.recover_senders().expect("recover senders");
+    assert_eq!(
+        real_txs.len(),
+        1,
+        "fixture block1 carries exactly one EVM tx"
+    );
+    let tx_hash = *real_txs[0].tx_hash();
+
+    let precommit = block.verify(&ctx, genesis_root).expect("verify");
+
+    // Corrupt the verify-time stash `verify` just wrote: replace it with TWO
+    // receipts for a block that only has ONE tx. `stash_receipts_for_test` is
+    // the `#[doc(hidden)]` test-only seam added for exactly this — production
+    // code only ever reaches the stash through `EvmBlock::verify`.
+    let corrupted = vec![
+        EthReceipt {
+            tx_type: TxType::Legacy,
+            success: true,
+            cumulative_gas_used: 21_000,
+            logs: Vec::new(),
+        },
+        EthReceipt {
+            tx_type: TxType::Legacy,
+            success: true,
+            cumulative_gas_used: 42_000,
+            logs: Vec::new(),
+        },
+    ];
+    ctx.stash_receipts_for_test(precommit, corrupted);
+
+    // `accept` must still succeed: the length mismatch is caught inside
+    // `index_accepted_receipts`, logged via `tracing::warn!`, and swallowed —
+    // never propagated.
+    block
+        .accept(&ctx, precommit)
+        .expect("accept must not fail on a corrupted/mismatched receipt stash");
+
+    // The block IS durably accepted (tip advanced) despite the indexing
+    // failure.
+    assert_eq!(
+        ctx.canonical().last_canonical().expect("tip"),
+        Some(block.number())
+    );
+    // `accept` persists whatever was stashed without second-guessing it — the
+    // (corrupted) 2-receipt list is what got encoded.
+    let receipts_bytes = ctx
+        .canonical()
+        .receipts_at(block.number())
+        .expect("receipts_at")
+        .expect("receipts row present");
+    let decoded = decode_block_receipts(&receipts_bytes).expect("decode_block_receipts");
+    assert_eq!(
+        decoded.len(),
+        2,
+        "the corrupted stash's own 2 receipts persist as-is"
+    );
+
+    // Indexing was skipped because of the mismatch — no `tx_number` row and
+    // no `AcceptedTxIndex` entry for the block's real (single) tx.
+    assert_eq!(
+        ctx.canonical().tx_number(tx_hash).expect("tx_number"),
+        None,
+        "tx_number indexing was skipped on the mismatch"
+    );
+    assert_eq!(
+        ctx.accepted_tx_index().get(&tx_hash),
+        None,
+        "AcceptedTxIndex indexing was skipped on the mismatch"
+    );
 }
 
 #[test]

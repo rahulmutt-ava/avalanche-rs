@@ -217,6 +217,25 @@ pub enum Error {
         /// The header's actual `extra` length.
         got: usize,
     },
+
+    /// `crate::receipts::decode_block_receipts` failed: the persisted
+    /// `RECEIPTS` column bytes are not a valid RLP list of EIP-2718 receipt
+    /// envelopes (malformed/truncated bytes, or trailing bytes after the list).
+    #[error("receipt decode: {0}")]
+    ReceiptDecode(String),
+
+    /// `EvmBlock::accept`'s post-append receipt indexing (cchain-tx-pipeline
+    /// task 3, I1): the verify-time receipt stash carries a different tx
+    /// count than [`EvmBlock::transactions`] — a corrupted/mismatched stash.
+    /// Always caught and logged (never propagated) by `accept`, which has
+    /// already durably committed the block by the time this can fire.
+    #[error("receipt/tx count mismatch: {txs} txs, {receipts} receipts")]
+    ReceiptTxCountMismatch {
+        /// The block's real EVM tx count.
+        txs: usize,
+        /// The stashed receipt count.
+        receipts: usize,
+    },
 }
 
 /// C-Chain VM result alias.
@@ -348,6 +367,19 @@ mod tests {
                 got: 3
             },
             Error::InvalidExtraLength { .. }
+        );
+
+        // Task 3 (receipts): decode + tx-count-mismatch sentinels.
+        assert_matches!(
+            Error::ReceiptDecode("boom".to_string()),
+            Error::ReceiptDecode(_)
+        );
+        assert_matches!(
+            Error::ReceiptTxCountMismatch {
+                txs: 1,
+                receipts: 2
+            },
+            Error::ReceiptTxCountMismatch { .. }
         );
     }
 }

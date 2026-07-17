@@ -34,10 +34,10 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, ConsensusTx as _, Decodable2718, EMPTY_OMMER_ROOT_HASH, Header,
-    RLP_EMPTY_STRING_CODE, RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader,
-    SignerRecoverable, State, StateBuilder, StateProviderDatabase, TransactionSigned, U256,
-    calculate_transaction_root, keccak256,
+    Address, B256, Bytes, ConsensusTx as _, Decodable2718, EMPTY_OMMER_ROOT_HASH, EthReceipt,
+    Header, RLP_EMPTY_STRING_CODE, RecoveredTx, RlpDecodable, RlpEncodable, RlpError,
+    RlpListHeader, SignerRecoverable, State, StateBuilder, StateProviderDatabase,
+    TransactionSigned, TxHashRef as _, Typed2718 as _, U256, calculate_transaction_root, keccak256,
 };
 
 use crate::atomic::backend::AtomicBackend;
@@ -50,6 +50,7 @@ use crate::feerules::acp176;
 use crate::feerules::window;
 use crate::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use crate::precompile::warp::{WarpBackend, WarpLog, WarpPrecompile, handle_precompile_accept};
+use crate::receipts::{AcceptedTxIndex, TxReceiptRecord, encode_block_receipts};
 use crate::state::{FirewoodStateProvider, FirewoodStateView};
 
 /// coreth `plugin/evm/upgrade/ap0/params.go` `MinGasPrice` — 470 gwei, the
@@ -494,6 +495,20 @@ pub struct EvmBlockContext {
     /// [`WarpBackend`] that records accepted unsigned messages for signing.
     /// `None` until wired via [`EvmBlockContext::with_warp`].
     warp: Option<WarpAcceptSeam>,
+    /// The verify-time receipt stash (cchain-tx-pipeline task 3): `verify`'s
+    /// `execute_batch` outcome carries the ONLY copy of this block's receipts,
+    /// so it stashes them here keyed by pre-commit root (the same warp-seam
+    /// idiom as `warp`'s `pending` map, always present — unlike `warp`/
+    /// `atomic_backend` this is not an optional feature). `accept` takes +
+    /// persists the entry; `reject` drops it.
+    receipts: parking_lot::Mutex<std::collections::BTreeMap<B256, Vec<EthReceipt>>>,
+    /// The accepted-tx index [`EvmBlock::accept`] records each block's
+    /// [`TxReceiptRecord`]s into (cchain-tx-pipeline task 3, Task 4's RPC
+    /// reader). Defaults to a fresh, unshared index; [`EvmVm`](crate::vm::EvmVm)
+    /// overrides it via [`EvmBlockContext::with_accepted_tx_index`] so the RPC
+    /// handlers (`EvmVm::accepted_tx_index`) observe the SAME instance the
+    /// block lifecycle writes into.
+    accepted_tx_index: Arc<AcceptedTxIndex>,
 }
 
 /// The accept-time warp routing seam (M6.31, coreth `handlePrecompileAccept`):
@@ -528,6 +543,8 @@ impl EvmBlockContext {
             canonical,
             atomic_backend: None,
             warp: None,
+            receipts: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
+            accepted_tx_index: Arc::new(AcceptedTxIndex::new()),
         }
     }
 
@@ -559,6 +576,36 @@ impl EvmBlockContext {
     #[must_use]
     pub fn atomic_backend(&self) -> Option<&Arc<AtomicBackend>> {
         self.atomic_backend.as_ref()
+    }
+
+    /// Overrides the accepted-tx index [`EvmBlock::accept`] records into
+    /// (cchain-tx-pipeline task 3). [`EvmVm`](crate::vm::EvmVm) calls this with
+    /// its own shared instance so the `avax.*`/`eth_*` RPC handlers observe the
+    /// same accepted receipts the lifecycle writes; callers that never attach
+    /// one (most tests) keep the fresh per-context default from
+    /// [`EvmBlockContext::new`].
+    #[must_use]
+    pub fn with_accepted_tx_index(mut self, accepted_tx_index: Arc<AcceptedTxIndex>) -> Self {
+        self.accepted_tx_index = accepted_tx_index;
+        self
+    }
+
+    /// The accepted-tx index this context's `accept` writes into.
+    #[must_use]
+    pub fn accepted_tx_index(&self) -> &Arc<AcceptedTxIndex> {
+        &self.accepted_tx_index
+    }
+
+    /// Test-only seam (cchain-tx-pipeline task 3, I1 review fix): overwrites
+    /// the verify-time receipt stash for `root`, bypassing a real `verify`.
+    /// Lets a test exercise `accept`'s never-fail posture against a
+    /// corrupted/mismatched stash (e.g. a receipts/tx-count disagreement)
+    /// without fabricating one through full semantic execution. NOT part of
+    /// the lifecycle contract — production code only ever reaches this stash
+    /// through [`EvmBlock::verify`].
+    #[doc(hidden)]
+    pub fn stash_receipts_for_test(&self, root: B256, receipts: Vec<EthReceipt>) {
+        self.receipts.lock().insert(root, receipts);
     }
 
     /// The Firewood state-of-record provider.
@@ -940,6 +987,17 @@ impl EvmBlock {
             seam.pending.lock().insert(precommit, warp_logs);
         }
 
+        // Stash this verified block's per-tx receipts for accept-time persist +
+        // index (cchain-tx-pipeline task 3): `outcome.result.receipts` is the
+        // ONLY place these exist — `accept` has no way to re-derive them
+        // without re-executing. Moved (not cloned): `outcome` is not read again
+        // after this point. `reject` removes this entry (below) so a failed
+        // verify never leaks receipts into a later accept, mirroring the warp
+        // seam immediately above.
+        ctx.receipts
+            .lock()
+            .insert(precommit, outcome.result.receipts);
+
         Ok(precommit)
     }
 
@@ -977,19 +1035,149 @@ impl EvmBlock {
             backend.accept(self.number(), self.atomic_txs())?;
         }
 
+        // 2.5 Receipts (cchain-tx-pipeline task 3): take the verify-time stash
+        //     for this pre-commit root. Its absence means `verify` never ran in
+        //     THIS process (e.g. an accept-only replay/resume path) — that is
+        //     NEVER an accept failure: persist an empty receipts list and skip
+        //     indexing below, exactly the M6.24 placeholder behavior this task
+        //     replaces for the common (verify-then-accept) case.
+        let receipts = ctx.receipts.lock().remove(&precommit_root).unwrap_or_else(|| {
+            tracing::debug!(
+                block_hash = %self.hash(),
+                block_number = self.number(),
+                precommit_root = %precommit_root,
+                "no verify-time receipt stash for this pre-commit root; persisting empty receipts"
+            );
+            Vec::new()
+        });
+        let encoded_receipts = encode_block_receipts(&receipts);
+
         // 3. Append non-state block metadata + advance the canonical tip (G6,
-        //    §17.7). precompile-accept callbacks (§8) are wired by M6.22; the
-        //    canonical append is this task.
+        //    §17.7). precompile-accept callbacks (§8) are wired by M6.22.
         ctx.canonical.append_canonical(
             self.number(),
             self.hash(),
             self.header().state_root,
             self.ext_data(),
-            // Receipts bytes are persisted once the receipt encoding is wired
-            // (RPC/history task); the canonical index contract is satisfied by the
-            // header/hash/number rows + tip pointer here.
-            &[],
+            &encoded_receipts,
         )?;
+
+        // 4. `tx_hash -> block number` rows + the `AcceptedTxIndex` (task 3;
+        //    Task 4's RPC layer is the reader). This block is ALREADY durably
+        //    accepted by this point (steps 1-3 succeeded) — an indexing
+        //    failure here must NEVER fail `accept` (I1 review fix): log at
+        //    `warn!` and continue. A no-op when the stash was missing above
+        //    (`receipts` is empty then).
+        if !receipts.is_empty()
+            && let Err(e) = self.index_accepted_receipts(ctx, &receipts)
+        {
+            tracing::warn!(
+                block_hash = %self.hash(),
+                block_number = self.number(),
+                error = %e,
+                "failed to index accepted tx receipts after the block was \
+                 already durably accepted (tx_number rows / AcceptedTxIndex \
+                 may be incomplete for this block); continuing"
+            );
+        }
+        Ok(())
+    }
+
+    /// Builds + records a [`TxReceiptRecord`] per tx and writes the
+    /// `tx_hash -> block number` row (cchain-tx-pipeline task 3). `receipts`
+    /// MUST be this block's receipts in the same order as
+    /// [`EvmBlock::transactions`] (the order `execute_batch` produced them in
+    /// at verify time — the invariant [`EvmBlock::accept`] relies on to zip
+    /// them against the re-recovered senders here); a length mismatch is
+    /// treated as a corrupted stash, not a panic.
+    ///
+    /// Called ONLY after [`EvmBlock::accept`] has already durably committed
+    /// the block (state committed + canonical appended) — every error path
+    /// here is caught and logged by the caller, NEVER propagated to fail
+    /// `accept` (I1 review fix). Each tx's `tx_number` row and
+    /// `AcceptedTxIndex` entry are written together in the same loop
+    /// iteration, so a failure partway through (e.g. a KV write error) leaves
+    /// the two indices consistent with each other for every tx processed so
+    /// far — never a `tx_number` row with no matching `AcceptedTxIndex` entry.
+    ///
+    /// # Errors
+    /// Returns [`Error::NilTx`] if a signature fails to recover (never
+    /// expected — the same txs recovered cleanly at verify time),
+    /// [`Error::ReceiptTxCountMismatch`] if `receipts.len()` disagrees with
+    /// this block's tx count, [`Error::FeeOverflow`] if a receipt's
+    /// cumulative gas used is not monotonically non-decreasing (a corrupted
+    /// receipt list), or a canonical-store KV write error.
+    fn index_accepted_receipts(
+        &self,
+        ctx: &EvmBlockContext,
+        receipts: &[EthReceipt],
+    ) -> Result<()> {
+        let txs = self.recover_senders()?;
+        if txs.len() != receipts.len() {
+            return Err(Error::ReceiptTxCountMismatch {
+                txs: txs.len(),
+                receipts: receipts.len(),
+            });
+        }
+        let base_fee = self.eth_env_header()?.base_fee_per_gas;
+        let block_hash = self.hash();
+        let block_number = self.number();
+
+        let mut cumulative_before = 0u64;
+        for (idx, (tx, receipt)) in txs.iter().zip(receipts.iter()).enumerate() {
+            let tx_hash = *tx.tx_hash();
+
+            let gas_used = receipt
+                .cumulative_gas_used
+                .checked_sub(cumulative_before)
+                .ok_or(Error::FeeOverflow)?;
+            cumulative_before = receipt.cumulative_gas_used;
+
+            // coreth/geth `types.Receipt.ContractAddress`: the CREATE address
+            // derived from the sender + the tx's OWN nonce (alloy
+            // `Address::create`, the geth `crypto.CreateAddress` port), only
+            // set for a contract-creation tx (`to == None`).
+            let contract_address = if tx.is_create() {
+                Some(tx.signer().create(tx.nonce()))
+            } else {
+                None
+            };
+
+            // `tx_index` is an RPC-only ordinal (not consensus-critical, and a
+            // block can never realistically carry `u64::MAX` txs), so this
+            // saturates rather than erroring — unlike `gas_used`'s
+            // `checked_sub` above, an overflow here would not indicate a
+            // corrupted receipt list, so `Error::FeeOverflow` would misuse
+            // that sentinel (review fix, minor 2).
+            let tx_index = u64::try_from(idx).unwrap_or(u64::MAX);
+
+            let record = TxReceiptRecord {
+                tx_hash,
+                block_hash,
+                block_number,
+                tx_index,
+                from: tx.signer(),
+                to: tx.to(),
+                contract_address,
+                gas_used,
+                cumulative_gas_used: receipt.cumulative_gas_used,
+                // alloy `Transaction::effective_gas_price`: `gas_price` for a
+                // legacy tx, `min(max_fee_per_gas, base_fee +
+                // max_priority_fee_per_gas)` for a dynamic-fee tx — the same
+                // formula coreth/geth's `types.Transaction` uses for
+                // `eth_getTransactionReceipt`'s `effectiveGasPrice`.
+                effective_gas_price: tx.effective_gas_price(base_fee),
+                success: receipt.success,
+                logs: receipt.logs.clone(),
+                tx_type: receipt.ty(),
+            };
+
+            // Write the KV row THEN record into the in-memory index for the
+            // SAME tx, so a failure here never leaves a `tx_number` row
+            // without a matching `AcceptedTxIndex` entry (or vice versa).
+            ctx.canonical.put_tx_number(tx_hash, block_number)?;
+            ctx.accepted_tx_index.record(vec![record]);
+        }
         Ok(())
     }
 
@@ -1007,6 +1195,12 @@ impl EvmBlock {
         if let Some(seam) = ctx.warp.as_ref() {
             seam.pending.lock().remove(&precommit_root);
         }
+        // Likewise its stashed receipts (cchain-tx-pipeline task 3): a rejected
+        // block's receipts are never persisted, so the stash entry must not
+        // leak into a later accept of a different block that happens to reuse
+        // this pre-commit root value (never expected under G1, but cheap to
+        // guarantee).
+        ctx.receipts.lock().remove(&precommit_root);
         ctx.state.discard(precommit_root);
         Ok(())
     }

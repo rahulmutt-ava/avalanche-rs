@@ -57,6 +57,11 @@ mod prefix {
     pub const RECEIPTS: u8 = 0x05;
     /// Singleton tip pointer (reth `ChainState[LAST_CANONICAL]`).
     pub const TIP: u8 = 0x06;
+    /// `tx hash (32) -> number (BE u64)` (reth `TransactionHashNumbers`
+    /// analogue) — the accept-time index `eth_getTransactionReceipt` /
+    /// `eth_getTransactionByHash` resolve a tx hash to its block through
+    /// (cchain-tx-pipeline task 3; Task 4 is the RPC consumer).
+    pub const TX_NUMBER: u8 = 0x07;
 }
 
 /// The singleton key for the canonical tip height (`ChainState[LAST_CANONICAL]`).
@@ -185,6 +190,42 @@ impl CanonicalStore {
         self.get(&num_key(prefix::BODY, number))
     }
 
+    /// The encoded receipts bytes stored at `number` (the
+    /// [`crate::receipts::encode_block_receipts`] output `EvmBlock::accept`
+    /// writes), or `None` if nothing was accepted at that height yet.
+    ///
+    /// # Errors
+    /// Returns an error if the KV read fails.
+    pub fn receipts_at(&self, number: u64) -> Result<Option<Vec<u8>>> {
+        self.get(&num_key(prefix::RECEIPTS, number))
+    }
+
+    /// Records `tx_hash -> number` (the accept-side writer; cchain-tx-pipeline
+    /// task 3). Overwrites any prior mapping for `tx_hash` (never expected to
+    /// fire under linear acceptance — a tx hash cannot appear in two accepted
+    /// blocks — but this is a plain KV `put`, not a conflict-checked insert).
+    ///
+    /// # Errors
+    /// Returns an error if the KV write fails.
+    pub fn put_tx_number(&self, tx_hash: B256, number: u64) -> Result<()> {
+        self.put(
+            &hash_key(prefix::TX_NUMBER, &tx_hash),
+            &number.to_be_bytes(),
+        )
+    }
+
+    /// The block number the tx with `tx_hash` was accepted in, or `None` if
+    /// unknown (never accepted, or accepted before this index existed).
+    ///
+    /// # Errors
+    /// Returns an error if the KV read fails or the stored value is malformed.
+    pub fn tx_number(&self, tx_hash: B256) -> Result<Option<u64>> {
+        match self.get(&hash_key(prefix::TX_NUMBER, &tx_hash))? {
+            Some(bytes) => Ok(Some(decode_u64(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Reads a 32-byte value at `key`, mapping a non-32-byte value to an error.
     fn read_b256(&self, key: &[u8]) -> Result<Option<B256>> {
         match self.get(key)? {
@@ -252,6 +293,30 @@ mod tests {
             .expect("append 2");
         assert_eq!(s.last_canonical().expect("tip"), Some(2));
         assert_eq!(s.canonical_hash(2).expect("hash"), Some(h2));
+    }
+
+    #[test]
+    fn tx_number_round_trips_and_unknown_is_none() {
+        let s = store();
+        let h1 = B256::repeat_byte(0xaa);
+        let h2 = B256::repeat_byte(0xbb);
+        assert_eq!(s.tx_number(h1).expect("miss"), None);
+
+        s.put_tx_number(h1, 1).expect("put h1");
+        s.put_tx_number(h2, 7).expect("put h2");
+        assert_eq!(s.tx_number(h1).expect("h1"), Some(1));
+        assert_eq!(s.tx_number(h2).expect("h2"), Some(7));
+        // An unrelated hash still misses.
+        assert_eq!(s.tx_number(B256::repeat_byte(0xcc)).expect("miss"), None);
+    }
+
+    #[test]
+    fn receipts_at_reads_what_append_canonical_wrote() {
+        let s = store();
+        assert_eq!(s.receipts_at(1).expect("miss"), None);
+        s.append_canonical(1, B256::repeat_byte(1), B256::ZERO, b"body", b"rcpt-bytes")
+            .expect("append");
+        assert_eq!(s.receipts_at(1).expect("hit"), Some(b"rcpt-bytes".to_vec()));
     }
 
     #[test]

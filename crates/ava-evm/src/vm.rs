@@ -87,6 +87,7 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, CChainGenesis};
 use crate::error::Error;
 use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use crate::receipts::AcceptedTxIndex;
 use crate::rpc::admin::AdminRpc;
 use crate::rpc::avax::{AcceptedAtomicTxIndex, AvaxRpc};
 use crate::rpc::eth::EthRpc;
@@ -277,6 +278,12 @@ pub struct EvmVm {
     /// [`AcceptedAtomicTxIndex`]; the VM owns the index so `create_handlers`
     /// and the (future) accept path share one instance.
     accepted_atomic_txs: Arc<AcceptedAtomicTxIndex>,
+    /// The accepted-tx receipt index (cchain-tx-pipeline task 3): `EvmBlock`'s
+    /// lifecycle context (wired in [`EvmVm::wrap`] via
+    /// [`EvmBlockContext::with_accepted_tx_index`]) records each accepted
+    /// block's [`crate::receipts::TxReceiptRecord`]s here; Task 4's `eth_*` RPC
+    /// handlers read it via [`EvmVm::accepted_tx_index`].
+    accepted_tx_index: Arc<AcceptedTxIndex>,
     /// The immutable chain identity/handles received at `initialize`.
     ctx: Option<Arc<ChainContext>>,
     /// The current engine phase (Go `vm.bootstrapped`).
@@ -332,6 +339,7 @@ impl EvmVm {
             builder,
             preferred: ArcSwap::from_pointee(tip.0),
             accepted_atomic_txs: Arc::new(AcceptedAtomicTxIndex::new()),
+            accepted_tx_index: Arc::new(AcceptedTxIndex::new()),
             ctx: None,
             engine_state: EngineState::Initializing,
             clock: Arc::new(RealClock),
@@ -450,6 +458,14 @@ impl EvmVm {
         Arc::clone(&self.accepted_atomic_txs)
     }
 
+    /// The accepted-tx receipt index shared with the `eth_*` handlers
+    /// (cchain-tx-pipeline task 3; the accept-side writer is wired into every
+    /// block's [`EvmBlockContext`] by [`EvmVm::wrap`]).
+    #[must_use]
+    pub fn accepted_tx_index(&self) -> Arc<AcceptedTxIndex> {
+        Arc::clone(&self.accepted_tx_index)
+    }
+
     /// The current committed Firewood state root (test/inspection helper).
     #[must_use]
     pub fn state_root(&self) -> B256 {
@@ -476,11 +492,14 @@ impl EvmVm {
     fn wrap(&self, block: EvmBlock) -> Arc<dyn VmBlock> {
         let id = id_of(block.hash());
         let parent = id_of(*block.parent_hash());
-        let ctx = Arc::new(EvmBlockContext::new(
-            Arc::clone(&self.shared.state),
-            self.evm_config.clone(),
-            Arc::clone(&self.shared.blocks),
-        ));
+        let ctx = Arc::new(
+            EvmBlockContext::new(
+                Arc::clone(&self.shared.state),
+                self.evm_config.clone(),
+                Arc::clone(&self.shared.blocks),
+            )
+            .with_accepted_tx_index(Arc::clone(&self.accepted_tx_index)),
+        );
         Arc::new(VerifiedEvmBlock {
             block,
             id,

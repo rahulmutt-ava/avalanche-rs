@@ -39,6 +39,10 @@ pub mod block;
 // Canonical (non-state) MDBX store: headers/bodies/receipts (G6, §3) — M6.9.
 pub mod canonical;
 
+// Accepted-tx receipts: verify-time stash, accept-time persisted encoding +
+// `AcceptedTxIndex` (cchain-tx-pipeline design doc, task 3).
+pub mod receipts;
+
 // On-demand block builder driver (G5, §4) — M6.20.
 pub mod builder;
 

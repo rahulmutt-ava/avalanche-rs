@@ -224,6 +224,18 @@ pub use reth_ethereum_primitives::{
 pub use alloy_consensus::TxReceipt;
 pub use alloy_consensus::proofs::calculate_transaction_root;
 pub use alloy_primitives::Bloom;
+// cchain-tx-pipeline task 3 (accept-time receipt persistence + `AcceptedTxIndex`):
+// `ReceiptWithBloom` is the EIP-2718-encodable receipt envelope
+// `ava-evm::receipts::{encode_block_receipts, decode_block_receipts}` wraps each
+// `EthReceipt` into/out of; `Encodable2718`/`Typed2718` are the traits its
+// `.encoded_2718()`/`decode_2718_exact()`/`.ty()` calls need in scope (mirroring
+// `Decodable2718` above); `TxType` is `EthReceipt::tx_type`'s field type
+// (needed to construct a bare receipt in the round-trip unit test).
+// `transaction::TxHashRef` is the `.tx_hash()` accessor `ava-evm::block::EvmBlock::accept`
+// reads off a [`RecoveredTx`] to key `TxReceiptRecord`/`put_tx_number`.
+pub use alloy_consensus::transaction::TxHashRef;
+pub use alloy_consensus::{ReceiptWithBloom, TxType};
+pub use alloy_eips::{Encodable2718, Typed2718};
 // `Recovered<T>` (sender-attached tx) + the `SignerRecoverable` recovery trait
 // used by `ava-evm::block` to recover senders before execution (spec 10 §9.3).
 pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
