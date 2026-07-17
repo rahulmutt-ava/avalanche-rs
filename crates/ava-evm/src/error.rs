@@ -236,6 +236,26 @@ pub enum Error {
         /// The stashed receipt count.
         receipts: usize,
     },
+
+    /// `eth_sendRawTransaction` (cchain-tx-pipeline task 4): the submitted
+    /// bytes are not a valid EIP-2718 transaction envelope (RLP / typed-tx
+    /// decode failure, `TransactionSigned::decode_2718`).
+    #[error("invalid transaction: {0}")]
+    TxDecode(String),
+
+    /// `eth_sendRawTransaction`: EIP-2718 envelope decoded, but signature
+    /// recovery failed (malformed/invalid ECDSA signature).
+    #[error("invalid transaction signature: {0}")]
+    InvalidTxSignature(String),
+
+    /// `eth_sendRawTransaction`: the recovered tx failed
+    /// [`crate::mempool::EvmMempool::add_local`] admission. Transparent so the
+    /// coreth-parity sentinel text (`EvmMempoolError`'s `Display`, e.g.
+    /// "already known" / "nonce too low" / "nonce gap") survives verbatim to
+    /// the JSON-RPC error message (`rpc::service`'s `domain(...)` mapping),
+    /// which client tooling greps for.
+    #[error(transparent)]
+    Mempool(#[from] crate::mempool::EvmMempoolError),
 }
 
 /// C-Chain VM result alias.
@@ -381,5 +401,17 @@ mod tests {
             },
             Error::ReceiptTxCountMismatch { .. }
         );
+
+        // Task 4 (RPC): decode/signature/mempool-admission sentinels. The
+        // `Mempool` variant is `#[from] EvmMempoolError` and must surface the
+        // source's sentinel text verbatim (client tooling greps it).
+        assert_matches!(Error::TxDecode("boom".to_string()), Error::TxDecode(_));
+        assert_matches!(
+            Error::InvalidTxSignature("boom".to_string()),
+            Error::InvalidTxSignature(_)
+        );
+        let mempool_err: Error = crate::mempool::EvmMempoolError::AlreadyKnown.into();
+        assert_matches!(mempool_err, Error::Mempool(_));
+        assert_eq!(mempool_err.to_string(), "already known");
     }
 }

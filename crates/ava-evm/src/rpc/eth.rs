@@ -47,9 +47,11 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, ConfigureEvm, EMPTY_ROOT_HASH, Evm, ExecutionResult, KECCAK_EMPTY,
-    Output, ProviderError, StateProviderDatabase, TxEnv, TxKind, U256,
+    Address, B256, Bytes, ConfigureEvm, Decodable2718, EMPTY_ROOT_HASH, Evm, ExecutionResult,
+    KECCAK_EMPTY, Output, ProviderError, SignerRecoverable, StateProviderDatabase,
+    TransactionSigned, TxEnv, TxKind, U256, logs_bloom,
 };
+use parking_lot::Mutex;
 use ruint::aliases::U256 as RuintU256;
 use serde_json::{Value, json};
 
@@ -57,6 +59,8 @@ use crate::canonical::CanonicalStore;
 use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaFeeState, AvaNextBlockCtx};
 use crate::feerules;
+use crate::mempool::{AdmissionRules, EvmMempool, SenderAccount};
+use crate::receipts::AcceptedTxIndex;
 use crate::state::FirewoodStateProvider;
 
 // ─── Block tags ──────────────────────────────────────────────────────────────
@@ -150,22 +154,35 @@ pub struct EthRpc {
     config: AvaEvmConfig,
     /// The EIP-155 chain id reported by `eth_chainId`.
     chain_id: u64,
+    /// The EVM mempool `eth_sendRawTransaction` admits into (cchain-tx-pipeline
+    /// task 4). Held behind a [`parking_lot::Mutex`] — the same convention
+    /// [`crate::vm::EvmVm`]'s atomic `txpool` uses (`EvmMempool::add_local`
+    /// takes `&mut self`).
+    mempool: Arc<Mutex<EvmMempool>>,
+    /// The accepted-tx receipt index `eth_getTransactionReceipt` reads
+    /// (cchain-tx-pipeline task 3/4).
+    tx_index: Arc<AcceptedTxIndex>,
 }
 
 impl EthRpc {
-    /// Builds the handler over the given state/canonical/config + chain id.
+    /// Builds the handler over the given state/canonical/config + chain id +
+    /// the mempool/receipt-index handles (cchain-tx-pipeline task 4).
     #[must_use]
     pub fn new(
         state: Arc<FirewoodStateProvider>,
         canonical: Arc<CanonicalStore>,
         config: AvaEvmConfig,
         chain_id: u64,
+        mempool: Arc<Mutex<EvmMempool>>,
+        tx_index: Arc<AcceptedTxIndex>,
     ) -> Self {
         Self {
             state,
             canonical,
             config,
             chain_id,
+            mempool,
+            tx_index,
         }
     }
 
@@ -258,6 +275,110 @@ impl EthRpc {
         let view = self.state.view_tip()?;
         let value = view.storage(addr, slot)?.unwrap_or(U256::ZERO);
         Ok(data(&value.to_be_bytes::<32>()))
+    }
+
+    // ─── eth_sendRawTransaction / eth_getTransactionReceipt ─────────────────────
+    // (cchain-tx-pipeline task 4, over Task 1's EvmMempool + Task 3's
+    // AcceptedTxIndex.)
+
+    /// `eth_sendRawTransaction` — decode the EIP-2718 envelope, recover the
+    /// signer, and admit to the EVM mempool (coreth
+    /// `internal/ethapi/api.go:1884-1890` `SendRawTransaction` ->
+    /// `SubmitTransaction` -> `txPool.Add`). Returns the tx hash on admission.
+    ///
+    /// # Errors
+    /// Returns [`Error::TxDecode`] if `raw` is not a valid EIP-2718 envelope,
+    /// [`Error::InvalidTxSignature`] if signature recovery fails,
+    /// [`Error::Mempool`] (carrying the coreth-parity sentinel text) if
+    /// [`EvmMempool::add_local`] rejects the tx, or an error if the Firewood
+    /// sender-account read fails.
+    pub fn send_raw_transaction(&self, raw: &[u8]) -> Result<Value> {
+        let mut buf = raw;
+        let tx =
+            TransactionSigned::decode_2718(&mut buf).map_err(|e| Error::TxDecode(e.to_string()))?;
+        let recovered = tx
+            .try_into_recovered()
+            .map_err(|e| Error::InvalidTxSignature(e.to_string()))?;
+
+        // The eth_getTransactionCount read pattern (this module, above): a
+        // Firewood snapshot of the sender's current nonce/balance.
+        let sender = {
+            let view = self.state.view_tip()?;
+            let acc = read_account(&view, &recovered.signer())?;
+            SenderAccount {
+                nonce: acc.as_ref().map_or(0, |a| a.nonce),
+                balance: acc.as_ref().map_or(U256::ZERO, |a| a.balance),
+            }
+        };
+        let rules = AdmissionRules {
+            chain_id: self.chain_id,
+            ..AdmissionRules::default()
+        };
+        let hash = self.mempool.lock().add_local(recovered, &sender, &rules)?;
+        Ok(data(hash.as_slice()))
+    }
+
+    /// `eth_getTransactionReceipt` — the accepted receipt for `hash`, or
+    /// `null` if unknown (geth returns `null`, not an error, for an unknown
+    /// hash — coreth `internal/ethapi/api.go` `GetTransactionReceipt`).
+    ///
+    /// `logsBloom` is folded from the record's own logs (not stored on
+    /// [`crate::receipts::TxReceiptRecord`]): `ava_evm_reth::logs_bloom`, the
+    /// same `Bloom::accrue_log` fold [`crate::builder`] uses for the
+    /// block-level bloom, scoped to this one tx's logs.
+    ///
+    /// Each `logs[]` entry's `logIndex` is numbered from 0 within this tx's
+    /// own log list — [`crate::receipts::TxReceiptRecord`] does not carry the
+    /// block-wide starting log offset (out of Task 3's scope), so this is a
+    /// documented simplification versus coreth/geth's true block-wide
+    /// `logIndex`.
+    ///
+    /// # Errors
+    /// Currently infallible (a lookup miss returns `Ok(Value::Null)`), but
+    /// returns [`Result`] for API symmetry with the other handlers.
+    pub fn get_transaction_receipt(&self, hash: B256) -> Result<Value> {
+        let Some(rec) = self.tx_index.get(&hash) else {
+            return Ok(Value::Null);
+        };
+
+        let logs: Vec<Value> = rec
+            .logs
+            .iter()
+            .enumerate()
+            .map(|(i, log)| {
+                let log_index = u64::try_from(i).unwrap_or(u64::MAX);
+                let topics: Vec<Value> = log.topics().iter().map(|t| data(t.as_slice())).collect();
+                json!({
+                    "address": data(log.address.as_slice()),
+                    "topics": topics,
+                    "data": data(log.data.data.as_ref()),
+                    "blockNumber": quantity(rec.block_number),
+                    "transactionHash": data(rec.tx_hash.as_slice()),
+                    "transactionIndex": quantity(rec.tx_index),
+                    "blockHash": data(rec.block_hash.as_slice()),
+                    "logIndex": quantity(log_index),
+                    "removed": false,
+                })
+            })
+            .collect();
+        let bloom = logs_bloom(rec.logs.iter());
+
+        Ok(json!({
+            "transactionHash": data(rec.tx_hash.as_slice()),
+            "transactionIndex": quantity(rec.tx_index),
+            "blockHash": data(rec.block_hash.as_slice()),
+            "blockNumber": quantity(rec.block_number),
+            "from": data(rec.from.as_slice()),
+            "to": rec.to.map_or(Value::Null, |a| data(a.as_slice())),
+            "cumulativeGasUsed": quantity(rec.cumulative_gas_used),
+            "gasUsed": quantity(rec.gas_used),
+            "contractAddress": rec.contract_address.map_or(Value::Null, |a| data(a.as_slice())),
+            "logs": logs,
+            "logsBloom": data(bloom.as_slice()),
+            "status": quantity(u64::from(rec.success)),
+            "type": quantity(u64::from(rec.tx_type)),
+            "effectiveGasPrice": quantity_u128(rec.effective_gas_price),
+        }))
     }
 
     // ─── eth_call / eth_estimateGas ────────────────────────────────────────────
@@ -544,6 +665,12 @@ fn quantity_u256(n: U256) -> Value {
 /// `hexutil.Bytes`).
 fn data(bytes: &[u8]) -> Value {
     Value::String(format!("0x{}", hex::encode(bytes)))
+}
+
+/// Encodes a `u128` as a minimal `0x`-hex quantity (`0x0` for zero —
+/// `effectiveGasPrice`'s wei amount, which fits `u128` but not `u64`).
+fn quantity_u128(n: u128) -> Value {
+    Value::String(format!("0x{n:x}"))
 }
 
 #[cfg(test)]

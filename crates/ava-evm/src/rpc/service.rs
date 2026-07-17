@@ -173,6 +173,14 @@ impl EthHttpService {
                 let hash = b256_param(params, 0)?;
                 domain(self.eth.debug_trace_transaction(hash))
             }
+            "eth_sendRawTransaction" => {
+                let raw = data_param(params, 0)?;
+                domain(self.eth.send_raw_transaction(&raw))
+            }
+            "eth_getTransactionReceipt" => {
+                let hash = b256_param(params, 0)?;
+                domain(self.eth.get_transaction_receipt(hash))
+            }
             other => Err(Failure {
                 code: code::METHOD_NOT_FOUND,
                 message: format!("the method {other} does not exist/is not available"),
@@ -246,6 +254,15 @@ fn b256_param(params: &[Value], i: usize) -> Result<B256, Failure> {
     let s = str_param(params, i)?;
     B256::from_str(s)
         .map_err(|e| Failure::invalid_params(format!("invalid 32-byte argument {i}: {e}")))
+}
+
+/// Arbitrary-length `0x…` hex bytes at `params[i]` (`eth_sendRawTransaction`'s
+/// raw EIP-2718 envelope).
+fn data_param(params: &[Value], i: usize) -> Result<Vec<u8>, Failure> {
+    let s = str_param(params, i)?;
+    let hex_str = s.strip_prefix("0x").unwrap_or(s);
+    hex::decode(hex_str)
+        .map_err(|e| Failure::invalid_params(format!("invalid data argument {i}: {e}")))
 }
 
 /// The block tag at `params[i]` (string tag / hex number; a JSON number also
@@ -785,7 +802,13 @@ mod tests {
             Arc::new(ava_database::MemDb::new()),
         )
         .expect("open firewood");
-        let svc = EthHttpService::new(EthRpc::new(provider, canonical, config, 43114));
+        let mempool = Arc::new(parking_lot::Mutex::new(crate::mempool::EvmMempool::new(
+            4096,
+        )));
+        let tx_index = Arc::new(crate::receipts::AcceptedTxIndex::new());
+        let svc = EthHttpService::new(EthRpc::new(
+            provider, canonical, config, 43114, mempool, tx_index,
+        ));
         (dir, svc)
     }
 

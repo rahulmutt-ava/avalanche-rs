@@ -357,6 +357,11 @@ pub use revm::precompile::PrecompileStatus; // M6.31
 // `Log`/`LogData` — the journal log record a stateful precompile emits
 // (`EvmInternals::log`), and the value carried into receipts.
 pub use alloy_primitives::{Log, LogData}; // M6.31
+// `logs_bloom` — folds a tx's own logs into its per-receipt `logsBloom`
+// (cchain-tx-pipeline task 4, `eth_getTransactionReceipt`); the same
+// `Bloom::accrue_log` fold `builder.rs`'s block-level bloom uses, scoped to
+// one tx's logs instead of a whole block's receipts.
+pub use alloy_primitives::logs_bloom; // M6.23 task 4
 
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the

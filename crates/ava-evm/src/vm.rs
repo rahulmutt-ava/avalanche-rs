@@ -87,6 +87,7 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, CChainGenesis};
 use crate::error::Error;
 use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use crate::mempool::EvmMempool;
 use crate::receipts::AcceptedTxIndex;
 use crate::rpc::admin::AdminRpc;
 use crate::rpc::avax::{AcceptedAtomicTxIndex, AvaxRpc};
@@ -284,6 +285,14 @@ pub struct EvmVm {
     /// block's [`crate::receipts::TxReceiptRecord`]s here; Task 4's `eth_*` RPC
     /// handlers read it via [`EvmVm::accepted_tx_index`].
     accepted_tx_index: Arc<AcceptedTxIndex>,
+    /// The C-Chain EVM mempool (cchain-tx-pipeline task 1/4): `create_handlers`
+    /// hands this to [`EthRpc::new`] so `eth_sendRawTransaction` admits into
+    /// it. Held behind a [`parking_lot::Mutex`] (the same convention as the
+    /// atomic `txpool` above — `EvmMempool::add_local` takes `&mut self`).
+    /// NOT YET drained by `build_block`/`wait_for_event` — that wiring is
+    /// task 5's scope; this field only exists so the RPC surface has
+    /// somewhere real to admit txs into.
+    evm_mempool: Arc<parking_lot::Mutex<EvmMempool>>,
     /// The immutable chain identity/handles received at `initialize`.
     ctx: Option<Arc<ChainContext>>,
     /// The current engine phase (Go `vm.bootstrapped`).
@@ -332,6 +341,10 @@ impl EvmVm {
             avax_asset_id,
         )));
         let builder = BlockBuilderDriver::new(evm_config.clone(), state, Arc::clone(&txpool));
+        // Same capacity as the atomic `txpool` above (4096); no admission
+        // rules are baked in here — `create_handlers` builds per-call
+        // `AdmissionRules` from the VM's configured chain id (task 4 scope).
+        let evm_mempool = Arc::new(parking_lot::Mutex::new(EvmMempool::new(4096)));
         Self {
             shared,
             evm_config,
@@ -340,6 +353,7 @@ impl EvmVm {
             preferred: ArcSwap::from_pointee(tip.0),
             accepted_atomic_txs: Arc::new(AcceptedAtomicTxIndex::new()),
             accepted_tx_index: Arc::new(AcceptedTxIndex::new()),
+            evm_mempool,
             ctx: None,
             engine_state: EngineState::Initializing,
             clock: Arc::new(RealClock),
@@ -485,6 +499,16 @@ impl EvmVm {
     #[must_use]
     pub fn mempool_handle(&self) -> Arc<parking_lot::Mutex<AtomicMempool>> {
         Arc::clone(&self.txpool)
+    }
+
+    /// The EVM mempool handle (test/inspection helper; cchain-tx-pipeline
+    /// task 4). `create_handlers` hands the same `Arc` to [`EthRpc::new`], so
+    /// a test can seed/inspect it exactly like `mempool_handle` does for the
+    /// atomic pool.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn evm_mempool_handle(&self) -> Arc<parking_lot::Mutex<EvmMempool>> {
+        Arc::clone(&self.evm_mempool)
     }
 
     /// Wraps an [`EvmBlock`] as the engine-facing [`ava_snow::Block`], cloning the
@@ -645,6 +669,8 @@ impl Vm for EvmVm {
             Arc::clone(&self.shared.blocks),
             self.evm_config.clone(),
             chain_id,
+            Arc::clone(&self.evm_mempool),
+            Arc::clone(&self.accepted_tx_index),
         )));
         let avax = avax_service(AvaxRpc::new(
             Arc::clone(&self.txpool),
