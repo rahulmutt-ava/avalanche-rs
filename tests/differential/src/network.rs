@@ -843,6 +843,224 @@ impl Network {
         Ok(net)
     }
 
+    /// Boot a live 4-Go + 1-Rust **validator** net (M9.15 Task 8).
+    ///
+    /// Unlike [`Network::boot_mixed`] (5 Go validators + a 0-weight Rust
+    /// follower), here the Rust node is a full **staked validator** — staker5,
+    /// equal weight with the four Go stakers. With equal stake the Rust node
+    /// proposes ~20% of blocks; the 4-Go quorum finalizes even if it misbehaves,
+    /// so a bad Rust block is *observable* (a fork / stalled tip) rather than
+    /// wedging the net. `nodes()[0..4]` are the Go validators (stakers 1-4);
+    /// `nodes().last()` is the Rust validator (staker5).
+    ///
+    /// Deltas from [`Network::boot_mixed`]:
+    /// - 4 Go validators = stakers 1..=4 (was 1..=5), full-mesh bootstrap.
+    /// - Rust node = staker5: RSA cert/key via [`crate::livenet::local_staker`]`(5)`
+    ///   (Task 7 made the RSA local stakers loadable by `avalanchers`) and its
+    ///   genesis BLS key via [`crate::livenet::local_signer_key`]`(5)` passed as
+    ///   `signer_key_file` (was `None`) so its proof-of-possession matches the
+    ///   genesis-registered PoP; it bootstraps from the four Go validators.
+    ///   NodeID asserted == `LOCAL_VALIDATOR_NODE_IDS[4]`.
+    /// - All five slots are genesis validators in one full mesh, spawned up front
+    ///   so equal-stake quorum forms with the Rust node participating (not added
+    ///   after the Go cluster is already up, as the 0-weight follower is).
+    ///
+    /// # Errors
+    /// Same shape as [`Network::boot_mixed`]: `GoBinaryMissing`, `Timeout`
+    /// (oracle pre-gate / node-ID scrape / bootstrap), `CertSource`, `Spawn`,
+    /// `RustBinaryMissing`.
+    pub async fn boot_mixed_rust_validator(seed: u64) -> Result<Network, NetworkError> {
+        let go_path = resolve_go_binary(std::env::var("AVALANCHEGO_PATH").ok())?;
+        let rust_path = locate_rust_binary()?;
+
+        // Pre-gate: binary commit must match the ~/avalanchego checkout (rpcchainvm=45).
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/check_oracle_binary.sh");
+        let status = std::process::Command::new(&script).status().map_err(|e| {
+            NetworkError::Timeout(format!(
+                "check_oracle_binary.sh not runnable ({}): {e}",
+                script.display()
+            ))
+        })?;
+        if !status.success() {
+            return Err(NetworkError::Timeout(
+                "check_oracle_binary.sh failed — rebuild ~/avalanchego (stale binary)".to_owned(),
+            ));
+        }
+
+        let work_dir = std::env::temp_dir().join(format!("rust-validator-net-{seed}"));
+        let _ = std::fs::create_dir_all(&work_dir);
+
+        // 10 ports: 5 validators × (http, staking).
+        let ports = crate::livenet::free_ports(10)
+            .map_err(|e| NetworkError::Timeout(format!("free_ports: {e}")))?;
+
+        // Build the 5 validator slots. Slot i uses stakerI's RSA cert/key + BLS
+        // signer key and the i-th well-known local NodeID; slots 0-3 run Go,
+        // slot 4 (staker5) runs Rust. All five join one full mesh, wired before
+        // any node spawns.
+        let mut validators: Vec<crate::livenet::GoValidator> = Vec::with_capacity(5);
+        let mut launches: Vec<crate::livenet::NodeLaunch> = Vec::with_capacity(5);
+        for i in 0..5usize {
+            let port_http = i
+                .checked_mul(2)
+                .ok_or_else(|| NetworkError::Timeout("port index overflow".to_owned()))?;
+            let port_staking = port_http
+                .checked_add(1)
+                .ok_or_else(|| NetworkError::Timeout("port index overflow".to_owned()))?;
+            let http = *ports
+                .get(port_http)
+                .ok_or_else(|| NetworkError::Timeout("missing http port".to_owned()))?;
+            let staking = *ports
+                .get(port_staking)
+                .ok_or_else(|| NetworkError::Timeout("missing staking port".to_owned()))?;
+            // local_staker / local_signer_key are 1-indexed (staker1..staker5).
+            let i1 = i
+                .checked_add(1)
+                .ok_or_else(|| NetworkError::Timeout("staker index overflow".to_owned()))?;
+            let idx = u8::try_from(i1)
+                .map_err(|_| NetworkError::Timeout("staker index overflow".to_owned()))?;
+            let staker = crate::livenet::local_staker(idx)?;
+            let node_id = crate::livenet::LOCAL_VALIDATOR_NODE_IDS
+                .get(i)
+                .ok_or_else(|| NetworkError::Timeout("missing local validator id".to_owned()))?;
+            validators.push(crate::livenet::GoValidator {
+                ip: format!("127.0.0.1:{staking}"),
+                id: (*node_id).to_owned(),
+            });
+            launches.push(crate::livenet::NodeLaunch {
+                http_port: http,
+                staking_port: staking,
+                data_dir: work_dir.join(format!("staker{i1}")),
+                cert_file: staker.cert,
+                key_file: staker.key,
+                bootstrap: Vec::new(), // filled below once the full set is known
+                // Every slot is a genesis validator: it MUST present its
+                // genesis BLS signer key so its PoP matches genesis, else peers
+                // reject the signed-IP BLS signature. This is the delta that
+                // makes the Rust node (slot 4) a real staker vs the 0-weight
+                // follower in `boot_mixed`.
+                signer_key_file: Some(crate::livenet::local_signer_key(idx)?),
+                extra_args: Vec::new(),
+            });
+        }
+        // Full mesh: each validator bootstraps from the other four (incl. the
+        // Rust node), so equal-stake quorum can form.
+        for (i, launch) in launches.iter_mut().enumerate() {
+            launch.bootstrap = crate::livenet::mesh_peers(&validators, i);
+        }
+
+        // Spawn all five up front: slots 0-3 Go, slot 4 (staker5) Rust.
+        let mut nodes: Vec<Node> = Vec::with_capacity(5);
+        for (i, launch) in launches.iter().enumerate() {
+            let slot =
+                u32::try_from(i).map_err(|_| NetworkError::Timeout("slot overflow".to_owned()))?;
+            let (bin, kind) = if i == 4 {
+                (rust_path.as_str(), Binary::Rust)
+            } else {
+                (go_path.as_str(), Binary::Go)
+            };
+            nodes.push(spawn_role_node(bin, kind, slot, launch)?);
+        }
+
+        // staker1 (node 0) is the reference Go validator; everything keys off it.
+        let beacon_api = nodes
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("go staker1 missing".to_owned()))?
+            .api_base
+            .clone();
+        let beacon_log = nodes
+            .first()
+            .ok_or_else(|| NetworkError::Timeout("go staker1 missing".to_owned()))?
+            .log_path
+            .clone();
+
+        // Sanity: the scraped staker1 NodeID must match the vendored table head.
+        {
+            let deadline = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_secs(60))
+                .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+            loop {
+                if let Ok(id) = crate::livenet::scrape_node_id(&beacon_api).await {
+                    if id != crate::livenet::LOCAL_VALIDATOR_NODE_IDS[0] {
+                        return Err(NetworkError::Timeout(format!(
+                            "staker1 NodeID {id} != vendored staker1 {}",
+                            crate::livenet::LOCAL_VALIDATOR_NODE_IDS[0]
+                        )));
+                    }
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(NetworkError::Timeout(format!(
+                        "Go staker1 never answered info.getNodeID:\n{}",
+                        log_tail(&beacon_log, 40)
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+
+        let net = Network { nodes, work_dir };
+
+        // The Rust node (staker5, last slot) must present the genesis staker5
+        // identity: assert its scraped NodeID == LOCAL_VALIDATOR_NODE_IDS[4].
+        // A mismatch means the RSA cert did not load as staker5 (Task 7 gate).
+        let rust_node = net
+            .nodes()
+            .last()
+            .ok_or_else(|| NetworkError::Timeout("rust validator missing".to_owned()))?;
+        let rust_api = rust_node.api_base.clone();
+        let rust_log = rust_node.log_path.clone();
+        {
+            let deadline = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_secs(60))
+                .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+            loop {
+                if let Ok(id) = crate::livenet::scrape_node_id(&rust_api).await {
+                    if id != crate::livenet::LOCAL_VALIDATOR_NODE_IDS[4] {
+                        return Err(NetworkError::Timeout(format!(
+                            "rust staker5 NodeID {id} != vendored staker5 {} \
+                             (RSA cert did not load as staker5?)",
+                            crate::livenet::LOCAL_VALIDATOR_NODE_IDS[4]
+                        )));
+                    }
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(NetworkError::Timeout(format!(
+                        "Rust staker5 never answered info.getNodeID:\n{}",
+                        log_tail(&rust_log, 60)
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+
+        // All five validators (Rust included — it is a validator now and must
+        // reach NormalOp) must bootstrap P/X/C. Poll each node's own API so the
+        // error names the lagging node.
+        for node in net.nodes() {
+            let kind = node.binary;
+            let api = node.api_base.clone();
+            let log = node.log_path.clone();
+            crate::livenet::await_bootstrapped(
+                &api,
+                &["P", "X", "C"],
+                std::time::Duration::from_secs(240),
+            )
+            .await
+            .map_err(|e| {
+                NetworkError::Timeout(format!(
+                    "{kind:?} validator {api} did not bootstrap (quorum not reached?):\n{e}\n\
+                     log:\n{}",
+                    log_tail(&log, 60)
+                ))
+            })?;
+        }
+
+        Ok(net)
+    }
+
     /// Bisection probe for M9.15 rung-3: one Go validator (self-bootstraps) +
     /// one Rust follower whose sole bootstrap beacon is that Go node. The
     /// follower's connectivity gate threshold collapses to

@@ -225,15 +225,17 @@ fn local_signer_key_in(src: &std::path::Path, idx: u8) -> Result<PathBuf, Networ
     Ok(path)
 }
 
-/// Generate a fresh ECDSA-P256 staking cert/key (the only format `avalanchers`
-/// supports) and write it under `dir` as `<name>.crt` / `<name>.key`.
+/// Generate a fresh ECDSA-P256 staking cert/key and write it under `dir` as
+/// `<name>.crt` / `<name>.key`.
 ///
-/// The Go beacon must present a genesis initial-staker cert (RSA `staker1`), but
-/// the Rust follower is a non-validating bootstrapper, so its node-ID need not be
-/// a genesis staker. `avalanchers`' staking identity only loads ECDSA-P256 keys
-/// (`ava-network`'s `Identity::from_pem` rejects the RSA local staker keys that
-/// Go accepts — see the M9.15 gap note), so the follower gets a freshly generated
-/// ECDSA cert here rather than the RSA `staker2`.
+/// Used for a throwaway, *non-genesis* identity — the 0-weight Rust follower in
+/// [`crate::network::Network::boot_mixed`], whose node-ID need not match any
+/// genesis staker. As of Task 7 `avalanchers` DOES load the RSA local-staker
+/// pairs (`ava-network`'s `Identity::from_pem` now accepts RSA as well as
+/// ECDSA-P256), so a Rust node that must BE a genesis validator (staker5 in
+/// [`crate::network::Network::boot_mixed_rust_validator`]) uses
+/// [`local_staker`]`(5)` directly; this generator is no longer an RSA workaround,
+/// only a convenience for a fresh non-genesis identity.
 ///
 /// # Errors
 /// Returns [`NetworkError::CertSource`] if cert generation or writing fails.
@@ -485,6 +487,98 @@ pub async fn drive_c_transfer(go_api: &str) -> Result<(), NetworkError> {
             return Err(NetworkError::Timeout(format!(
                 "tx {tx_hash} not mined within 60 s"
             )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Submit one C-chain legacy value transfer (ewoq → ewoq) to `api`'s C-chain
+/// RPC and return the tx hash **without** waiting for the receipt. The split
+/// from [`drive_c_transfer`] lets a caller submit to one node and then poll the
+/// receipt on a *different* node (the `mixed_network_rust_proposes` detection:
+/// submit to Rust, confirm the tx surfaces network-wide).
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] on any RPC failure or parse error.
+pub async fn submit_c_transfer(api: &str) -> Result<String, NetworkError> {
+    let ep = rpc::Endpoint::parse(api)
+        .map_err(|e| NetworkError::Timeout(format!("submit_c_transfer: bad url: {e}")))?;
+
+    let ewoq_addr = {
+        let key = ewoq_key()?;
+        Address::from(key.public_key().eth_address())
+    };
+    let nonce: u64 = {
+        let addr_hex = format!("{ewoq_addr:?}");
+        let params = format!(r#"["{addr_hex}","latest"]"#);
+        let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionCount", &params)
+            .await
+            .map_err(|e| NetworkError::Timeout(format!("eth_getTransactionCount: {e}")))?;
+        let s = v
+            .as_str()
+            .and_then(|s| s.strip_prefix("0x"))
+            .ok_or_else(|| {
+                NetworkError::Timeout("eth_getTransactionCount: unexpected result shape".to_owned())
+            })?;
+        u64::from_str_radix(s, 16)
+            .map_err(|e| NetworkError::Timeout(format!("nonce parse: {e}")))?
+    };
+    let gas_price: u128 = {
+        let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_gasPrice", "[]")
+            .await
+            .map_err(|e| NetworkError::Timeout(format!("eth_gasPrice: {e}")))?;
+        let s = v
+            .as_str()
+            .and_then(|s| s.strip_prefix("0x"))
+            .ok_or_else(|| {
+                NetworkError::Timeout("eth_gasPrice: unexpected result shape".to_owned())
+            })?;
+        let raw = u128::from_str_radix(s, 16)
+            .map_err(|e| NetworkError::Timeout(format!("gas price parse: {e}")))?;
+        if raw == 0 { 1_000_000_000 } else { raw }
+    };
+    let raw_tx = build_signed_raw_tx(nonce, gas_price, ewoq_addr)?;
+    let hex = format!("0x{}", hex::encode(&raw_tx));
+    let params = format!(r#"["{hex}"]"#);
+    let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_sendRawTransaction", &params)
+        .await
+        .map_err(|e| NetworkError::Timeout(format!("eth_sendRawTransaction: {e}")))?;
+    v.as_str().map(str::to_owned).ok_or_else(|| {
+        NetworkError::Timeout("eth_sendRawTransaction: expected string tx hash".to_owned())
+    })
+}
+
+/// Poll `eth_getTransactionReceipt` for `tx_hash` on `api`'s C-chain RPC until a
+/// non-null receipt appears (`Ok(true)`) or `within` elapses (`Ok(false)`).
+///
+/// A `null` receipt means "still pending / not on this node's chain"; any
+/// non-null object means the tx is mined into an accepted block visible to this
+/// node. Distinguishes submitted-but-never-built (stays `false` on the Rust
+/// node) from accepted-network-wide (`true` on a Go node).
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] only if `api` is not a valid URL.
+pub async fn await_c_receipt(
+    api: &str,
+    tx_hash: &str,
+    within: std::time::Duration,
+) -> Result<bool, NetworkError> {
+    let ep = rpc::Endpoint::parse(api)
+        .map_err(|e| NetworkError::Timeout(format!("await_c_receipt: bad url: {e}")))?;
+    let deadline = std::time::Instant::now()
+        .checked_add(within)
+        .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+    loop {
+        let params = format!(r#"["{tx_hash}"]"#);
+        let mined = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionReceipt", &params)
+            .await
+            .ok()
+            .is_some_and(|v| !v.is_null());
+        if mined {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(false);
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
