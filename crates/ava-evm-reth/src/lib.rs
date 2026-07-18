@@ -207,6 +207,35 @@ pub use alloy_primitives::{Address, B256, Bytes, U256};
 pub use reth_ethereum_primitives::{
     Block as RethBlock, EthPrimitives, Receipt as EthReceipt, TransactionSigned,
 };
+// M9.15 task 2: real tx/receipt roots + logs bloom on built blocks (coreth
+// `customtypes/block_ext.go:189` — `NewBlockWithExtData` derives
+// `TxHash`/`ReceiptHash`/`Bloom` from the body, never sentinels).
+// `calculate_transaction_root` is alloy's ordered-trie tx-root helper (EIP-2718
+// per-tx encoding, the exact inverse of the trie `EthReceipt::
+// calculate_receipt_root_no_memo` above builds for receipts). `TxReceipt` is
+// the accessor trait `EthReceipt` implements; its `bloom()` computes a single
+// receipt's logs bloom (OR-folded into the header bloom by
+// `BlockBuilderDriver::build_on`) and its inherent
+// `calculate_receipt_root_no_memo` (see `EthReceipt` above) is the SAME
+// bloom-recomputing ordered-trie helper `ava-saevm-exec::driver.rs:269` already
+// uses for `receipt_root` — reused here for builder/executor parity. `Bloom`
+// is the 256-byte logs-bloom type `AvaHeader::bloom` (an alloy `Bytes`) is
+// built from.
+pub use alloy_consensus::TxReceipt;
+pub use alloy_consensus::proofs::calculate_transaction_root;
+pub use alloy_primitives::Bloom;
+// cchain-tx-pipeline task 3 (accept-time receipt persistence + `AcceptedTxIndex`):
+// `ReceiptWithBloom` is the EIP-2718-encodable receipt envelope
+// `ava-evm::receipts::{encode_block_receipts, decode_block_receipts}` wraps each
+// `EthReceipt` into/out of; `Encodable2718`/`Typed2718` are the traits its
+// `.encoded_2718()`/`decode_2718_exact()`/`.ty()` calls need in scope (mirroring
+// `Decodable2718` above); `TxType` is `EthReceipt::tx_type`'s field type
+// (needed to construct a bare receipt in the round-trip unit test).
+// `transaction::TxHashRef` is the `.tx_hash()` accessor `ava-evm::block::EvmBlock::accept`
+// reads off a [`RecoveredTx`] to key `TxReceiptRecord`/`put_tx_number`.
+pub use alloy_consensus::transaction::TxHashRef;
+pub use alloy_consensus::{ReceiptWithBloom, TxType};
+pub use alloy_eips::{Encodable2718, Typed2718};
 // `Recovered<T>` (sender-attached tx) + the `SignerRecoverable` recovery trait
 // used by `ava-evm::block` to recover senders before execution (spec 10 §9.3).
 pub use alloy_consensus::transaction::{Recovered, SignerRecoverable};
@@ -328,6 +357,11 @@ pub use revm::precompile::PrecompileStatus; // M6.31
 // `Log`/`LogData` — the journal log record a stateful precompile emits
 // (`EvmInternals::log`), and the value carried into receipts.
 pub use alloy_primitives::{Log, LogData}; // M6.31
+// `logs_bloom` — folds a tx's own logs into its per-receipt `logsBloom`
+// (cchain-tx-pipeline task 4, `eth_getTransactionReceipt`); the same
+// `Bloom::accrue_log` fold `builder.rs`'s block-level bloom uses, scoped to
+// one tx's logs instead of a whole block's receipts.
+pub use alloy_primitives::logs_bloom; // M6.23 task 4
 
 /// The pinned reth git revision (G0 / R3, spec 10 §17.1). A single 40-char hex
 /// commit SHA — never a version range. Bumping it is the one-line edit in the

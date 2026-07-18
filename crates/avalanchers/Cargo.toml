@@ -122,3 +122,9 @@ ava-secp256k1fx = { path = "../ava-secp256k1fx" }
 ava-saevm-core = { path = "../ava-saevm/core" }
 ava-saevm-adaptor = { path = "../ava-saevm/adaptor" }
 ava-saevm-testutil = { path = "../ava-saevm/testutil" }
+# The per-chain proposal-forwarder test (M9.15 proposal-initiation task 2) boots
+# a real `EvmVm` from the committed local C-Chain genesis and signs an admittable
+# ewoq transfer: `ava-evm-reth` supplies the alloy tx types + signature, `hex`
+# decodes the well-known ewoq key. (`ava-evm` + `ava-crypto` are regular deps.)
+ava-evm-reth = { path = "../ava-evm-reth" }
+hex = { workspace = true }

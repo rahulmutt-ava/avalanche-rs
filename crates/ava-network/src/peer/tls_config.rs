@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use rustls::crypto::CryptoProvider;
 use rustls::crypto::ring::default_provider;
+use rustls::sign::{CertifiedKey, SingleCertAndKey};
 use rustls::{ClientConfig, ServerConfig};
 
 use super::verifier::danger::{AvaClientCertVerifier, AvaServerCertVerifier};
@@ -25,6 +26,34 @@ use crate::identity::Identity;
 
 /// The single supported protocol version: TLS 1.3 only.
 const TLS13_ONLY: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS13];
+
+/// Build a [`CertifiedKey`] for our local staking identity WITHOUT rustls'
+/// `with_single_cert` / `with_client_auth_cert`, which route through
+/// `CertifiedKey::from_der` → webpki `ParsedCertificate::try_from` and reject
+/// avalanchego's X.509 **v1** RSA staking certs with `UnsupportedCertVersion`
+/// (the M9.15 Task 8 live blocker: an RSA genesis staker — staker5 — died at
+/// "problem initializing networking" with "invalid peer certificate:
+/// UnsupportedCertVersion" before serving any API).
+///
+/// We load the private key via the active provider and pair it with the raw
+/// cert chain directly, skipping the webpki leaf parse / SPKI-consistency check.
+/// This is safe and does NOT weaken peer verification: the cert and key are
+/// loaded together from one staking identity (so they inherently match), and
+/// peers still authenticate us by our leaf public key through the raw-key
+/// verifiers ([`AvaClientCertVerifier`] / [`AvaServerCertVerifier`], which are
+/// unchanged). The wire bytes are the v1 cert verbatim, which Go's `crypto/tls`
+/// and our v1-tolerant verifiers both accept. Mirrors the manual construction
+/// the `tls_v1_rsa_handshake` integration test already validated.
+fn certified_key(provider: &Arc<CryptoProvider>, identity: &Identity) -> Result<Arc<CertifiedKey>> {
+    let signing_key = provider
+        .key_provider
+        .load_private_key(identity.rustls_key())
+        .map_err(|e| Error::TlsConfig(format!("load staking private key: {e}")))?;
+    Ok(Arc::new(CertifiedKey::new(
+        vec![identity.rustls_cert()],
+        signing_key,
+    )))
+}
 
 /// Build the server-side `rustls` config from a local staking identity.
 ///
@@ -37,12 +66,14 @@ pub fn server_config(identity: &Identity) -> Result<Arc<ServerConfig>> {
     let provider = Arc::new(default_provider());
     let verifier = AvaClientCertVerifier::new(&provider);
 
+    let certified = certified_key(&provider, identity)?;
     let config = ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(TLS13_ONLY)
         .map_err(|e| Error::TlsConfig(e.to_string()))?
         .with_client_cert_verifier(verifier)
-        .with_single_cert(vec![identity.rustls_cert()], identity.rustls_key())
-        .map_err(|e| Error::TlsConfig(e.to_string()))?;
+        // `with_cert_resolver` installs our pre-built `CertifiedKey` as-is,
+        // avoiding the v1-rejecting webpki parse in `with_single_cert`.
+        .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified)));
 
     // No ALPN (Go sets none); leave `alpn_protocols` empty.
     Ok(Arc::new(config))
@@ -60,13 +91,15 @@ pub fn client_config(identity: &Identity) -> Result<Arc<ClientConfig>> {
     let provider = Arc::new(default_provider());
     let verifier = AvaServerCertVerifier::new(&provider);
 
+    let certified = certified_key(&provider, identity)?;
     let config = ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(TLS13_ONLY)
         .map_err(|e| Error::TlsConfig(e.to_string()))?
         .dangerous()
         .with_custom_certificate_verifier(verifier)
-        .with_client_auth_cert(vec![identity.rustls_cert()], identity.rustls_key())
-        .map_err(|e| Error::TlsConfig(e.to_string()))?;
+        // `with_client_cert_resolver` installs our pre-built `CertifiedKey`
+        // as-is, avoiding the v1-rejecting webpki parse in `with_client_auth_cert`.
+        .with_client_cert_resolver(Arc::new(SingleCertAndKey::from(certified)));
 
     Ok(Arc::new(config))
 }

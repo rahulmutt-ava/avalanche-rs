@@ -131,3 +131,59 @@ async fn rsa_v1_client_cert_completes_handshake() {
         .expect("client task")
         .expect("client upgrade ok (v1 RSA client cert accepted)");
 }
+
+// ── The node's OWN v1 RSA identity in the PRODUCTION config path ─────────────
+//
+// M9.15 Task 8 regression: when `avalanchers` runs as a genesis RSA staker
+// (staker5 in the live validator arm), its own X.509 v1 RSA cert flows into
+// `tls_config::{server_config, client_config}`. rustls' `with_single_cert` /
+// `with_client_auth_cert` call `CertifiedKey::from_der` → webpki
+// `ParsedCertificate::try_from`, which rejects v1 with `UnsupportedCertVersion`
+// ("tls config error: invalid peer certificate: Other(OtherError(...))") — the
+// node dies at "problem initializing networking" before serving any API. The
+// tests above only prove the PEER-verification path is v1-tolerant (they build
+// the config manually via `SingleCertAndKey`); these exercise the production
+// functions themselves, which must install the cert through the same
+// version-gate-free resolver without weakening peer verification.
+
+/// Load the vendored v1 RSA staking pair as a production [`Identity`] — the
+/// exact path `avalanchers` uses for a genesis RSA staker.
+fn rsa_v1_production_identity() -> Identity {
+    let cert_pem = include_str!("fixtures/staker_rsa_v1.crt");
+    let key_pem = include_str!("fixtures/staker_rsa_v1.key");
+    Identity::from_pem(cert_pem, key_pem).expect("load v1 RSA identity via Identity::from_pem")
+}
+
+#[test]
+fn production_server_config_accepts_v1_rsa_identity() {
+    let id = rsa_v1_production_identity();
+    server_config(&id).expect("server_config must build from a v1 RSA staking identity");
+}
+
+#[test]
+fn production_client_config_accepts_v1_rsa_identity() {
+    let id = rsa_v1_production_identity();
+    client_config(&id).expect("client_config must build from a v1 RSA staking identity");
+}
+
+// End-to-end: BOTH endpoints use the PRODUCTION config path with a v1 RSA
+// identity (the live scenario — an RSA staker both dialing and listening). The
+// mutual TLS 1.3 handshake must complete.
+#[tokio::test]
+async fn production_configs_v1_rsa_both_ends_complete_handshake() {
+    let server_cfg = server_config(&rsa_v1_production_identity()).expect("server cfg (v1 RSA)");
+    let client_cfg = client_config(&rsa_v1_production_identity()).expect("client cfg (v1 RSA)");
+
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(async move { Upgrader::server(server_cfg).upgrade(server_io).await });
+    let client = tokio::spawn(async move { Upgrader::client(client_cfg).upgrade(client_io).await });
+
+    server
+        .await
+        .expect("server task")
+        .expect("server upgrade ok (production v1 RSA both ends)");
+    client
+        .await
+        .expect("client task")
+        .expect("client upgrade ok (production v1 RSA both ends)");
+}

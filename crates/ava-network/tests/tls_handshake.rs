@@ -46,6 +46,52 @@ async fn loopback_mutual_tls_derives_node_id() {
 }
 
 #[tokio::test]
+async fn loopback_mutual_tls_with_rsa_server_identity() {
+    // The server presents an RSA (PKCS#1) staking identity — `Identity::from_pem`
+    // must load it, and the (ECDSA) client's leaf-key policy + raw-key TLS 1.3
+    // signature check must accept it (`specs/05` §4.4/§4.5; M9.15 RSA staking
+    // identity gap).
+    let cert = include_str!("testdata/rsa_staker.crt");
+    let key = include_str!("testdata/rsa_staker.key");
+    let server_id = Identity::from_pem(cert, key).expect("rsa server identity");
+    let client_id = Identity::generate().expect("client identity");
+
+    let server_node_id = node_id_from_cert_der(server_id.cert_der()).expect("server node id");
+    // NodeID pinned from the one-time generation step (identity.rs
+    // `from_pem_loads_an_rsa_cert`).
+    assert_eq!(
+        server_node_id.to_string(),
+        "NodeID-Foj2bN48Hm4orFr5Hg3ttEZYrNCUQf9tz"
+    );
+
+    let server_cfg = server_config(&server_id).expect("server config");
+    let client_cfg = client_config(&client_id).expect("client config");
+
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+
+    let server_upgrader = Upgrader::server(server_cfg);
+    let client_upgrader = Upgrader::client(client_cfg);
+
+    let server_task = tokio::spawn(async move { server_upgrader.upgrade(server_io).await });
+    let client_task = tokio::spawn(async move { client_upgrader.upgrade(client_io).await });
+
+    let (_s_node, _s_stream, _s_cert) = server_task
+        .await
+        .expect("server task")
+        .expect("server upgrade ok (rsa server identity)");
+    let (c_node, _c_stream, _c_cert) = client_task
+        .await
+        .expect("client task")
+        .expect("client upgrade ok (rsa server identity)");
+
+    // The client observes the RSA server cert's NodeID.
+    assert_eq!(
+        c_node, server_node_id,
+        "client derives the RSA server's NodeID"
+    );
+}
+
+#[tokio::test]
 async fn rejects_non_p256() {
     // A server presenting a P-384 leaf must fail the client's leaf-key policy,
     // so the handshake does not complete.

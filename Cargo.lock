@@ -1359,6 +1359,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -2188,6 +2189,7 @@ dependencies = [
  "ava-database",
  "ava-engine",
  "ava-evm",
+ "ava-evm-reth",
  "ava-genesis",
  "ava-message",
  "ava-network",
@@ -2206,6 +2208,7 @@ dependencies = [
  "ava-vm",
  "axum",
  "clap",
+ "hex",
  "libc",
  "prometheus",
  "rcgen",

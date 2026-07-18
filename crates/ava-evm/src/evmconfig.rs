@@ -453,10 +453,19 @@ impl AvaEvmConfig {
     #[must_use]
     pub fn evm_env_for_header(&self, header: &Header) -> AvaEvmEnv {
         // `EthEvmConfig::evm_env` is infallible (`Error = Infallible`).
-        let evm_env = match ConfigureEvm::evm_env(&self.inner, header) {
+        let mut evm_env = match ConfigureEvm::evm_env(&self.inner, header) {
             Ok(env) => env,
             Err(never) => match never {},
         };
+        // coreth `core/evm.go:86-95` (`OverrideNewEVMArgs`): at Durango+ the EVM
+        // must run with Random = THIS header's difficulty, difficulty = 0 — not
+        // reth's default `prevrandao = mix_hash`.
+        apply_coreth_random_rule(
+            &mut evm_env.block_env,
+            &self.chain_spec,
+            header.difficulty,
+            header.timestamp,
+        );
         AvaEvmEnv {
             evm_env,
             header: header.clone(),
@@ -523,7 +532,20 @@ impl AvaEvmConfig {
             Err(e) => return Err(e),
         }
 
-        // 4. The header the per-block execution context is derived from. The
+        // 4. coreth `core/evm.go:86-95`: at Durango+ Random = THIS (built)
+        //    header's difficulty, difficulty = 0. The builder stamps every
+        //    built header's difficulty to 1 (`consensus.go:233-235`, wired in
+        //    Task 5), so build-exec here runs with prevrandao 1 — matching
+        //    what the verify path (`evm_env_for_header`) derives from the same
+        //    built header once it round-trips through decode.
+        apply_coreth_random_rule(
+            &mut evm_env.block_env,
+            &self.chain_spec,
+            U256::from(1),
+            ctx.timestamp,
+        );
+
+        // 5. The header the per-block execution context is derived from. The
         //    fee-bearing fields mirror the overridden env so the reexecute path
         //    (`evm_env_for_header`) and build path agree.
         let header = Header {
@@ -538,6 +560,22 @@ impl AvaEvmConfig {
         };
 
         Ok(AvaEvmEnv { evm_env, header })
+    }
+}
+
+/// coreth `core/evm.go:86-95` (`OverrideNewEVMArgs`): at Shanghai
+/// (== Durango on Avalanche, `params/config_extra.go:82-88`) the EVM runs
+/// with Random = header difficulty (32-byte big-endian) and difficulty = 0.
+/// Pre-Durango the env is left untouched (difficulty keeps its value).
+fn apply_coreth_random_rule(
+    block_env: &mut BlockEnv,
+    spec: &AvaChainSpec,
+    header_difficulty: U256,
+    time: u64,
+) {
+    if spec.fork_at(time) >= AvaPhase::Durango {
+        block_env.prevrandao = Some(B256::from(header_difficulty.to_be_bytes::<32>()));
+        block_env.difficulty = U256::ZERO;
     }
 }
 

@@ -39,11 +39,19 @@ pub mod block;
 // Canonical (non-state) MDBX store: headers/bodies/receipts (G6, §3) — M6.9.
 pub mod canonical;
 
+// Accepted-tx receipts: verify-time stash, accept-time persisted encoding +
+// `AcceptedTxIndex` (cchain-tx-pipeline design doc, task 3).
+pub mod receipts;
+
 // On-demand block builder driver (G5, §4) — M6.20.
 pub mod builder;
 
 // ChainVm adapter (§3) — M6.10.
 pub mod vm;
+
+// EVM mempool: coreth-parity admission validation, storage, eviction
+// (cchain-tx-pipeline design doc 2026-07-17, task 1).
+pub mod mempool;
 
 // Atomic X<->C txs: types/codec, mempool, backend, atomic trie, state hook,
 // semantic verify (G3, §6) — M6.14..M6.18.

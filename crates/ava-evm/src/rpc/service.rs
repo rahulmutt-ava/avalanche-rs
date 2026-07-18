@@ -173,6 +173,14 @@ impl EthHttpService {
                 let hash = b256_param(params, 0)?;
                 domain(self.eth.debug_trace_transaction(hash))
             }
+            "eth_sendRawTransaction" => {
+                let raw = data_param(params, 0)?;
+                domain(self.eth.send_raw_transaction(&raw))
+            }
+            "eth_getTransactionReceipt" => {
+                let hash = b256_param(params, 0)?;
+                domain(self.eth.get_transaction_receipt(hash))
+            }
             other => Err(Failure {
                 code: code::METHOD_NOT_FOUND,
                 message: format!("the method {other} does not exist/is not available"),
@@ -246,6 +254,15 @@ fn b256_param(params: &[Value], i: usize) -> Result<B256, Failure> {
     let s = str_param(params, i)?;
     B256::from_str(s)
         .map_err(|e| Failure::invalid_params(format!("invalid 32-byte argument {i}: {e}")))
+}
+
+/// Arbitrary-length `0x…` hex bytes at `params[i]` (`eth_sendRawTransaction`'s
+/// raw EIP-2718 envelope).
+fn data_param(params: &[Value], i: usize) -> Result<Vec<u8>, Failure> {
+    let s = str_param(params, i)?;
+    let hex_str = s.strip_prefix("0x").unwrap_or(s);
+    hex::decode(hex_str)
+        .map_err(|e| Failure::invalid_params(format!("invalid data argument {i}: {e}")))
 }
 
 /// The block tag at `params[i]` (string tag / hex number; a JSON number also
@@ -718,7 +735,7 @@ mod tests {
     // The eth envelope: unknown method → -32601 with geth's message shape.
     #[tokio::test]
     async fn eth_unknown_method_is_32601() {
-        let (_dir, svc) = eth_fixture();
+        let (_dir, svc, _mempool, _tx_index) = eth_fixture();
         let body = post_eth(
             &svc,
             json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_nope", "params": [] }),
@@ -735,7 +752,7 @@ mod tests {
     // Batch arrays dispatch per-entry (geth rpc.Server batch handling).
     #[tokio::test]
     async fn eth_batch_dispatches_each_entry() {
-        let (_dir, svc) = eth_fixture();
+        let (_dir, svc, _mempool, _tx_index) = eth_fixture();
         let body = post_eth(
             &svc,
             json!([
@@ -751,7 +768,7 @@ mod tests {
     // Non-POST is rejected at the transport (geth 405).
     #[tokio::test]
     async fn eth_get_is_405() {
-        let (_dir, svc) = eth_fixture();
+        let (_dir, svc, _mempool, _tx_index) = eth_fixture();
         let resp = svc
             .serve_http(VmRequest {
                 method: "GET".to_string(),
@@ -763,11 +780,170 @@ mod tests {
         assert_eq!(resp.status, 405, "geth HTTP transport is POST-only");
     }
 
-    /// An `EthHttpService` over a temp-Firewood fixture: no state is read by
-    /// the methods exercised here (`eth_maxPriorityFeePerGas`, unknown
-    /// methods), but the handler set needs a live provider. The returned
-    /// guard keeps the temp dir alive for the test's lifetime.
-    fn eth_fixture() -> (tempfile::TempDir, EthHttpService) {
+    // cchain-tx-pipeline task 4 follow-up (reviewer Important #2): dispatch-row
+    // coverage for eth_sendRawTransaction/eth_getTransactionReceipt driven
+    // through the actual serve_http POST-JSON envelope (transport mechanics —
+    // this module's convention), not just the direct-handler-call tests in
+    // `tests/rpc_eth.rs`.
+
+    // A valid raw tx through the envelope: result is the tx hash (a `0x`-hex
+    // string), matching `EthRpc::send_raw_transaction`'s own return.
+    #[tokio::test]
+    async fn eth_send_raw_transaction_envelope_admits_and_returns_hash() {
+        let (_dir, svc, mempool, _tx_index) = eth_fixture();
+        let raw = funded_legacy_tx_hex(0);
+        let body = post_eth(
+            &svc,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_sendRawTransaction", "params": [raw] }),
+        )
+        .await;
+        let result = body["result"].as_str().expect("result string");
+        assert!(result.starts_with("0x"), "got: {result}");
+        assert!(body.get("error").is_none(), "no error, got: {body}");
+
+        // The returned hash really is pooled (envelope round-trips through to
+        // the real EvmMempool, not a stub).
+        let hash = ava_evm_reth::B256::from_str(result).expect("parse tx hash");
+        assert!(
+            mempool.lock().contains(&hash),
+            "the admitted tx must be pooled"
+        );
+    }
+
+    // A malformed (odd-length) hex param exercises `data_param`'s decode
+    // failure -> INVALID_PARAMS (-32602), not a panic or a -32000 server
+    // error.
+    #[tokio::test]
+    async fn eth_send_raw_transaction_envelope_malformed_hex_is_invalid_params() {
+        let (_dir, svc, _mempool, _tx_index) = eth_fixture();
+        let body = post_eth(
+            &svc,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_sendRawTransaction", "params": ["0xabc"] }),
+        )
+        .await;
+        assert_eq!(
+            body["error"]["code"], -32602,
+            "odd-length hex must fail data_param's decode, not dispatch"
+        );
+        assert!(body.get("result").is_none(), "got: {body}");
+    }
+
+    // Unknown hash through the envelope -> `"result": null` (geth parity:
+    // null, never an error), not an `"error"` key.
+    #[tokio::test]
+    async fn eth_get_transaction_receipt_envelope_unknown_is_null() {
+        let (_dir, svc, _mempool, _tx_index) = eth_fixture();
+        let body = post_eth(
+            &svc,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getTransactionReceipt",
+                "params": [format!("0x{}", "ab".repeat(32))],
+            }),
+        )
+        .await;
+        assert_eq!(body["result"], Value::Null, "got: {body}");
+        assert!(body.get("error").is_none(), "got: {body}");
+    }
+
+    // A receipt with a real `to` (a plain call, not contract-creation)
+    // through the envelope: the positive-`to` branch (reviewer Minor).
+    #[tokio::test]
+    async fn eth_get_transaction_receipt_envelope_positive_to() {
+        let (_dir, svc, _mempool, tx_index) = eth_fixture();
+        let tx_hash = ava_evm_reth::B256::repeat_byte(0x42);
+        let to = Address::repeat_byte(0xEE);
+        tx_index.record(vec![crate::receipts::TxReceiptRecord {
+            tx_hash,
+            block_hash: ava_evm_reth::B256::repeat_byte(0x05),
+            block_number: 5,
+            tx_index: 0,
+            from: funded_address(),
+            to: Some(to),
+            contract_address: None,
+            gas_used: 21_000,
+            cumulative_gas_used: 21_000,
+            effective_gas_price: 2_000_000_000,
+            success: true,
+            logs: Vec::new(),
+            tx_type: 0,
+            first_log_index: 0,
+        }]);
+
+        let body = post_eth(
+            &svc,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_getTransactionReceipt",
+                "params": [format!("0x{}", hex::encode(tx_hash.as_slice()))],
+            }),
+        )
+        .await;
+        assert_eq!(
+            body["result"]["to"],
+            format!("0x{}", hex::encode(to.as_slice())),
+            "positive-`to` (a plain call) branch, got: {body}"
+        );
+        assert_eq!(body["result"]["contractAddress"], Value::Null);
+    }
+
+    /// The `eth_sendRawTransaction` envelope-test signer (repeat-don't-import
+    /// convention: the same private-key-from-repeated-byte pattern
+    /// `evm_factory.rs`/`rpc_eth.rs`'s `funded_key`/`funded_address` use),
+    /// funded by [`eth_fixture`].
+    fn funded_key() -> ava_crypto::secp256k1::PrivateKey {
+        ava_crypto::secp256k1::PrivateKey::from_bytes(&[0x11u8; 32]).expect("PrivateKey")
+    }
+
+    /// The funded signer's EVM address (`PublicKey::eth_address`).
+    fn funded_address() -> Address {
+        Address::from(funded_key().public_key().eth_address())
+    }
+
+    /// Signs `tx` with [`funded_key`] as a legacy EIP-155 transaction and
+    /// returns its EIP-2718-encoded raw bytes hex-quoted with a `0x` prefix
+    /// (the `eth_sendRawTransaction` wire param shape).
+    fn sign_legacy_hex(tx: ava_evm_reth::TxLegacy) -> String {
+        use ava_evm_reth::{Encodable2718, SignableTransaction, TransactionSigned};
+
+        let sig_hash = tx.signature_hash();
+        let rsv = funded_key().sign_hash(&sig_hash.0).expect("sign_hash");
+        let r = ava_evm_reth::U256::from_be_slice(&rsv[..32]);
+        let s = ava_evm_reth::U256::from_be_slice(&rsv[32..64]);
+        let sig = ava_evm_reth::EvmSignature::new(r, s, rsv[64] == 1);
+        let signed = TransactionSigned::Legacy(tx.into_signed(sig));
+        format!("0x{}", hex::encode(signed.encoded_2718()))
+    }
+
+    /// A funded-signer legacy tx (2 gwei gas price, 21000 gas, 1 wei value,
+    /// chain id 43114 — matching [`eth_fixture`]'s configured chain).
+    fn funded_legacy_tx_hex(nonce: u64) -> String {
+        sign_legacy_hex(ava_evm_reth::TxLegacy {
+            chain_id: Some(43114),
+            nonce,
+            gas_price: 2_000_000_000,
+            gas_limit: 21_000,
+            to: ava_evm_reth::TxKind::Call(Address::repeat_byte(0xEE)),
+            value: ava_evm_reth::U256::from(1u64),
+            input: ava_evm_reth::Bytes::new(),
+        })
+    }
+
+    /// An `EthHttpService` over a temp-Firewood fixture, funded so
+    /// `eth_sendRawTransaction` envelope tests have a real signer to submit
+    /// from (1 ether, nonce 0, at [`funded_address`]). The handler set is
+    /// wired over its own real `EvmMempool`/`AcceptedTxIndex`, both returned
+    /// alongside the service so envelope tests can inspect/seed them
+    /// directly (the `rpc_eth.rs` `setup()` precedent). The returned guard
+    /// keeps the temp dir alive for the test's lifetime.
+    fn eth_fixture() -> (
+        tempfile::TempDir,
+        EthHttpService,
+        Arc<parking_lot::Mutex<crate::mempool::EvmMempool>>,
+        Arc<crate::receipts::AcceptedTxIndex>,
+    ) {
         use crate::chainspec::AvaChainSpec;
         use crate::evmconfig::AvaEvmConfig;
 
@@ -785,8 +961,35 @@ mod tests {
             Arc::new(ava_database::MemDb::new()),
         )
         .expect("open firewood");
-        let svc = EthHttpService::new(EthRpc::new(provider, canonical, config, 43114));
-        (dir, svc)
+
+        // Fund the envelope-test signer (1 ether, nonce 0) through the same
+        // propose -> commit path `rpc_eth.rs`'s `setup()` uses.
+        let mut builder = ava_evm_reth::BundleState::builder(0..=0);
+        builder = builder.state_present_account_info(
+            funded_address(),
+            ava_evm_reth::AccountInfo {
+                balance: ava_evm_reth::U256::from(1_000_000_000_000_000_000_u128),
+                nonce: 0,
+                ..Default::default()
+            },
+        );
+        let bundle = builder.build();
+        let root = provider.propose_from_bundle(&bundle).expect("propose");
+        provider.commit(root).expect("commit");
+
+        let mempool = Arc::new(parking_lot::Mutex::new(crate::mempool::EvmMempool::new(
+            4096,
+        )));
+        let tx_index = Arc::new(crate::receipts::AcceptedTxIndex::new());
+        let svc = EthHttpService::new(EthRpc::new(
+            provider,
+            canonical,
+            config,
+            43114,
+            Arc::clone(&mempool),
+            Arc::clone(&tx_index),
+        ));
+        (dir, svc, mempool, tx_index)
     }
 
     async fn post_eth(svc: &EthHttpService, body: Value) -> Value {

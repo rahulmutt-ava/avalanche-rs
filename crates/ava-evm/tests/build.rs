@@ -29,8 +29,16 @@ use ava_evm::builder::{BlockBuilderDriver, MIN_BLOCK_BUILD_DELAY};
 use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, NetworkUpgrades};
 use ava_evm::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use ava_evm::feerules::acp176::{Acp176State, STATE_SIZE};
+use ava_evm::feerules::acp226::INITIAL_DELAY_EXCESS;
+use ava_evm::feerules::window::WINDOW_SIZE;
+use ava_evm::feerules::{fee_state_after_block, parent_fee_state_of};
+use ava_evm::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use ava_evm::state::FirewoodStateProvider;
-use ava_evm_reth::{Address, B256, BundleState, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH, U256};
+use ava_evm_reth::{
+    Address, B256, BundleState, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH, U256,
+    calculate_transaction_root,
+};
 use parking_lot::Mutex;
 
 #[derive(serde::Deserialize)]
@@ -84,10 +92,63 @@ fn block1_bytes(fx: &Fixture) -> Vec<u8> {
     hex::decode(fx.block1_rlp.trim_start_matches("0x")).expect("block1 hex")
 }
 
+/// The same schedule as [`ap3_chain_spec`] but with Etna (and every upgrade up
+/// to it) active from genesis — used by the Cancun-tail assertions in
+/// [`built_header_carries_go_shape_fields`] (coreth activates Cancun with Etna,
+/// `miner/worker.go:186-197`).
+fn etna_chain_spec(chain_id: u64) -> AvaChainSpec {
+    const FAR_FUTURE: u64 = u64::MAX;
+    let upgrades = NetworkUpgrades {
+        apricot_phase_1: 0,
+        apricot_phase_2: 0,
+        apricot_phase_3: 0,
+        apricot_phase_4: 0,
+        apricot_phase_5: 0,
+        apricot_phase_pre_6: 0,
+        apricot_phase_6: 0,
+        apricot_phase_post_6: 0,
+        banff: 0,
+        cortina: 0,
+        durango: 0,
+        etna: 0,
+        fortuna: FAR_FUTURE,
+        granite: FAR_FUTURE,
+        helicon: u64::MAX,
+    };
+    AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(chain_id), false)
+}
+
+/// The same schedule as [`etna_chain_spec`] but with Fortuna **and** Granite
+/// active from genesis — used by [`built_header_carries_acp176_extra_prefix`] so
+/// the built block is in the ACP-176 regime (24-byte fee-state extra prefix +
+/// the Granite millisecond/min-delay-excess tail).
+fn granite_chain_spec(chain_id: u64) -> AvaChainSpec {
+    let upgrades = NetworkUpgrades {
+        apricot_phase_1: 0,
+        apricot_phase_2: 0,
+        apricot_phase_3: 0,
+        apricot_phase_4: 0,
+        apricot_phase_5: 0,
+        apricot_phase_pre_6: 0,
+        apricot_phase_6: 0,
+        apricot_phase_post_6: 0,
+        banff: 0,
+        cortina: 0,
+        durango: 0,
+        etna: 0,
+        fortuna: 0,
+        granite: 0,
+        helicon: u64::MAX,
+    };
+    AvaChainSpec::from_parts(upgrades, ava_evm_reth::Chain::from_id(chain_id), false)
+}
+
 /// Opens a fresh Firewood db with the genesis alloc committed; returns the
-/// provider, the EVM config, a canonical store, and the committed genesis root.
+/// provider, the EVM config (built over `spec`), a canonical store, and the
+/// committed genesis root.
 fn setup(
     fx: &Fixture,
+    spec: AvaChainSpec,
 ) -> (
     tempfile::TempDir,
     Arc<FirewoodStateProvider>,
@@ -125,7 +186,7 @@ fn setup(
     );
 
     let canonical: Arc<CanonicalStore> = Arc::new(CanonicalStore::new(Arc::new(MemDb::new())));
-    let config = AvaEvmConfig::new(ap3_chain_spec(fx.chain_id));
+    let config = AvaEvmConfig::new(spec);
     (dir, provider, config, canonical, genesis_root)
 }
 
@@ -174,7 +235,7 @@ fn next_ctx() -> AvaNextBlockCtx {
 #[test]
 fn build_then_verify_same_root() {
     let fx = load_fixture();
-    let (_dir, provider, config, canonical, genesis_root) = setup(&fx);
+    let (_dir, provider, config, canonical, genesis_root) = setup(&fx, ap3_chain_spec(fx.chain_id));
 
     // The candidate EVM tx: block-1's single transfer (recovered).
     let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
@@ -229,7 +290,8 @@ fn build_then_verify_same_root() {
 #[test]
 fn respects_min_build_delay() {
     let fx = load_fixture();
-    let (_dir, provider, config, _canonical, genesis_root) = setup(&fx);
+    let (_dir, provider, config, _canonical, genesis_root) =
+        setup(&fx, ap3_chain_spec(fx.chain_id));
 
     let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
     let evm_txs = decoded.recover_senders().expect("recover senders");
@@ -273,4 +335,252 @@ fn respects_min_build_delay() {
         driver.can_build_on(B256::repeat_byte(0x99), Instant::now()),
         "the guard is keyed per-parent; a different parent is buildable now"
     );
+}
+
+/// M9.15 task 2: the builder stamps Go-shaped header fields on a built block —
+/// blackhole coinbase, the Cancun (== Etna) tail, and real tx/receipt roots +
+/// bloom derived from the body, not the previous sentinels/`suggested_fee_recipient`.
+///
+/// Reuses the `genesis_to_1` fixture's committed genesis (genesis-root parity
+/// is alloc-only, independent of the fork schedule) but over [`etna_chain_spec`]
+/// so the built block is Cancun-active and the tail assertions below apply.
+#[test]
+fn built_header_carries_go_shape_fields() {
+    let fx = load_fixture();
+    let (_dir, provider, config, _canonical, genesis_root) =
+        setup(&fx, etna_chain_spec(fx.chain_id));
+
+    let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
+    let evm_txs = decoded.recover_senders().expect("recover senders");
+    assert_eq!(evm_txs.len(), 1, "fixture block-1 has one EVM tx");
+
+    let parent = genesis_header(&fx, genesis_root);
+    let txpool = Arc::new(Mutex::new(ava_evm::atomic::mempool::AtomicMempool::new(
+        64,
+        ava_types::id::Id::EMPTY,
+    )));
+    let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
+
+    let built = driver
+        .build_on(&parent, genesis_root, &next_ctx(), evm_txs)
+        .expect("build_on");
+    let header = built.header();
+    let txs = built.transactions();
+    assert_eq!(
+        txs.len(),
+        1,
+        "the candidate EVM tx was packed into the block"
+    );
+
+    // coreth `plugin/evm/vm.go:565` — coinbase is the blackhole address, not
+    // the per-block `suggested_fee_recipient`.
+    assert_eq!(header.coinbase, BLACKHOLE_ADDRESS, "build_header coinbase");
+
+    // coreth `miner/worker.go:186-197` — the Cancun tail at Etna+.
+    assert_eq!(header.parent_beacon_root, Some(B256::ZERO));
+    assert_eq!(header.blob_gas_used, Some(0));
+    assert_eq!(header.excess_blob_gas, Some(0));
+
+    // coreth `customheader/extra.go:46-53` — Etna is in the AP3 window regime
+    // (Fortuna is far-future here), so the extra prefix is the 80-byte fee
+    // window. Building on a genesis (number-0) parent, coreth's `feeWindow`
+    // returns the empty window (`dynamic_fee_windower.go:156-158`). Etna is
+    // also Durango+ here, so a 6-byte predicate-results suffix follows the
+    // prefix (`core/evm.go:187` `SetPredicateBytesInExtra`; M9.15 Task 6 —
+    // `builder.rs::EMPTY_BLOCK_PREDICATE_RESULTS`); it happens to be all-zero
+    // too (the empty-`BlockResults` encoding), so the content check below is
+    // unaffected.
+    assert_eq!(
+        header.extra.len(),
+        WINDOW_SIZE + 6,
+        "Etna (Window regime) extra prefix is the 80-byte fee window + the 6-byte empty predicate-results suffix"
+    );
+    assert_eq!(
+        header.extra.as_ref(),
+        &[0u8; WINDOW_SIZE + 6][..],
+        "first block on genesis carries the empty (all-zero) fee window + empty predicate results"
+    );
+    // Pre-Granite: no millisecond timestamp / min-delay-excess tail.
+    assert_eq!(header.time_milliseconds, None);
+    assert_eq!(header.min_delay_excess, None);
+
+    // coreth `customtypes/block_ext.go:189` — tx/receipt roots + bloom are
+    // derived from the body at assembly.
+    assert_eq!(
+        header.tx_root,
+        calculate_transaction_root(txs),
+        "tx_root == the ordered-trie root over the built block's own transactions \
+         (computed independently here, not read back off the builder)"
+    );
+    assert_ne!(
+        header.receipt_root, EMPTY_ROOT_HASH,
+        "real receipt root, not the empty-trie sentinel"
+    );
+    // The fixture's single tx is a plain value transfer — it emits no logs, so
+    // the CORRECTLY OR-folded bloom over its (empty) receipt bloom is the zero
+    // bloom. This still exercises the real per-receipt `bloom()`/fold path (as
+    // opposed to the removed hardcoded `Bytes::from(vec![0u8; 256])` sentinel);
+    // it happens to coincide byte-for-byte with that sentinel only because
+    // there is nothing to fold in.
+    assert_eq!(
+        header.bloom.as_ref(),
+        &[0u8; 256][..],
+        "no logs in the batch ⇒ the OR-fold of receipt blooms is the zero bloom"
+    );
+}
+
+/// M9.15 task 4: at Fortuna+ the builder stamps the exact 24-byte ACP-176 fee
+/// state as the header extra prefix (coreth `customheader/extra.go:36-44`
+/// `ExtraPrefix` → `feeStateAfterBlock`), and at Granite the millisecond
+/// timestamp + ACP-226 min-delay-excess tail (`consensus/dummy/consensus.go:334-352`).
+///
+/// The built block's extra must round-trip as the exact post-block fee state
+/// recomputed from the parent + built-header fields — the invariant Go's
+/// dummy-engine `VerifyExtraPrefix` checks byte-for-byte on every node.
+#[test]
+fn built_header_carries_acp176_extra_prefix() {
+    let fx = load_fixture();
+    let (_dir, provider, config, _canonical, genesis_root) =
+        setup(&fx, granite_chain_spec(fx.chain_id));
+
+    let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
+    let evm_txs = decoded.recover_senders().expect("recover senders");
+    assert_eq!(evm_txs.len(), 1, "fixture block-1 has one EVM tx");
+
+    // A Granite genesis parent carries the ACP-226 initial min-delay-excess and a
+    // millisecond timestamp (coreth `Genesis.toBlock` at Granite; the real local
+    // genesis does the same) — `minDelayExcess` parity requires the parent to
+    // carry it. The extra stays empty: a number-0 parent seeds the zero fee state.
+    let mut parent = genesis_header(&fx, genesis_root);
+    parent.time_milliseconds = Some(0);
+    parent.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+
+    let ctx = AvaNextBlockCtx {
+        timestamp: 10,
+        timestamp_ms: 10_000,
+        suggested_fee_recipient: Address::ZERO,
+        parent_fee_state: parent_fee_state_of(config.chain_spec(), &parent)
+            .expect("parent fee state"),
+        ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
+    };
+
+    let txpool = Arc::new(Mutex::new(ava_evm::atomic::mempool::AtomicMempool::new(
+        64,
+        ava_types::id::Id::EMPTY,
+    )));
+    let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
+
+    let built = driver
+        .build_on(&parent, genesis_root, &ctx, evm_txs)
+        .expect("build_on");
+    let header = built.header();
+
+    // The extra is the 24-byte ACP-176 fee state prefix plus the 6-byte
+    // Durango+ empty predicate-results suffix (`core/evm.go:187`
+    // `SetPredicateBytesInExtra`; M9.15 Task 6 —
+    // `builder.rs::EMPTY_BLOCK_PREDICATE_RESULTS`). `Acp176State::from_bytes`
+    // below only reads the leading `STATE_SIZE` bytes, so the round-trip check
+    // is unaffected by the trailing suffix.
+    assert_eq!(
+        header.extra.len(),
+        STATE_SIZE + 6,
+        "Fortuna+ extra is the 24-byte ACP-176 fee state + the 6-byte empty predicate-results suffix"
+    );
+
+    // Round-trip: the built block's extra must parse back to the exact post-block
+    // fee state recomputed from the parent + this header's own fields.
+    let ext_data_gas_used = header
+        .ext_data_gas_used
+        .map(|v| u64::try_from(v).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    let reparsed = Acp176State::from_bytes(&header.extra).expect("parse built extra prefix");
+    assert_eq!(
+        reparsed,
+        fee_state_after_block(
+            config.chain_spec(),
+            &parent,
+            header.time,
+            header.time_milliseconds,
+            header.gas_used,
+            ext_data_gas_used,
+            None,
+        )
+        .expect("fee_state_after_block"),
+        "builder extra prefix == coreth ExtraPrefix (feeStateAfterBlock)"
+    );
+
+    // Granite tail: the millisecond timestamp we built at + the ACP-226
+    // min-delay-excess (carried from the Granite parent, no desired override).
+    assert_eq!(
+        header.time_milliseconds,
+        Some(10_000),
+        "Granite header stamps the millisecond timestamp"
+    );
+    assert_eq!(
+        header.min_delay_excess,
+        Some(INITIAL_DELAY_EXCESS.0),
+        "Granite header carries the parent's ACP-226 min-delay-excess"
+    );
+}
+
+/// M9.15 task 5 — the offline exit gate of Phases 1+2 (builder + verify): a
+/// Rust-built block must satisfy the FULL ported `syntacticVerify`
+/// (`wrapped_block.go:398-527`), including the two checks this task adds
+/// (`Difficulty == 1`, `VerifyExtra`) — driven through the SAME
+/// [`ava_evm::block::EvmBlock::verify`] entry the `ChainVm` adapter uses, not
+/// a bespoke check. Built on the all-forks-active-from-genesis (Granite)
+/// spec so every fork-gated check in `syntactic_verify` is exercised.
+#[test]
+fn built_block_passes_full_syntactic_verify() {
+    let fx = load_fixture();
+    let (_dir, provider, config, canonical, genesis_root) =
+        setup(&fx, granite_chain_spec(fx.chain_id));
+
+    let decoded = decode_ava_evm_block(&block1_bytes(&fx), config.chain_spec()).expect("decode");
+    let evm_txs = decoded.recover_senders().expect("recover senders");
+    assert_eq!(evm_txs.len(), 1, "fixture block-1 has >= 1 EVM tx");
+
+    let mut parent = genesis_header(&fx, genesis_root);
+    parent.time_milliseconds = Some(0);
+    parent.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+
+    let ctx = AvaNextBlockCtx {
+        timestamp: 10,
+        timestamp_ms: 10_000,
+        suggested_fee_recipient: Address::ZERO,
+        parent_fee_state: parent_fee_state_of(config.chain_spec(), &parent)
+            .expect("parent fee state"),
+        ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
+    };
+
+    let txpool = Arc::new(Mutex::new(ava_evm::atomic::mempool::AtomicMempool::new(
+        64,
+        ava_types::id::Id::EMPTY,
+    )));
+    let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
+
+    let built = driver
+        .build_on(&parent, genesis_root, &ctx, evm_txs)
+        .expect("build_on");
+
+    // consensus.go:233-235 — `Prepare` stamps every built header's difficulty
+    // to exactly 1.
+    assert_eq!(
+        built.header().difficulty,
+        U256::from(1),
+        "builder must stamp difficulty 1 (coreth consensus.go:233-235)"
+    );
+
+    // build_on stashed the proposal (commit-on-accept); drop it so the verify
+    // path below owns the proposal it re-stashes and commits (mirrors
+    // `build_then_verify_same_root`).
+    let built_root = *built.header_state_root();
+    provider.discard(built_root);
+
+    let block_ctx = EvmBlockContext::new(Arc::clone(&provider), config, canonical);
+    // The full `syntacticVerify` port + semantic execute — the SAME entry the
+    // `ChainVm` adapter drives.
+    built
+        .verify(&block_ctx, genesis_root)
+        .expect("a Rust-built block must pass its own full syntactic_verify");
 }

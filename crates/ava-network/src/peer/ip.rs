@@ -19,10 +19,9 @@ use std::net::IpAddr;
 
 use ava_crypto::bls::Signer;
 use ava_crypto::staking::{Certificate, check_signature};
-use ring::rand::SystemRandom;
-use ring::signature::EcdsaKeyPair;
 
 use crate::error::{Error, Result};
+use crate::identity::TlsSigningKey;
 
 /// Length of the signed-IP byte layout: 16 (As16) + 2 (port) + 8 (timestamp).
 pub const UNSIGNED_IP_LEN: usize = 16 + 2 + 8;
@@ -76,22 +75,21 @@ impl UnsignedIp {
 
     /// Sign this claim, producing a [`SignedIp`].
     ///
-    /// The TLS signature is an ECDSA-P256/SHA-256 signature whose digest is
-    /// `SHA256(bytes)` (the `ring` signer hashes the message internally, exactly
-    /// matching Go signing the pre-computed `crypto.SHA256(ipBytes)` digest).
-    /// The BLS signature is a proof-of-possession over the raw `bytes`.
+    /// The TLS signature's algorithm follows the staking identity's key
+    /// family (`identity::TlsSigningKey`): ECDSA-P256/SHA-256 (ASN.1/DER) for
+    /// ECDSA staking identities, or RSA PKCS#1 v1.5/SHA-256 for RSA staking
+    /// identities — both over `SHA256(bytes)` (`ring` hashes the message
+    /// internally, exactly matching Go signing the pre-computed
+    /// `crypto.SHA256(ipBytes)` digest), matching Go
+    /// `staking/verify.go::CheckSignature`'s two verification branches. The
+    /// BLS signature is a proof-of-possession over the raw `bytes`.
     ///
     /// # Errors
     /// [`Error::Signing`] if either the TLS or BLS signing operation fails.
-    pub fn sign(&self, tls_signer: &EcdsaKeyPair, bls_signer: &dyn Signer) -> Result<SignedIp> {
+    pub fn sign(&self, tls_signer: &TlsSigningKey, bls_signer: &dyn Signer) -> Result<SignedIp> {
         let ip_bytes = self.bytes();
 
-        let rng = SystemRandom::new();
-        let tls_signature = tls_signer
-            .sign(&rng, &ip_bytes)
-            .map_err(|_| Error::Signing("tls sign failed".into()))?
-            .as_ref()
-            .to_vec();
+        let tls_signature = tls_signer.sign(&ip_bytes)?;
 
         let bls_signature = bls_signer
             .sign_proof_of_possession(&ip_bytes)
@@ -111,7 +109,8 @@ impl UnsignedIp {
 pub struct SignedIp {
     /// The signed claim.
     pub unsigned: UnsignedIp,
-    /// ECDSA-P256/SHA-256 (ASN.1/DER) signature over `SHA256(unsigned.bytes())`.
+    /// ECDSA-P256/SHA-256 (ASN.1/DER) or RSA PKCS#1 v1.5/SHA-256 signature
+    /// (depending on the signer's key family) over `SHA256(unsigned.bytes())`.
     pub tls_signature: Vec<u8>,
     /// Compressed BLS proof-of-possession signature over `unsigned.bytes()`.
     pub bls_signature_bytes: Vec<u8>,

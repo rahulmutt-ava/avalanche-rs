@@ -64,7 +64,7 @@ use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
 
 use ava_database::{DynDatabase, MemDb};
-use ava_evm_reth::{B256, Chain, EMPTY_ROOT_HASH};
+use ava_evm_reth::{Address, B256, Chain, ConsensusTx, EMPTY_ROOT_HASH};
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
@@ -76,7 +76,7 @@ use ava_vm::connector::Connector;
 use ava_vm::error::{Error as VmError, Result as VmResult};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
-use ava_vm::vm::{HttpHandler, LockOptions, Vm, VmEvent, VmHttpService};
+use ava_vm::vm::{HttpHandler, LockOptions, PendingWorkWaiter, Vm, VmEvent, VmHttpService};
 
 use crate::atomic::mempool::AtomicMempool;
 use crate::block::{
@@ -87,6 +87,8 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, CChainGenesis};
 use crate::error::Error;
 use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use crate::mempool::EvmMempool;
+use crate::receipts::AcceptedTxIndex;
 use crate::rpc::admin::AdminRpc;
 use crate::rpc::avax::{AcceptedAtomicTxIndex, AvaxRpc};
 use crate::rpc::eth::EthRpc;
@@ -185,6 +187,31 @@ impl VmBlock for VerifiedEvmBlock {
         self.shared
             .last_accepted
             .store(Arc::new((self.id, self.block.number())));
+        // EVM mempool maintenance (cchain-tx-pipeline task 5): drop the txs this
+        // block just consumed, keyed off the txs ACTUALLY IN THE BLOCK (recovered
+        // here, not the build-time pool snapshot — a block adopted from a peer was
+        // never in our pool, and even a self-built block may have packed a subset).
+        // Never-fail posture (mirrors `EvmBlock::accept`'s swallow-and-warn after
+        // `append_canonical`, N3): a recovery hiccup here must NOT fail an
+        // already-committed block — the sender was already recovered at verify time,
+        // so this is defensive.
+        match self.block.recover_senders() {
+            Ok(recovered) => {
+                let included: Vec<(Address, u64, B256)> = recovered
+                    .iter()
+                    .map(|tx| (tx.signer(), ConsensusTx::nonce(tx.inner()), *tx.hash()))
+                    .collect();
+                if !included.is_empty() {
+                    self.shared.evm_mempool.lock().on_block_accepted(&included);
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                block_number = self.block.number(),
+                "could not recover senders for accepted-block EVM mempool maintenance; \
+                 the pool will self-correct on the next admission/build"
+            ),
+        }
         Ok(())
     }
 
@@ -221,6 +248,12 @@ struct Shared {
     /// The committed last-accepted `(id, height)` (Go `vm.lastAcceptedBlock`),
     /// seeded from the canonical tip on init.
     last_accepted: ArcSwap<(Id, u64)>,
+    /// The C-Chain EVM mempool (cchain-tx-pipeline task 5). The same `Arc` the
+    /// [`EvmVm`] holds; kept here so [`VerifiedEvmBlock::accept`] can run
+    /// accept-time pool maintenance ([`EvmMempool::on_block_accepted`]) over the
+    /// txs the just-accepted block included, without threading the handle
+    /// through every block.
+    evm_mempool: Arc<parking_lot::Mutex<EvmMempool>>,
 }
 
 impl Shared {
@@ -277,6 +310,21 @@ pub struct EvmVm {
     /// [`AcceptedAtomicTxIndex`]; the VM owns the index so `create_handlers`
     /// and the (future) accept path share one instance.
     accepted_atomic_txs: Arc<AcceptedAtomicTxIndex>,
+    /// The accepted-tx receipt index (cchain-tx-pipeline task 3): `EvmBlock`'s
+    /// lifecycle context (wired in [`EvmVm::wrap`] via
+    /// [`EvmBlockContext::with_accepted_tx_index`]) records each accepted
+    /// block's [`crate::receipts::TxReceiptRecord`]s here; Task 4's `eth_*` RPC
+    /// handlers read it via [`EvmVm::accepted_tx_index`].
+    accepted_tx_index: Arc<AcceptedTxIndex>,
+    /// The C-Chain EVM mempool (cchain-tx-pipeline tasks 1/4/5):
+    /// `create_handlers` hands this to [`EthRpc::new`] so
+    /// `eth_sendRawTransaction` admits into it; `wait_for_event` wakes on its
+    /// admission notify and `build_block` drains [`EvmMempool::best_txs`] into
+    /// the block (task 5). The same `Arc` lives on [`Shared`] so
+    /// [`VerifiedEvmBlock::accept`] can run pool maintenance. Held behind a
+    /// [`parking_lot::Mutex`] (the same convention as the atomic `txpool`
+    /// above — `EvmMempool::add_local` takes `&mut self`).
+    evm_mempool: Arc<parking_lot::Mutex<EvmMempool>>,
     /// The immutable chain identity/handles received at `initialize`.
     ctx: Option<Arc<ChainContext>>,
     /// The current engine phase (Go `vm.bootstrapped`).
@@ -314,11 +362,19 @@ impl EvmVm {
             _ => (genesis_id, 0),
         };
         let avax_asset_id = Id::EMPTY;
+        // Same capacity as the atomic `txpool` below (4096; coreth
+        // legacypool `globalSlots` default order — the exact capacity is not
+        // consensus). No admission rules are baked in here — `create_handlers`
+        // builds per-call `AdmissionRules` from the VM's configured chain id
+        // (task 4 scope). The `Arc` is shared with `Shared` so accept-time pool
+        // maintenance can reach it (task 5).
+        let evm_mempool = Arc::new(parking_lot::Mutex::new(EvmMempool::new(4096)));
         let shared = Arc::new(Shared {
             state: Arc::clone(&state),
             blocks,
             verified: DashMap::new(),
             last_accepted: ArcSwap::from_pointee(tip),
+            evm_mempool: Arc::clone(&evm_mempool),
         });
         let txpool = Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
             4096,
@@ -332,6 +388,8 @@ impl EvmVm {
             builder,
             preferred: ArcSwap::from_pointee(tip.0),
             accepted_atomic_txs: Arc::new(AcceptedAtomicTxIndex::new()),
+            accepted_tx_index: Arc::new(AcceptedTxIndex::new()),
+            evm_mempool,
             ctx: None,
             engine_state: EngineState::Initializing,
             clock: Arc::new(RealClock),
@@ -450,6 +508,14 @@ impl EvmVm {
         Arc::clone(&self.accepted_atomic_txs)
     }
 
+    /// The accepted-tx receipt index shared with the `eth_*` handlers
+    /// (cchain-tx-pipeline task 3; the accept-side writer is wired into every
+    /// block's [`EvmBlockContext`] by [`EvmVm::wrap`]).
+    #[must_use]
+    pub fn accepted_tx_index(&self) -> Arc<AcceptedTxIndex> {
+        Arc::clone(&self.accepted_tx_index)
+    }
+
     /// The current committed Firewood state root (test/inspection helper).
     #[must_use]
     pub fn state_root(&self) -> B256 {
@@ -471,16 +537,29 @@ impl EvmVm {
         Arc::clone(&self.txpool)
     }
 
+    /// The EVM mempool handle (test/inspection helper; cchain-tx-pipeline
+    /// task 4). `create_handlers` hands the same `Arc` to [`EthRpc::new`], so
+    /// a test can seed/inspect it exactly like `mempool_handle` does for the
+    /// atomic pool.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn evm_mempool_handle(&self) -> Arc<parking_lot::Mutex<EvmMempool>> {
+        Arc::clone(&self.evm_mempool)
+    }
+
     /// Wraps an [`EvmBlock`] as the engine-facing [`ava_snow::Block`], cloning the
     /// shared collaborators into the block's lifecycle context.
     fn wrap(&self, block: EvmBlock) -> Arc<dyn VmBlock> {
         let id = id_of(block.hash());
         let parent = id_of(*block.parent_hash());
-        let ctx = Arc::new(EvmBlockContext::new(
-            Arc::clone(&self.shared.state),
-            self.evm_config.clone(),
-            Arc::clone(&self.shared.blocks),
-        ));
+        let ctx = Arc::new(
+            EvmBlockContext::new(
+                Arc::clone(&self.shared.state),
+                self.evm_config.clone(),
+                Arc::clone(&self.shared.blocks),
+            )
+            .with_accepted_tx_index(Arc::clone(&self.accepted_tx_index)),
+        );
         Arc::new(VerifiedEvmBlock {
             block,
             id,
@@ -567,6 +646,52 @@ impl Connector for EvmVm {
 // Vm.
 // ---------------------------------------------------------------------------
 
+/// A lock-free [`PendingWorkWaiter`] over `EvmVm`'s two mempools (the atomic
+/// X<->C pool and the EVM pool). Holds only the pool `Arc`s the VM already
+/// owns — NEVER the outer `Arc<Mutex<dyn Vm>>` a proposal forwarder would
+/// otherwise have to hold to call `wait_for_event` (the M7.18 lock-parking
+/// hazard this seam exists to avoid).
+struct EvmPendingWorkWaiter {
+    atomic: Arc<parking_lot::Mutex<AtomicMempool>>,
+    evm: Arc<parking_lot::Mutex<EvmMempool>>,
+}
+
+impl EvmPendingWorkWaiter {
+    /// True iff either pool currently holds work.
+    fn pending(&self) -> bool {
+        !self.atomic.lock().is_empty() || !self.evm.lock().is_empty()
+    }
+}
+
+#[async_trait]
+impl PendingWorkWaiter for EvmPendingWorkWaiter {
+    fn has_pending(&self) -> bool {
+        self.pending()
+    }
+
+    async fn wait(&self) {
+        // Mirrors `EvmVm::wait_for_event` below: register on BOTH pools'
+        // notify BEFORE the emptiness check so a tx admitted between the
+        // check and the `select!` is never lost (tokio `Notify` stores one
+        // permit — the `.notified()` future created here observes a
+        // `notify_one` that fires after this line).
+        loop {
+            let atomic_notify = self.atomic.lock().subscribe();
+            let evm_notify = self.evm.lock().subscribe();
+            if self.pending() {
+                return;
+            }
+            tokio::select! {
+                () = atomic_notify.notified() => {}
+                () = evm_notify.notified() => {}
+            }
+            // Loop back: re-subscribe and re-check. A spurious wake (e.g. the
+            // admission that woke us was immediately drained by a concurrent
+            // `build_block`) simply re-arms instead of returning early.
+        }
+    }
+}
+
 #[async_trait]
 impl Vm for EvmVm {
     async fn initialize(
@@ -626,6 +751,8 @@ impl Vm for EvmVm {
             Arc::clone(&self.shared.blocks),
             self.evm_config.clone(),
             chain_id,
+            Arc::clone(&self.evm_mempool),
+            Arc::clone(&self.accepted_tx_index),
         )));
         let avax = avax_service(AvaxRpc::new(
             Arc::clone(&self.txpool),
@@ -672,17 +799,38 @@ impl Vm for EvmVm {
     }
 
     async fn wait_for_event(&self, token: &CancellationToken) -> VmResult<VmEvent> {
-        // Report PendingTxs when the atomic mempool is non-empty; otherwise block
-        // until cancellation. `VmEvent` has no cancellation variant, so on
-        // shutdown we return `PendingTxs` (the engine re-checks emptiness and
-        // re-parks — harmless when tearing down). Matches the avm precedent.
-        let pending = !self.txpool.lock().is_empty();
+        // Report PendingTxs when EITHER pool (atomic X<->C or EVM) is non-empty;
+        // otherwise park until the first admission notify from either pool, or
+        // cancellation. The engine's notification forwarder re-invokes
+        // `wait_for_event` after each event (Go `common.NotificationForwarder`
+        // loop; the C-Chain rpcchainvm host drives this over gRPC), re-checking
+        // emptiness each round, so a spurious wake is harmless.
+        //
+        // Register on BOTH notifies BEFORE the emptiness check so a tx admitted
+        // between the check and the `select!` still wakes us (tokio `Notify`
+        // stores one permit): the `.notified()` future created here observes a
+        // `notify_one` that fires after this line. `VmEvent` has no cancellation
+        // variant, so on shutdown we return `PendingTxs` — the engine re-checks
+        // emptiness and re-parks, harmless when tearing down.
+        let atomic_notify = self.txpool.lock().subscribe();
+        let evm_notify = self.evm_mempool.lock().subscribe();
+        let pending = !self.txpool.lock().is_empty() || !self.evm_mempool.lock().is_empty();
         if pending {
-            Ok(VmEvent::PendingTxs)
-        } else {
-            token.cancelled().await;
-            Ok(VmEvent::PendingTxs)
+            return Ok(VmEvent::PendingTxs);
         }
+        tokio::select! {
+            () = atomic_notify.notified() => {}
+            () = evm_notify.notified() => {}
+            () = token.cancelled() => {}
+        }
+        Ok(VmEvent::PendingTxs)
+    }
+
+    fn pending_work_waiter(&self) -> Option<Arc<dyn PendingWorkWaiter>> {
+        Some(Arc::new(EvmPendingWorkWaiter {
+            atomic: Arc::clone(&self.txpool),
+            evm: Arc::clone(&self.evm_mempool),
+        }))
     }
 }
 
@@ -714,26 +862,63 @@ impl ChainVm for EvmVm {
         // The next-block build/fee context (§17.3). The build-time timestamp comes
         // from the injectable clock (specs/24 hazard #5: never read the wall clock
         // directly — this header time is consensus state), clamped to >
-        // parent.time so the header is strictly monotonic. The fee state defaults
-        // to the genesis/first-AP3 window (the parent-extra fee-state extraction is
-        // M6.7's follow-up — see the build report). The atomic gas budget is the
-        // post-AP5 limit the mempool packs against.
+        // parent.time so the header is strictly monotonic. The parent's real
+        // dynamic-fee state is parsed from its extra prefix (coreth
+        // `feeStateBeforeBlock`/`feeWindow` initial state) so the child base fee is
+        // derived from the actual parent state, not a default. The atomic gas
+        // budget is the post-AP5 limit the mempool packs against.
         let now_secs = self.clock.unix().max(parent_header.time.saturating_add(1));
+        let parent_fee_state =
+            crate::feerules::parent_fee_state_of(self.evm_config.chain_spec(), &parent_header)
+                .map_err(VmError::from)?;
         let ctx = AvaNextBlockCtx {
             timestamp: now_secs,
+            // The header carries `Time` (seconds) and, at Granite, a millisecond
+            // `TimeMilliseconds`; we build at whole-second precision so the two
+            // stay consistent (`time_ms / 1000 == time`).
+            timestamp_ms: now_secs.saturating_mul(1000),
+            parent_fee_state,
             ..AvaNextBlockCtx::with_atomic_gas_limit(100_000)
         };
 
-        // The reth-txpool `best_transactions` integration is M6.23; until then the
-        // VM contributes no EVM txs (atomic-only blocks build from the mempool).
+        // Pull the fee-cap-ordered EVM candidates from the mempool (M6.23:
+        // purpose-built `EvmMempool` in place of reth's pool — design doc
+        // `crates/ava-evm/src/mempool.rs`). `build_on` re-filters each for
+        // base-fee affordability and gas budget as it packs (`builder.rs`
+        // `pack_evm_txs`); the atomic batch (if any) is drained inside `build_on`.
+        // Snapshot `(signer, nonce, hash)` BEFORE moving the candidates into
+        // `build_on` so a batch-execution failure can evict exactly them.
+        let evm_candidates = self.evm_mempool.lock().best_txs();
+        let stale: Vec<(Address, u64, B256)> = evm_candidates
+            .iter()
+            .map(|tx| (tx.signer(), ConsensusTx::nonce(tx.inner()), *tx.hash()))
+            .collect();
+        let had_candidates = !stale.is_empty();
         match self
             .builder
-            .build_on(&parent_header, parent_state_root, &ctx, Vec::new())
+            .build_on(&parent_header, parent_state_root, &ctx, evm_candidates)
         {
             Ok(block) => Ok(self.wrap(block)),
             // "Nothing to build" / min-retry-delay guard -> no pending block.
+            // This is the benign path (no atomic batch AND no includable EVM
+            // tx); NEVER evict here — the candidates were simply not packable
+            // (e.g. underpriced at the real base fee), not poison.
             Err(Error::MissingProposal(_)) => Err(VmError::NotFound),
-            Err(e) => Err(VmError::from(e)),
+            Err(e) => {
+                // Admission pre-validates nonce/balance/gas, so a batch-execution
+                // failure with candidates present is exceptional. Evict the whole
+                // snapshotted batch (design §Component 3 — no per-tx bisection) so
+                // a poisoned tx can never wedge block building, and say so loudly.
+                if had_candidates {
+                    self.evm_mempool.lock().on_block_accepted(&stale);
+                    tracing::warn!(
+                        error = %e,
+                        evicted = stale.len(),
+                        "build_on failed with EVM candidates present; evicted the batch"
+                    );
+                }
+                Err(VmError::from(e))
+            }
         }
     }
 

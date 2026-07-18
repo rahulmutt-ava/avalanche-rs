@@ -2024,6 +2024,64 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > harness `dechunk` can panic on a multi-byte UTF-8 char split across an HTTP chunk boundary
 > (bounded — JSON-RPC responses are ASCII in practice).
 
+> **AS-BUILT — M9.15 Rust-as-proposer arc (branch `m9.15-rust-proposer`, 2026-07-16→18).**
+> The proposal-side deferrals above are now CLOSED offline (live proof = the operator/nightly
+> arm). Landed in three phases:
+> - **C-Chain proposer parity** (parent plan `2026-07-16-rust-as-proposer-cchain-parity`):
+>   (2) PREVRANDAO `Random=difficulty` at Durango+ (coreth `core/evm.go:86-95`); builder stamps
+>   full Go-shape headers — blackhole coinbase, Cancun tail, real tx/receipt roots + bloom,
+>   exact ACP-176 extra prefix + Granite tail, **difficulty==1** (retires the `difficulty:0`
+>   deferral (1)); **L1 closed** — `syntactic_verify` now ports the full coreth
+>   `wrappedBlock.syntacticVerify` check set (number/nonce/mixDigest/version/txsHash/uncleHash/
+>   coinbase/min-gas-price/basefee/blockgascost/Cancun clamp/VerifyExtra) in Go order with
+>   sentinel parity. A recorded **Go-oracle verdict leg** has real coreth ACCEPT the honest
+>   Rust-built block + reject 5 adversarial mutations with matched rejection classes. RSA
+>   staking identity + RSA IP signing (Go `staking/verify.go` PKCS1v15-SHA256 parity).
+> - **C-Chain tx pipeline** (nested insert, spec `2026-07-17-cchain-tx-pipeline-design`):
+>   `EvmMempool` (coreth-parity admission), `eth_sendRawTransaction`/`eth_getTransactionReceipt`,
+>   receipts persisted at accept + `AcceptedTxIndex`, `build_block` packs mempool txs. Retires
+>   the "M6.23 reth-txpool `best_transactions`" reading — purpose-built pool with cited coreth
+>   parity satisfies the intent. **Tx GOSSIP still deferred** (its own milestone; needs
+>   engine-layer AppGossip/AppRequest routing — `InboundOp` has no App variants today).
+> - **Proposal initiation** (nested insert #2, spec `2026-07-18-proposal-initiation-design`):
+>   a lock-free `PendingWorkWaiter` seam + per-chain forwarder task (Go
+>   `NotificationForwarder` parity) so a pending EVM tx triggers `build_block` in production
+>   without holding the consensus-shared VM mutex; `GenesisValidatorState` feeds the proposervm
+>   windower the real genesis 5-validator set (retires the live `FixedState` self+beacons).
+>   The live TLS-v1-RSA-own-cert boot bug (rustls `with_single_cert` rejecting avalanchego's
+>   v1 staker cert) was found + fixed live. **STILL DEFERRED:** full `PChainValidatorManager`
+>   node wiring (needed only when validator sets change — Fuji/mainnet); P/X/SAE forwarder
+>   opt-in; the slot-wait-under-lock hazard (bounded, M7.18 family). Live `mixed_network_rust_
+>   proposes` re-run = the operator gate.
+>
+> **AS-BUILT addendum (Task 9 closeout, same branch).** The live gate above landed after this
+> note was written: `mixed_network_rust_proposes` ran GREEN end-to-end (4 Go validators + the
+> Rust node proposing; 28.84s, no fork) with the follower-only arm showing no regression — the
+> live proof, not just an offline exit gate. Two scoping notes for anyone extending L1 further:
+> (1) **Helicon upstream-delta** — `VerifyExtra`'s Fortuna-arm length floor (ported here,
+> `syntactic_verify::truncated_extra_is_rejected_at_fortuna`) is itself a **pre-Helicon**
+> behavior; Helicon (unscheduled on every network, per `specs/10-cchain-evm-reth.md` §Helicon
+> callouts and `specs/README.md`) drops the ACP-176 state-space floor from `header.Extra`
+> entirely (`VerifyExtra` then accepts any length) — non-gating today, but the port must not be
+ read as "any length is always invalid below 24 bytes" once Helicon activates. (2) ★ the
+> dummy-engine `verifyHeaderGasFields` (`consensus/dummy/consensus.go:125-154`) is **UNPORTED on
+> the Rust verify path** — surfaced by the whole-branch review as a genuine fail-OPEN gap, not a
+> bland "non-goal." coreth's *complete* block verification recomputes and **equality-checks** four
+> fee/gas header fields that `syntactic_verify` only checks structurally: (a) `header.BaseFee ==
+> BaseFee(parent,…)` (Rust: non-nil at AP3+ only), (b) `header.BlockGasCost == expected` (Rust:
+> non-nil/uint64 at AP4+ only), (c) `VerifyExtraPrefix` **byte-equality** of the ACP-176 extra
+> prefix (Rust: length ≥ 24/80 only), (d) the gas-limit rule (Rust: no check). None of these
+> affects an empty block's EVM state root, so a **Byzantine proposer** can craft a block with a
+> VALID state root but a wrong fee-metadata field that Go rejects and Rust accepts — a silent
+> Rust-vs-Go consensus split, the same class the Cancun clamp closed. **NOT triggered on the honest
+> arm** (every honest proposer, and the Rust builder itself, stamps these fields correctly — which
+> is why Go ACCEPTs Rust-built blocks and no live gate depends on this), but it **MUST be ported
+> before any adversarial / BFT-exposed deployment**. Coupled with the deferred `base_fee`
+> `feeStateBeforeBlock` time-advance above: once verify recomputes the expected base fee, it will
+> also need that advance to ACCEPT Go blocks under sustained load. Follow-up: port
+> `verifyHeaderGasFields` (expected-base-fee via `feerules::base_fee`, expected-block-gas-cost,
+> extra-prefix byte-equality, gas-limit) onto `EvmBlock::verify`.
+
 ---
 
 ## Spec coverage check

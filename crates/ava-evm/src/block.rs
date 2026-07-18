@@ -34,9 +34,10 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, ConsensusTx as _, Decodable2718, Header, RLP_EMPTY_STRING_CODE,
-    RecoveredTx, RlpDecodable, RlpEncodable, RlpError, RlpListHeader, SignerRecoverable, State,
-    StateBuilder, StateProviderDatabase, TransactionSigned, U256, keccak256,
+    Address, B256, Bytes, ConsensusTx as _, Decodable2718, EMPTY_OMMER_ROOT_HASH, EthReceipt,
+    Header, RLP_EMPTY_STRING_CODE, RecoveredTx, RlpDecodable, RlpEncodable, RlpError,
+    RlpListHeader, SignerRecoverable, State, StateBuilder, StateProviderDatabase,
+    TransactionSigned, TxHashRef as _, Typed2718 as _, U256, calculate_transaction_root, keccak256,
 };
 
 use crate::atomic::backend::AtomicBackend;
@@ -45,8 +46,25 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaExecCtx, NoopPreHook};
+use crate::feerules::acp176;
+use crate::feerules::window;
+use crate::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use crate::precompile::warp::{WarpBackend, WarpLog, WarpPrecompile, handle_precompile_accept};
+use crate::receipts::{AcceptedTxIndex, TxReceiptRecord, encode_block_receipts};
 use crate::state::{FirewoodStateProvider, FirewoodStateView};
+
+/// coreth `plugin/evm/upgrade/ap0/params.go` `MinGasPrice` — 470 gwei, the
+/// minimum tx gas price enforced pre-ApricotPhase1 (`wrapped_block.go:460-465`).
+const AP0_MIN_GAS_PRICE: u128 = 470_000_000_000;
+
+/// coreth `plugin/evm/upgrade/ap1/params.go` `MinGasPrice` — 225 gwei, the
+/// minimum tx gas price enforced pre-ApricotPhase3 (`wrapped_block.go:466-472`).
+const AP1_MIN_GAS_PRICE: u128 = 225_000_000_000;
+
+/// coreth `plugin/evm/upgrade/ap0/params.go:25` `MaximumExtraDataSize` — the
+/// pre-ApricotPhase1 ceiling on `header.Extra` (`customheader/extra.go:158-166`,
+/// `VerifyExtra`'s default arm).
+const AP0_MAX_EXTRA_DATA_SIZE: usize = 64;
 
 /// `customtypes.EmptyExtDataHash` = `keccak256(rlp(nil))` — the `ExtDataHash` of
 /// a block with no atomic txs (coreth `hashes_ext.go`).
@@ -477,6 +495,20 @@ pub struct EvmBlockContext {
     /// [`WarpBackend`] that records accepted unsigned messages for signing.
     /// `None` until wired via [`EvmBlockContext::with_warp`].
     warp: Option<WarpAcceptSeam>,
+    /// The verify-time receipt stash (cchain-tx-pipeline task 3): `verify`'s
+    /// `execute_batch` outcome carries the ONLY copy of this block's receipts,
+    /// so it stashes them here keyed by pre-commit root (the same warp-seam
+    /// idiom as `warp`'s `pending` map, always present — unlike `warp`/
+    /// `atomic_backend` this is not an optional feature). `accept` takes +
+    /// persists the entry; `reject` drops it.
+    receipts: parking_lot::Mutex<std::collections::BTreeMap<B256, Vec<EthReceipt>>>,
+    /// The accepted-tx index [`EvmBlock::accept`] records each block's
+    /// [`TxReceiptRecord`]s into (cchain-tx-pipeline task 3, Task 4's RPC
+    /// reader). Defaults to a fresh, unshared index; [`EvmVm`](crate::vm::EvmVm)
+    /// overrides it via [`EvmBlockContext::with_accepted_tx_index`] so the RPC
+    /// handlers (`EvmVm::accepted_tx_index`) observe the SAME instance the
+    /// block lifecycle writes into.
+    accepted_tx_index: Arc<AcceptedTxIndex>,
 }
 
 /// The accept-time warp routing seam (M6.31, coreth `handlePrecompileAccept`):
@@ -511,6 +543,8 @@ impl EvmBlockContext {
             canonical,
             atomic_backend: None,
             warp: None,
+            receipts: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
+            accepted_tx_index: Arc::new(AcceptedTxIndex::new()),
         }
     }
 
@@ -542,6 +576,36 @@ impl EvmBlockContext {
     #[must_use]
     pub fn atomic_backend(&self) -> Option<&Arc<AtomicBackend>> {
         self.atomic_backend.as_ref()
+    }
+
+    /// Overrides the accepted-tx index [`EvmBlock::accept`] records into
+    /// (cchain-tx-pipeline task 3). [`EvmVm`](crate::vm::EvmVm) calls this with
+    /// its own shared instance so the `avax.*`/`eth_*` RPC handlers observe the
+    /// same accepted receipts the lifecycle writes; callers that never attach
+    /// one (most tests) keep the fresh per-context default from
+    /// [`EvmBlockContext::new`].
+    #[must_use]
+    pub fn with_accepted_tx_index(mut self, accepted_tx_index: Arc<AcceptedTxIndex>) -> Self {
+        self.accepted_tx_index = accepted_tx_index;
+        self
+    }
+
+    /// The accepted-tx index this context's `accept` writes into.
+    #[must_use]
+    pub fn accepted_tx_index(&self) -> &Arc<AcceptedTxIndex> {
+        &self.accepted_tx_index
+    }
+
+    /// Test-only seam (cchain-tx-pipeline task 3, I1 review fix): overwrites
+    /// the verify-time receipt stash for `root`, bypassing a real `verify`.
+    /// Lets a test exercise `accept`'s never-fail posture against a
+    /// corrupted/mismatched stash (e.g. a receipts/tx-count disagreement)
+    /// without fabricating one through full semantic execution. NOT part of
+    /// the lifecycle contract — production code only ever reaches this stash
+    /// through [`EvmBlock::verify`].
+    #[doc(hidden)]
+    pub fn stash_receipts_for_test(&self, root: B256, receipts: Vec<EthReceipt>) {
+        self.receipts.lock().insert(root, receipts);
     }
 
     /// The Firewood state-of-record provider.
@@ -626,31 +690,159 @@ impl EvmBlock {
     ///
     /// # Errors
     /// As [`EvmBlock::verify`].
-    /// Cancun syntactic header clamp + body blob-count parity (M9.15 task 8f).
+    /// Full `wrappedBlock.syntacticVerify` port (M9.15 task L1 + task 5 —
+    /// every structural check, including `Difficulty == 1` and `VerifyExtra`).
     ///
     /// Mirrors coreth `wrappedBlock.syntacticVerify`
-    /// (`plugin/evm/wrapped_block.go:493-518`): at Cancun (== Etna on
-    /// Avalanche) the header must carry `parentBeaconRoot == 0x0`,
-    /// `blobGasUsed == 0`, and `excessBlobGas == 0` exactly; pre-Cancun all
-    /// three must be absent. `ValidateBody` parity
-    /// (`core/block_validator.go:100-104`) then counts the body's blob hashes
-    /// against `blobGasUsed / DATA_GAS_PER_BLOB` — with the clamp forcing 0,
-    /// every type-3 blob tx mismatches, so blob txs are syntactically invalid
-    /// on the C-Chain exactly as in Go.
-    fn syntactic_verify_cancun_clamp(&self, spec: &AvaChainSpec) -> Result<()> {
+    /// (`plugin/evm/wrapped_block.go:398-527`) **in Go's check order**, so the
+    /// first error a malformed block hits matches Go's rejection exactly:
+    /// number → difficulty → nonce → mixDigest → VerifyExtra → version →
+    /// txsHash → uncleHash → coinbase → min-gas-price → BaseFee →
+    /// BlockGasCost → the Cancun header clamp + body blob-count parity
+    /// (`core/block_validator.go:100-104`).
+    fn syntactic_verify(&self, spec: &AvaChainSpec) -> Result<()> {
         let h = self.header();
 
-        // Ungated header invariant (coreth `wrapped_block.go:420-421`, applied to
-        // every non-genesis block): MixDigest must be the zero hash. Closes an
-        // adversarial PREVRANDAO fail-open. (coreth also fixes Difficulty==1 and
-        // Nonce==0 here; those are deferred with the wider `syntacticVerify` port
-        // because `builder.rs` currently stamps difficulty 0 on Rust-built blocks
-        // — porting them requires reconciling the builder first.)
+        // coreth wrapped_block.go:412 — block number must fit uint64.
+        // `AvaHeader::number` already decodes as a Rust `u64` (never a wider
+        // integer, see `AvaHeader::decode_rlp`), so this can never fire; kept
+        // to preserve Go's check order + sentinel for Task 6's
+        // rejection-class mapping.
+        if U256::from(h.number) > U256::from(u64::MAX) {
+            return Err(Error::InvalidBlockNumber(U256::from(h.number)));
+        }
+
+        // coreth wrapped_block.go:415 — difficulty must be exactly 1 (the
+        // dummy consensus engine's `Prepare` stamps every header this way,
+        // `consensus/dummy/consensus.go:233-235`).
+        if h.difficulty != U256::from(1) {
+            return Err(Error::InvalidDifficulty(h.difficulty));
+        }
+
+        // coreth wrapped_block.go:418 — nonce must be 0.
+        if h.nonce != [0u8; 8] {
+            return Err(Error::InvalidNonce(u64::from_be_bytes(h.nonce)));
+        }
+
+        // Ungated header invariant (coreth `wrapped_block.go:420-421`, applied
+        // to every non-genesis block): MixDigest must be the zero hash.
+        // Closes an adversarial PREVRANDAO fail-open.
         if h.mix_digest != B256::ZERO {
             return Err(Error::InvalidMixDigest(h.mix_digest));
         }
 
-        if spec.fork_at(h.time) >= AvaPhase::Etna {
+        // The phase is needed here (VerifyExtra) and again below (min-gas-price
+        // / BaseFee / BlockGasCost); resolved once and reused.
+        let phase = spec.fork_at(h.time);
+
+        // coreth `customheader/extra.go:115-168` (`VerifyExtra`) — fork-keyed
+        // header.Extra length rules.
+        //
+        // upstream-delta: coreth's `IsHelicon` arm (extra.go:120-121) skips
+        // this check entirely; `AvaPhase` has no Helicon variant yet (it maps
+        // to `None`, see `chainspec.rs`'s `AvaPhase::from_version_fork`), so
+        // this port cannot express that arm. Fold it in when `AvaPhase` grows
+        // Helicon.
+        let extra_len = h.extra.len();
+        match phase {
+            p if p >= AvaPhase::Fortuna => {
+                if extra_len < acp176::STATE_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: ">= 24",
+                        got: extra_len,
+                    });
+                }
+            }
+            p if p >= AvaPhase::Durango => {
+                if extra_len < window::WINDOW_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: ">= 80",
+                        got: extra_len,
+                    });
+                }
+            }
+            p if p >= AvaPhase::ApricotPhase3 => {
+                if extra_len != window::WINDOW_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: "== 80",
+                        got: extra_len,
+                    });
+                }
+            }
+            p if p >= AvaPhase::ApricotPhase1 => {
+                if extra_len != 0 {
+                    return Err(Error::InvalidExtraLength {
+                        expected: "== 0",
+                        got: extra_len,
+                    });
+                }
+            }
+            _ => {
+                if extra_len > AP0_MAX_EXTRA_DATA_SIZE {
+                    return Err(Error::InvalidExtraLength {
+                        expected: "<= 64",
+                        got: extra_len,
+                    });
+                }
+            }
+        }
+
+        // coreth wrapped_block.go:434 — body extension version must be 0.
+        if self.version() != 0 {
+            return Err(Error::InvalidBlockVersion(self.version()));
+        }
+
+        // coreth wrapped_block.go:439 — header txsHash matches the body.
+        let calculated_tx_root = calculate_transaction_root(&self.parts().transactions);
+        if calculated_tx_root != h.tx_root {
+            return Err(Error::TxRootMismatch {
+                header: h.tx_root,
+                calculated: calculated_tx_root,
+            });
+        }
+
+        // coreth wrapped_block.go:444/:453 — uncle hash matches the
+        // (structurally empty) body; the RLP decode (`decode_uncle_list`)
+        // admits only an empty uncle list, so `CalcUncleHash(uncles)` is
+        // always the empty-ommer sentinel and `errUnclesUnsupported`
+        // (:453-455) can never separately fire.
+        if h.uncle_hash != EMPTY_OMMER_ROOT_HASH {
+            return Err(Error::InvalidUncleHash(h.uncle_hash));
+        }
+
+        // coreth wrapped_block.go:449 — C-Chain coinbase is the blackhole
+        // address.
+        if h.coinbase != BLACKHOLE_ADDRESS {
+            return Err(Error::InvalidCoinbase(h.coinbase));
+        }
+
+        // coreth wrapped_block.go:458-473 — pre-AP1/pre-AP3 minimum gas
+        // prices, enforced before dynamic fees (AP3+) go into effect.
+        // (`phase` was already resolved above, for VerifyExtra.)
+        if phase < AvaPhase::ApricotPhase1 {
+            self.check_min_gas_price(AP0_MIN_GAS_PRICE)?;
+        } else if phase < AvaPhase::ApricotPhase3 {
+            self.check_min_gas_price(AP1_MIN_GAS_PRICE)?;
+        }
+
+        // coreth wrapped_block.go:476-483 — BaseFee non-nil at AP3+ (the
+        // `BitLen() <= 256` half is structurally guaranteed: `base_fee` is a
+        // `U256`).
+        if phase >= AvaPhase::ApricotPhase3 && h.base_fee.is_none() {
+            return Err(Error::NilBaseFee);
+        }
+
+        // coreth wrapped_block.go:486-495 — BlockGasCost non-nil + uint64 at
+        // AP4+ (header verification already checks `BlockGasCost`
+        // correctness upstream in Go; here only nil-ness/range is enforced).
+        if phase >= AvaPhase::ApricotPhase4 {
+            match h.block_gas_cost {
+                Some(v) if v <= U256::from(u64::MAX) => {}
+                other => return Err(Error::InvalidBlockGasCost(other)),
+            }
+        }
+
+        if phase >= AvaPhase::Etna {
             match h.parent_beacon_root {
                 None => return Err(Error::MissingParentBeaconRoot),
                 Some(root) if root != B256::ZERO => {
@@ -702,17 +894,33 @@ impl EvmBlock {
         Ok(())
     }
 
+    /// coreth `wrapped_block.go:458-473` — rejects the block if any tx's
+    /// `GasPrice()` (the fee cap, for dynamic-fee txs) is below `min`.
+    fn check_min_gas_price(&self, min: u128) -> Result<()> {
+        for tx in &self.parts().transactions {
+            let have = tx.max_fee_per_gas();
+            if have < min {
+                return Err(Error::GasPriceTooLow {
+                    tx: *tx.hash(),
+                    have,
+                    min,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn verify_with_predicates(
         &self,
         ctx: &EvmBlockContext,
         parent_state_root: B256,
         exec_ctx: &AvaExecCtx,
     ) -> Result<B256> {
-        // Cancun syntactic header clamp — runs before any execution work
+        // Structural syntacticVerify port — runs before any execution work
         // (coreth fail-closes these in `wrappedBlock.syntacticVerify` before
         // the state transition; a violating block is invalid regardless of its
         // declared state root).
-        self.syntactic_verify_cancun_clamp(ctx.chain_spec())?;
+        self.syntactic_verify(ctx.chain_spec())?;
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
@@ -779,6 +987,17 @@ impl EvmBlock {
             seam.pending.lock().insert(precommit, warp_logs);
         }
 
+        // Stash this verified block's per-tx receipts for accept-time persist +
+        // index (cchain-tx-pipeline task 3): `outcome.result.receipts` is the
+        // ONLY place these exist — `accept` has no way to re-derive them
+        // without re-executing. Moved (not cloned): `outcome` is not read again
+        // after this point. `reject` removes this entry (below) so a failed
+        // verify never leaks receipts into a later accept, mirroring the warp
+        // seam immediately above.
+        ctx.receipts
+            .lock()
+            .insert(precommit, outcome.result.receipts);
+
         Ok(precommit)
     }
 
@@ -816,19 +1035,162 @@ impl EvmBlock {
             backend.accept(self.number(), self.atomic_txs())?;
         }
 
+        // 2.5 Receipts (cchain-tx-pipeline task 3): take the verify-time stash
+        //     for this pre-commit root. Its absence means `verify` never ran in
+        //     THIS process (e.g. an accept-only replay/resume path) — that is
+        //     NEVER an accept failure: persist an empty receipts list and skip
+        //     indexing below, exactly the M6.24 placeholder behavior this task
+        //     replaces for the common (verify-then-accept) case.
+        let receipts = ctx.receipts.lock().remove(&precommit_root).unwrap_or_else(|| {
+            tracing::debug!(
+                block_hash = %self.hash(),
+                block_number = self.number(),
+                precommit_root = %precommit_root,
+                "no verify-time receipt stash for this pre-commit root; persisting empty receipts"
+            );
+            Vec::new()
+        });
+        let encoded_receipts = encode_block_receipts(&receipts);
+
         // 3. Append non-state block metadata + advance the canonical tip (G6,
-        //    §17.7). precompile-accept callbacks (§8) are wired by M6.22; the
-        //    canonical append is this task.
+        //    §17.7). precompile-accept callbacks (§8) are wired by M6.22.
         ctx.canonical.append_canonical(
             self.number(),
             self.hash(),
             self.header().state_root,
             self.ext_data(),
-            // Receipts bytes are persisted once the receipt encoding is wired
-            // (RPC/history task); the canonical index contract is satisfied by the
-            // header/hash/number rows + tip pointer here.
-            &[],
+            &encoded_receipts,
         )?;
+
+        // 4. `tx_hash -> block number` rows + the `AcceptedTxIndex` (task 3;
+        //    Task 4's RPC layer is the reader). This block is ALREADY durably
+        //    accepted by this point (steps 1-3 succeeded) — an indexing
+        //    failure here must NEVER fail `accept` (I1 review fix): log at
+        //    `warn!` and continue. A no-op when the stash was missing above
+        //    (`receipts` is empty then).
+        if !receipts.is_empty()
+            && let Err(e) = self.index_accepted_receipts(ctx, &receipts)
+        {
+            tracing::warn!(
+                block_hash = %self.hash(),
+                block_number = self.number(),
+                error = %e,
+                "failed to index accepted tx receipts after the block was \
+                 already durably accepted (tx_number rows / AcceptedTxIndex \
+                 may be incomplete for this block); continuing"
+            );
+        }
+        Ok(())
+    }
+
+    /// Builds + records a [`TxReceiptRecord`] per tx and writes the
+    /// `tx_hash -> block number` row (cchain-tx-pipeline task 3). `receipts`
+    /// MUST be this block's receipts in the same order as
+    /// [`EvmBlock::transactions`] (the order `execute_batch` produced them in
+    /// at verify time — the invariant [`EvmBlock::accept`] relies on to zip
+    /// them against the re-recovered senders here); a length mismatch is
+    /// treated as a corrupted stash, not a panic.
+    ///
+    /// Called ONLY after [`EvmBlock::accept`] has already durably committed
+    /// the block (state committed + canonical appended) — every error path
+    /// here is caught and logged by the caller, NEVER propagated to fail
+    /// `accept` (I1 review fix). Each tx's `tx_number` row and
+    /// `AcceptedTxIndex` entry are written together in the same loop
+    /// iteration, so a failure partway through (e.g. a KV write error) leaves
+    /// the two indices consistent with each other for every tx processed so
+    /// far — never a `tx_number` row with no matching `AcceptedTxIndex` entry.
+    ///
+    /// # Errors
+    /// Returns [`Error::NilTx`] if a signature fails to recover (never
+    /// expected — the same txs recovered cleanly at verify time),
+    /// [`Error::ReceiptTxCountMismatch`] if `receipts.len()` disagrees with
+    /// this block's tx count, [`Error::FeeOverflow`] if a receipt's
+    /// cumulative gas used is not monotonically non-decreasing (a corrupted
+    /// receipt list), or a canonical-store KV write error.
+    fn index_accepted_receipts(
+        &self,
+        ctx: &EvmBlockContext,
+        receipts: &[EthReceipt],
+    ) -> Result<()> {
+        let txs = self.recover_senders()?;
+        if txs.len() != receipts.len() {
+            return Err(Error::ReceiptTxCountMismatch {
+                txs: txs.len(),
+                receipts: receipts.len(),
+            });
+        }
+        let base_fee = self.eth_env_header()?.base_fee_per_gas;
+        let block_hash = self.hash();
+        let block_number = self.number();
+
+        let mut cumulative_before = 0u64;
+        // Block-wide running log counter (go-ethereum `core/types.Receipts.
+        // DeriveFields`: each log's `Index` is a running count across the
+        // WHOLE block, not reset per tx). `first_log_index` for tx N is this
+        // counter's value BEFORE tx N's own logs are added.
+        let mut log_count_before = 0u64;
+        for (idx, (tx, receipt)) in txs.iter().zip(receipts.iter()).enumerate() {
+            let tx_hash = *tx.tx_hash();
+
+            let gas_used = receipt
+                .cumulative_gas_used
+                .checked_sub(cumulative_before)
+                .ok_or(Error::FeeOverflow)?;
+            cumulative_before = receipt.cumulative_gas_used;
+
+            let first_log_index = log_count_before;
+            let this_tx_log_count =
+                u64::try_from(receipt.logs.len()).map_err(|_| Error::FeeOverflow)?;
+            log_count_before = log_count_before
+                .checked_add(this_tx_log_count)
+                .ok_or(Error::FeeOverflow)?;
+
+            // coreth/geth `types.Receipt.ContractAddress`: the CREATE address
+            // derived from the sender + the tx's OWN nonce (alloy
+            // `Address::create`, the geth `crypto.CreateAddress` port), only
+            // set for a contract-creation tx (`to == None`).
+            let contract_address = if tx.is_create() {
+                Some(tx.signer().create(tx.nonce()))
+            } else {
+                None
+            };
+
+            // `tx_index` is an RPC-only ordinal (not consensus-critical, and a
+            // block can never realistically carry `u64::MAX` txs), so this
+            // saturates rather than erroring — unlike `gas_used`'s
+            // `checked_sub` above, an overflow here would not indicate a
+            // corrupted receipt list, so `Error::FeeOverflow` would misuse
+            // that sentinel (review fix, minor 2).
+            let tx_index = u64::try_from(idx).unwrap_or(u64::MAX);
+
+            let record = TxReceiptRecord {
+                tx_hash,
+                block_hash,
+                block_number,
+                tx_index,
+                from: tx.signer(),
+                to: tx.to(),
+                contract_address,
+                gas_used,
+                cumulative_gas_used: receipt.cumulative_gas_used,
+                // alloy `Transaction::effective_gas_price`: `gas_price` for a
+                // legacy tx, `min(max_fee_per_gas, base_fee +
+                // max_priority_fee_per_gas)` for a dynamic-fee tx — the same
+                // formula coreth/geth's `types.Transaction` uses for
+                // `eth_getTransactionReceipt`'s `effectiveGasPrice`.
+                effective_gas_price: tx.effective_gas_price(base_fee),
+                success: receipt.success,
+                logs: receipt.logs.clone(),
+                tx_type: receipt.ty(),
+                first_log_index,
+            };
+
+            // Write the KV row THEN record into the in-memory index for the
+            // SAME tx, so a failure here never leaves a `tx_number` row
+            // without a matching `AcceptedTxIndex` entry (or vice versa).
+            ctx.canonical.put_tx_number(tx_hash, block_number)?;
+            ctx.accepted_tx_index.record(vec![record]);
+        }
         Ok(())
     }
 
@@ -846,6 +1208,12 @@ impl EvmBlock {
         if let Some(seam) = ctx.warp.as_ref() {
             seam.pending.lock().remove(&precommit_root);
         }
+        // Likewise its stashed receipts (cchain-tx-pipeline task 3): a rejected
+        // block's receipts are never persisted, so the stash entry must not
+        // leak into a later accept of a different block that happens to reuse
+        // this pre-commit root value (never expected under G1, but cheap to
+        // guarantee).
+        ctx.receipts.lock().remove(&precommit_root);
         ctx.state.discard(precommit_root);
         Ok(())
     }
@@ -886,8 +1254,8 @@ pub fn decode_ava_evm_block(bytes: &[u8], spec: &AvaChainSpec) -> Result<EvmBloc
     // 2) Txs — a list of EIP-2718 typed-envelope items.
     let transactions = decode_tx_list(body)?;
 
-    // 3) Uncles — always empty on the C-Chain, but consume the list.
-    let _uncles = decode_uncle_list(body)?;
+    // 3) Uncles — always empty on the C-Chain; a non-empty list is rejected.
+    decode_uncle_list(body)?;
 
     // 4) Version (uint32).
     let version = u32::decode(body).map_err(rlp_err)?;
@@ -1018,9 +1386,13 @@ fn decode_tx_list(buf: &mut &[u8]) -> Result<Vec<TransactionSigned>> {
     Ok(txs)
 }
 
-/// Decodes (and discards) the `Uncles` list; the C-Chain never has uncles, but
-/// the list framing must be consumed. Returns the count for sanity.
-fn decode_uncle_list(buf: &mut &[u8]) -> Result<usize> {
+/// Decodes the `Uncles` list; the C-Chain never has uncles (coreth
+/// `wrapped_block.go:452-455`, `errUnclesUnsupported`), so a non-empty list is
+/// rejected here at decode time — the Go-parity fix (M9.15 task L1): a
+/// well-formed C-Chain block can only ever carry an empty uncle list, which is
+/// what lets [`EvmBlock::syntactic_verify`]'s uncle-hash check collapse to a
+/// single comparison against the empty-ommer sentinel.
+fn decode_uncle_list(buf: &mut &[u8]) -> Result<()> {
     let list = RlpListHeader::decode(buf).map_err(rlp_err)?;
     if !list.list {
         return Err(rlp_err(RlpError::UnexpectedString));
@@ -1030,9 +1402,10 @@ fn decode_uncle_list(buf: &mut &[u8]) -> Result<usize> {
     }
     let (uncles, rest) = buf.split_at(list.payload_length);
     *buf = rest;
-    // Uncles are headers; the C-Chain forbids them, so a non-empty list is
-    // invalid. We only need to skip the bytes for round-trip parity.
-    Ok(usize::from(!uncles.is_empty()))
+    if !uncles.is_empty() {
+        return Err(rlp_err(RlpError::UnexpectedLength));
+    }
+    Ok(())
 }
 
 /// Encodes a `Txs` list (each tx as its EIP-2718 typed envelope).
@@ -1128,4 +1501,205 @@ fn rlp_err(_e: RlpError) -> Error {
 #[must_use]
 pub fn empty_ext_data_hash() -> B256 {
     B256::from(EMPTY_EXT_DATA_HASH)
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_matches::assert_matches;
+    use ava_evm_reth::{EvmSignature, SignableTransaction, TxLegacy};
+
+    use super::*;
+    use crate::chainspec::NetworkUpgrades;
+
+    /// A `NetworkUpgrades` schedule with AP1/AP3/AP4 activated at the given
+    /// unix seconds (`u64::MAX` == never); every later phase (AP5..Granite,
+    /// Helicon) is parked far in the future so the header stays pre-Etna (the
+    /// Cancun clamp then requires the blob/beacon-root fields to stay
+    /// `None`, which the test headers below already satisfy).
+    fn upgrades(ap1: u64, ap3: u64, ap4: u64) -> NetworkUpgrades {
+        const FAR_FUTURE: u64 = u64::MAX;
+        NetworkUpgrades {
+            apricot_phase_1: ap1,
+            apricot_phase_2: ap1,
+            apricot_phase_3: ap3,
+            apricot_phase_4: ap4,
+            apricot_phase_5: FAR_FUTURE,
+            apricot_phase_pre_6: FAR_FUTURE,
+            apricot_phase_6: FAR_FUTURE,
+            apricot_phase_post_6: FAR_FUTURE,
+            banff: FAR_FUTURE,
+            cortina: FAR_FUTURE,
+            durango: FAR_FUTURE,
+            etna: FAR_FUTURE,
+            fortuna: FAR_FUTURE,
+            granite: FAR_FUTURE,
+            helicon: FAR_FUTURE,
+        }
+    }
+
+    /// A self-consistent, minimal test header: every check `syntactic_verify`
+    /// runs *before* the one under test in a given case is satisfied
+    /// (difficulty/mixDigest/nonce/version zero-or-one, uncleHash/coinbase
+    /// correct, `tx_root` derived from `transactions`), so a case only needs
+    /// to vary the field(s) its check inspects. `extra` must be sized for the
+    /// caller's active phase (`VerifyExtra` now runs before every check this
+    /// helper is used for) — callers pass a phase-appropriate length.
+    fn test_header(
+        transactions: &[TransactionSigned],
+        base_fee: Option<U256>,
+        block_gas_cost: Option<U256>,
+        extra: Bytes,
+    ) -> AvaHeader {
+        AvaHeader {
+            parent_hash: B256::ZERO,
+            uncle_hash: EMPTY_OMMER_ROOT_HASH,
+            coinbase: BLACKHOLE_ADDRESS,
+            state_root: B256::ZERO,
+            tx_root: calculate_transaction_root(transactions),
+            receipt_root: B256::ZERO,
+            bloom: Bytes::from(vec![0u8; 256]),
+            difficulty: U256::from(1),
+            number: 1,
+            gas_limit: 8_000_000,
+            gas_used: 0,
+            time: 0,
+            extra,
+            mix_digest: B256::ZERO,
+            nonce: [0u8; 8],
+            ext_data_hash: empty_ext_data_hash(),
+            base_fee,
+            ext_data_gas_used: None,
+            block_gas_cost,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_root: None,
+            time_milliseconds: None,
+            min_delay_excess: None,
+        }
+    }
+
+    /// Assembles `header` + `transactions` into an [`EvmBlock`] via the same
+    /// path the wire codec uses, so `syntactic_verify` sees a block shaped
+    /// exactly as `decode_ava_evm_block` would hand it one.
+    fn build_block(header: AvaHeader, transactions: Vec<TransactionSigned>) -> EvmBlock {
+        let parts = AvaBlockParts {
+            header,
+            transactions,
+            atomic_txs: Vec::new(),
+            ext_data: Vec::new(),
+            version: 0,
+        };
+        assemble_ava_block(
+            parts,
+            &AvaChainSpec::c_chain(1, ava_evm_reth::Chain::from_id(43112)),
+        )
+        .expect("assemble test block")
+    }
+
+    /// A signed legacy tx with the given `gas_price` (signature is bogus —
+    /// `syntactic_verify` never recovers senders, only reads `GasPrice()`).
+    fn legacy_tx(gas_price: u128) -> TransactionSigned {
+        let tx = TxLegacy {
+            chain_id: Some(43112),
+            nonce: 0,
+            gas_price,
+            gas_limit: 21_000,
+            to: ava_evm_reth::TxKind::Call(Address::ZERO),
+            value: U256::ZERO,
+            input: Bytes::new(),
+        };
+        let sig = EvmSignature::new(U256::from(1), U256::from(1), false);
+        TransactionSigned::Legacy(tx.into_signed(sig))
+    }
+
+    /// coreth `wrapped_block.go:476-483`: `BaseFee == nil` at AP3+ is
+    /// rejected with `errNilBaseFeeApricotPhase3`.
+    #[test]
+    fn nil_base_fee_at_apricot_phase3_is_rejected() {
+        let spec = AvaChainSpec::from_parts(
+            upgrades(0, 0, u64::MAX),
+            ava_evm_reth::Chain::from_id(43112),
+            false,
+        );
+        // Phase is ApricotPhase3 (ap3=0, durango=FAR_FUTURE): VerifyExtra's
+        // ApricotPhase3 arm requires extra_len == window::WINDOW_SIZE (80).
+        let header = test_header(&[], None, None, Bytes::from(vec![0u8; window::WINDOW_SIZE]));
+        let block = build_block(header, Vec::new());
+        let err = block
+            .syntactic_verify(&spec)
+            .expect_err("nil BaseFee at AP3+ must be rejected");
+        assert_matches!(err, Error::NilBaseFee);
+    }
+
+    /// coreth `wrapped_block.go:486-495`: `BlockGasCost == nil` at AP4+ is
+    /// rejected with `errNilBlockGasCostApricotPhase4`.
+    #[test]
+    fn nil_block_gas_cost_at_apricot_phase4_is_rejected() {
+        let spec = AvaChainSpec::from_parts(
+            upgrades(0, 0, 0),
+            ava_evm_reth::Chain::from_id(43112),
+            false,
+        );
+        // AP3 is active too (AP4 implies AP3 chronologically), so BaseFee
+        // must be present for that earlier check to pass. Phase is
+        // ApricotPhase4 (durango=FAR_FUTURE): VerifyExtra's ApricotPhase3 arm
+        // (the highest one that matches) requires extra_len == 80.
+        let header = test_header(
+            &[],
+            Some(U256::ZERO),
+            None,
+            Bytes::from(vec![0u8; window::WINDOW_SIZE]),
+        );
+        let block = build_block(header, Vec::new());
+        let err = block
+            .syntactic_verify(&spec)
+            .expect_err("nil BlockGasCost at AP4+ must be rejected");
+        assert_matches!(err, Error::InvalidBlockGasCost(None));
+    }
+
+    /// coreth `wrapped_block.go:458-465`: pre-ApricotPhase1, every tx's
+    /// `GasPrice()` must be >= `ap0.MinGasPrice` (470 gwei).
+    #[test]
+    fn gas_price_below_ap0_minimum_is_rejected() {
+        let spec = AvaChainSpec::from_parts(
+            upgrades(u64::MAX, u64::MAX, u64::MAX),
+            ava_evm_reth::Chain::from_id(43112),
+            false,
+        );
+        let low_price = AP0_MIN_GAS_PRICE - 1;
+        let tx = legacy_tx(low_price);
+        // Pre-ApricotPhase1: VerifyExtra's default arm requires
+        // extra_len <= AP0_MAX_EXTRA_DATA_SIZE (64); empty extra satisfies it.
+        let header = test_header(std::slice::from_ref(&tx), None, None, Bytes::new());
+        let block = build_block(header, vec![tx]);
+        let err = block
+            .syntactic_verify(&spec)
+            .expect_err("gas price below ap0.MinGasPrice must be rejected");
+        assert_matches!(
+            err,
+            Error::GasPriceTooLow { have, min, .. }
+                if have == low_price && min == AP0_MIN_GAS_PRICE
+        );
+    }
+
+    /// `decode_uncle_list` (the Go-parity fix, `wrapped_block.go:452-455`):
+    /// a non-empty uncle list must be rejected at wire decode, not silently
+    /// admitted and stripped.
+    #[test]
+    fn decode_uncle_list_rejects_non_empty_list() {
+        // `[0xc1, 0x80]` — a one-item RLP list whose single element is the
+        // empty string (`0x80`); a well-formed (if bogus) single-uncle list.
+        let mut buf: &[u8] = &[0xc1, 0x80];
+        let err = decode_uncle_list(&mut buf).expect_err("non-empty uncle list must be rejected");
+        assert_matches!(err, Error::NilTx);
+    }
+
+    /// `decode_uncle_list` still accepts the empty list (`0xc0`) — the only
+    /// shape a well-formed C-Chain block ever carries.
+    #[test]
+    fn decode_uncle_list_accepts_empty_list() {
+        let mut buf: &[u8] = &[0xc0];
+        decode_uncle_list(&mut buf).expect("empty uncle list must decode");
+        assert!(buf.is_empty(), "the empty list's bytes must be consumed");
+    }
 }

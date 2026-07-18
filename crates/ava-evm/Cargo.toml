@@ -121,6 +121,10 @@ arc-swap = { workspace = true }
 # applies it in the gas-charge path gated on Helicon (spec 11). ava-saevm-hook
 # does NOT depend on ava-evm, so there is no cycle.
 ava-saevm-hook = { path = "../ava-saevm/hook" }
+# cchain-tx-pipeline task 3: `EvmBlock::accept` logs at `debug` (never an error)
+# when a verify-time receipt stash is missing (verify did not run in this
+# process — an accept-only replay/resume path).
+tracing = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }

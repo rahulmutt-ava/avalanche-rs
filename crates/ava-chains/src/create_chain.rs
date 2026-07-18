@@ -58,7 +58,7 @@ use ava_vm::error::{Error as VmError, Result as VmResult};
 use ava_vm::fx::Fx;
 use ava_vm::health::HealthCheck;
 use ava_vm::middleware::{MeterVm, TracedVm};
-use ava_vm::vm::{HttpHandler, Vm, VmEvent};
+use ava_vm::vm::{HttpHandler, PendingWorkWaiter, Vm, VmEvent};
 use prometheus::Registry;
 
 use crate::error::Result;
@@ -642,6 +642,15 @@ where
     //    under the VM DB). We pass the VM DB so the wrapped state is namespaced
     //    under the chain.
     let on_change: OnChange = Arc::new(|| {});
+
+    // Capture the lock-free proposal waiter from the inner VM BEFORE it is
+    // wrapped and moved behind the consensus-shared mutex. Go:
+    // snow/engine/common/notifier.go (NotificationForwarder) polls
+    // WaitForEvent off the engine lock; the shared `Arc<Mutex<dyn Vm>>` here
+    // forbids that, so a per-chain forwarder (spawned below) drives a lock-free
+    // waiter instead. `None` (P/X/SAE today) means no forwarder is spawned.
+    let pending_waiter: Option<Arc<dyn PendingWorkWaiter>> = inner_vm.pending_work_waiter();
+
     let mut vm = wrap_snowman_vm(
         inner_vm,
         primary_alias,
@@ -755,6 +764,47 @@ where
         transition_rx,
     );
     router.add_chain(chain_id, Arc::new(sink.clone()));
+
+    // 7b. Production NotificationForwarder (Go snow/engine/common/notifier.go:31-134,
+    //     started at handler start per handler.go:254-255): a VM pending-work
+    //     signal becomes an engine `PendingTxs` build trigger. Spawned ONLY for a
+    //     VM that hands out a lock-free waiter (`Some` — the EVM VM today; P/X/SAE
+    //     return `None`, so their chains spawn no task and see no extra sends). The
+    //     task holds NO VM lock: it awaits the Task-1 waiter (which locks only the
+    //     mempool `Arc`s) and sends into `vm_tx`, never touching the shared
+    //     `Arc<Mutex<dyn Vm>>` verify/get/build hold (the M7.18 lock-parking hazard
+    //     this seam exists to avoid).
+    if let Some(waiter) = pending_waiter {
+        let vm_tx = vm_tx.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            loop {
+                // Park until the VM gains buildable work, or the chain is torn down.
+                tokio::select! {
+                    () = waiter.wait() => {}
+                    () = token.cancelled() => return,
+                }
+                // Signal once; spurious signals are harmless (the engine build
+                // returns NotFound when there is nothing to build — engine.rs).
+                if vm_tx.send(VmEvent::PendingTxs).await.is_err() {
+                    return;
+                }
+                // Re-arm while work remains so a build rejected by the proposervm
+                // windower ("not my slot yet") is retried when the next window
+                // opens (Go's CheckForEvent re-arm). Bounded, cancellation-aware
+                // sleep — never a busy-spin.
+                while waiter.has_pending() {
+                    tokio::select! {
+                        () = tokio::time::sleep(Duration::from_secs(2)) => {}
+                        () = token.cancelled() => return,
+                    }
+                    if vm_tx.send(VmEvent::PendingTxs).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+    }
 
     Ok(SnowmanChain {
         chain_id,

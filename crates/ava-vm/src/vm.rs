@@ -219,6 +219,27 @@ impl HttpHandler {
     }
 }
 
+/// A lock-free signal that a VM has buildable work, so a forwarder can await
+/// it WITHOUT holding the consensus-shared `Arc<Mutex<dyn Vm>>` (Go's model:
+/// `snow/engine/common/notifier.go` calls `WaitForEvent` off the engine lock,
+/// since Go VMs manage their own concurrency internally). A VM that exposes
+/// this trait (via [`Vm::pending_work_waiter`]) lets a per-chain proposal
+/// forwarder park on [`PendingWorkWaiter::wait`] while holding only whatever
+/// the waiter itself captures — never the outer VM mutex a forwarder would
+/// otherwise need to call `wait_for_event` (M7.18 lock-parking hazard: a
+/// forwarder blocked inside that lock wedges verify/get/build for the whole
+/// chain).
+#[async_trait]
+pub trait PendingWorkWaiter: Send + Sync {
+    /// True iff the VM currently has work to build.
+    fn has_pending(&self) -> bool;
+
+    /// Resolves when the VM has (or gains) buildable work. Implementations
+    /// must register interest (e.g. subscribe to a notify) before checking
+    /// emptiness, so an admission racing the call is never lost.
+    async fn wait(&self);
+}
+
 /// `snow/engine/common.VM` — the base every consensus VM implements
 /// (specs 07 §2.1).
 ///
@@ -272,4 +293,13 @@ pub trait Vm: AppHandler + HealthCheck + Connector + Send + Sync {
     /// `WaitForEvent` — blocks until the VM has a [`VmEvent`] for the engine or
     /// the token is cancelled.
     async fn wait_for_event(&self, token: &CancellationToken) -> Result<VmEvent>;
+
+    /// An optional lock-free waiter for a per-chain proposal forwarder. `None`
+    /// (the default) means the VM has no admission-driven build trigger (P/X/
+    /// SAE today park until cancellation in `wait_for_event`); a VM that
+    /// overrides this hands out a [`PendingWorkWaiter`] the forwarder can
+    /// await without going through the VM's own lock.
+    fn pending_work_waiter(&self) -> Option<Arc<dyn PendingWorkWaiter>> {
+        None
+    }
 }

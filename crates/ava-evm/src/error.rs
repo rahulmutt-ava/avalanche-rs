@@ -12,7 +12,7 @@
 //! error, never silent wrap — overview §6.1); [`Error::FeeOverflow`] is the
 //! sentinel that surfaces such a failure.
 
-use ava_evm_reth::{AvaEvmError, B256, BlockExecutionError, ProviderError};
+use ava_evm_reth::{Address, AvaEvmError, B256, BlockExecutionError, ProviderError, U256};
 
 /// C-Chain VM error. Sentinel variants mirror coreth's `errors.Is` targets so
 /// callers can `assert_matches!` / `matches!` on them exactly as Go does.
@@ -46,6 +46,14 @@ pub enum Error {
     /// `ErrFeeOverflow` — checked fee/balance arithmetic overflowed.
     #[error("fee overflow")]
     FeeOverflow,
+
+    /// The ACP-176 / AP3 dynamic-fee state transition could not be computed —
+    /// a malformed parent extra prefix, a child timestamp before its parent
+    /// (`errInvalidTimestamp`), or a nil parent min-delay-excess. Mirrors the
+    /// coreth `customheader` fee-state errors (`dynamic_fee_state.go`,
+    /// `dynamic_fee_windower.go`, `min_delay_excess.go`).
+    #[error("invalid fee state: {0}")]
+    InvalidFeeState(String),
 
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.
@@ -136,6 +144,118 @@ pub enum Error {
         /// The blob gas implied by the body's blob hashes.
         calculated: u64,
     },
+
+    // --- Remaining coreth `wrappedBlock.syntacticVerify` port (M9.15 task L1,
+    // `wrapped_block.go:398-527`). Difficulty==1 and `VerifyExtra` land with
+    // this task (Task 5), coupled with the builder's difficulty-1 flip so no
+    // commit boundary ever has verify reject Rust's own blocks.
+    /// coreth `wrapped_block.go:412` — block number exceeds uint64.
+    /// `AvaHeader::number` already decodes as a Rust `u64` (never a wider
+    /// integer), so this can never fire in practice; kept for Go check-order
+    /// parity and Task 6's rejection-class mapping.
+    #[error("invalid block number: {0}")]
+    InvalidBlockNumber(U256),
+
+    /// coreth `wrapped_block.go:418` — header nonce must be 0.
+    #[error("expected nonce to be 0 but got {0}: invalid nonce")]
+    InvalidNonce(u64),
+
+    /// coreth `wrapped_block.go:434` — block body extension version must be 0.
+    #[error("invalid version: {0}")]
+    InvalidBlockVersion(u32),
+
+    /// coreth `wrapped_block.go:439` — header txsHash vs body mismatch.
+    #[error("invalid txs hash {header} does not match calculated txs hash {calculated}")]
+    TxRootMismatch {
+        /// The header-declared transactions root.
+        header: B256,
+        /// The root recomputed from the body's transaction list.
+        calculated: B256,
+    },
+
+    /// coreth `wrapped_block.go:444`/`:453` — header uncleHash vs the
+    /// (structurally empty, block.rs decode-enforced) body uncle list.
+    #[error("invalid uncle hash {0} does not match calculated uncle hash")]
+    InvalidUncleHash(B256),
+
+    /// coreth `wrapped_block.go:449` — coinbase must be the blackhole address.
+    #[error("invalid coinbase {0} does not match required blackhole address")]
+    InvalidCoinbase(Address),
+
+    /// coreth `wrapped_block.go:458-473` — tx gas price below the phase
+    /// minimum (pre-AP1: `ap0.MinGasPrice`; pre-AP3: `ap1.MinGasPrice`).
+    #[error("block contains tx {tx} with gas price too low ({have} < {min})")]
+    GasPriceTooLow {
+        /// The offending transaction's hash.
+        tx: B256,
+        /// Its declared gas price (`tx.GasPrice()` — the fee cap for
+        /// dynamic-fee txs).
+        have: u128,
+        /// The phase-minimum gas price it fell below.
+        min: u128,
+    },
+
+    /// coreth `wrapped_block.go:486-495` — `BlockGasCost` nil/oversized at
+    /// AP4+. Carries the offending value (`None` = missing).
+    #[error("invalid block gas cost: {0:?}")]
+    InvalidBlockGasCost(Option<U256>),
+
+    /// coreth `wrapped_block.go:415` — `Difficulty` must be exactly 1 (the
+    /// `dummy` consensus engine's `Prepare` stamps every header this way,
+    /// `consensus/dummy/consensus.go:233-235`). Carries the offending value.
+    #[error("invalid difficulty: {0}")]
+    InvalidDifficulty(U256),
+
+    /// coreth `customheader/extra.go:115-168` (`VerifyExtra`) — the header's
+    /// `Extra` length violates the active fork's rule. `expected` is a short
+    /// human-readable description of the rule that fired (`">= 24"`, `"== 80"`,
+    /// …); `got` is the header's actual extra length.
+    #[error("invalid header.Extra length: expected {expected}, got {got}")]
+    InvalidExtraLength {
+        /// A description of the length rule that fired (e.g. `">= 24"`).
+        expected: &'static str,
+        /// The header's actual `extra` length.
+        got: usize,
+    },
+
+    /// `crate::receipts::decode_block_receipts` failed: the persisted
+    /// `RECEIPTS` column bytes are not a valid RLP list of EIP-2718 receipt
+    /// envelopes (malformed/truncated bytes, or trailing bytes after the list).
+    #[error("receipt decode: {0}")]
+    ReceiptDecode(String),
+
+    /// `EvmBlock::accept`'s post-append receipt indexing (cchain-tx-pipeline
+    /// task 3, I1): the verify-time receipt stash carries a different tx
+    /// count than [`EvmBlock::transactions`] — a corrupted/mismatched stash.
+    /// Always caught and logged (never propagated) by `accept`, which has
+    /// already durably committed the block by the time this can fire.
+    #[error("receipt/tx count mismatch: {txs} txs, {receipts} receipts")]
+    ReceiptTxCountMismatch {
+        /// The block's real EVM tx count.
+        txs: usize,
+        /// The stashed receipt count.
+        receipts: usize,
+    },
+
+    /// `eth_sendRawTransaction` (cchain-tx-pipeline task 4): the submitted
+    /// bytes are not a valid EIP-2718 transaction envelope (RLP / typed-tx
+    /// decode failure, `TransactionSigned::decode_2718`).
+    #[error("invalid transaction: {0}")]
+    TxDecode(String),
+
+    /// `eth_sendRawTransaction`: EIP-2718 envelope decoded, but signature
+    /// recovery failed (malformed/invalid ECDSA signature).
+    #[error("invalid transaction signature: {0}")]
+    InvalidTxSignature(String),
+
+    /// `eth_sendRawTransaction`: the recovered tx failed
+    /// [`crate::mempool::EvmMempool::add_local`] admission. Transparent so the
+    /// coreth-parity sentinel text (`EvmMempoolError`'s `Display`, e.g.
+    /// "already known" / "nonce too low" / "nonce gap") survives verbatim to
+    /// the JSON-RPC error message (`rpc::service`'s `domain(...)` mapping),
+    /// which client tooling greps for.
+    #[error(transparent)]
+    Mempool(#[from] crate::mempool::EvmMempoolError),
 }
 
 /// C-Chain VM result alias.
@@ -220,5 +340,78 @@ mod tests {
         // `#[from]` wrap of a facade BlockExecutionError.
         let e: Error = BlockExecutionError::msg("boom").into();
         assert_matches!(e, Error::Execution(_));
+
+        // Remaining `syntacticVerify` port sentinels (M9.15 task L1).
+        assert_matches!(
+            Error::InvalidBlockNumber(U256::ZERO),
+            Error::InvalidBlockNumber(_)
+        );
+        assert_matches!(Error::InvalidNonce(1), Error::InvalidNonce(_));
+        assert_matches!(Error::InvalidBlockVersion(1), Error::InvalidBlockVersion(_));
+        assert_matches!(
+            Error::TxRootMismatch {
+                header: B256::ZERO,
+                calculated: B256::ZERO
+            },
+            Error::TxRootMismatch { .. }
+        );
+        assert_matches!(
+            Error::InvalidUncleHash(B256::ZERO),
+            Error::InvalidUncleHash(_)
+        );
+        assert_matches!(
+            Error::InvalidCoinbase(Address::ZERO),
+            Error::InvalidCoinbase(_)
+        );
+        assert_matches!(
+            Error::GasPriceTooLow {
+                tx: B256::ZERO,
+                have: 0,
+                min: 1
+            },
+            Error::GasPriceTooLow { .. }
+        );
+        assert_matches!(
+            Error::InvalidBlockGasCost(None),
+            Error::InvalidBlockGasCost(_)
+        );
+
+        // Task 5: difficulty==1 + VerifyExtra sentinels.
+        assert_matches!(
+            Error::InvalidDifficulty(U256::ZERO),
+            Error::InvalidDifficulty(_)
+        );
+        assert_matches!(
+            Error::InvalidExtraLength {
+                expected: ">= 24",
+                got: 3
+            },
+            Error::InvalidExtraLength { .. }
+        );
+
+        // Task 3 (receipts): decode + tx-count-mismatch sentinels.
+        assert_matches!(
+            Error::ReceiptDecode("boom".to_string()),
+            Error::ReceiptDecode(_)
+        );
+        assert_matches!(
+            Error::ReceiptTxCountMismatch {
+                txs: 1,
+                receipts: 2
+            },
+            Error::ReceiptTxCountMismatch { .. }
+        );
+
+        // Task 4 (RPC): decode/signature/mempool-admission sentinels. The
+        // `Mempool` variant is `#[from] EvmMempoolError` and must surface the
+        // source's sentinel text verbatim (client tooling greps it).
+        assert_matches!(Error::TxDecode("boom".to_string()), Error::TxDecode(_));
+        assert_matches!(
+            Error::InvalidTxSignature("boom".to_string()),
+            Error::InvalidTxSignature(_)
+        );
+        let mempool_err: Error = crate::mempool::EvmMempoolError::AlreadyKnown.into();
+        assert_matches!(mempool_err, Error::Mempool(_));
+        assert_eq!(mempool_err.to_string(), "already known");
     }
 }

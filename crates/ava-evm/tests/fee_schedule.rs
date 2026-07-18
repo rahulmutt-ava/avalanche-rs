@@ -137,6 +137,10 @@ proptest! {
             // next_evm_env still succeeds but leaves basefee at 0 (treated nil).
             let env = cfg.next_evm_env(&parent, &ctx).unwrap();
             prop_assert_eq!(env.evm_env.block_env.basefee, 0u64);
+
+            // ── gas_limit dispatch (regime-independent pre-Fortuna) ──────────
+            let gl = feerules::gas_limit(&cs, &parent, &ctx).unwrap();
+            prop_assert!(gl > 0);
         } else if phase < AvaPhase::Fortuna {
             // AP3..Fortuna: the rolling-window base fee.
             let params = window_params_for_phase(phase);
@@ -152,6 +156,10 @@ proptest! {
             prop_assert_eq!(env.evm_env.block_env.basefee, want_u64);
             // regime classification agrees.
             prop_assert!(matches!(regime_for_phase(phase), feerules::FeeRegime::Window));
+
+            // ── gas_limit dispatch (regime-independent pre-Fortuna) ──────────
+            let gl = feerules::gas_limit(&cs, &parent, &ctx).unwrap();
+            prop_assert!(gl > 0);
         } else {
             // Fortuna+: ACP-176 gas price.
             // For this arm we need an Acp176 fee state; swap it in.
@@ -163,11 +171,15 @@ proptest! {
             let env = cfg.next_evm_env(&parent, &ctx176).unwrap();
             prop_assert_eq!(env.evm_env.block_env.basefee, s.gas_price().0);
             prop_assert!(matches!(regime_for_phase(phase), feerules::FeeRegime::Acp176));
-        }
 
-        // ── gas_limit dispatch always succeeds and is non-zero ───────────────
-        let gl = feerules::gas_limit(&cs, &parent, &ctx).unwrap();
-        prop_assert!(gl > 0);
+            // ── gas_limit dispatch (Fortuna+: the ACP-176 `MaxCapacity`,
+            // M9.15 Task 6 — `feerules::gas_limit`'s Fortuna arm) ────────────
+            // The `ctx` (Window-state) built above is not regime-matched for
+            // Fortuna+; `gas_limit` needs the `ctx176` Acp176 state instead.
+            let gl176 = feerules::gas_limit(&cs, &parent, &ctx176).unwrap();
+            prop_assert_eq!(gl176, ctx176.gas_limit_hint.unwrap_or(s.max_capacity().0));
+            prop_assert!(gl176 > 0);
+        }
 
         // ── spec 21 §9 invariant: off-target window move >= 1 ────────────────
         if phase >= AvaPhase::ApricotPhase3 && phase < AvaPhase::Fortuna {

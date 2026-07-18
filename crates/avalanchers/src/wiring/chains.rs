@@ -707,6 +707,12 @@ pub struct PChainBootHandle {
     /// db out from under the running VM. `None` for chains with no on-disk state
     /// (P/X boot over in-memory state).
     pub _data_dir: Option<tempfile::TempDir>,
+    /// The windower's [`ValidatorState`] this chain was actually assembled
+    /// with. The in-process (`RecordingSender`) boot always gets [`FixedState`]
+    /// (self + explicit beacons at weight 1) — exposed so tests can assert the
+    /// loopback path did NOT pick up [`GenesisValidatorState`] (M9.15 proposal
+    /// initiation P2 nested-insert #2 regression test).
+    pub validator_state: Arc<dyn ValidatorState>,
 }
 
 /// Materializes the **real `ava_platformvm::PlatformVm`** (seeded from the
@@ -1119,6 +1125,9 @@ where
             // The in-process `RecordingSender` paths frontier only from the self
             // beacon (or no beacon); no remote bootstrap peers.
             extra_beacons: BTreeMap::new(),
+            // Loopback boot: no real genesis staker identity to match, so the
+            // windower stays on the synthetic self+beacons `FixedState`.
+            use_genesis_validator_state: false,
         },
         Arc::clone(&recording),
         router,
@@ -1156,6 +1165,7 @@ where
         _sink: assembled.sink,
         vm: assembled.vm,
         _data_dir: data_dir,
+        validator_state: assembled.validator_state,
     })
 }
 
@@ -1175,6 +1185,19 @@ struct ChainAssemblySpec {
     /// the [`Bootstrapper`] queries. Empty for the solo / self-beacon paths
     /// (M9.15 G5 — real follower bootstrap from a remote beacon).
     extra_beacons: BTreeMap<NodeId, u64>,
+    /// `true` ⇒ the windower's [`ValidatorState`] is [`GenesisValidatorState`]
+    /// (the network's real genesis validator set, so proposer-window order
+    /// agrees with Go); `false` ⇒ [`FixedState`] (self + `extra_beacons` at a
+    /// synthetic weight of 1). The in-process loopback boot ([`boot_chain`],
+    /// `Sender = RecordingSender`) has no real genesis staker identity to
+    /// match, so it stays `false`; the production network boot
+    /// ([`boot_chain_over_network_core`], `Sender = OutboundSender`) sets
+    /// `true` — a follower verifying real Go validators' proposed blocks must
+    /// window-sample over the SAME set Go derives from the same genesis
+    /// (specs 06 §6.1). The self+`extra_beacons` [`DefaultManager`]
+    /// registration below is unaffected either way — that is a separate
+    /// connectedness/gossip concern, not the windower.
+    use_genesis_validator_state: bool,
 }
 
 /// The full chain identity a production network boot needs (the analogue of the
@@ -1204,11 +1227,19 @@ struct AssembledChain {
     /// The shared fully-wrapped VM, type-erased for API-server chain
     /// registration (M9.15 rung 2).
     vm: Arc<tokio::sync::Mutex<dyn ava_vm::vm::Vm>>,
+    /// The windower's [`ValidatorState`] this chain was actually assembled
+    /// with — [`FixedState`] (loopback) or [`GenesisValidatorState`] (network),
+    /// per `spec.use_genesis_validator_state`. Threaded out onto the boot
+    /// handles ([`PChainBootHandle`]/[`NetworkChainBootHandle`]) so tests can
+    /// assert on the live switch directly instead of by code-reading.
+    validator_state: Arc<dyn ValidatorState>,
 }
 
 /// The shared in-process chain-assembly core, generic over the inner
 /// [`ChainVm`] **and** the [`Sender`](ava_engine::common::sender::Sender):
-/// wires the fixed single-validator state, no-op app sender, and the real
+/// wires the windower's [`ValidatorState`] ([`FixedState`] for the loopback
+/// boot, [`GenesisValidatorState`] for the network boot — see
+/// `spec.use_genesis_validator_state`), no-op app sender, and the real
 /// [`ChainRouter`] over a clock-injected [`AdaptiveTimeoutManager`], drives
 /// `inner_vm` through the full [`create_snowman_chain`] pipeline, runs
 /// `after_create` (the loopback-install hook the [`RecordingSender`] path uses;
@@ -1287,7 +1318,22 @@ where
             },
         );
     }
-    let validator_state = FixedState { set };
+    // The windower's ValidatorState: the real genesis validator set on the
+    // network path (so proposer-window order agrees with Go), else the
+    // synthetic self+beacons FixedState (loopback boot; M9.15 proposal
+    // initiation P2 nested-insert #2). `Arc<dyn ValidatorState>` unifies both
+    // arms behind the blanket `impl<T: ValidatorState + ?Sized> ValidatorState
+    // for Arc<T>` (ava-validators/src/state.rs), so `create_snowman_chain`'s
+    // `S` generic is the same concrete type either way.
+    let validator_state: Arc<dyn ValidatorState> = if spec.use_genesis_validator_state {
+        Arc::new(
+            crate::wiring::genesis_validator_state::GenesisValidatorState::from_network(
+                spec.network_id,
+            )?,
+        )
+    } else {
+        Arc::new(FixedState { set })
+    };
 
     // A per-network ChainContext (network id + fork schedule from the chosen
     // network), so the VM initializes with the production identity surface.
@@ -1314,6 +1360,11 @@ where
         beacons.insert(node_id, 1u64);
     }
     beacons.extend(spec.extra_beacons.iter().map(|(&id, &w)| (id, w)));
+
+    // Kept alongside the `S`-generic value `create_snowman_chain` consumes, so
+    // the actually-assembled windower state can be threaded out onto the boot
+    // handle for tests to assert on (see `AssembledChain::validator_state`).
+    let validator_state_handle = Arc::clone(&validator_state);
 
     let chain = create_snowman_chain(
         token,
@@ -1394,6 +1445,7 @@ where
         vm_tx,
         sink,
         vm,
+        validator_state: validator_state_handle,
     })
 }
 
@@ -1453,6 +1505,12 @@ pub struct NetworkChainBootHandle {
     /// alive for the booted chain's lifetime; dropping it would delete the state
     /// db out from under the running VM. `None` for chains with no on-disk state.
     pub _data_dir: Option<tempfile::TempDir>,
+    /// The windower's [`ValidatorState`] this chain was actually assembled
+    /// with. The production network boot always gets [`GenesisValidatorState`]
+    /// (the real genesis validator set) — exposed so tests can assert the
+    /// network path did NOT fall back to the loopback [`FixedState`] (M9.15
+    /// proposal initiation P2 nested-insert #2 regression test).
+    pub validator_state: Arc<dyn ValidatorState>,
 }
 
 /// The production network-boot core: assemble one chain whose `Sender` is a real
@@ -1507,6 +1565,9 @@ where
             avax_asset_id: spec.avax_asset_id,
             include_self_beacon,
             extra_beacons,
+            // Production network boot: the windower must agree with Go on
+            // proposer-window order, so it uses the real genesis validator set.
+            use_genesis_validator_state: true,
         },
         sender,
         router,
@@ -1532,6 +1593,7 @@ where
         _sink: assembled.sink,
         vm: assembled.vm,
         _data_dir: None,
+        validator_state: assembled.validator_state,
     })
 }
 
@@ -1541,10 +1603,12 @@ where
 /// multi-node replacement for the in-process [`RecordingSender`] (M9.15 STEP-q).
 ///
 /// Mirrors the [`boot_chain`] assembly (via the shared
-/// [`boot_chain_with_sender`] core) — fixed single-validator state, no-op app
-/// sender, the real [`ChainRouter`] over a clock-injected
-/// [`AdaptiveTimeoutManager`], the full [`create_snowman_chain`] pipeline — but
-/// the chain's `Sender` translates each engine `send_*` op into a `proto/p2p`
+/// [`boot_chain_with_sender`] core) — no-op app sender, the real
+/// [`ChainRouter`] over a clock-injected [`AdaptiveTimeoutManager`], the full
+/// [`create_snowman_chain`] pipeline — but the windower's [`ValidatorState`]
+/// is [`GenesisValidatorState`] (the real genesis validator set), not
+/// [`boot_chain`]'s loopback [`FixedState`], and the chain's `Sender`
+/// translates each engine `send_*` op into a `proto/p2p`
 /// wire message and dispatches it through `network` (`Network::send` / `gossip`),
 /// registering request ops with the router for timeout tracking. There is no
 /// loopback: in the multi-node case outbound ops go to real peers over the
