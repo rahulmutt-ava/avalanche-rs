@@ -14,7 +14,7 @@ bootstrapper) are listed as `n/a` with reasons.
 
 Legend: ⬜ not ported · 🟡 partial · ✅ ported · n/a not applicable
 
-**Summary (shipped scope):** 99 ported ✅ / 9 partial 🟡 / 0 not-ported ⬜ /
+**Summary (shipped scope):** 103 ported ✅ / 9 partial 🟡 / 0 not-ported ⬜ /
 38 n/a · 0 wip rows.
 
 Shipped scope covers: block wire codec / chainspec / fee rules / lifecycle
@@ -129,6 +129,31 @@ matching Go byte-for-byte on the rejection message.
 | `BlockGasCost != nil` at AP4+ (:486-495) | ✅ ported | `block.rs::nil_block_gas_cost_at_apricot_phase4_is_rejected` |
 | Cancun header clamp — `parentBeaconRoot`/`blobGasUsed`/`excessBlobGas` exactness + body blob-count parity (:493-522) | ✅ ported | `cancun_clamp::nonzero_excess_blob_gas_is_rejected`, `nonzero_blob_gas_used_is_rejected`, `nonzero_parent_beacon_root_is_rejected`, `missing_parent_beacon_root_is_rejected_with_coreth_error`, `blob_tx_in_body_is_rejected` |
 | full check, in order, against a Rust-BUILT block | ✅ ported | `build::built_block_passes_full_syntactic_verify` — a Granite-spec built block is round-tripped through the exact same `EvmBlock::verify` the `ChainVm` adapter drives; the offline exit gate proving the builder satisfies every check the verify side now enforces |
+
+---
+
+## `verifyHeaderGasFields` — complete block-verification equality checks (verifyHeaderGasFields-port task)
+
+coreth's *complete* block verification (`consensus/dummy/consensus.go:125-176`,
+invoked from `wrappedBlock.semanticVerify` before execution) recomputes and
+**equality-checks** the header's fee/gas fields against the parent — a second
+layer beyond the `wrappedBlock.syntacticVerify` structural checks tracked
+above. Like that function, `verifyHeaderGasFields` has no dedicated
+`*_test.go` of its own; each field it checks is exercised implicitly by the
+broader Go `customheader` test suite (`TestVerifyGasLimit`,
+`TestVerifyExtraPrefix`, `TestBaseFee`, `TestVerifyBlockFee`, tracked ✅ in the
+`plugin/evm/customheader` table below). The rows below track the Rust port of
+the orchestrator and its two newly-ported per-field functions, each pinned by
+dedicated unit tests plus a full `parse_block → verify` end-to-end mutation
+guard proving the Byzantine-proposer fail-open the whole-branch review flagged
+(`plan/M9-interop-hardening.md` AS-BUILT addendum) is now closed.
+
+| Go check | Status | Rust counterpart / note |
+|---|---|---|
+| `verifyHeaderGasFields` orchestrator, Go check order (`consensus/dummy/consensus.go:125-176`) | ✅ ported | `feerules::verify_header_gas_fields` (`crates/ava-evm/src/feerules/mod.rs:639`) — `feerules.rs::verify_header_gas_fields_check_order_matches_go` (multi-fault block hits Go's first error class); `verify_header_gas_fields_ext_data_gas_used_gating` + `verify_header_gas_fields_rejects_oversize_ext_data_gas_used_pre_fortuna`; the pre-AP3/pre-AP4 `Option`-equality rejections `pre_ap3_base_fee_present_is_rejected` / `pre_ap4_block_gas_cost_present_is_rejected` / `pre_ap4_ext_data_gas_used_present_is_rejected`; e2e proof via `verify_gas_fields.rs::{wrong_base_fee_is_rejected_by_full_verify, wrong_gas_limit_is_rejected_by_full_verify}` (the full `EvmVm::parse_block → Block::verify` entry, real Byzantine-shaped mutants of a live-captured block) |
+| `VerifyGasLimit` (`customheader/gas_limit.go:101-160`, incl. the pre-AP1 bound-divisor arm) | ✅ ported | `feerules::verify_gas_limit` — `feerules.rs::{verify_gas_limit_fortuna_equality, verify_gas_limit_cortina_is_15m, verify_gas_limit_ap1_is_8m, verify_gas_limit_ap0_range, verify_gas_limit_ap0_bound_divisor}` (the bound-divisor arm was missed by the original design pass and added mid-task once the real Go span was read) |
+| `VerifyExtraPrefix` (`customheader/extra.go:62-111`) | ✅ ported | `feerules::verify_extra_prefix` — `feerules.rs::{verify_extra_prefix_fortuna_honest_and_tampered, verify_extra_prefix_target_excess_clamp, verify_extra_prefix_window_arm, verify_extra_prefix_fortuna_short_extra_is_invalid_fee_state}` (Fortuna full-struct equality incl. the claimed-target-excess clamp trick, the AP3 window-prefix byte match, tampered-bytes rejection) |
+| `BaseFee` time-advance (`customheader/base_fee.go:27-33`) | ✅ ported | `feerules::base_fee`'s signature changed to take the parent as `&AvaHeader` (not a reth `Header`, which carries no `time_milliseconds`) so the ACP-176 arm can perform the `feeStateBeforeBlock` time-advance; `feerules.rs::acp176_base_fee_advance_matches_go_vectors` (30-row recorded Go-oracle corpus incl. nonzero-excess/sustained-load rows) is the false-reject regression guard; builder, RPC (`eth_gasPrice`), and verifier now share this one function so they cannot drift apart |
 
 ---
 

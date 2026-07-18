@@ -1,7 +1,7 @@
 # verifyHeaderGasFields port — C-Chain verify-path fee/gas equality checks
 
 **Date:** 2026-07-18
-**Status:** Approved (brainstorming complete; awaiting implementation plan)
+**Status:** Implemented (see docs/superpowers/plans/2026-07-18-verify-header-gas-fields.md)
 **Predecessor:** M9.15 rust-as-proposer arc (merge `74625f5`); this closes the
 whole-branch review's flagged fail-open (plan/M9-interop-hardening.md AS-BUILT
 addendum, item (2)).

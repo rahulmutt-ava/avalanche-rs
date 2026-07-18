@@ -236,6 +236,27 @@ simply dropped. Sibling blocks of the same parent each hold an independent
 Firewood proposal (proposal-on-proposal is supported, 04 §4.2). This eliminates
 the entire class of reth `TreeState`/fork-choice reorg machinery.
 
+> **AS-BUILT (verifyHeaderGasFields port, 2026-07-18).** Step 2 of `Block::verify` above
+> ("semantic verify against parent state") now additionally runs the contextual
+> `feerules::verify_header_gas_fields` (coreth `consensus/dummy/consensus.go:125-176`) immediately
+> after `syntactic_verify` and before sender recovery/execution — Go's ordering. It recomputes and
+> equality-checks `GasLimit` (`customheader/gas_limit.go:101-160`, incl. the pre-AP1 bound-divisor
+> arm), the ACP-176/AP3 extra prefix (`customheader/extra.go:62-111`), `BaseFee`, `BlockGasCost`, and
+> gates `ExtDataGasUsed`, all against the parent — resolved via a new `Shared::parent_header` (the
+> processing tree, else the canonical store, else genesis). `base_fee` is now time-advance-correct
+> (`customheader/base_fee.go:27-33`'s `feeStateBeforeBlock`, ported at the source by changing
+> `feerules::base_fee`'s parent parameter to `&AvaHeader` so builder, RPC, and verifier share one
+> function) — byte-parity guarded by a 30-row recorded Go-oracle advance corpus plus a 10-mutation
+> Go-verdict corpus (up from 5) asserting matched Go/Rust rejection classes. This closes the
+> Byzantine-proposer fail-open the M9.15 whole-branch review flagged
+> (`plan/M9-interop-hardening.md` AS-BUILT addendum); design detail in
+> `docs/superpowers/specs/2026-07-18-verify-header-gas-fields-design.md`. Residual gap (documented,
+> non-gating on the honest arm): Go's `VerifyGasUsed`/`verifyIntrinsicGas` family
+> (`wrapped_block.go:260-278` → `customheader/gas_limit.go:60-99`) — a pre-execution gas-capacity /
+> summed-intrinsic-gas check — has no direct Rust mirror; Rust's executor instead equality-checks
+> `gas_used` against the real post-execution result, which is currently sufficient but not the same
+> check.
+
 ### 3.2 Driving reth's executor for verify
 
 ```rust

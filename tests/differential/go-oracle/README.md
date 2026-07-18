@@ -14,6 +14,7 @@ a normal `go test` never runs it:
 | `precompile_selectors_emitter_test.go` + `precompile_nativeminter_selectors_emitter_test.go` | (none — plain `go test`) | constants pinned in `ava-evm src/precompile/{feemanager,rewardmanager,gaspricemanager,nativeminter}.rs` (M6.31) | (stdout only) |
 | `atomic_tx_gas_emitter_test.go` | `AVAX_RS_EMIT_ATOMIC_GAS` | `ava-evm atomic_mempool.rs::gas_used_matches_coreth_oracle` (M6.29) | `gas_used` block in `crates/ava-evm/tests/vectors/cchain/atomic/atomic_txs.json` |
 | `rust_built_block_verdict_test.go` | `RUST_BLOCK_VERDICT_DIR` (judge; the Rust side emits via `EMIT_PROPOSER_CANDIDATES`) | `ava-evm proposer_candidates.rs::proposer_verdicts_hold` (M9.15 Task 6) | `crates/ava-evm/tests/vectors/proposer_verdict/` |
+| `base_fee_advance_emitter_test.go` | `BASE_FEE_ADVANCE_OUT` | `ava-evm feerules.rs::acp176_base_fee_advance_matches_go_vectors` (verifyHeaderGasFields-port Task 7) | `crates/ava-evm/tests/vectors/cchain/fees/acp176/base_fee_advance.json` |
 
 > The two SAE emitters redeclare a few shared helper names (`observe*Frontier`,
 > `*HexBytes`) under distinct prefixes, but to be safe drop **one emitter at a
@@ -31,6 +32,15 @@ a normal `go test` never runs it:
 > `graft/coreth/`. It parses the already-committed unsigned-tx interface bytes
 > from `atomic_txs.json`, signs each with one key, and prints `GasUsed` for both
 > `fixedFee` modes (frozen into the vector's `gas_used` block).
+>
+> The verifyHeaderGasFields-port Task 7 base-fee-advance emitter is a
+> `package customheader` test — drop it into
+> `graft/coreth/plugin/evm/customheader/` in the avalanchego checkout and run
+> `BASE_FEE_ADVANCE_OUT=<abs path>/crates/ava-evm/tests/vectors/cchain/fees/acp176/base_fee_advance.json
+> go test ./graft/coreth/plugin/evm/customheader/ -run TestEmitBaseFeeAdvanceVectors -count=1 -v` from
+> the avalanchego repo root (per the file's own header comment). It needs no unexported test harness —
+> only the package's own exported `BaseFee`, swept over a Cartesian (excess, elapsed-ms) grid under a
+> Fortuna+Granite-active-at-genesis `ChainConfig`.
 
 ## Recovery emitter (M7.29)
 

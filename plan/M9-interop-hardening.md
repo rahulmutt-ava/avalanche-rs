@@ -2082,6 +2082,46 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `verifyHeaderGasFields` (expected-base-fee via `feerules::base_fee`, expected-block-gas-cost,
 > extra-prefix byte-equality, gas-limit) onto `EvmBlock::verify`.
 
+> **AS-BUILT (verifyHeaderGasFields port, branch `verify-header-gas-fields`, 2026-07-18) — CLOSED.**
+> The `verifyHeaderGasFields` fail-open flagged directly above is now closed.
+> `feerules::verify_header_gas_fields` (`crates/ava-evm/src/feerules/mod.rs`) ports the full
+> orchestrator in Go's exact check order — `verify_gas_limit` (incl. the pre-AP1 bound-divisor arm the
+> original design pass missed and added mid-task), `verify_extra_prefix` (Fortuna full-struct equality +
+> the claimed-target-excess clamp trick, AP3 window-prefix byte match), expected-`BaseFee`/
+> `BlockGasCost` `Option`-equality, and `ExtDataGasUsed` fork gating — wired into
+> `EvmBlock::verify_with_predicates` via a new `Shared::parent_header` resolver (processing tree, else
+> canonical store, else genesis), running immediately after `syntactic_verify` and before sender
+> recovery/execution (Go's ordering). The coupled `base_fee` `feeStateBeforeBlock` time-advance gap
+> noted just above is fixed at the source: `feerules::base_fee` now takes the parent as `&AvaHeader`
+> (not a reth `Header`, which carries no `time_milliseconds`) so builder, RPC, and verifier share one
+> time-advance-correct function — byte-parity guarded by a 30-row recorded Go-oracle advance corpus
+> (incl. nonzero-excess/sustained-load rows the prior quiet-net vectors could not catch). The Go-oracle
+> **verdict corpus** grew from 5 to 10 per-field mutations (`proposer_candidates.rs`: `wrong_base_fee`,
+> `wrong_gas_limit`, `wrong_block_gas_cost`, `oversized_ext_data_gas_used`, plus the original 5), each
+> REJECTED by both Go and Rust with matched sentinel classes, alongside the honest block still
+> ACCEPTing on both sides. A dedicated e2e guard (`verify_gas_fields.rs`) drives the full
+> `parse_block → verify` entry against real Byzantine-shaped mutants of a live-captured block.
+>
+> **Two scoping notes for anyone extending this further:**
+> (1) **Helicon correction.** The Helicon upstream-delta noted in the addendum above described the
+> `IsHelicon` short-circuit as living in `VerifyExtraPrefix`; on closer read of the Go source it
+> actually lives in **`VerifyExtra`** (`extra.go:120-121` — the sibling function ported separately as
+> `syntactic_verify::truncated_extra_is_rejected_at_fortuna`), NOT `VerifyExtraPrefix`. This port's
+> `verify_extra_prefix` therefore has no Helicon arm at all (unscheduled on every network; `AvaPhase`
+> carries no `Helicon` variant), matching Go's current behavior exactly — the prior note's attribution
+> was wrong, not the port. Once Helicon lands, both `VerifyExtra` and `VerifyExtraPrefix`'s Fortuna arm
+> need a new arm together (single callout covers both, per the design spec's Risks section).
+> (2) **Residual gap — the `VerifyGasUsed`/`verifyIntrinsicGas` family is UNPORTED.** Go's
+> semantic-verify stage (`wrapped_block.go:260-278`, `semanticVerify` → `verifyIntrinsicGas`)
+> additionally checks, pre-execution, that the header's claimed `GasUsed` (+`ExtDataGasUsed`
+> post-Fortuna) fits the block's gas capacity (`customheader/gas_limit.go:60-99`, `VerifyGasUsed`) AND
+> that the summed per-tx intrinsic gas does not exceed the claimed `GasUsed`. This branch's Go-oracle
+> mutation corpus (T6) shows no fail-open for this family today — Rust's executor independently
+> recomputes and equality-checks `gas_used` against the real execution result
+> (`lifecycle::verify_computes_precommit_root_no_commit`), a different but currently-sufficient check —
+> but Go's pre-execution capacity/intrinsic-gas rejection surface itself has no direct Rust mirror.
+> Flagged as a follow-up before any BFT-exposed deployment claim, same as the Helicon item above.
+
 ---
 
 ## Spec coverage check
