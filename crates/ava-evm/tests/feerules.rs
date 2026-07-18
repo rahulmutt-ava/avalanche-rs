@@ -900,3 +900,43 @@ fn pre_ap4_ext_data_gas_used_present_is_rejected() {
         "sentinel parity: {err}"
     );
 }
+
+// ─── acp176_base_fee_advance: Task-1 time-advance false-reject guard (Task 7) ─
+
+/// Go-recorded false-reject guard for the Task-1 time-advance: for every
+/// recorded (parent fee state, elapsed) — including NONZERO excess, where the
+/// old raw-parent read diverged — Rust's `base_fee` must equal what coreth's
+/// `customheader.BaseFee` computed. A mismatch here means the verify path
+/// would falsely reject an honest Go block under load.
+#[test]
+fn acp176_base_fee_advance_matches_go_vectors() {
+    let raw = include_str!("vectors/cchain/fees/acp176/base_fee_advance.json");
+    let doc: Value = serde_json::from_str(raw).expect("parse advance vectors");
+    let cs = local_all_active_spec();
+    let rows = doc["rows"].as_array().expect("rows array");
+    assert!(rows.len() >= 30, "corpus must not silently shrink");
+    for row in rows {
+        let parent = AvaHeader {
+            number: row["parent_number"].as_u64().expect("parent_number"),
+            time: row["parent_time"].as_u64().expect("parent_time"),
+            extra: hex::decode(row["parent_extra_hex"].as_str().expect("extra"))
+                .expect("decode extra")
+                .into(),
+            ..AvaHeader::default()
+        };
+        let child_ms = row["child_time_ms"].as_u64().expect("child_time_ms");
+        let ctx = ava_evm::evmconfig::AvaNextBlockCtx {
+            timestamp: child_ms / 1000,
+            timestamp_ms: child_ms,
+            parent_fee_state: feerules::parent_fee_state_of(&cs, &parent).expect("fee state"),
+            ..ava_evm::evmconfig::AvaNextBlockCtx::default()
+        };
+        assert_eq!(
+            feerules::base_fee(&cs, &parent, &ctx).expect("base_fee"),
+            row["expected_base_fee"]
+                .as_u64()
+                .expect("expected_base_fee"),
+            "row {row:?}"
+        );
+    }
+}

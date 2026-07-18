@@ -1,0 +1,216 @@
+{
+  "_comment": "LIVE Go-oracle ACP-176 base-fee time-advance corpus for avalanche-rs Task 7 (verifyHeaderGasFields plan): the false-reject-guard regression proof for the Task-1 `feerules::base_fee` fix. Sweeps excess x elapsed-ms over the real coreth customheader.BaseFee with a Fortuna+Granite-active-at-genesis ChainConfig. Rows with excess \u003e 0 and delta_ms \u003e 0 must show a LOWER expected_base_fee than their delta_ms == 0 sibling (AdvanceMilliseconds drains excess over elapsed time) — the case where a raw read of the parent's claimed price (instead of advancing it) would falsely reject an honest Go block under load.",
+  "go_commit": "a4290dc0f47f2694572e156cadb94ef43e2eab22",
+  "rows": [
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000000000000000000000016e360",
+      "child_time_ms": 1607144400000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000000000000000000000016e360",
+      "child_time_ms": 1607144400500,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000000000000000000000016e360",
+      "child_time_ms": 1607144401000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000000000000000000000016e360",
+      "child_time_ms": 1607144410000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000000000000000000000016e360",
+      "child_time_ms": 1607144460000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000000000000000000000016e360",
+      "child_time_ms": 1607145000000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e848000000000000f4240000000000016e360",
+      "child_time_ms": 1607144400000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e848000000000000f4240000000000016e360",
+      "child_time_ms": 1607144400500,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e848000000000000f4240000000000016e360",
+      "child_time_ms": 1607144401000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e848000000000000f4240000000000016e360",
+      "child_time_ms": 1607144410000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e848000000000000f4240000000000016e360",
+      "child_time_ms": 1607144460000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e848000000000000f4240000000000016e360",
+      "child_time_ms": 1607145000000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000002faf080000000000016e360",
+      "child_time_ms": 1607144400000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000002faf080000000000016e360",
+      "child_time_ms": 1607144400500,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000002faf080000000000016e360",
+      "child_time_ms": 1607144401000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000002faf080000000000016e360",
+      "child_time_ms": 1607144410000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000002faf080000000000016e360",
+      "child_time_ms": 1607144460000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000002faf080000000000016e360",
+      "child_time_ms": 1607145000000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e8480000000000bebc200000000000016e360",
+      "child_time_ms": 1607144400000,
+      "expected_base_fee": 9
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e8480000000000bebc200000000000016e360",
+      "child_time_ms": 1607144400500,
+      "expected_base_fee": 8
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e8480000000000bebc200000000000016e360",
+      "child_time_ms": 1607144401000,
+      "expected_base_fee": 8
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e8480000000000bebc200000000000016e360",
+      "child_time_ms": 1607144410000,
+      "expected_base_fee": 8
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e8480000000000bebc200000000000016e360",
+      "child_time_ms": 1607144460000,
+      "expected_base_fee": 4
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e8480000000000bebc200000000000016e360",
+      "child_time_ms": 1607145000000,
+      "expected_base_fee": 1
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000077359400000000000016e360",
+      "child_time_ms": 1607144400000,
+      "expected_base_fee": 3526200160
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000077359400000000000016e360",
+      "child_time_ms": 1607144400500,
+      "expected_base_fee": 3506006580
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000077359400000000000016e360",
+      "child_time_ms": 1607144401000,
+      "expected_base_fee": 3485928643
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000077359400000000000016e360",
+      "child_time_ms": 1607144410000,
+      "expected_base_fee": 3143563821
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000077359400000000000016e360",
+      "child_time_ms": 1607144460000,
+      "expected_base_fee": 1770104424
+    },
+    {
+      "parent_number": 1,
+      "parent_time": 1607144400,
+      "parent_extra_hex": "00000000001e84800000000077359400000000000016e360",
+      "child_time_ms": 1607145000000,
+      "expected_base_fee": 3582830
+    }
+  ]
+}
