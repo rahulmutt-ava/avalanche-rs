@@ -74,7 +74,9 @@ fn signed_transfer(nonce: u64) -> (ava_evm_reth::RecoveredTx, ava_evm_reth::B256
     let s = U256::from_be_slice(&rsv[32..64]);
     let sig = EvmSignature::new(r, s, rsv[64] == 1);
     let signed = TransactionSigned::Legacy(tx.into_signed(sig));
-    let recovered = signed.try_into_recovered().expect("recover transfer sender");
+    let recovered = signed
+        .try_into_recovered()
+        .expect("recover transfer sender");
     let hash = *recovered.hash();
     (recovered, hash)
 }

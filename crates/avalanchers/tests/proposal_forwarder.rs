@@ -89,7 +89,9 @@ fn signed_transfer(nonce: u64) -> (ava_evm_reth::RecoveredTx, ava_evm_reth::B256
     let s = U256::from_be_slice(&rsv[32..64]);
     let sig = EvmSignature::new(r, s, rsv[64] == 1);
     let signed = TransactionSigned::Legacy(tx.into_signed(sig));
-    let recovered = signed.try_into_recovered().expect("recover transfer sender");
+    let recovered = signed
+        .try_into_recovered()
+        .expect("recover transfer sender");
     let hash = *recovered.hash();
     (recovered, hash)
 }
@@ -125,8 +127,9 @@ async fn forwarder_drives_submitted_tx_to_accepted_block() {
     // A real EVM VM over the committed local genesis (ewoq funded at nonce 0). The
     // Firewood state db lives in an owned scratch dir kept alive by the boot handle.
     let dir = tempfile::tempdir().expect("tempdir");
-    let (vm, genesis_id) = EvmVm::from_genesis(LOCAL_ID, dir.path(), local_genesis_json().as_bytes())
-        .expect("EvmVm::from_genesis over the committed local genesis");
+    let (vm, genesis_id) =
+        EvmVm::from_genesis(LOCAL_ID, dir.path(), local_genesis_json().as_bytes())
+            .expect("EvmVm::from_genesis over the committed local genesis");
 
     // Clone the two lock-free observation handles BEFORE the VM is moved into the
     // chain: the EVM mempool (to admit the tx) and the accepted-tx receipt index
