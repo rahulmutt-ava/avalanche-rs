@@ -87,11 +87,10 @@ All three take `(spec: &AvaChainSpec, parent: &AvaHeader, header: &AvaHeader)`.
 **`verify_extra_prefix`** — port of `customheader.VerifyExtraPrefix`
 (`plugin/evm/customheader/extra.go:62-108`):
 - Fortuna+: parse the **claimed** ACP-176 state from `header.extra`
-  (`Acp176State::from_bytes`); recompute
-  `fee_state_after_block(spec, parent, header_time, header_time_ms, gas_used,
-  ext_data_gas_used, Some(claimed.target_excess))` — passing the claimed
-  target excess is Go's clamp trick (`extra.go:74-84`): the expected value
-  equals the claim iff the claim was reachable in one step; full-struct
+  (`Acp176State::from_bytes`); recompute the expected state via the existing
+  `fee_state_after_block`, passing `Some(claimed.target_excess)` as its
+  `desired_target_excess` — Go's clamp trick (`extra.go:74-84`): the expected
+  value equals the claim iff the claim was reachable in one step; full-struct
   equality against the claimed state.
 - AP3+ (pre-Fortuna): recompute the fee window via the existing `fee_window`
   and require `header.extra` starts with its bytes.
@@ -101,8 +100,12 @@ All three take `(spec: &AvaChainSpec, parent: &AvaHeader, header: &AvaHeader)`.
 (`consensus/dummy/consensus.go:125-176`), in Go's exact order:
 1. `verify_gas_limit(spec, parent, header)?`
 2. `verify_extra_prefix(spec, parent, header)?`
-3. Expected base fee: at AP3+, `base_fee(spec, parent, ctx)` at
-   `header_time_ms(header)`; **exact `Option` equality** with
+3. Expected base fee: at AP3+, `base_fee(spec, parent, ctx)` with a ctx the
+   orchestrator builds itself — `timestamp`/`timestamp_ms` from the header
+   under verification, `parent_fee_state` via the existing
+   `parent_fee_state_of(spec, parent)` (needed by the window arm; the ACP-176
+   arm re-derives from `parent.extra` after the fix); **exact `Option`
+   equality** with
    `header.base_fee` — pre-AP3 the expectation is `None`, so a block
    *carrying* a base fee pre-AP3 is rejected (Go `BigEqual(nil, x)` = false;
    Rust today accepts — a second fail-open this closes).
