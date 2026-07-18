@@ -462,3 +462,149 @@ fn verify_gas_limit_ap0_bound_divisor() {
         "sentinel parity: {err}"
     );
 }
+
+// ─── verify_extra_prefix: `VerifyExtraPrefix` per-fork arms (M9.15 task 3) ────
+
+/// coreth `customheader/extra.go:62-111` — `VerifyExtraPrefix`, Fortuna arm:
+/// the claimed ACP-176 state must equal `feeStateAfterBlock(parent, header,
+/// claimed.TargetExcess)` — passing the CLAIMED target excess means the
+/// expectation clamps toward the claim, so any one-step-reachable claim is
+/// accepted and anything else mismatches (extra.go:74-87).
+#[test]
+fn verify_extra_prefix_fortuna_honest_and_tampered() {
+    // `local_all_active_spec`'s real local-network genesis is
+    // `1_607_144_400` (see `verify_gas_limit_fortuna_equality`'s identical
+    // convention) — using an epoch-relative timestamp here would put
+    // `header.time` before the network's actual Fortuna activation.
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+
+    // Honest child: extra prefix = fee_state_after_block with its own target.
+    let honest_state = feerules::fee_state_after_block(
+        &cs,
+        &parent,
+        GENESIS + 2,
+        Some((GENESIS + 2) * 1000),
+        21_000,
+        0,
+        None,
+    )
+    .expect("after-block state");
+    let child = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        time_milliseconds: Some((GENESIS + 2) * 1000),
+        gas_used: 21_000,
+        ext_data_gas_used: Some(U256::ZERO),
+        extra: honest_state.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    feerules::verify_extra_prefix(&cs, &parent, &child).expect("honest prefix accepted");
+
+    // Tampered: flip a byte inside the excess field (bytes 8..16 of the prefix).
+    let mut tampered_extra = child.extra.to_vec();
+    tampered_extra[9] ^= 0x01;
+    let tampered = AvaHeader {
+        extra: tampered_extra.into(),
+        ..child
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &tampered)
+        .expect_err("tampered prefix rejected");
+    assert!(
+        err.to_string().contains("incorrect fee state"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// A claimed target excess reachable in one step is accepted (the clamp makes
+/// expected == claimed); a claim beyond the per-block step mismatches.
+#[test]
+fn verify_extra_prefix_target_excess_clamp() {
+    // See `verify_extra_prefix_fortuna_honest_and_tampered` for why the real
+    // local-network genesis timestamp is used rather than an epoch-relative one.
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+
+    // Reachable claim: recompute with a slightly-moved desired target.
+    let near = feerules::fee_state_after_block(
+        &cs,
+        &parent,
+        GENESIS + 2,
+        Some((GENESIS + 2) * 1000),
+        0,
+        0,
+        Some(1_500_001),
+    )
+    .expect("near-claim state");
+    assert_eq!(near.target_excess.0, 1_500_001, "one-step-reachable claim");
+    let child_near = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        time_milliseconds: Some((GENESIS + 2) * 1000),
+        extra: near.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    feerules::verify_extra_prefix(&cs, &parent, &child_near).expect("reachable claim accepted");
+
+    // Unreachable claim: hand-craft a prefix whose target_excess jumped far
+    // beyond one step; the clamped expectation cannot equal it.
+    let far = acp176_extra(2_000_000, 0, u64::MAX / 2);
+    let child_far = AvaHeader {
+        extra: far,
+        ..child_near
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &child_far)
+        .expect_err("unreachable claim rejected");
+    assert!(err.to_string().contains("incorrect fee state"));
+}
+
+/// coreth `customheader/extra.go:62-111` — `VerifyExtraPrefix`, `[AP3, Fortuna)`
+/// window arm: `header.Extra` must start with the recomputed fee window's
+/// bytes (`extra.go:96-108`), but may carry additional trailing bytes
+/// (predicate/padding) after the prefix.
+#[test]
+fn verify_extra_prefix_window_arm() {
+    let cs = phase_staggered_spec();
+    // Pre-AP3 parent (AP3 activates at 3_000): `fee_window` seeds the default
+    // (all-zero) window regardless of `parent.extra`.
+    let parent = AvaHeader {
+        number: 1,
+        time: 2_000,
+        ..AvaHeader::default()
+    };
+    let window = feerules::fee_window(&cs, &parent, 3_500).expect("fee window");
+    let mut extra = window.to_bytes().to_vec();
+    extra.extend_from_slice(&[0xAB; 6]); // trailing predicate/padding bytes.
+    let child = AvaHeader {
+        number: 2,
+        time: 3_500, // AP3-active, pre-Fortuna.
+        extra: extra.clone().into(),
+        ..AvaHeader::default()
+    };
+    feerules::verify_extra_prefix(&cs, &parent, &child).expect("honest window prefix accepted");
+
+    let mut tampered_extra = extra;
+    tampered_extra[0] ^= 0x01;
+    let tampered = AvaHeader {
+        extra: tampered_extra.into(),
+        ..child
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &tampered)
+        .expect_err("tampered window prefix rejected");
+    assert!(
+        err.to_string().contains("invalid header.Extra prefix"),
+        "sentinel parity: {err}"
+    );
+}

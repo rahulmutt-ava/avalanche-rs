@@ -476,6 +476,65 @@ pub fn extra_prefix(
     }
 }
 
+/// coreth `customheader/extra.go:62-111` — `VerifyExtraPrefix`.
+///
+/// Fortuna+: the header's claimed ACP-176 fee state (first 24 bytes of
+/// `Extra`) must equal `feeStateAfterBlock(parent, header, claimed.
+/// TargetExcess)` — the claimed target excess is passed as the desired value
+/// so the expectation clamps toward the claim (`extra.go:74-87`); a claim
+/// reachable in one step therefore matches exactly, anything else mismatches.
+/// `[AP3, Fortuna)`: `Extra` must start with the recomputed fee window's
+/// bytes. Pre-AP3: no expected prefix.
+///
+/// upstream-delta: coreth's `IsHelicon` arm short-circuits Fortuna's check
+/// (the ACP-176 state leaves `header.Extra` under Helicon); `AvaPhase` has no
+/// Helicon variant yet — fold the arm in when it grows one (same callout as
+/// `EvmBlock::syntactic_verify`'s `VerifyExtra` port).
+///
+/// # Errors
+/// [`Error::IncorrectFeeState`] / [`Error::InvalidExtraPrefix`] on mismatch;
+/// [`Error::InvalidFeeState`] if the claimed or parent state is unparsable.
+pub fn verify_extra_prefix(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    let phase = spec.fork_at(header.time);
+    if phase >= AvaPhase::Fortuna {
+        // extra.go:69-72 — parse the CLAIMED fee state off the header.
+        let claimed = Acp176State::from_bytes(&header.extra)
+            .map_err(|e| Error::InvalidFeeState(format!("parsing remote fee state: {e}")))?;
+        // extra.go:74-87
+        let expected = fee_state_after_block(
+            spec,
+            parent,
+            header.time,
+            header.time_milliseconds,
+            header.gas_used,
+            opt_u256_to_u64(header.ext_data_gas_used),
+            Some(claimed.target_excess.0),
+        )?;
+        // extra.go:89-95
+        if claimed != expected {
+            return Err(Error::IncorrectFeeState {
+                expected: format!("{expected:?}"),
+                found: format!("{claimed:?}"),
+            });
+        }
+    } else if phase >= AvaPhase::ApricotPhase3 {
+        // extra.go:96-108
+        let window = fee_window(spec, parent, header.time)?;
+        let want = window.to_bytes();
+        if !header.extra.starts_with(want.as_slice()) {
+            return Err(Error::InvalidExtraPrefix {
+                expected: hex::encode(want),
+                found: hex::encode(&header.extra),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The parent's dynamic-fee state, parsed from its header extra prefix, to
 /// thread into the child's [`AvaNextBlockCtx::parent_fee_state`] so
 /// [`base_fee`]/[`AvaEvmConfig::next_evm_env`](crate::evmconfig::AvaEvmConfig)

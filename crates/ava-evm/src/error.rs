@@ -82,6 +82,15 @@ pub enum Error {
     #[error("invalid gas limit: have {have}, want {want} += {limit}")]
     GasLimitOutOfBound { have: u64, want: u64, limit: u64 },
 
+    /// coreth `customheader/extra.go:22` `errIncorrectFeeState`
+    /// ("%w: expected %+v, found %+v") — Fortuna full-struct mismatch.
+    #[error("incorrect fee state: expected {expected}, found {found}")]
+    IncorrectFeeState { expected: String, found: String },
+    /// coreth `customheader/extra.go:21` `errInvalidExtraPrefix`
+    /// ("%w: expected %x as prefix, found %x") — AP3 window-prefix mismatch.
+    #[error("invalid header.Extra prefix: expected {expected} as prefix, found {found}")]
+    InvalidExtraPrefix { expected: String, found: String },
+
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.
     #[error("conflicting atomic inputs")]
@@ -440,5 +449,21 @@ mod tests {
         let mempool_err: Error = crate::mempool::EvmMempoolError::AlreadyKnown.into();
         assert_matches!(mempool_err, Error::Mempool(_));
         assert_eq!(mempool_err.to_string(), "already known");
+
+        // Task 3 (feerules): `VerifyExtraPrefix` sentinels.
+        assert_matches!(
+            Error::IncorrectFeeState {
+                expected: "a".to_string(),
+                found: "b".to_string()
+            },
+            Error::IncorrectFeeState { .. }
+        );
+        assert_matches!(
+            Error::InvalidExtraPrefix {
+                expected: "aa".to_string(),
+                found: "bb".to_string()
+            },
+            Error::InvalidExtraPrefix { .. }
+        );
     }
 }
