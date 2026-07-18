@@ -629,9 +629,12 @@ pub fn expected_block_gas_cost(
 /// the parent-less structural checks in `EvmBlock::syntactic_verify` — coreth
 /// keeps both layers, and so do we. Checks run in Go's order so a multi-fault
 /// header reports Go's first rejection class. Go's `VerifyGasUsed` is NOT
-/// called here (same comment as consensus.go:126-127): gas-used correctness
-/// is checked by execution (`EvmBlock::verify` asserts executed gas ==
-/// `header.gas_used`).
+/// called here (same comment as consensus.go:126-127): in Go it runs
+/// PRE-execution, in `verifyIntrinsicGas` (semantic-verify stage,
+/// `wrapped_block.go`) — and that check is UNPORTED (documented follow-up,
+/// pre-existing gap). Rust's only gas-used guard is the POST-execution
+/// executed-gas equality check in `EvmBlock::verify` (asserts executed gas ==
+/// `header.gas_used`) — fail-closed, but later in the pipeline than Go's.
 ///
 /// # Errors
 /// The first failing check's error (see the per-check variants); recompute
