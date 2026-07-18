@@ -207,7 +207,18 @@ async fn forwarder_drives_submitted_tx_to_accepted_block() {
          carrying the admitted tx (NO manual vm_tx.send)"
     );
 
-    // Acceptance drained the tx from the pool (the engine's accept maintenance).
+    // Acceptance drains the tx from the pool (the engine's accept maintenance).
+    // `VerifiedEvmBlock::accept` records the receipt into the AcceptedTxIndex
+    // BEFORE `on_block_accepted` drains the pool, so the receipt being visible
+    // above does NOT imply the drain has already run — poll for it (mirroring the
+    // receipt-poll loop) rather than race it (fixes a `--profile ci` TOCTOU where
+    // parallel CPU contention let the `is_empty()` check win the race).
+    let drain_deadline = Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .expect("deadline in range");
+    while Instant::now() < drain_deadline && !pool.lock().is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert!(
         pool.lock().is_empty(),
         "the accepted block's pool maintenance drained the included tx"
