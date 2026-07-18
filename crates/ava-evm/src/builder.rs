@@ -189,11 +189,8 @@ impl BlockBuilderDriver {
         // 2. Pull one gas-limited atomic batch (coreth one-batch-per-block, §6.4).
         let atomic_batch = self.txpool.lock().next_batch(ctx);
 
-        // 3. The base fee + gas limit for the next block (§7.2/§17.3). The
-        //    per-fork override (`next_evm_env`) consumes a reth `Header`, so we
-        //    project the coreth parent header onto the fee-bearing reth fields.
-        let parent_eth = parent_eth_header(parent)?;
-        let next_env = self.evm_config.next_evm_env(&parent_eth, ctx)?;
+        // 3. The base fee + gas limit for the next block (§7.2/§17.3).
+        let next_env = self.evm_config.next_evm_env(parent, ctx)?;
         let base_fee = next_env.evm_env.block_env.basefee;
         let gas_limit = next_env.evm_env.block_env.gas_limit;
 
@@ -601,7 +598,7 @@ fn u256_to_u64(v: U256) -> u64 {
 /// # Errors
 /// Returns [`Error::NilBaseFee`] if the parent's base fee exceeds `u64::MAX`
 /// (a malformed header — C-Chain base fees fit in `u64`).
-fn parent_eth_header(parent: &AvaHeader) -> Result<Header> {
+pub(crate) fn parent_eth_header(parent: &AvaHeader) -> Result<Header> {
     let base_fee_per_gas = match parent.base_fee {
         Some(bf) => Some(u64::try_from(bf).map_err(|_| Error::NilBaseFee)?),
         None => None,

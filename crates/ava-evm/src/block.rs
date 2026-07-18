@@ -82,7 +82,7 @@ const EMPTY_EXT_DATA_HASH: [u8; 32] = [
 /// (`difficulty`, `base_fee`, `ext_data_gas_used`, `block_gas_cost`) are
 /// [`U256`] encoded as RLP scalars (minimal big-endian), matching Go
 /// `WriteBigInt`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AvaHeader {
     /// `ParentHash`.
     pub parent_hash: B256,

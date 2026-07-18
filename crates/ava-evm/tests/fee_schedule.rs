@@ -18,14 +18,16 @@
 //! off-target window moves are ≥1, the AP4 block gas cost stays in `[0, 1e6]`,
 //! and the ACP-176 price is continuous (±1) across `UpdateTargetExcess`.
 
-use ava_evm::chainspec::{AvaChainSpec, AvaPhase, NetworkUpgrades};
+use ava_evm::block::AvaHeader;
+use ava_evm::chainspec::{AvaChainSpec, AvaPhase, CChainGenesis, NetworkUpgrades};
 use ava_evm::evmconfig::{AvaEvmConfig, AvaFeeState, AvaNextBlockCtx};
 use ava_evm::feerules::acp176::{Acp176State, MAX_TARGET_EXCESS_DIFF};
 use ava_evm::feerules::blockgas::{BLOCK_GAS_COST_STEP_AP4, ap4_block_gas_cost};
 use ava_evm::feerules::window::{BaseFeeParams as WindowParams, Window, base_fee_from_window};
 use ava_evm::feerules::{self, regime_for_phase, window_params_for_phase};
 use ava_evm::{Error, Gas, GasState};
-use ava_evm_reth::{Address, B256, Chain, Header};
+use ava_evm_reth::{Address, B256, Chain};
+use ava_types::constants::LOCAL_ID;
 use proptest::prelude::*;
 use ruint::aliases::U256;
 
@@ -58,14 +60,23 @@ fn spec() -> AvaChainSpec {
 }
 
 /// Build a minimal parent header at the given number / timestamp / base fee.
-fn parent_header(number: u64, timestamp: u64, base_fee: Option<u64>) -> Header {
-    Header {
+fn parent_header(number: u64, timestamp: u64, base_fee: Option<u64>) -> AvaHeader {
+    AvaHeader {
         number,
-        timestamp,
+        time: timestamp,
         gas_limit: 8_000_000,
-        base_fee_per_gas: base_fee,
-        ..Default::default()
+        base_fee: base_fee.map(U256::from),
+        ..AvaHeader::default()
     }
+}
+
+/// A chain spec with every fork (including Fortuna+Granite) active at genesis —
+/// the local-network genesis, mirroring the construction
+/// `feerules.rs::fee_state_after_block_matches_live_go_block_extra` uses.
+fn local_all_active_spec() -> AvaChainSpec {
+    let genesis = CChainGenesis::parse(include_str!("vectors/cchain/genesis/local.json"))
+        .expect("parse local genesis");
+    AvaChainSpec::c_chain(LOCAL_ID, Chain::from_id(genesis.chain_id()))
 }
 
 prop_compose! {
@@ -166,9 +177,21 @@ proptest! {
             let mut ctx176 = ctx;
             let s = Acp176State::default();
             ctx176.parent_fee_state = AvaFeeState::Acp176(s);
-            let bf176 = feerules::base_fee(&cs, &parent, &ctx176).unwrap();
+            // M9.15 Task 1: `base_fee`'s Acp176 arm now re-derives the fee
+            // state from `parent.extra` via `fee_state_before_block` rather
+            // than trusting `ctx.parent_fee_state` — a number-0 (genesis)
+            // parent makes it seed the zero state directly (coreth
+            // `feeStateBeforeBlock`'s own genesis-parent branch), which is
+            // exactly `s` here since advancing a zero-excess state by any
+            // elapsed time cannot raise `excess` above 0 (only `consume_gas`
+            // does), so `gas_price()` stays `MinGasPrice` either way.
+            let parent176 = AvaHeader {
+                number: 0,
+                ..parent.clone()
+            };
+            let bf176 = feerules::base_fee(&cs, &parent176, &ctx176).unwrap();
             prop_assert_eq!(bf176, s.gas_price().0);
-            let env = cfg.next_evm_env(&parent, &ctx176).unwrap();
+            let env = cfg.next_evm_env(&parent176, &ctx176).unwrap();
             prop_assert_eq!(env.evm_env.block_env.basefee, s.gas_price().0);
             prop_assert!(matches!(regime_for_phase(phase), feerules::FeeRegime::Acp176));
 
@@ -176,7 +199,7 @@ proptest! {
             // M9.15 Task 6 — `feerules::gas_limit`'s Fortuna arm) ────────────
             // The `ctx` (Window-state) built above is not regime-matched for
             // Fortuna+; `gas_limit` needs the `ctx176` Acp176 state instead.
-            let gl176 = feerules::gas_limit(&cs, &parent, &ctx176).unwrap();
+            let gl176 = feerules::gas_limit(&cs, &parent176, &ctx176).unwrap();
             prop_assert_eq!(gl176, ctx176.gas_limit_hint.unwrap_or(s.max_capacity().0));
             prop_assert!(gl176 > 0);
         }
@@ -271,4 +294,56 @@ fn atomic_gas_and_fee() {
     assert_eq!(zero, U256::ZERO);
 
     let _ = B256::ZERO;
+}
+
+/// coreth `customheader/base_fee.go:27-33` — the ACP-176 child base fee is
+/// `feeStateBeforeBlock(parent, childTimeMS).GasPrice()`: the parent state is
+/// FIRST advanced by the elapsed time (draining `gas.excess`, lowering the
+/// price) and only then read. The old code read the raw parent state.
+#[test]
+fn base_fee_acp176_advances_parent_state_by_elapsed_time() {
+    let cs = local_all_active_spec(); // all forks (incl. Fortuna+Granite) at genesis
+
+    // 24-byte ACP-176 prefix: capacity(8) | excess(8) | target_excess(8), BE.
+    // A large excess makes the price strictly > MinGasPrice so the advance is
+    // observable. Tune constants until the strict inequality below holds.
+    let mut extra = Vec::with_capacity(24);
+    extra.extend_from_slice(&2_000_000u64.to_be_bytes()); // capacity
+    extra.extend_from_slice(&200_000_000u64.to_be_bytes()); // excess (nonzero)
+    extra.extend_from_slice(&1_500_000u64.to_be_bytes()); // target_excess
+    let raw = Acp176State::from_bytes(&extra).expect("parse fixture state");
+
+    // `local_all_active_spec`'s "genesis" is the local network's real
+    // `InitiallyActiveTime` (2020-12-05 05:00:00 UTC = 1_607_144_400, spec 10
+    // §7.4), not unix-epoch 0 — every phase through Granite activates exactly
+    // there, so the parent/child timestamps must land at-or-after it for the
+    // Acp176 regime (and the parent-extra parse below) to actually engage.
+    const GENESIS: u64 = 1_607_144_400;
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: extra.clone().into(),
+        ..AvaHeader::default()
+    };
+    let child_ts = GENESIS + 60; // 60s elapsed
+    let ctx = AvaNextBlockCtx {
+        timestamp: child_ts,
+        timestamp_ms: child_ts * 1000,
+        parent_fee_state: feerules::parent_fee_state_of(&cs, &parent).expect("parent fee state"),
+        ..AvaNextBlockCtx::default()
+    };
+
+    let advanced = feerules::fee_state_before_block(&cs, &parent, child_ts * 1000)
+        .expect("advance parent state");
+    assert!(
+        advanced.gas_price().0 < raw.gas_price().0,
+        "fixture must make the advance observable: advanced {} !< raw {}",
+        advanced.gas_price().0,
+        raw.gas_price().0
+    );
+    assert_eq!(
+        feerules::base_fee(&cs, &parent, &ctx).expect("base_fee"),
+        advanced.gas_price().0,
+        "base_fee must return the TIME-ADVANCED price (coreth base_fee.go:27-33)"
+    );
 }

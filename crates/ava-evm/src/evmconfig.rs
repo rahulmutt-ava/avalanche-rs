@@ -57,6 +57,7 @@ use ava_evm_reth::{
 };
 use ruint::aliases::U256 as RuintU256;
 
+use crate::block::AvaHeader;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::Error;
 use crate::feerules::acp176::Acp176State;
@@ -500,7 +501,18 @@ impl AvaEvmConfig {
     /// Returns [`Error`] if the fork-dispatch base fee cannot be resolved for a
     /// reason other than the pre-AP3 nil case (e.g. the carried fee-state does
     /// not match the active regime — a builder-wiring bug).
-    pub fn next_evm_env(&self, parent: &Header, ctx: &AvaNextBlockCtx) -> Result<AvaEvmEnv, Error> {
+    pub fn next_evm_env(
+        &self,
+        parent: &AvaHeader,
+        ctx: &AvaNextBlockCtx,
+    ) -> Result<AvaEvmEnv, Error> {
+        // The reth-facing projection of the coreth parent header (number,
+        // timestamp, gas fields, parent hash) — reth's `ConfigureEvm` trait
+        // methods below consume its own `Header` type; `feerules::{base_fee,
+        // gas_limit}` consume the `AvaHeader` `parent` directly (they re-derive
+        // the ACP-176 state from `parent.extra`, spec 21 §7 / M9.15 Task 1).
+        let parent_eth = crate::builder::parent_eth_header(parent)?;
+
         // 1. reth's Ethereum baseline env for `parent + 1` (cfg/spec id, block
         //    number/timestamp, beneficiary, prevrandao, blob params). The inner
         //    `EthEvmConfig::next_evm_env` is infallible (`Error = Infallible`).
@@ -511,12 +523,12 @@ impl AvaEvmConfig {
             // A non-zero placeholder so the baseline env is valid; overridden
             // below by `feerules::gas_limit`.
             gas_limit: ctx.gas_limit_hint.unwrap_or(0),
-            parent_beacon_block_root: parent.parent_beacon_block_root,
+            parent_beacon_block_root: parent_eth.parent_beacon_block_root,
             withdrawals: None,
             extra_data: Default::default(),
             slot_number: None,
         };
-        let mut evm_env = match ConfigureEvm::next_evm_env(&self.inner, parent, &attrs) {
+        let mut evm_env = match ConfigureEvm::next_evm_env(&self.inner, &parent_eth, &attrs) {
             Ok(env) => env,
             Err(never) => match never {},
         };
@@ -552,7 +564,7 @@ impl AvaEvmConfig {
             number: parent.number.saturating_add(1),
             timestamp: ctx.timestamp,
             parent_hash: B256::ZERO,
-            parent_beacon_block_root: parent.parent_beacon_block_root,
+            parent_beacon_block_root: parent_eth.parent_beacon_block_root,
             beneficiary: ctx.suggested_fee_recipient,
             gas_limit: evm_env.block_env.gas_limit,
             base_fee_per_gas: Some(evm_env.block_env.basefee),

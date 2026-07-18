@@ -16,8 +16,6 @@ pub mod window;
 
 use ruint::aliases::U256;
 
-use ava_evm_reth::Header;
-
 use crate::atomic::tx::{COST_PER_SIGNATURE, EVM_INPUT_GAS, EVM_OUTPUT_GAS, TX_BYTES_GAS};
 use crate::block::AvaHeader;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
@@ -93,8 +91,10 @@ pub fn window_params_for_phase(phase: AvaPhase) -> window::BaseFeeParams {
 ///   over the parent window + parent base fee carried in
 ///   [`AvaFeeState::Window`]. The window/base-fee come from the parent header's
 ///   extra-data, extracted by the builder/verifier (M6.7) into the ctx.
-/// - **Fortuna+** ([`FeeRegime::Acp176`]) → the ACP-176 gas price of the
-///   carried [`AvaFeeState::Acp176`] state.
+/// - **Fortuna+** ([`FeeRegime::Acp176`]) → coreth
+///   `feeStateBeforeBlock(parent, childTimeMS).GasPrice()` (`customheader/base_fee.go:27-33`):
+///   the parent's ACP-176 state, re-derived from `parent.extra`, is advanced by
+///   the elapsed time FIRST and only then read.
 ///
 /// The window arm returns a `u64` (C-Chain base fees fit in `u64`); a value that
 /// exceeds `u64::MAX` saturates (it would already be clamped to a phase bound
@@ -103,7 +103,11 @@ pub fn window_params_for_phase(phase: AvaPhase) -> window::BaseFeeParams {
 /// # Errors
 /// Returns [`Error::NilBaseFee`] pre-AP3, or if the carried fee-state does not
 /// match the active regime (a programming error in the builder wiring).
-pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Result<u64, Error> {
+pub fn base_fee(
+    cs: &AvaChainSpec,
+    parent: &AvaHeader,
+    ctx: &AvaNextBlockCtx,
+) -> Result<u64, Error> {
     let phase = cs.fork_at(ctx.timestamp);
     match regime_for_phase(phase) {
         FeeRegime::Legacy => Err(Error::NilBaseFee),
@@ -115,31 +119,18 @@ pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Re
                 AvaFeeState::Acp176(_) => return Err(Error::NilBaseFee),
             };
             // `time_elapsed = child.Time - parent.Time` (seconds), floored at 0.
-            let time_elapsed = ctx.timestamp.saturating_sub(parent.timestamp);
+            let time_elapsed = ctx.timestamp.saturating_sub(parent.time);
             let bf = window::base_fee_from_window(params, &window, parent_base, time_elapsed);
             Ok(u64::try_from(bf).unwrap_or(u64::MAX))
         }
-        FeeRegime::Acp176 => match &ctx.parent_fee_state {
-            // DEFERRED (tracked follow-up), coreth `plugin/evm/customheader/base_fee.go:27-33`:
-            // coreth computes the child base fee as
-            // `feeStateBeforeBlock(parent, childTimeMS).GasPrice()` — it FIRST advances
-            // the parent state by the elapsed time (draining `gas.excess` toward 0 and
-            // thus lowering the price) and only then reads `GasPrice()`. Here we read
-            // `GasPrice()` off the RAW parent state, skipping that advance.
-            //   What's missing: the `fee_state_before_block` time-advance before
-            //     `gas_price()` (we already have that fn — see below in this module).
-            //   When it matters: sustained load / nonzero `gas.excess`. While
-            //     `excess ≈ 0` (the quiet mixed-network arm) both give `MinGasPrice`, so
-            //     it is byte-exact today; under load Go's advance lowers the price while
-            //     ours does not, so Go's `VerifyHeader` (which checks BaseFee exactly)
-            //     would REJECT our block — this is consensus-relevant.
-            //   Why deferred: `parent` here is a reth `Header`, which carries no
-            //     sub-second `time_milliseconds`; a faithful Granite ms-advance needs
-            //     the parent `AvaHeader` threaded in (a small signature refactor).
-            AvaFeeState::Acp176(state) => Ok(state.gas_price().0),
-            // Builder wiring error: ACP-176 regime requires an acp176 state.
-            AvaFeeState::Window { .. } => Err(Error::NilBaseFee),
-        },
+        // coreth `customheader/base_fee.go:27-33` — the child base fee is
+        // `feeStateBeforeBlock(parent, childTimeMS).GasPrice()`: advance the
+        // parent state by the elapsed time FIRST (ms at Granite, s at Fortuna),
+        // then read the price. Re-derives from `parent.extra` (Go-exact);
+        // `ctx.parent_fee_state` is not consulted on this arm.
+        FeeRegime::Acp176 => Ok(fee_state_before_block(cs, parent, ctx.timestamp_ms)?
+            .gas_price()
+            .0),
     }
 }
 
@@ -158,7 +149,11 @@ pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Re
 /// resolves the regime matching `cs.fork_at`, so this is unreachable for a
 /// correctly wired caller — mirrors [`base_fee`]'s identical regime-mismatch
 /// convention above).
-pub fn gas_limit(cs: &AvaChainSpec, _parent: &Header, ctx: &AvaNextBlockCtx) -> Result<u64, Error> {
+pub fn gas_limit(
+    cs: &AvaChainSpec,
+    _parent: &AvaHeader,
+    ctx: &AvaNextBlockCtx,
+) -> Result<u64, Error> {
     let phase = cs.fork_at(ctx.timestamp);
     if phase >= AvaPhase::Fortuna {
         // coreth `customheader/gas_limit.go:36-45` (`GasLimit`, Fortuna arm):
