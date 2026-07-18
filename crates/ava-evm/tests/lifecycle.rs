@@ -34,16 +34,19 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use ava_database::{DynDatabase, MemDb};
-use ava_evm::block::{EvmBlock, EvmBlockContext, assemble_ava_block, decode_ava_evm_block};
+use ava_evm::block::{
+    AvaHeader, EvmBlock, EvmBlockContext, assemble_ava_block, decode_ava_evm_block,
+};
 use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, NetworkUpgrades};
-use ava_evm::evmconfig::{AvaEvmConfig, NoopPreHook};
+use ava_evm::evmconfig::{AvaEvmConfig, AvaNextBlockCtx, NoopPreHook};
+use ava_evm::feerules::{base_fee, parent_fee_state_of};
 use ava_evm::precompile::rewardmanager::BLACKHOLE_ADDRESS;
 use ava_evm::receipts::decode_block_receipts;
 use ava_evm::state::FirewoodStateProvider;
 use ava_evm_reth::{
-    Address, B256, BundleState, EthReceipt, ExternalConsensusExecutor, Header, State,
-    StateProviderDatabase, TxHashRef, TxType, U256,
+    Address, B256, BundleState, EMPTY_OMMER_ROOT_HASH, EMPTY_ROOT_HASH, EthReceipt,
+    ExternalConsensusExecutor, Header, State, StateProviderDatabase, TxHashRef, TxType, U256,
 };
 
 #[derive(serde::Deserialize)]
@@ -57,6 +60,7 @@ struct Fixture {
     chain_id: u64,
     alloc: Vec<AllocEntry>,
     genesis_state_root: String,
+    genesis_base_fee: String,
     block1_rlp: String,
 }
 
@@ -95,6 +99,45 @@ fn load_fixture() -> Fixture {
 
 fn block1_bytes(fx: &Fixture) -> Vec<u8> {
     hex::decode(fx.block1_rlp.trim_start_matches("0x")).expect("block1 hex")
+}
+
+/// The synthetic AP3 genesis (height-0) coreth header the fixture's block-1 is a
+/// child of — the parent [`EvmBlock::verify`] recomputes the contextual
+/// `verifyHeaderGasFields` fee/gas fields against (coreth
+/// `consensus/dummy/consensus.go:125-176`). Same recipe as `build.rs`'s
+/// `genesis_header`: the committed genesis state root + the AP3 genesis base fee
+/// (`genesis_base_fee`), gas limit 8M, empty extra window — the params coreth
+/// generated the fixture's block 1 from, so block 1's stamped gas limit / base
+/// fee / window recompute to exactly its header values.
+fn genesis_header(fx: &Fixture, genesis_root: B256) -> AvaHeader {
+    AvaHeader {
+        parent_hash: B256::ZERO,
+        uncle_hash: EMPTY_OMMER_ROOT_HASH,
+        coinbase: Address::ZERO,
+        state_root: genesis_root,
+        tx_root: EMPTY_ROOT_HASH,
+        receipt_root: EMPTY_ROOT_HASH,
+        bloom: ava_evm_reth::Bytes::from(vec![0u8; 256]),
+        difficulty: U256::ZERO,
+        number: 0,
+        gas_limit: 8_000_000,
+        gas_used: 0,
+        time: 0,
+        extra: ava_evm_reth::Bytes::new(),
+        mix_digest: B256::ZERO,
+        nonce: [0u8; 8],
+        ext_data_hash: ava_evm::block::empty_ext_data_hash(),
+        base_fee: Some(U256::from(
+            u64::from_str(&fx.genesis_base_fee).expect("genesis base fee"),
+        )),
+        ext_data_gas_used: None,
+        block_gas_cost: None,
+        blob_gas_used: None,
+        excess_blob_gas: None,
+        parent_beacon_root: None,
+        time_milliseconds: None,
+        min_delay_excess: None,
+    }
 }
 
 /// Opens a fresh Firewood db with the genesis alloc committed, plus the
@@ -144,17 +187,38 @@ fn verifiable_block1(fx: &Fixture, ctx: &EvmBlockContext, parent_root: B256) -> 
     let decoded = decode_ava_evm_block(&block1_bytes(fx), ctx.chain_spec()).expect("decode block1");
     let txs = decoded.recover_senders().expect("recover");
 
-    // Dry-run execute to learn the executor's post-state root.
+    // The fixture's block-1 base fee is a raw `GenerateChainWithGenesis`
+    // artifact, NOT the coreth-AP3 dynamic-fee value a real node stamps: it
+    // carries the flat genesis base fee (225 gwei), whereas coreth's
+    // `baseFeeFromWindow` decreases it over the empty genesis window (→ 206.25
+    // gwei). The new `verifyHeaderGasFields` check (which this test now threads a
+    // parent header through) correctly rejects the flat value, so — as this
+    // helper already does for the state root and coinbase (a raw artifact isn't
+    // consensus-wrapped) — stamp the coreth-honest base fee recomputed from the
+    // genesis parent. It is state-neutral here (the single legacy tx is credited
+    // its full effective price regardless of base fee, `evmconfig.rs`), so the
+    // executed root is unchanged.
+    let genesis = genesis_header(fx, parent_root);
     let h = decoded.header();
+    let honest_base_fee = {
+        let spec = ctx.chain_spec();
+        let next = AvaNextBlockCtx {
+            timestamp: h.time,
+            timestamp_ms: h.time.saturating_mul(1000),
+            parent_fee_state: parent_fee_state_of(spec, &genesis).expect("parent fee state"),
+            ..AvaNextBlockCtx::default()
+        };
+        U256::from(base_fee(spec, &genesis, &next).expect("honest base fee"))
+    };
+
+    // Dry-run execute to learn the executor's post-state root.
     let env_header = Header {
         parent_hash: h.parent_hash,
         number: h.number,
         timestamp: h.time,
         gas_limit: h.gas_limit,
         gas_used: h.gas_used,
-        base_fee_per_gas: h
-            .base_fee
-            .map(|bf| u64::try_from(bf).expect("base fee fits")),
+        base_fee_per_gas: Some(u64::try_from(honest_base_fee).expect("base fee fits")),
         // The dry-run beneficiary MUST match the coinbase the final header
         // is stamped with (BLACKHOLE_ADDRESS, below) so the fee credit lands on
         // the same account the real verify-time re-execution uses; otherwise the
@@ -191,6 +255,7 @@ fn verifiable_block1(fx: &Fixture, ctx: &EvmBlockContext, parent_root: B256) -> 
     let mut parts = decoded.into_parts();
     parts.header.state_root = root;
     parts.header.coinbase = BLACKHOLE_ADDRESS;
+    parts.header.base_fee = Some(honest_base_fee);
     assemble_ava_block(parts, ctx.chain_spec()).expect("assemble")
 }
 
@@ -201,7 +266,9 @@ fn verify_computes_precommit_root_no_commit() {
     let block = verifiable_block1(&fx, &ctx, genesis_root);
 
     let tip_before = ctx.state().root();
-    let precommit = block.verify(&ctx, genesis_root).expect("verify");
+    let precommit = block
+        .verify(&ctx, genesis_root, &genesis_header(&fx, genesis_root))
+        .expect("verify");
 
     // The pre-commit root is the header's state root.
     assert_eq!(precommit, *block.header_state_root());
@@ -216,7 +283,9 @@ fn accept_commits_and_advances_tip() {
     let (_dir, ctx, genesis_root) = setup(&fx);
     let block = verifiable_block1(&fx, &ctx, genesis_root);
 
-    let precommit = block.verify(&ctx, genesis_root).expect("verify");
+    let precommit = block
+        .verify(&ctx, genesis_root, &genesis_header(&fx, genesis_root))
+        .expect("verify");
     assert_eq!(
         ctx.state().root(),
         genesis_root,
@@ -248,8 +317,12 @@ fn reject_drops_proposal_without_commit() {
     // Two verifies of the same parent (sibling/idempotent proposals). The contract
     // is that rejecting does not disturb the committed tip (proposal-on-proposal,
     // 04 §4.2).
-    let precommit = block.verify(&ctx, genesis_root).expect("verify A");
-    let precommit2 = block.verify(&ctx, genesis_root).expect("verify B");
+    let precommit = block
+        .verify(&ctx, genesis_root, &genesis_header(&fx, genesis_root))
+        .expect("verify A");
+    let precommit2 = block
+        .verify(&ctx, genesis_root, &genesis_header(&fx, genesis_root))
+        .expect("verify B");
     assert_eq!(
         precommit, precommit2,
         "same parent+txs => same precommit root"
@@ -281,7 +354,9 @@ fn accept_persists_receipts_and_indexes_txs() {
     let tx_hash = *txs[0].tx_hash();
     let expected_from = txs[0].signer();
 
-    let precommit = block.verify(&ctx, genesis_root).expect("verify");
+    let precommit = block
+        .verify(&ctx, genesis_root, &genesis_header(&fx, genesis_root))
+        .expect("verify");
     block.accept(&ctx, precommit).expect("accept");
 
     // (a) receipts bytes persisted in the canonical store, non-empty, and
@@ -369,7 +444,9 @@ fn accept_never_fails_on_receipt_tx_count_mismatch() {
     );
     let tx_hash = *real_txs[0].tx_hash();
 
-    let precommit = block.verify(&ctx, genesis_root).expect("verify");
+    let precommit = block
+        .verify(&ctx, genesis_root, &genesis_header(&fx, genesis_root))
+        .expect("verify");
 
     // Corrupt the verify-time stash `verify` just wrote: replace it with TWO
     // receipts for a block that only has ONE tx. `stash_receipts_for_test` is

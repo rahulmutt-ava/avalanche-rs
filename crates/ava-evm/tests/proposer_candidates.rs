@@ -276,7 +276,7 @@ fn emit_proposer_candidates() {
     provider.discard(built_root);
     let block_ctx = EvmBlockContext::new(Arc::clone(&provider), config, canonical);
     built
-        .verify(&block_ctx, genesis_root)
+        .verify(&block_ctx, genesis_root, &genesis_header)
         .expect("honest candidate must pass Rust's own full syntactic_verify");
 
     let honest_bytes = built.encoded_bytes().to_vec();

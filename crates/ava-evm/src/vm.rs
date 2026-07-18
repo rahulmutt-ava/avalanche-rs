@@ -80,7 +80,7 @@ use ava_vm::vm::{HttpHandler, LockOptions, PendingWorkWaiter, Vm, VmEvent, VmHtt
 
 use crate::atomic::mempool::AtomicMempool;
 use crate::block::{
-    AvaBlockParts, EvmBlock, EvmBlockContext, assemble_ava_block, decode_ava_evm_block,
+    AvaBlockParts, AvaHeader, EvmBlock, EvmBlockContext, assemble_ava_block, decode_ava_evm_block,
 };
 use crate::builder::BlockBuilderDriver;
 use crate::canonical::CanonicalStore;
@@ -155,9 +155,13 @@ impl VmBlock for VerifiedEvmBlock {
         // The parent must be the committed tip (linear acceptance, G6): resolve
         // its state root from the Firewood provider's current tip.
         let parent_root = self.shared.parent_state_root(self.parent)?;
+        // The parent's coreth header, for the contextual `verifyHeaderGasFields`
+        // checks — resolved from the SAME set `parent_state_root` covers, so both
+        // reads agree on which parent this block verifies against.
+        let parent_header = self.shared.parent_header(self.parent)?;
         let precommit = self
             .block
-            .verify(&self.ctx, parent_root)
+            .verify(&self.ctx, parent_root, &parent_header)
             .map_err(ava_snow::Error::from)?;
         // Promote into the processing-block tree, recording the pre-commit root
         // so accept/reject can commit/discard exactly it.
@@ -281,6 +285,30 @@ impl Shared {
     /// Whether `id` is the committed last-accepted tip.
     fn is_committed_tip(&self, id: Id) -> bool {
         self.last_accepted.load().0 == id
+    }
+
+    /// The parent block's coreth [`AvaHeader`], for the contextual
+    /// `verifyHeaderGasFields` checks (coreth `consensus/dummy/consensus.go:125-176`,
+    /// [`crate::feerules::verify_header_gas_fields`]).
+    ///
+    /// Resolves from the `verified` processing tree only — the same effective
+    /// coverage as [`Shared::parent_state_root`]: accepted blocks are RETAINED
+    /// in `verified` after `accept` (for `get_block` resolvability), so the
+    /// committed tip resolves here, as do all still-processing parents (the
+    /// verify-then-build-child case). A parent evicted from the tree CANNOT be
+    /// reconstructed here — the [`CanonicalStore`] persists only the header
+    /// commitment + ext_data, not the full block RLP (the same limitation
+    /// `get_block` documents for accepted-but-evicted ids, deferred to
+    /// M6.23/M6.24) — so this returns [`Error::MissingProposal`], matching
+    /// `parent_state_root`'s and `build_block`'s resolution contract and every
+    /// current caller.
+    fn parent_header(&self, parent: Id) -> ava_snow::Result<AvaHeader> {
+        if let Some(pb) = self.verified.get(&parent) {
+            return Ok(pb.block.header().clone());
+        }
+        Err(ava_snow::Error::from(Error::MissingProposal(hash_of(
+            parent,
+        ))))
     }
 }
 
@@ -545,6 +573,26 @@ impl EvmVm {
     #[must_use]
     pub fn evm_mempool_handle(&self) -> Arc<parking_lot::Mutex<EvmMempool>> {
         Arc::clone(&self.evm_mempool)
+    }
+
+    /// Test seam: seed an already-decided block into the processing tree under an
+    /// explicit consensus `id`, so it resolves as a parent for
+    /// [`VerifiedEvmBlock::verify`]'s `parent_state_root` / `parent_header` reads.
+    ///
+    /// [`EvmVm::from_genesis`] performs the equivalent genesis seeding internally
+    /// (so the production boot path never needs this). Tests that construct the VM
+    /// via the lower-level [`EvmVm::new`] — which receives only the genesis id, not
+    /// a reconstructable block — use this to seed the genesis parent they verify a
+    /// child against.
+    #[doc(hidden)]
+    pub fn seed_verified(&self, id: Id, block: EvmBlock, precommit_root: B256) {
+        self.shared.verified.insert(
+            id,
+            ProcessingBlock {
+                block,
+                precommit_root,
+            },
+        );
     }
 
     /// Wraps an [`EvmBlock`] as the engine-facing [`ava_snow::Block`], cloning the
