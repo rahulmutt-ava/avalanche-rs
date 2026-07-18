@@ -176,23 +176,32 @@ pub fn gas_limit(
     Ok(ctx.gas_limit_hint.unwrap_or(default_limit))
 }
 
-/// coreth `params/avalanche_params.go` — static pre-Fortuna gas limits.
+/// coreth `plugin/evm/upgrade/ap1/params.go:21` — the ApricotPhase1 static gas
+/// limit (`ap1.GasLimit`).
 pub const APRICOT_PHASE1_GAS_LIMIT: u64 = 8_000_000;
+/// coreth `plugin/evm/upgrade/cortina/params.go:11` — the Cortina static gas
+/// limit (`cortina.GasLimit`).
 pub const CORTINA_GAS_LIMIT: u64 = 15_000_000;
 /// coreth `plugin/evm/upgrade/ap0/params.go:27-28` — the pre-AP1 launch range.
 pub const AP0_MIN_GAS_LIMIT: u64 = 5_000;
 pub const AP0_MAX_GAS_LIMIT: u64 = 0x7fff_ffff_ffff_ffff;
+/// coreth `plugin/evm/upgrade/ap0/params.go:29` — the pre-AP1 gas-limit bound
+/// divisor (`ap0.GasLimitBoundDivisor`), used by [`verify_gas_limit`]'s pre-AP1
+/// bound-divisor arm (`customheader/gas_limit.go:147-157`).
+pub const AP0_GAS_LIMIT_BOUND_DIVISOR: u64 = 1024;
 
-/// coreth `customheader/gas_limit.go:101-145` — `VerifyGasLimit`.
+/// coreth `customheader/gas_limit.go:101-160` — `VerifyGasLimit`.
 ///
 /// The verify-side complement of [`gas_limit`]: recomputes the expected gas
-/// limit from the parent and equality-checks the header's claim (range-checks
-/// pre-AP1). At Fortuna+ the expectation is the ACP-176 `MaxCapacity()` off the
-/// time-advanced pre-block state (`gas_limit.go:107-120`).
+/// limit from the parent and equality-checks the header's claim (range- and
+/// bound-divisor-checks pre-AP1). At Fortuna+ the expectation is the ACP-176
+/// `MaxCapacity()` off the time-advanced pre-block state (`gas_limit.go:107-120`).
 ///
 /// # Errors
-/// [`Error::GasLimitMismatch`] / [`Error::GasLimitOutOfRange`] on a wrong
-/// claim; propagates [`Error::InvalidFeeState`] from the fee-state recompute.
+/// [`Error::GasLimitMismatch`] (Fortuna) / [`Error::GasLimitMismatchInFork`]
+/// (Cortina/ApricotPhase1) / [`Error::GasLimitOutOfRange`] /
+/// [`Error::GasLimitOutOfBound`] (pre-AP1) on a wrong claim; propagates
+/// [`Error::InvalidFeeState`] from the fee-state recompute.
 pub fn verify_gas_limit(
     spec: &AvaChainSpec,
     parent: &AvaHeader,
@@ -212,7 +221,8 @@ pub fn verify_gas_limit(
     } else if phase >= AvaPhase::Cortina {
         // gas_limit.go:121-128
         if header.gas_limit != CORTINA_GAS_LIMIT {
-            return Err(Error::GasLimitMismatch {
+            return Err(Error::GasLimitMismatchInFork {
+                fork: "Cortina",
                 have: header.gas_limit,
                 want: CORTINA_GAS_LIMIT,
             });
@@ -220,18 +230,32 @@ pub fn verify_gas_limit(
     } else if phase >= AvaPhase::ApricotPhase1 {
         // gas_limit.go:129-136
         if header.gas_limit != APRICOT_PHASE1_GAS_LIMIT {
-            return Err(Error::GasLimitMismatch {
+            return Err(Error::GasLimitMismatchInFork {
+                fork: "ApricotPhase1",
                 have: header.gas_limit,
                 want: APRICOT_PHASE1_GAS_LIMIT,
             });
         }
-    } else if header.gas_limit < AP0_MIN_GAS_LIMIT || header.gas_limit > AP0_MAX_GAS_LIMIT {
-        // gas_limit.go:137-144
-        return Err(Error::GasLimitOutOfRange {
-            have: header.gas_limit,
-            min: AP0_MIN_GAS_LIMIT,
-            max: AP0_MAX_GAS_LIMIT,
-        });
+    } else {
+        // gas_limit.go:138-145
+        if header.gas_limit < AP0_MIN_GAS_LIMIT || header.gas_limit > AP0_MAX_GAS_LIMIT {
+            return Err(Error::GasLimitOutOfRange {
+                have: header.gas_limit,
+                min: AP0_MIN_GAS_LIMIT,
+                max: AP0_MAX_GAS_LIMIT,
+            });
+        }
+        // gas_limit.go:147-157 — the gas limit may not jump by more than
+        // parent.GasLimit / GasLimitBoundDivisor from the parent's.
+        let diff = parent.gas_limit.abs_diff(header.gas_limit);
+        let limit = parent.gas_limit / AP0_GAS_LIMIT_BOUND_DIVISOR;
+        if diff >= limit {
+            return Err(Error::GasLimitOutOfBound {
+                have: header.gas_limit,
+                want: parent.gas_limit,
+                limit,
+            });
+        }
     }
     Ok(())
 }

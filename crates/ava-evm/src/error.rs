@@ -55,15 +55,32 @@ pub enum Error {
     #[error("invalid fee state: {0}")]
     InvalidFeeState(String),
 
-    /// coreth `customheader/gas_limit.go:24` `errInvalidGasLimit` — equality arms
-    /// ("%w: have %d, want %d" / "%w: expected to be %d in ..., but found %d").
+    /// coreth `customheader/gas_limit.go:24` `errInvalidGasLimit`, Fortuna arm
+    /// (`gas_limit.go:107-120`, `"%w: have %d, want %d"`).
     #[error("invalid gas limit: have {have}, want {want}")]
     GasLimitMismatch { have: u64, want: u64 },
 
-    /// coreth `gas_limit.go:138-144` — the pre-AP1 range arm
+    /// coreth `gas_limit.go:24` `errInvalidGasLimit`, the Cortina/ApricotPhase1
+    /// static-limit arms (`gas_limit.go:121-136`,
+    /// `"%w: expected to be %d in Cortina, but found %d"` /
+    /// `"...in ApricotPhase1..."`); `fork` is `"Cortina"` or `"ApricotPhase1"`.
+    #[error("invalid gas limit: expected to be {want} in {fork}, but found {have}")]
+    GasLimitMismatchInFork {
+        fork: &'static str,
+        have: u64,
+        want: u64,
+    },
+
+    /// coreth `gas_limit.go:138-145` — the pre-AP1 range arm
     /// ("%w: %d not in range [%d, %d]").
     #[error("invalid gas limit: {have} not in range [{min}, {max}]")]
     GasLimitOutOfRange { have: u64, min: u64, max: u64 },
+
+    /// coreth `gas_limit.go:147-157` — the pre-AP1 bound-divisor arm
+    /// ("%w: have %d, want %d += %d"); `want` is the parent's gas limit,
+    /// `limit` is `parent.GasLimit / ap0.GasLimitBoundDivisor`.
+    #[error("invalid gas limit: have {have}, want {want} += {limit}")]
+    GasLimitOutOfBound { have: u64, want: u64, limit: u64 },
 
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.

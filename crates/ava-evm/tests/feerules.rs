@@ -272,7 +272,7 @@ fn acp176_extra(capacity: u64, excess: u64, target_excess: u64) -> Bytes {
     e.into()
 }
 
-/// coreth `customheader/gas_limit.go:101-145` — `VerifyGasLimit` per-fork arms.
+/// coreth `customheader/gas_limit.go:101-160` — `VerifyGasLimit` per-fork arms.
 #[test]
 fn verify_gas_limit_fortuna_equality() {
     // `local_all_active_spec`'s "genesis" is the local network's real
@@ -303,13 +303,15 @@ fn verify_gas_limit_fortuna_equality() {
         ..ok
     };
     let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
-    assert!(
-        err.to_string().contains("invalid gas limit"),
+    // gas_limit.go:114-119 — `"%w: have %d, want %d"`.
+    assert_eq!(
+        err.to_string(),
+        format!("invalid gas limit: have {}, want {want}", want + 1),
         "sentinel parity: {err}"
     );
 }
 
-/// coreth `customheader/gas_limit.go:101-145` — the Cortina static-limit arm.
+/// coreth `customheader/gas_limit.go:101-160` — the Cortina static-limit arm.
 #[test]
 fn verify_gas_limit_cortina_is_15m() {
     let cs = phase_staggered_spec();
@@ -331,13 +333,15 @@ fn verify_gas_limit_cortina_is_15m() {
         ..ok
     };
     let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
-    assert!(
-        err.to_string().contains("invalid gas limit"),
+    // gas_limit.go:123-127 — `"%w: expected to be %d in Cortina, but found %d"`.
+    assert_eq!(
+        err.to_string(),
+        "invalid gas limit: expected to be 15000000 in Cortina, but found 15000001",
         "sentinel parity: {err}"
     );
 }
 
-/// coreth `customheader/gas_limit.go:101-145` — the ApricotPhase1 static-limit
+/// coreth `customheader/gas_limit.go:101-160` — the ApricotPhase1 static-limit
 /// arm.
 #[test]
 fn verify_gas_limit_ap1_is_8m() {
@@ -360,20 +364,27 @@ fn verify_gas_limit_ap1_is_8m() {
         ..ok
     };
     let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
-    assert!(
-        err.to_string().contains("invalid gas limit"),
+    // gas_limit.go:131-135 — `"%w: expected to be %d in ApricotPhase1, but found %d"`.
+    assert_eq!(
+        err.to_string(),
+        "invalid gas limit: expected to be 8000000 in ApricotPhase1, but found 8000001",
         "sentinel parity: {err}"
     );
 }
 
-/// coreth `customheader/gas_limit.go:101-145` / `plugin/evm/upgrade/ap0/params.go:27-28`
+/// coreth `customheader/gas_limit.go:138-145` / `plugin/evm/upgrade/ap0/params.go:27-28`
 /// — the pre-AP1 `[MinGasLimit, MaxGasLimit]` range arm.
 #[test]
 fn verify_gas_limit_ap0_range() {
     let cs = phase_staggered_spec();
-    let parent = AvaHeader {
+
+    // Each parent's gas limit matches its header's own, so the (separately
+    // tested, gas_limit.go:147-157) bound-divisor arm trivially passes
+    // (diff == 0) and only the range check below is exercised.
+    let parent_min = AvaHeader {
         number: 1,
         time: 100,
+        gas_limit: 5_000,
         ..AvaHeader::default()
     };
     let min_ok = AvaHeader {
@@ -382,21 +393,72 @@ fn verify_gas_limit_ap0_range() {
         gas_limit: 5_000,
         ..AvaHeader::default()
     };
-    feerules::verify_gas_limit(&cs, &parent, &min_ok).expect("AP0 min bound accepted");
+    feerules::verify_gas_limit(&cs, &parent_min, &min_ok).expect("AP0 min bound accepted");
 
+    let parent_max = AvaHeader {
+        gas_limit: 0x7fff_ffff_ffff_ffff,
+        ..parent_min.clone()
+    };
     let max_ok = AvaHeader {
         gas_limit: 0x7fff_ffff_ffff_ffff,
         ..min_ok.clone()
     };
-    feerules::verify_gas_limit(&cs, &parent, &max_ok).expect("AP0 max bound accepted");
+    feerules::verify_gas_limit(&cs, &parent_max, &max_ok).expect("AP0 max bound accepted");
 
     let bad = AvaHeader {
         gas_limit: 4_999,
         ..min_ok
     };
-    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("below AP0 min rejected");
-    assert!(
-        err.to_string().contains("invalid gas limit"),
+    // The range check (go:138-145) runs BEFORE the bound-divisor check, so
+    // this is rejected on the range regardless of parent_min's gas limit.
+    let err =
+        feerules::verify_gas_limit(&cs, &parent_min, &bad).expect_err("below AP0 min rejected");
+    // gas_limit.go:139-144 — `"%w: %d not in range [%d, %d]"`.
+    assert_eq!(
+        err.to_string(),
+        "invalid gas limit: 4999 not in range [5000, 9223372036854775807]",
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:147-157` — the pre-AP1 bound-divisor arm:
+/// the gas limit may not jump by `>= parent.GasLimit / GasLimitBoundDivisor`
+/// from the parent's, even when the claimed value is itself in range.
+#[test]
+fn verify_gas_limit_ap0_bound_divisor() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 100,
+        gas_limit: 8_000_000,
+        ..AvaHeader::default()
+    };
+    let limit = parent.gas_limit / feerules::AP0_GAS_LIMIT_BOUND_DIVISOR; // 7_812
+
+    // diff == limit - 1: strictly under the threshold, accepted.
+    let small_delta = AvaHeader {
+        number: 2,
+        time: 500, // pre-ApricotPhase1.
+        gas_limit: parent.gas_limit + limit - 1,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &small_delta).expect("small jump accepted");
+
+    // diff == limit: Go's `diff >= limit` triggers on equality too.
+    let boundary = AvaHeader {
+        gas_limit: parent.gas_limit + limit,
+        ..small_delta
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &boundary)
+        .expect_err("jump == parent/1024 rejected");
+    // gas_limit.go:151-156 — `"%w: have %d, want %d += %d"`.
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "invalid gas limit: have {}, want {} += {limit}",
+            parent.gas_limit + limit,
+            parent.gas_limit
+        ),
         "sentinel parity: {err}"
     );
 }
