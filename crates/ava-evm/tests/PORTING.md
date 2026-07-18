@@ -14,8 +14,8 @@ bootstrapper) are listed as `n/a` with reasons.
 
 Legend: ⬜ not ported · 🟡 partial · ✅ ported · n/a not applicable
 
-**Summary (shipped scope):** 86 ported ✅ / 9 partial 🟡 / 0 not-ported ⬜ /
-37 n/a · 0 wip rows.
+**Summary (shipped scope):** 99 ported ✅ / 9 partial 🟡 / 0 not-ported ⬜ /
+38 n/a · 0 wip rows.
 
 Shipped scope covers: block wire codec / chainspec / fee rules / lifecycle
 (verify/accept/reject) / atomic tx codec / atomic mempool / atomic trie /
@@ -97,6 +97,38 @@ the built-in no-op test-VM factory, which is what
 | `TestCalculateBlockBuildingDelay` | ✅ ported | `build::respects_min_build_delay` — the minimum block build delay (ACP-226 `MinDelayExcess`) is asserted on every built block |
 | `TestEVMSyncerVM` | ✅ ported | `state_sync::client_reconstructs_trie_and_verifies_root` + `state_sync::atomic_trie_syncs_then_applies_to_shared_memory` (EVM + atomic-trie state sync over Firewood proofs, M6.25) |
 | `TestPrestateWithDiffModeANTTracer` | n/a | Go debug tracer (prestate diff-mode); `debug_traceTransaction` is stubbed in `rpc_eth::debug_trace_transaction_is_deferred` |
+
+---
+
+## `wrappedBlock.syntacticVerify` structural checks (M9.15 Rust-as-proposer task L1)
+
+coreth's `syntacticVerify` (`plugin/evm/wrapped_block.go:398-527`) has no
+dedicated `*_test.go` file of its own — each check is an inline guard exercised
+only implicitly by the broader VM test suite (`errUnclesUnsupported` is the one
+exception, asserted directly in `vm_test.go:883/887`). The rows below track the
+Rust port of that function check-by-check (in source order) rather than by Go
+test name, each pinned by a dedicated mutation test that decodes a live
+Go-produced block, flips exactly one field, and asserts the coreth error
+string. All were fail-open in Rust before this task (execution alone could not
+catch them — see each test's doc comment for why) and are now fail-closed,
+matching Go byte-for-byte on the rejection message.
+
+| Go check (`wrapped_block.go`) | Status | Rust counterpart / note |
+|---|---|---|
+| block number fits `uint64` (:412) | n/a | `AvaHeader::number` already decodes as a Rust `u64` (`block.rs::decode_rlp`); a wire value too large for `uint64` cannot be constructed at this layer, so the guard (`Error::InvalidBlockNumber`) is unreachable — documented in `syntactic_verify.rs`'s module doc |
+| `Difficulty.Cmp(common.Big1) != 0` (:415) | ✅ ported | `syntactic_verify::zero_difficulty_is_rejected` (verify side); `build::built_block_passes_full_syntactic_verify` asserts the builder stamps `difficulty == 1` (coreth `consensus.go:233-235`) and that the built block then passes this very check |
+| `Nonce.Uint64() != 0` (:418) | ✅ ported | `syntactic_verify::nonzero_nonce_is_rejected` |
+| `MixDigest != (common.Hash{})` (:425, ungated in Go) | ✅ ported | `cancun_clamp::nonzero_mix_digest_is_rejected` |
+| `VerifyExtra` (Fortuna/ACP-176 `extra` length floor) | ✅ ported | `syntactic_verify::truncated_extra_is_rejected_at_fortuna` (verify side); `build::built_header_carries_acp176_extra_prefix` + `build::built_block_passes_full_syntactic_verify` (builder emits an extra the same check accepts) |
+| body extension `version != 0` (:434) | ✅ ported | `syntactic_verify::nonzero_body_version_is_rejected` |
+| header `TxHash` vs. derived txs root (:439) | ✅ ported | `syntactic_verify::wrong_tx_root_is_rejected` |
+| header `UncleHash` vs. derived (empty) uncle root + `errUnclesUnsupported` (:444/:452-455) | ✅ ported | `syntactic_verify::wrong_uncle_hash_is_rejected` (hash mismatch); `block.rs::decode_uncle_list_rejects_non_empty_list` + `decode_uncle_list_accepts_empty_list` (a non-empty uncle list is now rejected at wire decode, matching `errUnclesUnsupported`) — supersedes the older note on `TestUncleBlock` above |
+| coinbase == blackhole address (:449) | ✅ ported | `syntactic_verify::non_blackhole_coinbase_is_rejected`; `build::built_header_carries_go_shape_fields` pins the builder side |
+| pre-AP1/pre-AP3 minimum tx gas price (:458-473) | ✅ ported | `block.rs::gas_price_below_ap0_minimum_is_rejected` |
+| `BaseFee != nil` at AP3+ (:476-483) | ✅ ported | `block.rs::nil_base_fee_at_apricot_phase3_is_rejected` |
+| `BlockGasCost != nil` at AP4+ (:486-495) | ✅ ported | `block.rs::nil_block_gas_cost_at_apricot_phase4_is_rejected` |
+| Cancun header clamp — `parentBeaconRoot`/`blobGasUsed`/`excessBlobGas` exactness + body blob-count parity (:493-522) | ✅ ported | `cancun_clamp::nonzero_excess_blob_gas_is_rejected`, `nonzero_blob_gas_used_is_rejected`, `nonzero_parent_beacon_root_is_rejected`, `missing_parent_beacon_root_is_rejected_with_coreth_error`, `blob_tx_in_body_is_rejected` |
+| full check, in order, against a Rust-BUILT block | ✅ ported | `build::built_block_passes_full_syntactic_verify` — a Granite-spec built block is round-tripped through the exact same `EvmBlock::verify` the `ChainVm` adapter drives; the offline exit gate proving the builder satisfies every check the verify side now enforces |
 
 ---
 

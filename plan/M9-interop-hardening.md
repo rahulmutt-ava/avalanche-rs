@@ -2053,6 +2053,22 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   node wiring (needed only when validator sets change — Fuji/mainnet); P/X/SAE forwarder
 >   opt-in; the slot-wait-under-lock hazard (bounded, M7.18 family). Live `mixed_network_rust_
 >   proposes` re-run = the operator gate.
+>
+> **AS-BUILT addendum (Task 9 closeout, same branch).** The live gate above landed after this
+> note was written: `mixed_network_rust_proposes` ran GREEN end-to-end (4 Go validators + the
+> Rust node proposing; 28.84s, no fork) with the follower-only arm showing no regression — the
+> live proof, not just an offline exit gate. Two scoping notes for anyone extending L1 further:
+> (1) **Helicon upstream-delta** — `VerifyExtra`'s Fortuna-arm length floor (ported here,
+> `syntactic_verify::truncated_extra_is_rejected_at_fortuna`) is itself a **pre-Helicon**
+> behavior; Helicon (unscheduled on every network, per `specs/10-cchain-evm-reth.md` §Helicon
+> callouts and `specs/README.md`) drops the ACP-176 state-space floor from `header.Extra`
+> entirely (`VerifyExtra` then accepts any length) — non-gating today, but the port must not be
+> read as "any length is always invalid below 24 bytes" once Helicon activates. (2) the
+> dummy-engine `VerifyHeader` **exactness** checks (base-fee / block-gas-cost computed-vs-parent,
+> as opposed to the *nil-ness* checks L1 ports) on the Rust **verify** side remain an intentional
+> **non-goal** per spec — the **builder** satisfies them for every Rust-built block (Task 4), so
+> Go's dummy engine never observes a mismatch; porting exactness onto the Rust verify path itself
+> is deferred with no live gate depending on it.
 
 ---
 
