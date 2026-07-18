@@ -2063,12 +2063,24 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > behavior; Helicon (unscheduled on every network, per `specs/10-cchain-evm-reth.md` §Helicon
 > callouts and `specs/README.md`) drops the ACP-176 state-space floor from `header.Extra`
 > entirely (`VerifyExtra` then accepts any length) — non-gating today, but the port must not be
-> read as "any length is always invalid below 24 bytes" once Helicon activates. (2) the
-> dummy-engine `VerifyHeader` **exactness** checks (base-fee / block-gas-cost computed-vs-parent,
-> as opposed to the *nil-ness* checks L1 ports) on the Rust **verify** side remain an intentional
-> **non-goal** per spec — the **builder** satisfies them for every Rust-built block (Task 4), so
-> Go's dummy engine never observes a mismatch; porting exactness onto the Rust verify path itself
-> is deferred with no live gate depending on it.
+ read as "any length is always invalid below 24 bytes" once Helicon activates. (2) ★ the
+> dummy-engine `verifyHeaderGasFields` (`consensus/dummy/consensus.go:125-154`) is **UNPORTED on
+> the Rust verify path** — surfaced by the whole-branch review as a genuine fail-OPEN gap, not a
+> bland "non-goal." coreth's *complete* block verification recomputes and **equality-checks** four
+> fee/gas header fields that `syntactic_verify` only checks structurally: (a) `header.BaseFee ==
+> BaseFee(parent,…)` (Rust: non-nil at AP3+ only), (b) `header.BlockGasCost == expected` (Rust:
+> non-nil/uint64 at AP4+ only), (c) `VerifyExtraPrefix` **byte-equality** of the ACP-176 extra
+> prefix (Rust: length ≥ 24/80 only), (d) the gas-limit rule (Rust: no check). None of these
+> affects an empty block's EVM state root, so a **Byzantine proposer** can craft a block with a
+> VALID state root but a wrong fee-metadata field that Go rejects and Rust accepts — a silent
+> Rust-vs-Go consensus split, the same class the Cancun clamp closed. **NOT triggered on the honest
+> arm** (every honest proposer, and the Rust builder itself, stamps these fields correctly — which
+> is why Go ACCEPTs Rust-built blocks and no live gate depends on this), but it **MUST be ported
+> before any adversarial / BFT-exposed deployment**. Coupled with the deferred `base_fee`
+> `feeStateBeforeBlock` time-advance above: once verify recomputes the expected base fee, it will
+> also need that advance to ACCEPT Go blocks under sustained load. Follow-up: port
+> `verifyHeaderGasFields` (expected-base-fee via `feerules::base_fee`, expected-block-gas-cost,
+> extra-prefix byte-equality, gas-limit) onto `EvmBlock::verify`.
 
 ---
 
