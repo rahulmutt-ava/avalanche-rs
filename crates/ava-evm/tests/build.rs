@@ -254,8 +254,18 @@ fn build_then_verify_same_root() {
     let driver = BlockBuilderDriver::new(config.clone(), Arc::clone(&provider), txpool);
 
     // ---- build ----
+    // The build context must carry the REAL parent fee state (as the VM's
+    // `build_block` does, vm.rs) so the stamped base fee equals what the verify
+    // path recomputes from the parent header (coreth `verifyHeaderGasFields`);
+    // `next_ctx()`'s default (empty) fee state would stamp a base fee that
+    // disagrees with the genesis-derived recompute.
+    let build_ctx = AvaNextBlockCtx {
+        parent_fee_state: parent_fee_state_of(config.chain_spec(), &parent)
+            .expect("parent fee state"),
+        ..next_ctx()
+    };
     let built = driver
-        .build_on(&parent, genesis_root, &next_ctx(), evm_txs)
+        .build_on(&parent, genesis_root, &build_ctx, evm_txs)
         .expect("build_on");
     assert_eq!(built.number(), 1, "built block is height 1");
     assert_eq!(
@@ -279,7 +289,7 @@ fn build_then_verify_same_root() {
     provider.discard(built_root);
     let ctx = EvmBlockContext::new(Arc::clone(&provider), config, canonical);
     let reverified = built
-        .verify(&ctx, genesis_root)
+        .verify(&ctx, genesis_root, &parent)
         .expect("re-verify built block");
     assert_eq!(
         reverified, built_root,
@@ -581,6 +591,6 @@ fn built_block_passes_full_syntactic_verify() {
     // The full `syntacticVerify` port + semantic execute — the SAME entry the
     // `ChainVm` adapter drives.
     built
-        .verify(&block_ctx, genesis_root)
+        .verify(&block_ctx, genesis_root, &parent)
         .expect("a Rust-built block must pass its own full syntactic_verify");
 }

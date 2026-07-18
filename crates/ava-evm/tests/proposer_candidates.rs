@@ -16,7 +16,7 @@
 //!    already the Go-oracle genesis fixture `cancun_clamp.rs` boots — LOCAL_ID's
 //!    schedule activates every fork through Granite at `InitiallyActiveTime`,
 //!    matching Go's `upgradetest.Granite`), carrying one signed EVM tx — plus
-//!    five adversarial mutations of it (decode → mutate → re-encode, the
+//!    ten adversarial mutations of it (decode → mutate → re-encode, the
 //!    `cancun_clamp.rs:57-96` pattern). Writes `<name>.rlp.hex` + a copy of the
 //!    genesis JSON into the output directory.
 //! 2. The companion Go judge (`tests/differential/go-oracle/
@@ -102,12 +102,19 @@ fn corpus_dir() -> PathBuf {
 /// decoded parts.
 type Mutation = (&'static str, fn(&mut AvaBlockParts));
 
-/// The five adversarial mutations (brief-mandated set): each takes the honest
-/// candidate's decoded parts and corrupts exactly one `syntacticVerify` check,
-/// leaving every earlier-checked field untouched so Go's (and Rust's) first
-/// rejection is the intended one (`wrapped_block.go:398-527` / `block.rs`
-/// `syntactic_verify` — both walk the checks in the same order).
-const MUTATIONS: [Mutation; 5] = [
+/// The five structural adversarial mutations (brief-mandated set): each takes
+/// the honest candidate's decoded parts and corrupts exactly one
+/// `syntacticVerify` check, leaving every earlier-checked field untouched so
+/// Go's (and Rust's) first rejection is the intended one
+/// (`wrapped_block.go:398-527` / `block.rs` `syntactic_verify` — both walk the
+/// checks in the same order).
+///
+/// Task 6 adds five more, targeting the `verifyHeaderGasFields` legs ported in
+/// Tasks 1-5 (coreth `consensus/dummy/consensus.go:125-176`): each corrupts
+/// exactly one fee/gas equality check, leaving every earlier-checked field
+/// untouched so the first rejection is the intended one (Go's check order:
+/// GasLimit -> ExtraPrefix -> BaseFee -> BlockGasCost -> ExtData).
+const MUTATIONS: [Mutation; 10] = [
     ("zero_difficulty", |p| p.header.difficulty = U256::ZERO),
     ("missing_cancun_tail", |p| {
         p.header.parent_beacon_root = None;
@@ -122,6 +129,27 @@ const MUTATIONS: [Mutation; 5] = [
     }),
     ("nonzero_nonce", |p| {
         p.header.nonce = [0, 0, 0, 0, 0, 0, 0, 1]
+    }),
+    // ── verifyHeaderGasFields legs (consensus/dummy/consensus.go:125-176):
+    // each corrupts exactly ONE fee/gas equality check, leaving every
+    // earlier-checked field untouched so the first rejection is the intended
+    // one (order: GasLimit → ExtraPrefix → BaseFee → BlockGasCost → ExtData).
+    ("wrong_gas_limit", |p| {
+        p.header.gas_limit = p.header.gas_limit.saturating_add(1)
+    }),
+    ("tampered_fee_state_prefix", |p| {
+        let mut extra = p.header.extra.to_vec();
+        extra[9] ^= 0x01; // flip a bit inside the ACP-176 `excess` field
+        p.header.extra = extra.into();
+    }),
+    ("wrong_base_fee", |p| {
+        p.header.base_fee = p.header.base_fee.map(|bf| bf + U256::from(1))
+    }),
+    ("wrong_block_gas_cost", |p| {
+        p.header.block_gas_cost = Some(U256::from(123u64))
+    }),
+    ("oversized_ext_data_gas_used", |p| {
+        p.header.ext_data_gas_used = Some(U256::from(u64::MAX) + U256::from(1))
     }),
 ];
 
@@ -141,7 +169,45 @@ const MUTATIONS: [Mutation; 5] = [
 /// semantic check, with that exact sentinel. Both are correct rejections of
 /// the same malformed candidate at different (equally valid) layers — the
 /// same asymmetry Task 3 documented for non-empty uncle lists.
-const REJECTION_CLASSES: [(&str, &str, &str); 5] = [
+///
+/// Task 6 adds five `verifyHeaderGasFields` pairs. One of them,
+/// `oversized_ext_data_gas_used`, is a SECOND asymmetric pair, and the
+/// recorded Go class differs from BOTH the plan's table prediction AND the
+/// task brief's own predicted correction (neither survived contact with the
+/// live oracle — see the Task 6 report for the full derivation):
+///
+/// * The plan's table expected coreth's `errExtDataGasUsedTooLarge`
+///   ("extDataGasUsed is not uint64") — the LAST arm of
+///   `verifyHeaderGasFields` itself (`consensus/dummy/consensus.go:29,160-175`).
+/// * A later hypothesis expected `VerifyExtraPrefix`'s own fee-state
+///   recompute (`feeStateAfterBlock` -> `acp176.State.ConsumeGas`) to reject
+///   first with `gas.ErrInsufficientCapacity` ("insufficient capacity").
+/// * What the LIVE judge actually recorded: coreth rejects earlier still, in
+///   `wrappedBlock.verify` -> `semanticVerify` -> `verifyIntrinsicGas` ->
+///   `customheader.VerifyGasUsed` (`customheader/gas_limit.go:60-90`) — a
+///   check that runs BEFORE the consensus engine's `verifyHeaderGasFields` is
+///   ever reached (that runs later still, inside `blockChain.InsertBlockManual`).
+///   `VerifyGasUsed` holds the header's **unsaturated** `*big.Int`
+///   `ExtDataGasUsed` and fails its own `!extDataGasUsed.IsUint64()` guard
+///   with `errInvalidExtraDataGasUsed` ("invalid extra data gas used"),
+///   wrapped as `errInvalidGasUsedRelativeToCapacity` ("invalid gas used
+///   relative to capacity") by `verifyIntrinsicGas`, then "failed to verify
+///   intrinsic gas" / "failed to verify block" by the callers above it.
+///
+/// Rust has never ported `VerifyGasUsed`/`verifyIntrinsicGas` at all (a
+/// documented, intentional gap — see `feerules::verify_header_gas_fields`'s
+/// own doc comment: "Go's `VerifyGasUsed` is NOT called here ... gas-used
+/// correctness is checked by execution"), so Rust's rejection still comes
+/// from `verify_extra_prefix`: `opt_u256_to_u64` *saturates* the oversized
+/// value to `u64::MAX` (no "not uint64" guard is mirrored), and
+/// `Acp176State::consume_gas` then fails the ordinary capacity check against
+/// that saturated value, surfacing as [`Error::FeeOverflow`] ("fee
+/// overflow"). Different message, different mechanism, different pipeline
+/// stage on each side — but both are still gas-capacity/overflow rejections
+/// of the SAME malformed field, at the earliest check each implementation
+/// happens to run it through — not a struct-equality mismatch like
+/// `tampered_fee_state_prefix`'s `IncorrectFeeState` / "incorrect fee state".
+const REJECTION_CLASSES: [(&str, &str, &str); 10] = [
     (
         "zero_difficulty",
         "invalid difficulty",
@@ -155,6 +221,29 @@ const REJECTION_CLASSES: [(&str, &str, &str); 5] = [
     ("wrong_tx_root", "invalid txs hash", "invalid txs hash"),
     ("bad_coinbase", "invalid coinbase", "invalid coinbase"),
     ("nonzero_nonce", "invalid nonce", "invalid nonce"),
+    ("wrong_gas_limit", "invalid gas limit", "invalid gas limit"),
+    (
+        "tampered_fee_state_prefix",
+        "incorrect fee state",
+        "incorrect fee state",
+    ),
+    ("wrong_base_fee", "expected base fee", "expected base fee"),
+    (
+        "wrong_block_gas_cost",
+        "invalid block gas cost",
+        "invalid block gas cost",
+    ),
+    (
+        // Deviates from the plan's table (see the doc comment above): the
+        // LIVE Go judge rejects inside `VerifyGasUsed`/`verifyIntrinsicGas`
+        // (`errInvalidExtraDataGasUsed`, "invalid extra data gas used"), a
+        // check Rust has never ported; Rust's own rejection comes from
+        // `verify_extra_prefix`'s fee-state consumption overflowing
+        // (`Error::FeeOverflow`, "fee overflow") instead.
+        "oversized_ext_data_gas_used",
+        "invalid extra data gas used",
+        "fee overflow",
+    ),
 ];
 
 /// Decodes `base`, applies `mutate` to its parts, and re-assembles fresh
@@ -177,7 +266,7 @@ fn mutate_candidate(spec: &AvaChainSpec, base: &[u8], mutate: fn(&mut AvaBlockPa
 /// local genesis, carrying one signed EVM tx from the pre-funded "ewoq"
 /// key — asserts it passes Rust's own full `syntactic_verify` (never freeze a
 /// corpus whose honest candidate Rust itself would reject), then emits it plus
-/// the five [`MUTATIONS`] as `<name>.rlp.hex` alongside a copy of the genesis
+/// the ten [`MUTATIONS`] as `<name>.rlp.hex` alongside a copy of the genesis
 /// JSON, into `$EMIT_PROPOSER_CANDIDATES`.
 #[test]
 fn emit_proposer_candidates() {
@@ -276,7 +365,7 @@ fn emit_proposer_candidates() {
     provider.discard(built_root);
     let block_ctx = EvmBlockContext::new(Arc::clone(&provider), config, canonical);
     built
-        .verify(&block_ctx, genesis_root)
+        .verify(&block_ctx, genesis_root, &genesis_header)
         .expect("honest candidate must pass Rust's own full syntactic_verify");
 
     let honest_bytes = built.encoded_bytes().to_vec();

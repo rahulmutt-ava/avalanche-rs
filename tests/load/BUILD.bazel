@@ -1,0 +1,54 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_load",
+    srcs = [
+        "src/generator.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/network.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:thiserror",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "generator_offline",
+    srcs = ["tests/generator_offline.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_load",
+        "@crates//:pretty_assertions",
+    ],
+)
+
+rust_test(
+    name = "metrics_offline",
+    srcs = ["tests/metrics_offline.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/fixtures/ext_metrics_good.prom",
+        "tests/fixtures/ext_metrics_regressed.prom",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_load",
+        "@crates//:pretty_assertions",
+    ],
+)
+
+rust_test(
+    name = "sustained_load",
+    srcs = ["tests/sustained_load.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/fixtures/ext_metrics_good.prom",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":ava_load"],
+)

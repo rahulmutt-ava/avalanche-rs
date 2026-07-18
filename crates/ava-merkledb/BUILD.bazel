@@ -1,5 +1,5 @@
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_merkledb",
@@ -226,4 +226,18 @@ rust_test(
     name = "ava_merkledb_test",
     compile_data = ["Cargo.toml"],
     crate = ":ava_merkledb",
+)
+
+rust_binary(
+    name = "merkledb_commit",
+    srcs = ["benches/merkledb_commit.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_merkledb",
+        ":build_script",
+        "//crates/ava-database:ava_database",
+        "@crates//:criterion",
+    ],
 )

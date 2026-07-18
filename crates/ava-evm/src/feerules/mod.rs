@@ -16,8 +16,6 @@ pub mod window;
 
 use ruint::aliases::U256;
 
-use ava_evm_reth::Header;
-
 use crate::atomic::tx::{COST_PER_SIGNATURE, EVM_INPUT_GAS, EVM_OUTPUT_GAS, TX_BYTES_GAS};
 use crate::block::AvaHeader;
 use crate::chainspec::{AvaChainSpec, AvaPhase};
@@ -25,7 +23,9 @@ use crate::error::Error;
 use crate::evmconfig::{AvaFeeState, AvaNextBlockCtx};
 use crate::feerules::acp176::Acp176State;
 use crate::feerules::acp226::{DelayExcess, INITIAL_DELAY_EXCESS};
-use crate::feerules::blockgas::{BLOCK_GAS_COST_STEP_AP4, ap4_block_gas_cost};
+use crate::feerules::blockgas::{
+    BLOCK_GAS_COST_STEP_AP4, BLOCK_GAS_COST_STEP_AP5, ap4_block_gas_cost,
+};
 use crate::feerules::window::{INTRINSIC_BLOCK_GAS, Window};
 
 // Spec 21 §0: re-export the shared exponential + gas state from the canonical
@@ -93,8 +93,10 @@ pub fn window_params_for_phase(phase: AvaPhase) -> window::BaseFeeParams {
 ///   over the parent window + parent base fee carried in
 ///   [`AvaFeeState::Window`]. The window/base-fee come from the parent header's
 ///   extra-data, extracted by the builder/verifier (M6.7) into the ctx.
-/// - **Fortuna+** ([`FeeRegime::Acp176`]) → the ACP-176 gas price of the
-///   carried [`AvaFeeState::Acp176`] state.
+/// - **Fortuna+** ([`FeeRegime::Acp176`]) → coreth
+///   `feeStateBeforeBlock(parent, childTimeMS).GasPrice()` (`customheader/base_fee.go:27-33`):
+///   the parent's ACP-176 state, re-derived from `parent.extra`, is advanced by
+///   the elapsed time FIRST and only then read.
 ///
 /// The window arm returns a `u64` (C-Chain base fees fit in `u64`); a value that
 /// exceeds `u64::MAX` saturates (it would already be clamped to a phase bound
@@ -103,7 +105,11 @@ pub fn window_params_for_phase(phase: AvaPhase) -> window::BaseFeeParams {
 /// # Errors
 /// Returns [`Error::NilBaseFee`] pre-AP3, or if the carried fee-state does not
 /// match the active regime (a programming error in the builder wiring).
-pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Result<u64, Error> {
+pub fn base_fee(
+    cs: &AvaChainSpec,
+    parent: &AvaHeader,
+    ctx: &AvaNextBlockCtx,
+) -> Result<u64, Error> {
     let phase = cs.fork_at(ctx.timestamp);
     match regime_for_phase(phase) {
         FeeRegime::Legacy => Err(Error::NilBaseFee),
@@ -115,31 +121,18 @@ pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Re
                 AvaFeeState::Acp176(_) => return Err(Error::NilBaseFee),
             };
             // `time_elapsed = child.Time - parent.Time` (seconds), floored at 0.
-            let time_elapsed = ctx.timestamp.saturating_sub(parent.timestamp);
+            let time_elapsed = ctx.timestamp.saturating_sub(parent.time);
             let bf = window::base_fee_from_window(params, &window, parent_base, time_elapsed);
             Ok(u64::try_from(bf).unwrap_or(u64::MAX))
         }
-        FeeRegime::Acp176 => match &ctx.parent_fee_state {
-            // DEFERRED (tracked follow-up), coreth `plugin/evm/customheader/base_fee.go:27-33`:
-            // coreth computes the child base fee as
-            // `feeStateBeforeBlock(parent, childTimeMS).GasPrice()` — it FIRST advances
-            // the parent state by the elapsed time (draining `gas.excess` toward 0 and
-            // thus lowering the price) and only then reads `GasPrice()`. Here we read
-            // `GasPrice()` off the RAW parent state, skipping that advance.
-            //   What's missing: the `fee_state_before_block` time-advance before
-            //     `gas_price()` (we already have that fn — see below in this module).
-            //   When it matters: sustained load / nonzero `gas.excess`. While
-            //     `excess ≈ 0` (the quiet mixed-network arm) both give `MinGasPrice`, so
-            //     it is byte-exact today; under load Go's advance lowers the price while
-            //     ours does not, so Go's `VerifyHeader` (which checks BaseFee exactly)
-            //     would REJECT our block — this is consensus-relevant.
-            //   Why deferred: `parent` here is a reth `Header`, which carries no
-            //     sub-second `time_milliseconds`; a faithful Granite ms-advance needs
-            //     the parent `AvaHeader` threaded in (a small signature refactor).
-            AvaFeeState::Acp176(state) => Ok(state.gas_price().0),
-            // Builder wiring error: ACP-176 regime requires an acp176 state.
-            AvaFeeState::Window { .. } => Err(Error::NilBaseFee),
-        },
+        // coreth `customheader/base_fee.go:27-33` — the child base fee is
+        // `feeStateBeforeBlock(parent, childTimeMS).GasPrice()`: advance the
+        // parent state by the elapsed time FIRST (ms at Granite, s at Fortuna),
+        // then read the price. Re-derives from `parent.extra` (Go-exact);
+        // `ctx.parent_fee_state` is not consulted on this arm.
+        FeeRegime::Acp176 => Ok(fee_state_before_block(cs, parent, ctx.timestamp_ms)?
+            .gas_price()
+            .0),
     }
 }
 
@@ -158,7 +151,11 @@ pub fn base_fee(cs: &AvaChainSpec, parent: &Header, ctx: &AvaNextBlockCtx) -> Re
 /// resolves the regime matching `cs.fork_at`, so this is unreachable for a
 /// correctly wired caller — mirrors [`base_fee`]'s identical regime-mismatch
 /// convention above).
-pub fn gas_limit(cs: &AvaChainSpec, _parent: &Header, ctx: &AvaNextBlockCtx) -> Result<u64, Error> {
+pub fn gas_limit(
+    cs: &AvaChainSpec,
+    _parent: &AvaHeader,
+    ctx: &AvaNextBlockCtx,
+) -> Result<u64, Error> {
     let phase = cs.fork_at(ctx.timestamp);
     if phase >= AvaPhase::Fortuna {
         // coreth `customheader/gas_limit.go:36-45` (`GasLimit`, Fortuna arm):
@@ -173,16 +170,96 @@ pub fn gas_limit(cs: &AvaChainSpec, _parent: &Header, ctx: &AvaNextBlockCtx) -> 
             AvaFeeState::Window { .. } => Err(Error::NilBaseFee),
         };
     }
-    // coreth `params/avalanche_params.go`: ApricotPhase1GasLimit = 8_000_000,
-    // CortinaGasLimit = 15_000_000.
-    const APRICOT_PHASE1_GAS_LIMIT: u64 = 8_000_000;
-    const CORTINA_GAS_LIMIT: u64 = 15_000_000;
     let default_limit = if phase >= AvaPhase::Cortina {
         CORTINA_GAS_LIMIT
     } else {
         APRICOT_PHASE1_GAS_LIMIT
     };
     Ok(ctx.gas_limit_hint.unwrap_or(default_limit))
+}
+
+/// coreth `plugin/evm/upgrade/ap1/params.go:21` — the ApricotPhase1 static gas
+/// limit (`ap1.GasLimit`).
+pub const APRICOT_PHASE1_GAS_LIMIT: u64 = 8_000_000;
+/// coreth `plugin/evm/upgrade/cortina/params.go:11` — the Cortina static gas
+/// limit (`cortina.GasLimit`).
+pub const CORTINA_GAS_LIMIT: u64 = 15_000_000;
+/// coreth `plugin/evm/upgrade/ap0/params.go:27-28` — the pre-AP1 launch range.
+pub const AP0_MIN_GAS_LIMIT: u64 = 5_000;
+pub const AP0_MAX_GAS_LIMIT: u64 = 0x7fff_ffff_ffff_ffff;
+/// coreth `plugin/evm/upgrade/ap0/params.go:29` — the pre-AP1 gas-limit bound
+/// divisor (`ap0.GasLimitBoundDivisor`), used by [`verify_gas_limit`]'s pre-AP1
+/// bound-divisor arm (`customheader/gas_limit.go:147-157`).
+pub const AP0_GAS_LIMIT_BOUND_DIVISOR: u64 = 1024;
+
+/// coreth `customheader/gas_limit.go:101-160` — `VerifyGasLimit`.
+///
+/// The verify-side complement of [`gas_limit`]: recomputes the expected gas
+/// limit from the parent and equality-checks the header's claim (range- and
+/// bound-divisor-checks pre-AP1). At Fortuna+ the expectation is the ACP-176
+/// `MaxCapacity()` off the time-advanced pre-block state (`gas_limit.go:107-120`).
+///
+/// # Errors
+/// [`Error::GasLimitMismatch`] (Fortuna) / [`Error::GasLimitMismatchInFork`]
+/// (Cortina/ApricotPhase1) / [`Error::GasLimitOutOfRange`] /
+/// [`Error::GasLimitOutOfBound`] (pre-AP1) on a wrong claim; propagates
+/// [`Error::InvalidFeeState`] from the fee-state recompute.
+pub fn verify_gas_limit(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    let phase = spec.fork_at(header.time);
+    if phase >= AvaPhase::Fortuna {
+        // gas_limit.go:107-120
+        let state = fee_state_before_block(spec, parent, header_time_ms(header))?;
+        let want = state.max_capacity().0;
+        if header.gas_limit != want {
+            return Err(Error::GasLimitMismatch {
+                have: header.gas_limit,
+                want,
+            });
+        }
+    } else if phase >= AvaPhase::Cortina {
+        // gas_limit.go:121-128
+        if header.gas_limit != CORTINA_GAS_LIMIT {
+            return Err(Error::GasLimitMismatchInFork {
+                fork: "Cortina",
+                have: header.gas_limit,
+                want: CORTINA_GAS_LIMIT,
+            });
+        }
+    } else if phase >= AvaPhase::ApricotPhase1 {
+        // gas_limit.go:129-136
+        if header.gas_limit != APRICOT_PHASE1_GAS_LIMIT {
+            return Err(Error::GasLimitMismatchInFork {
+                fork: "ApricotPhase1",
+                have: header.gas_limit,
+                want: APRICOT_PHASE1_GAS_LIMIT,
+            });
+        }
+    } else {
+        // gas_limit.go:138-145
+        if header.gas_limit < AP0_MIN_GAS_LIMIT || header.gas_limit > AP0_MAX_GAS_LIMIT {
+            return Err(Error::GasLimitOutOfRange {
+                have: header.gas_limit,
+                min: AP0_MIN_GAS_LIMIT,
+                max: AP0_MAX_GAS_LIMIT,
+            });
+        }
+        // gas_limit.go:147-157 — the gas limit may not jump by more than
+        // parent.GasLimit / GasLimitBoundDivisor from the parent's.
+        let diff = parent.gas_limit.abs_diff(header.gas_limit);
+        let limit = parent.gas_limit / AP0_GAS_LIMIT_BOUND_DIVISOR;
+        if diff >= limit {
+            return Err(Error::GasLimitOutOfBound {
+                have: header.gas_limit,
+                want: parent.gas_limit,
+                limit,
+            });
+        }
+    }
+    Ok(())
 }
 
 // ─── ACP-176 fee-state extra prefix + parent-fee-state plumbing (spec 21 §5) ──
@@ -401,6 +478,67 @@ pub fn extra_prefix(
     }
 }
 
+/// coreth `customheader/extra.go:62-111` — `VerifyExtraPrefix`.
+///
+/// Fortuna+: the header's claimed ACP-176 fee state (first 24 bytes of
+/// `Extra`) must equal `feeStateAfterBlock(parent, header, claimed.
+/// TargetExcess)` — the claimed target excess is passed as the desired value
+/// so the expectation clamps toward the claim (`extra.go:74-87`); a claim
+/// reachable in one step therefore matches exactly, anything else mismatches.
+/// `[AP3, Fortuna)`: `Extra` must start with the recomputed fee window's
+/// bytes. Pre-AP3: no expected prefix.
+///
+/// `VerifyExtraPrefix` has no Helicon arm — the Fortuna check still runs
+/// under Helicon (forks are cumulative, so `IsFortuna` stays true). The
+/// `IsHelicon` short-circuit (`return nil`) belongs only to the sibling
+/// `VerifyExtra` (`extra.go:120-121`), ported separately in
+/// `EvmBlock::syntactic_verify` (`block.rs`, its own upstream-delta callout);
+/// add no Helicon handling to this function.
+///
+/// # Errors
+/// [`Error::IncorrectFeeState`] / [`Error::InvalidExtraPrefix`] on mismatch;
+/// [`Error::InvalidFeeState`] if the claimed or parent state is unparsable.
+pub fn verify_extra_prefix(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    let phase = spec.fork_at(header.time);
+    if phase >= AvaPhase::Fortuna {
+        // extra.go:69-72 — parse the CLAIMED fee state off the header.
+        let claimed = Acp176State::from_bytes(&header.extra)
+            .map_err(|e| Error::InvalidFeeState(format!("parsing remote fee state: {e}")))?;
+        // extra.go:74-87
+        let expected = fee_state_after_block(
+            spec,
+            parent,
+            header.time,
+            header.time_milliseconds,
+            header.gas_used,
+            opt_u256_to_u64(header.ext_data_gas_used),
+            Some(claimed.target_excess.0),
+        )?;
+        // extra.go:89-95
+        if claimed != expected {
+            return Err(Error::IncorrectFeeState {
+                expected: format!("{expected:?}"),
+                found: format!("{claimed:?}"),
+            });
+        }
+    } else if phase >= AvaPhase::ApricotPhase3 {
+        // extra.go:96-108
+        let window = fee_window(spec, parent, header.time)?;
+        let want = window.to_bytes();
+        if !header.extra.starts_with(want.as_slice()) {
+            return Err(Error::InvalidExtraPrefix {
+                expected: hex::encode(want),
+                found: hex::encode(&header.extra),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// The parent's dynamic-fee state, parsed from its header extra prefix, to
 /// thread into the child's [`AvaNextBlockCtx::parent_fee_state`] so
 /// [`base_fee`]/[`AvaEvmConfig::next_evm_env`](crate::evmconfig::AvaEvmConfig)
@@ -445,6 +583,117 @@ pub fn parent_fee_state_of(spec: &AvaChainSpec, parent: &AvaHeader) -> Result<Av
         // Pre-AP3: legacy pricing has no fee state (base_fee dispatch returns
         // `NilBaseFee` regardless of this value).
         FeeRegime::Legacy => Ok(AvaFeeState::default()),
+    }
+}
+
+// ─── verifyHeaderGasFields (spec 21 §7 verify path) ────────────────────────
+//
+// Port of coreth `consensus/dummy/consensus.go:125-176` + the
+// `customheader/block_gas_cost.go:31-59` wrapper it calls into.
+
+/// coreth `customheader/block_gas_cost.go:31-59` — `BlockGasCost`, the
+/// fork-gated wrapper over [`blockgas::block_gas_cost`]: `None` pre-AP4,
+/// `Some(0)` at Granite, else the AP4/AP5-stepped cost off the parent.
+#[must_use]
+pub fn expected_block_gas_cost(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    timestamp: u64,
+) -> Option<u64> {
+    // block_gas_cost.go:36-38
+    if !spec.is_apricot_phase4(timestamp) {
+        return None;
+    }
+    // block_gas_cost.go:42-45
+    let step = if spec.is_apricot_phase5(timestamp) {
+        BLOCK_GAS_COST_STEP_AP5
+    } else {
+        BLOCK_GAS_COST_STEP_AP4
+    };
+    // block_gas_cost.go:46-53 — an invalid parent/current time combination
+    // counts as 0 elapsed time.
+    let time_elapsed = timestamp.saturating_sub(parent.time);
+    Some(blockgas::block_gas_cost(
+        parent
+            .block_gas_cost
+            .map(|c| u64::try_from(c).unwrap_or(u64::MAX)),
+        step,
+        time_elapsed,
+        spec.is_granite(timestamp),
+    ))
+}
+
+/// coreth `consensus/dummy/consensus.go:125-176` — `verifyHeaderGasFields`.
+///
+/// The contextual (parent-dependent) fee/gas equality checks that complement
+/// the parent-less structural checks in `EvmBlock::syntactic_verify` — coreth
+/// keeps both layers, and so do we. Checks run in Go's order so a multi-fault
+/// header reports Go's first rejection class. Go's `VerifyGasUsed` is NOT
+/// called here (same comment as consensus.go:126-127): in Go it runs
+/// PRE-execution, in `verifyIntrinsicGas` (semantic-verify stage,
+/// `wrapped_block.go`) — and that check is UNPORTED (documented follow-up,
+/// pre-existing gap). Rust's only gas-used guard is the POST-execution
+/// executed-gas equality check in `EvmBlock::verify` (asserts executed gas ==
+/// `header.gas_used`) — fail-closed, but later in the pipeline than Go's.
+///
+/// # Errors
+/// The first failing check's error (see the per-check variants); recompute
+/// failures propagate as [`Error::InvalidFeeState`] / [`Error::NilBaseFee`].
+pub fn verify_header_gas_fields(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    // consensus.go:128-130
+    verify_gas_limit(spec, parent, header)?;
+    // consensus.go:131-133
+    verify_extra_prefix(spec, parent, header)?;
+
+    // consensus.go:136-144 — expected base fee via the SAME `base_fee` the
+    // builder stamps with (nil pre-AP3; `utils.BigEqual` treats nil-vs-non-nil
+    // as unequal in both directions). Go dispatches off `timeMS`
+    // (`customtypes.HeaderTimeMilliseconds(header)`); `header.time` is the
+    // same instant at second granularity, so `spec.fork_at(header.time)`
+    // resolves the identical phase.
+    let phase = spec.fork_at(header.time);
+    let expected_base_fee = if phase >= AvaPhase::ApricotPhase3 {
+        let ctx = AvaNextBlockCtx {
+            timestamp: header.time,
+            timestamp_ms: header_time_ms(header),
+            parent_fee_state: parent_fee_state_of(spec, parent)?,
+            ..AvaNextBlockCtx::default()
+        };
+        Some(U256::from(base_fee(spec, parent, &ctx)?))
+    } else {
+        None
+    };
+    if header.base_fee != expected_base_fee {
+        return Err(Error::BaseFeeMismatch {
+            expected: expected_base_fee,
+            found: header.base_fee,
+        });
+    }
+
+    // consensus.go:146-156 — BlockGasCost equality (`utils.BigEqual`: nil == nil).
+    let want = expected_block_gas_cost(spec, parent, header.time).map(U256::from);
+    if header.block_gas_cost != want {
+        return Err(Error::BlockGasCostMismatch {
+            have: header.block_gas_cost,
+            want,
+        });
+    }
+
+    // consensus.go:158-175 — ExtDataGasUsed fork gating.
+    if phase < AvaPhase::ApricotPhase4 {
+        if let Some(v) = header.ext_data_gas_used {
+            return Err(Error::ExtDataGasUsedBeforeFork(v));
+        }
+        return Ok(());
+    }
+    match header.ext_data_gas_used {
+        None => Err(Error::NilExtDataGasUsed),
+        Some(v) if v > U256::from(u64::MAX) => Err(Error::ExtDataGasUsedTooLarge(v)),
+        Some(_) => Ok(()),
     }
 }
 

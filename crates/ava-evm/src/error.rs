@@ -55,6 +55,68 @@ pub enum Error {
     #[error("invalid fee state: {0}")]
     InvalidFeeState(String),
 
+    /// coreth `customheader/gas_limit.go:24` `errInvalidGasLimit`, Fortuna arm
+    /// (`gas_limit.go:107-120`, `"%w: have %d, want %d"`).
+    #[error("invalid gas limit: have {have}, want {want}")]
+    GasLimitMismatch { have: u64, want: u64 },
+
+    /// coreth `gas_limit.go:24` `errInvalidGasLimit`, the Cortina/ApricotPhase1
+    /// static-limit arms (`gas_limit.go:121-136`,
+    /// `"%w: expected to be %d in Cortina, but found %d"` /
+    /// `"...in ApricotPhase1..."`); `fork` is `"Cortina"` or `"ApricotPhase1"`.
+    #[error("invalid gas limit: expected to be {want} in {fork}, but found {have}")]
+    GasLimitMismatchInFork {
+        fork: &'static str,
+        have: u64,
+        want: u64,
+    },
+
+    /// coreth `gas_limit.go:138-145` — the pre-AP1 range arm
+    /// ("%w: %d not in range [%d, %d]").
+    #[error("invalid gas limit: {have} not in range [{min}, {max}]")]
+    GasLimitOutOfRange { have: u64, min: u64, max: u64 },
+
+    /// coreth `gas_limit.go:147-157` — the pre-AP1 bound-divisor arm
+    /// ("%w: have %d, want %d += %d"); `want` is the parent's gas limit,
+    /// `limit` is `parent.GasLimit / ap0.GasLimitBoundDivisor`.
+    #[error("invalid gas limit: have {have}, want {want} += {limit}")]
+    GasLimitOutOfBound { have: u64, want: u64, limit: u64 },
+
+    /// coreth `customheader/extra.go:22` `errIncorrectFeeState`
+    /// ("%w: expected %+v, found %+v") — Fortuna full-struct mismatch.
+    #[error("incorrect fee state: expected {expected}, found {found}")]
+    IncorrectFeeState { expected: String, found: String },
+    /// coreth `customheader/extra.go:21` `errInvalidExtraPrefix`
+    /// ("%w: expected %x as prefix, found %x") — AP3 window-prefix mismatch.
+    #[error("invalid header.Extra prefix: expected {expected} as prefix, found {found}")]
+    InvalidExtraPrefix { expected: String, found: String },
+
+    /// coreth `consensus/dummy/consensus.go:142`
+    /// (`"expected base fee %d, found %d"`; nil renders as `<nil>` in Go —
+    /// `Option::None`'s `{:?}` is the Rust analogue).
+    #[error("expected base fee {expected:?}, found {found:?}")]
+    BaseFeeMismatch {
+        expected: Option<U256>,
+        found: Option<U256>,
+    },
+    /// coreth `consensus/dummy/consensus.go:154`
+    /// (`"invalid block gas cost: have %d, want %d"`).
+    #[error("invalid block gas cost: have {have:?}, want {want:?}")]
+    BlockGasCostMismatch {
+        have: Option<U256>,
+        want: Option<U256>,
+    },
+    /// coreth `consensus/dummy/consensus.go:160`
+    /// (`"invalid extDataGasUsed before fork: have %d, want <nil>"`).
+    #[error("invalid extDataGasUsed before fork: have {0}, want <nil>")]
+    ExtDataGasUsedBeforeFork(U256),
+    /// coreth `consensus/dummy/consensus.go:28` `errExtDataGasUsedNil`.
+    #[error("extDataGasUsed is nil")]
+    NilExtDataGasUsed,
+    /// coreth `consensus/dummy/consensus.go:29` `errExtDataGasUsedTooLarge`.
+    #[error("extDataGasUsed is not uint64")]
+    ExtDataGasUsedTooLarge(U256),
+
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.
     #[error("conflicting atomic inputs")]
@@ -413,5 +475,21 @@ mod tests {
         let mempool_err: Error = crate::mempool::EvmMempoolError::AlreadyKnown.into();
         assert_matches!(mempool_err, Error::Mempool(_));
         assert_eq!(mempool_err.to_string(), "already known");
+
+        // Task 3 (feerules): `VerifyExtraPrefix` sentinels.
+        assert_matches!(
+            Error::IncorrectFeeState {
+                expected: "a".to_string(),
+                found: "b".to_string()
+            },
+            Error::IncorrectFeeState { .. }
+        );
+        assert_matches!(
+            Error::InvalidExtraPrefix {
+                expected: "aa".to_string(),
+                found: "bb".to_string()
+            },
+            Error::InvalidExtraPrefix { .. }
+        );
     }
 }

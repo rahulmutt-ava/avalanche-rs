@@ -57,6 +57,7 @@ rust_library(
         "@crates//:tokio",
         "@crates//:tokio-rustls",
         "@crates//:tokio-util",
+        "@crates//:tracing",
         "@crates//:x509-parser",
     ],
 )
@@ -292,5 +293,22 @@ rust_test(
         "@crates//:rcgen",
         "@crates//:serde",
         "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "tls_v1_rsa_handshake",
+    srcs = ["tests/tls_v1_rsa_handshake.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/fixtures/staker_rsa_v1.crt",
+        "tests/fixtures/staker_rsa_v1.key",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_network",
+        "@crates//:rustls",
+        "@crates//:rustls-pemfile",
+        "@crates//:tokio",
     ],
 )

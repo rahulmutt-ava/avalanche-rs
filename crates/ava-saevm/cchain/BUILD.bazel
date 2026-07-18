@@ -4,6 +4,7 @@ rust_library(
     name = "ava_saevm_cchain",
     srcs = [
         "src/api.rs",
+        "src/block_ext.rs",
         "src/dynamic/delay.rs",
         "src/dynamic/math.rs",
         "src/dynamic/mod.rs",
@@ -17,6 +18,9 @@ rust_library(
         "src/tx/mod.rs",
         "src/txpool.rs",
         "src/vm.rs",
+        "src/warp/mod.rs",
+        "src/warp/storage.rs",
+        "src/warp/verifier.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
@@ -24,6 +28,7 @@ rust_library(
         "//crates/ava-codec:ava_codec",
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
         "//crates/ava-evm-reth:ava_evm_reth",
         "//crates/ava-saevm/blocks:ava_saevm_blocks",
         "//crates/ava-saevm/core:ava_saevm_core",
@@ -32,8 +37,12 @@ rust_library(
         "//crates/ava-saevm/types:ava_saevm_types",
         "//crates/ava-secp256k1fx:ava_secp256k1fx",
         "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-validators:ava_validators",
         "//crates/ava-vm:ava_vm",
+        "//crates/ava-warp:ava_warp",
         "@crates//:parking_lot",
+        "@crates//:rayon",
         "@crates//:serde_json",
         "@crates//:thiserror",
         "@crates//:tokio",
@@ -126,4 +135,81 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":ava_saevm_cchain",
     deps = ["//crates/ava-secp256k1fx:ava_secp256k1fx"],
+)
+
+rust_test(
+    name = "ext_data_hash",
+    srcs = ["tests/ext_data_hash.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_cchain",
+        "//crates/ava-chains:ava_chains",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "warp_from_receipts",
+    srcs = ["tests/warp_from_receipts.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_cchain",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-warp:ava_warp",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "warp_storage",
+    srcs = ["tests/warp_storage.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_cchain",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-warp:ava_warp",
+        "@crates//:assert_matches",
+    ],
+)
+
+rust_test(
+    name = "warp_verifier",
+    srcs = ["tests/warp_verifier.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_cchain",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-warp:ava_warp",
+    ],
+)
+
+rust_test(
+    name = "warp_verify_block",
+    srcs = ["tests/warp_verify_block.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_cchain",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-warp:ava_warp",
+        "@crates//:assert_matches",
+        "@crates//:tokio",
+    ],
 )

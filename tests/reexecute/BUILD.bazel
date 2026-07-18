@@ -1,0 +1,67 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_reexecute",
+    srcs = [
+        "src/lib.rs",
+        "src/pchain.rs",
+        "src/xchain.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-avm:ava_avm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-platformvm:ava_platformvm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "cchain_range",
+    srcs = ["tests/cchain_range.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "vectors/cchain/genesis_to_1/genesis_to_1.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":ava_reexecute"],
+)
+
+rust_test(
+    name = "pchain_range",
+    srcs = ["tests/pchain_range.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_reexecute"],
+)
+
+rust_test(
+    name = "px_range",
+    srcs = ["tests/px_range.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_reexecute"],
+)
+
+rust_test(
+    name = "ava_reexecute_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_reexecute",
+)

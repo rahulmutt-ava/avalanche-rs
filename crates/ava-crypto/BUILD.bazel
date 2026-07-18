@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_crypto",
@@ -135,5 +135,17 @@ rust_test(
     deps = [
         "@crates//:rcgen",
         "@crates//:rustls-pemfile",
+    ],
+)
+
+rust_binary(
+    name = "signature",
+    srcs = ["benches/signature.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_crypto",
+        "@crates//:criterion",
     ],
 )

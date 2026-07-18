@@ -55,6 +55,7 @@ use parking_lot::Mutex;
 use ruint::aliases::U256 as RuintU256;
 use serde_json::{Value, json};
 
+use crate::block::AvaHeader;
 use crate::canonical::CanonicalStore;
 use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaFeeState, AvaNextBlockCtx};
@@ -595,7 +596,7 @@ impl EthRpc {
     /// pre-AP3 (legacy, no base fee) and the empty default fee-state both resolve
     /// to 0 (coreth `errNilBaseFee` → "absent" → 0 on the suggestion path).
     fn suggested_base_fee(&self) -> Result<u64> {
-        let parent = ava_evm_reth::Header::default();
+        let parent = AvaHeader::default();
         let ctx = AvaNextBlockCtx {
             parent_fee_state: AvaFeeState::default(),
             ..AvaNextBlockCtx::default()

@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_upgrade",
+    srcs = [
+        "src/continuity.rs",
+        "src/lib.rs",
+        "src/plan.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/ava-database:ava_database",
+        "//crates/ava-version:ava_version",
+        "//tests/differential:ava_differential",
+        "@crates//:anyhow",
+        "@crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "go_to_rust",
+    srcs = ["tests/go_to_rust.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_upgrade",
+        "//crates/ava-version:ava_version",
+        "//tests/differential:ava_differential",
+        "@crates//:tempfile",
+    ],
+)

@@ -9,7 +9,6 @@ cargo_build_script(
     visibility = ["//visibility:public"],
     deps = [
         "//crates/ava-avm:ava_avm",
-        "//crates/ava-codec:ava_codec",
         "//crates/ava-platformvm:ava_platformvm",
         "//crates/ava-secp256k1fx:ava_secp256k1fx",
         "//crates/ava-types:ava_types",

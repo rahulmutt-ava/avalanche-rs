@@ -1,5 +1,5 @@
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_vm_rpc",
@@ -7,6 +7,7 @@ rust_library(
         "src/guest/mod.rs",
         "src/host/block.rs",
         "src/host/mod.rs",
+        "src/host/noop.rs",
         "src/host/subprocess.rs",
         "src/lib.rs",
         "src/proxy/aliasreader.rs",
@@ -17,6 +18,7 @@ rust_library(
         "src/proxy/validatorstate.rs",
         "src/proxy/warp.rs",
         "src/runtime.rs",
+        "src/upgrades.rs",
     ],
     compile_data = ["Cargo.toml"],
     proc_macro_deps = ["@crates//:async-trait"],
@@ -32,6 +34,8 @@ rust_library(
         "//crates/ava-vm:ava_vm",
         "@crates//:anyhow",
         "@crates//:bytes",
+        "@crates//:chrono",
+        "@crates//:criterion",
         "@crates//:libc",
         "@crates//:parking_lot",
         "@crates//:prost-types",
@@ -162,4 +166,116 @@ rust_test(
         "@crates//:tokio-util",
         "@crates//:tonic",
     ],
+)
+
+rust_test(
+    name = "host_bundle",
+    srcs = ["tests/host_bundle.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-validators:ava_validators",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "host_subprocess",
+    srcs = ["tests/host_subprocess.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_test(
+    name = "wire_identity",
+    srcs = ["tests/wire_identity.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:anyhow",
+        "@crates//:bytes",
+        "@crates//:criterion",
+        "@crates//:parking_lot",
+        "@crates//:prost",
+        "@crates//:serde_json",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_binary(
+    name = "rpcchainvm_roundtrip",
+    srcs = ["benches/rpcchainvm_roundtrip.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        ":build_script",
+        "//crates/ava-database:ava_database",
+        "@crates//:criterion",
+        "@crates//:tokio",
+        "@crates//:tokio-stream",
+        "@crates//:tokio-util",
+        "@crates//:tonic",
+    ],
+)
+
+rust_binary(
+    name = "testvm_plugin",
+    srcs = ["examples/testvm_plugin.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    tags = ["example"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_vm_rpc",
+        ":build_script",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "ava_vm_rpc_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_vm_rpc",
+    deps = ["//crates/ava-crypto:ava_crypto"],
 )

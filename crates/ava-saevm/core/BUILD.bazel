@@ -6,6 +6,7 @@ rust_library(
         "src/block_handle.rs",
         "src/frontier.rs",
         "src/lib.rs",
+        "src/metrics.rs",
         "src/recovery.rs",
         "src/rpc.rs",
         "src/settle.rs",
@@ -26,6 +27,7 @@ rust_library(
         "//crates/ava-vm:ava_vm",
         "@crates//:arc-swap",
         "@crates//:parking_lot",
+        "@crates//:prometheus",
         "@crates//:serde_json",
         "@crates//:thiserror",
         "@crates//:tokio-util",
@@ -134,5 +136,41 @@ rust_test(
         "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
         "//crates/ava-saevm/types:ava_saevm_types",
         "//crates/ava-vm:ava_vm",
+    ],
+)
+
+rust_test(
+    name = "block_sources",
+    srcs = ["tests/block_sources.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/adaptor:ava_saevm_adaptor",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:parking_lot",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "metrics",
+    srcs = ["tests/metrics.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_core",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/proxytime:ava_saevm_proxytime",
+        "//crates/ava-saevm/types:ava_saevm_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:prometheus",
     ],
 )

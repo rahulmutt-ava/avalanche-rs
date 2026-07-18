@@ -8,11 +8,17 @@
 //! file's `_provenance` field. This test asserts the Rust fee math matches them
 //! bit-for-bit, plus property tests for the saturating window invariants.
 
+use ava_evm::block::AvaHeader;
+use ava_evm::chainspec::{AvaChainSpec, CChainGenesis, NetworkUpgrades};
+use ava_evm::error::Error;
+use ava_evm::feerules;
 use ava_evm::feerules::blockgas::{
     BLOCK_GAS_COST_STEP_AP4, BLOCK_GAS_COST_STEP_AP5, MAX_BLOCK_GAS_COST, ap4_block_gas_cost,
     block_gas_cost,
 };
 use ava_evm::feerules::window::{BaseFeeParams, Window, base_fee_from_window};
+use ava_evm_reth::{Bytes, Chain};
+use ava_types::constants::LOCAL_ID;
 use proptest::prelude::*;
 use ruint::aliases::U256;
 use serde_json::Value;
@@ -218,4 +224,719 @@ fn fee_state_after_block_matches_live_go_block_extra() {
         "coreth feeStateAfterBlock parity: recomputed ACP-176 state must equal the \
          live Go block's extra prefix (Go computed this via customheader.ExtraPrefix)"
     );
+}
+
+// ─── verify_gas_limit: per-fork VerifyGasLimit arms (M9.15 task 2) ────────────
+
+/// A chain spec with every fork (including Fortuna+Granite) active at genesis —
+/// the local-network genesis, mirroring `fee_schedule.rs::local_all_active_spec()`.
+fn local_all_active_spec() -> AvaChainSpec {
+    let genesis = CChainGenesis::parse(include_str!("vectors/cchain/genesis/local.json"))
+        .expect("parse local genesis");
+    AvaChainSpec::c_chain(LOCAL_ID, Chain::from_id(genesis.chain_id()))
+}
+
+/// A schedule with each pre-Fortuna fork at a distinct activation timestamp, so
+/// a single spec can select any pre-Fortuna arm by varying `header.time` —
+/// mirrors `fee_schedule.rs::staged_schedule()`.
+fn phase_staggered_spec() -> AvaChainSpec {
+    AvaChainSpec::from_parts(
+        NetworkUpgrades {
+            apricot_phase_1: 1_000,
+            apricot_phase_2: 2_000,
+            apricot_phase_3: 3_000,
+            apricot_phase_4: 4_000,
+            apricot_phase_5: 5_000,
+            apricot_phase_pre_6: 6_000,
+            apricot_phase_6: 7_000,
+            apricot_phase_post_6: 8_000,
+            banff: 9_000,
+            cortina: 10_000,
+            durango: 11_000,
+            etna: 12_000,
+            fortuna: 13_000,
+            granite: 14_000,
+            helicon: u64::MAX,
+        },
+        Chain::from_id(43_114),
+        false,
+    )
+}
+
+/// The 24-byte ACP-176 fee-state extra prefix: capacity(8) | excess(8) |
+/// target_excess(8), all big-endian.
+fn acp176_extra(capacity: u64, excess: u64, target_excess: u64) -> Bytes {
+    let mut e = Vec::with_capacity(24);
+    e.extend_from_slice(&capacity.to_be_bytes());
+    e.extend_from_slice(&excess.to_be_bytes());
+    e.extend_from_slice(&target_excess.to_be_bytes());
+    e.into()
+}
+
+/// coreth `customheader/gas_limit.go:101-160` — `VerifyGasLimit` per-fork arms.
+#[test]
+fn verify_gas_limit_fortuna_equality() {
+    // `local_all_active_spec`'s "genesis" is the local network's real
+    // `InitiallyActiveTime` (2020-12-05 05:00:00 UTC = 1_607_144_400, spec 10
+    // §7.4), not unix-epoch 0 — see `fee_schedule.rs`'s identical convention.
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+    let want = feerules::fee_state_before_block(&cs, &parent, (GENESIS + 2) * 1000)
+        .expect("pre-block state")
+        .max_capacity()
+        .0;
+    let ok = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        gas_limit: want,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &ok).expect("exact MaxCapacity accepted");
+
+    let bad = AvaHeader {
+        gas_limit: want + 1,
+        ..ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
+    // gas_limit.go:114-119 — `"%w: have %d, want %d"`.
+    assert_eq!(
+        err.to_string(),
+        format!("invalid gas limit: have {}, want {want}", want + 1),
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:101-160` — the Cortina static-limit arm.
+#[test]
+fn verify_gas_limit_cortina_is_15m() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 10_000,
+        ..AvaHeader::default()
+    };
+    let ok = AvaHeader {
+        number: 2,
+        time: 10_500, // Cortina-active, pre-Durango.
+        gas_limit: 15_000_000,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &ok).expect("exact CortinaGasLimit accepted");
+
+    let bad = AvaHeader {
+        gas_limit: 15_000_001,
+        ..ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
+    // gas_limit.go:123-127 — `"%w: expected to be %d in Cortina, but found %d"`.
+    assert_eq!(
+        err.to_string(),
+        "invalid gas limit: expected to be 15000000 in Cortina, but found 15000001",
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:101-160` — the ApricotPhase1 static-limit
+/// arm.
+#[test]
+fn verify_gas_limit_ap1_is_8m() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 1_000,
+        ..AvaHeader::default()
+    };
+    let ok = AvaHeader {
+        number: 2,
+        time: 1_500, // ApricotPhase1-active, pre-ApricotPhase2.
+        gas_limit: 8_000_000,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &ok).expect("exact ApricotPhase1GasLimit accepted");
+
+    let bad = AvaHeader {
+        gas_limit: 8_000_001,
+        ..ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
+    // gas_limit.go:131-135 — `"%w: expected to be %d in ApricotPhase1, but found %d"`.
+    assert_eq!(
+        err.to_string(),
+        "invalid gas limit: expected to be 8000000 in ApricotPhase1, but found 8000001",
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:138-145` / `plugin/evm/upgrade/ap0/params.go:27-28`
+/// — the pre-AP1 `[MinGasLimit, MaxGasLimit]` range arm.
+#[test]
+fn verify_gas_limit_ap0_range() {
+    let cs = phase_staggered_spec();
+
+    // Each parent's gas limit matches its header's own, so the (separately
+    // tested, gas_limit.go:147-157) bound-divisor arm trivially passes
+    // (diff == 0) and only the range check below is exercised.
+    let parent_min = AvaHeader {
+        number: 1,
+        time: 100,
+        gas_limit: 5_000,
+        ..AvaHeader::default()
+    };
+    let min_ok = AvaHeader {
+        number: 2,
+        time: 500, // pre-ApricotPhase1.
+        gas_limit: 5_000,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent_min, &min_ok).expect("AP0 min bound accepted");
+
+    let parent_max = AvaHeader {
+        gas_limit: 0x7fff_ffff_ffff_ffff,
+        ..parent_min.clone()
+    };
+    let max_ok = AvaHeader {
+        gas_limit: 0x7fff_ffff_ffff_ffff,
+        ..min_ok.clone()
+    };
+    feerules::verify_gas_limit(&cs, &parent_max, &max_ok).expect("AP0 max bound accepted");
+
+    let bad = AvaHeader {
+        gas_limit: 4_999,
+        ..min_ok
+    };
+    // The range check (go:138-145) runs BEFORE the bound-divisor check, so
+    // this is rejected on the range regardless of parent_min's gas limit.
+    let err =
+        feerules::verify_gas_limit(&cs, &parent_min, &bad).expect_err("below AP0 min rejected");
+    // gas_limit.go:139-144 — `"%w: %d not in range [%d, %d]"`.
+    assert_eq!(
+        err.to_string(),
+        "invalid gas limit: 4999 not in range [5000, 9223372036854775807]",
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:147-157` — the pre-AP1 bound-divisor arm:
+/// the gas limit may not jump by `>= parent.GasLimit / GasLimitBoundDivisor`
+/// from the parent's, even when the claimed value is itself in range.
+#[test]
+fn verify_gas_limit_ap0_bound_divisor() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 100,
+        gas_limit: 8_000_000,
+        ..AvaHeader::default()
+    };
+    let limit = parent.gas_limit / feerules::AP0_GAS_LIMIT_BOUND_DIVISOR; // 7_812
+
+    // diff == limit - 1: strictly under the threshold, accepted.
+    let small_delta = AvaHeader {
+        number: 2,
+        time: 500, // pre-ApricotPhase1.
+        gas_limit: parent.gas_limit + limit - 1,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &small_delta).expect("small jump accepted");
+
+    // diff == limit: Go's `diff >= limit` triggers on equality too.
+    let boundary = AvaHeader {
+        gas_limit: parent.gas_limit + limit,
+        ..small_delta
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &boundary)
+        .expect_err("jump == parent/1024 rejected");
+    // gas_limit.go:151-156 — `"%w: have %d, want %d += %d"`.
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "invalid gas limit: have {}, want {} += {limit}",
+            parent.gas_limit + limit,
+            parent.gas_limit
+        ),
+        "sentinel parity: {err}"
+    );
+}
+
+// ─── verify_extra_prefix: `VerifyExtraPrefix` per-fork arms (M9.15 task 3) ────
+
+/// coreth `customheader/extra.go:62-111` — `VerifyExtraPrefix`, Fortuna arm:
+/// the claimed ACP-176 state must equal `feeStateAfterBlock(parent, header,
+/// claimed.TargetExcess)` — passing the CLAIMED target excess means the
+/// expectation clamps toward the claim, so any one-step-reachable claim is
+/// accepted and anything else mismatches (extra.go:74-87).
+#[test]
+fn verify_extra_prefix_fortuna_honest_and_tampered() {
+    // `local_all_active_spec`'s real local-network genesis is
+    // `1_607_144_400` (see `verify_gas_limit_fortuna_equality`'s identical
+    // convention) — using an epoch-relative timestamp here would put
+    // `header.time` before the network's actual Fortuna activation.
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+
+    // Honest child: extra prefix = fee_state_after_block with its own target.
+    let honest_state = feerules::fee_state_after_block(
+        &cs,
+        &parent,
+        GENESIS + 2,
+        Some((GENESIS + 2) * 1000),
+        21_000,
+        0,
+        None,
+    )
+    .expect("after-block state");
+    let child = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        time_milliseconds: Some((GENESIS + 2) * 1000),
+        gas_used: 21_000,
+        ext_data_gas_used: Some(U256::ZERO),
+        extra: honest_state.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    feerules::verify_extra_prefix(&cs, &parent, &child).expect("honest prefix accepted");
+
+    // Tampered: flip a byte inside the excess field (bytes 8..16 of the prefix).
+    let mut tampered_extra = child.extra.to_vec();
+    tampered_extra[9] ^= 0x01;
+    let tampered = AvaHeader {
+        extra: tampered_extra.into(),
+        ..child
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &tampered)
+        .expect_err("tampered prefix rejected");
+    assert!(
+        err.to_string().contains("incorrect fee state"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// A claimed target excess reachable in one step is accepted (the clamp makes
+/// expected == claimed); a claim beyond the per-block step mismatches.
+#[test]
+fn verify_extra_prefix_target_excess_clamp() {
+    // See `verify_extra_prefix_fortuna_honest_and_tampered` for why the real
+    // local-network genesis timestamp is used rather than an epoch-relative one.
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+
+    // Reachable claim: recompute with a slightly-moved desired target.
+    let near = feerules::fee_state_after_block(
+        &cs,
+        &parent,
+        GENESIS + 2,
+        Some((GENESIS + 2) * 1000),
+        0,
+        0,
+        Some(1_500_001),
+    )
+    .expect("near-claim state");
+    assert_eq!(near.target_excess.0, 1_500_001, "one-step-reachable claim");
+    let child_near = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        time_milliseconds: Some((GENESIS + 2) * 1000),
+        extra: near.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    feerules::verify_extra_prefix(&cs, &parent, &child_near).expect("reachable claim accepted");
+
+    // Unreachable claim: hand-craft a prefix whose target_excess jumped far
+    // beyond one step; the clamped expectation cannot equal it.
+    let far = acp176_extra(2_000_000, 0, u64::MAX / 2);
+    let child_far = AvaHeader {
+        extra: far,
+        ..child_near
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &child_far)
+        .expect_err("unreachable claim rejected");
+    assert!(err.to_string().contains("incorrect fee state"));
+}
+
+/// coreth `customheader/extra.go:62-111` — `VerifyExtraPrefix`, `[AP3, Fortuna)`
+/// window arm: `header.Extra` must start with the recomputed fee window's
+/// bytes (`extra.go:96-108`), but may carry additional trailing bytes
+/// (predicate/padding) after the prefix.
+#[test]
+fn verify_extra_prefix_window_arm() {
+    let cs = phase_staggered_spec();
+    // Pre-AP3 parent (AP3 activates at 3_000): `fee_window` seeds the default
+    // (all-zero) window regardless of `parent.extra`.
+    let parent = AvaHeader {
+        number: 1,
+        time: 2_000,
+        ..AvaHeader::default()
+    };
+    let window = feerules::fee_window(&cs, &parent, 3_500).expect("fee window");
+    let mut extra = window.to_bytes().to_vec();
+    extra.extend_from_slice(&[0xAB; 6]); // trailing predicate/padding bytes.
+    let child = AvaHeader {
+        number: 2,
+        time: 3_500, // AP3-active, pre-Fortuna.
+        extra: extra.clone().into(),
+        ..AvaHeader::default()
+    };
+    feerules::verify_extra_prefix(&cs, &parent, &child).expect("honest window prefix accepted");
+
+    let mut tampered_extra = extra;
+    tampered_extra[0] ^= 0x01;
+    let tampered = AvaHeader {
+        extra: tampered_extra.into(),
+        ..child
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &tampered)
+        .expect_err("tampered window prefix rejected");
+    assert!(
+        err.to_string().contains("invalid header.Extra prefix"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/extra.go:69-72` — a Fortuna+ header whose claimed
+/// ACP-176 state is too short to parse (< `acp176::STATE_SIZE` = 24 bytes)
+/// fails at the `acp176.ParseState` step itself, surfacing
+/// `Error::InvalidFeeState` ("parsing remote fee state: ..."), NOT the
+/// Fortuna full-struct-mismatch sentinel (`Error::IncorrectFeeState`) — the
+/// two are distinct failure modes at distinct points in the Go function.
+#[test]
+fn verify_extra_prefix_fortuna_short_extra_is_invalid_fee_state() {
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+    let short = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        time_milliseconds: Some((GENESIS + 2) * 1000),
+        extra: vec![0u8; 23].into(), // one byte short of STATE_SIZE (24).
+        ..AvaHeader::default()
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &short)
+        .expect_err("short claimed extra rejected before any fee-state comparison");
+    assert!(
+        matches!(err, Error::InvalidFeeState(_)),
+        "expected InvalidFeeState, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("parsing remote fee state"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// Builds a self-consistent (parent, child) pair at the all-active spec —
+/// child fields computed through the SAME feerules functions the builder
+/// uses. Times are rebased onto the local network's real
+/// `InitiallyActiveTime` (`1_607_144_400`, see
+/// `verify_gas_limit_fortuna_equality`'s identical convention).
+fn honest_pair(cs: &AvaChainSpec) -> (AvaHeader, AvaHeader) {
+    const GENESIS: u64 = 1_607_144_400;
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+    let (time, time_ms, gas_used) = (GENESIS + 2, (GENESIS + 2) * 1000, 0u64);
+    let state = feerules::fee_state_before_block(cs, &parent, time_ms).expect("pre-block state");
+    let after =
+        feerules::fee_state_after_block(cs, &parent, time, Some(time_ms), gas_used, 0, None)
+            .expect("after-block state");
+    let child = AvaHeader {
+        number: 2,
+        time,
+        time_milliseconds: Some(time_ms),
+        gas_used,
+        gas_limit: state.max_capacity().0,
+        base_fee: Some(U256::from(state.gas_price().0)),
+        block_gas_cost: Some(U256::ZERO), // Granite retires the mechanism => 0
+        ext_data_gas_used: Some(U256::ZERO),
+        extra: after.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    (parent, child)
+}
+
+/// coreth `consensus/dummy/consensus.go:136-144` — header.BaseFee must equal
+/// the recompute; nil-vs-non-nil is unequal BOTH ways (`utils.BigEqual`).
+#[test]
+fn verify_header_gas_fields_rejects_wrong_base_fee() {
+    let cs = local_all_active_spec();
+    let (parent, honest) = honest_pair(&cs);
+    feerules::verify_header_gas_fields(&cs, &parent, &honest).expect("honest header accepted");
+
+    let bad = AvaHeader {
+        base_fee: honest.base_fee.map(|bf| bf + U256::from(1)),
+        ..honest.clone()
+    };
+    let err = feerules::verify_header_gas_fields(&cs, &parent, &bad)
+        .expect_err("wrong base fee rejected");
+    assert!(
+        err.to_string().contains("expected base fee"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// consensus.go:146-156 — BlockGasCost equality (Granite expectation is 0).
+#[test]
+fn verify_header_gas_fields_rejects_wrong_block_gas_cost() {
+    let cs = local_all_active_spec();
+    let (parent, honest) = honest_pair(&cs);
+    let bad = AvaHeader {
+        block_gas_cost: Some(U256::from(123u64)),
+        ..honest
+    };
+    let err = feerules::verify_header_gas_fields(&cs, &parent, &bad)
+        .expect_err("wrong block gas cost rejected");
+    assert!(
+        err.to_string().contains("invalid block gas cost"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// consensus.go:158-175 — ExtDataGasUsed fork gating: AP4+ nil rejects via
+/// this orchestrator's own check.
+///
+/// Brief-vs-Go delta: the brief's sample reused the SAME Fortuna/Granite
+/// `honest` header for an oversize sub-case too, but at Fortuna+
+/// `verify_extra_prefix` (consensus.go:131-133, run BEFORE this orchestrator's
+/// own ExtDataGasUsed checks at 158-175) calls `feeStateAfterBlock` ->
+/// `ConsumeGas` on the header's raw `ExtDataGasUsed` UNCONDITIONALLY
+/// (`dynamic_fee_state.go:73-76`); `ConsumeGas`'s own `!extraGasUsed.IsUint64()`
+/// guard (`acp176.go:145-148`) trips FIRST for an out-of-range value,
+/// surfacing `gas.ErrInsufficientCapacity` (our [`Error::FeeOverflow`]) —
+/// consensus.go's `errExtDataGasUsedTooLarge` (158-175) is dead code at
+/// Fortuna+ for that reason. It IS reachable in the AP4..Fortuna window
+/// regime, where `verify_extra_prefix`'s AP3 arm only compares prefix BYTES
+/// and never touches `ExtDataGasUsed` — exercised separately below via
+/// [`phase_staggered_spec`].
+#[test]
+fn verify_header_gas_fields_ext_data_gas_used_gating() {
+    let cs = local_all_active_spec();
+    let (parent, honest) = honest_pair(&cs);
+
+    let nil = AvaHeader {
+        ext_data_gas_used: None,
+        ..honest
+    };
+    let err =
+        feerules::verify_header_gas_fields(&cs, &parent, &nil).expect_err("nil at AP4+ rejected");
+    assert!(err.to_string().contains("extDataGasUsed is nil"));
+}
+
+/// consensus.go:170-172 — the `errExtDataGasUsedTooLarge` oversize check,
+/// exercised in the AP4..Fortuna window regime where it is actually reachable
+/// (see the brief-vs-Go delta documented on
+/// `verify_header_gas_fields_ext_data_gas_used_gating`).
+#[test]
+fn verify_header_gas_fields_rejects_oversize_ext_data_gas_used_pre_fortuna() {
+    let cs = phase_staggered_spec(); // apricot_phase_4: 4_000, fortuna: 13_000
+    let parent = AvaHeader {
+        number: 1,
+        time: 2_000, // pre-AP3 parent: fee_window seeds the default window.
+        ..AvaHeader::default()
+    };
+    let window = feerules::fee_window(&cs, &parent, 4_500).expect("fee window");
+    let ctx = ava_evm::evmconfig::AvaNextBlockCtx {
+        timestamp: 4_500,
+        timestamp_ms: 4_500_000,
+        parent_fee_state: feerules::parent_fee_state_of(&cs, &parent).expect("parent fee state"),
+        ..ava_evm::evmconfig::AvaNextBlockCtx::default()
+    };
+    let base_fee = feerules::base_fee(&cs, &parent, &ctx).expect("base fee");
+    let oversize = AvaHeader {
+        number: 2,
+        time: 4_500, // ApricotPhase4: AP4-active, pre-Fortuna (window regime).
+        gas_limit: feerules::APRICOT_PHASE1_GAS_LIMIT,
+        base_fee: Some(U256::from(base_fee)),
+        block_gas_cost: Some(U256::ZERO), // parent has no cost => MinBlockGasCost.
+        ext_data_gas_used: Some(U256::from(u64::MAX) + U256::from(1)),
+        extra: window.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    let err =
+        feerules::verify_header_gas_fields(&cs, &parent, &oversize).expect_err("oversize rejected");
+    assert!(
+        err.to_string().contains("extDataGasUsed is not uint64"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// Go check order: a header wrong in BOTH gas limit and base fee reports the
+/// gas-limit error (the FIRST check), matching Go's first-rejection class.
+#[test]
+fn verify_header_gas_fields_check_order_matches_go() {
+    let cs = local_all_active_spec();
+    let (parent, honest) = honest_pair(&cs);
+    let doubly_bad = AvaHeader {
+        gas_limit: honest.gas_limit + 1,
+        base_fee: honest.base_fee.map(|bf| bf + U256::from(1)),
+        ..honest
+    };
+    let err = feerules::verify_header_gas_fields(&cs, &parent, &doubly_bad).expect_err("rejected");
+    assert!(
+        err.to_string().contains("invalid gas limit"),
+        "gas limit checks FIRST: {err}"
+    );
+}
+
+/// consensus.go:141 — pre-AP3 a header carrying a non-nil `BaseFee` is
+/// rejected (`utils.BigEqual` treats nil-vs-non-nil as unequal): the expected
+/// value is `None` (legacy pricing has no base fee) but the header claims one.
+#[test]
+fn pre_ap3_base_fee_present_is_rejected() {
+    let cs = phase_staggered_spec(); // apricot_phase_3: 3_000
+    let parent = AvaHeader {
+        number: 1,
+        time: 2_000,
+        ..AvaHeader::default()
+    };
+    let header = AvaHeader {
+        number: 2,
+        time: 2_500, // ApricotPhase2: pre-AP3, post-AP1.
+        gas_limit: feerules::APRICOT_PHASE1_GAS_LIMIT,
+        base_fee: Some(U256::from(1)),
+        ..AvaHeader::default()
+    };
+    let err = feerules::verify_header_gas_fields(&cs, &parent, &header)
+        .expect_err("base fee present pre-AP3 rejected");
+    assert!(
+        err.to_string().contains("expected base fee"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// consensus.go:153 — pre-AP4 a header carrying a non-nil `BlockGasCost` is
+/// rejected: the expected value is `None` (the mechanism isn't active yet)
+/// but the header claims one.
+#[test]
+fn pre_ap4_block_gas_cost_present_is_rejected() {
+    let cs = phase_staggered_spec(); // apricot_phase_4: 4_000
+    let parent = AvaHeader {
+        number: 1,
+        time: 2_000, // pre-AP3 parent: fee_window seeds the default window.
+        ..AvaHeader::default()
+    };
+    let window = feerules::fee_window(&cs, &parent, 3_500).expect("fee window");
+    let ctx = ava_evm::evmconfig::AvaNextBlockCtx {
+        timestamp: 3_500,
+        timestamp_ms: 3_500_000,
+        parent_fee_state: feerules::parent_fee_state_of(&cs, &parent).expect("parent fee state"),
+        ..ava_evm::evmconfig::AvaNextBlockCtx::default()
+    };
+    let base_fee = feerules::base_fee(&cs, &parent, &ctx).expect("base fee");
+    let header = AvaHeader {
+        number: 2,
+        time: 3_500, // ApricotPhase3: AP3-active, pre-AP4.
+        gas_limit: feerules::APRICOT_PHASE1_GAS_LIMIT,
+        base_fee: Some(U256::from(base_fee)),
+        block_gas_cost: Some(U256::from(999u64)),
+        extra: window.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    let err = feerules::verify_header_gas_fields(&cs, &parent, &header)
+        .expect_err("block gas cost present pre-AP4 rejected");
+    assert!(
+        err.to_string().contains("invalid block gas cost"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// consensus.go:159-161 — pre-AP4 a header carrying a non-nil
+/// `ExtDataGasUsed` is rejected (`errInvalidExtDataGasUsed`'s "before fork"
+/// arm): AP4 hasn't retired the nil expectation yet.
+#[test]
+fn pre_ap4_ext_data_gas_used_present_is_rejected() {
+    let cs = phase_staggered_spec(); // apricot_phase_4: 4_000
+    let parent = AvaHeader {
+        number: 1,
+        time: 2_000, // pre-AP3 parent: fee_window seeds the default window.
+        ..AvaHeader::default()
+    };
+    let window = feerules::fee_window(&cs, &parent, 3_500).expect("fee window");
+    let ctx = ava_evm::evmconfig::AvaNextBlockCtx {
+        timestamp: 3_500,
+        timestamp_ms: 3_500_000,
+        parent_fee_state: feerules::parent_fee_state_of(&cs, &parent).expect("parent fee state"),
+        ..ava_evm::evmconfig::AvaNextBlockCtx::default()
+    };
+    let base_fee = feerules::base_fee(&cs, &parent, &ctx).expect("base fee");
+    let header = AvaHeader {
+        number: 2,
+        time: 3_500, // ApricotPhase3: AP3-active, pre-AP4.
+        gas_limit: feerules::APRICOT_PHASE1_GAS_LIMIT,
+        base_fee: Some(U256::from(base_fee)),
+        block_gas_cost: None,
+        ext_data_gas_used: Some(U256::from(5u64)),
+        extra: window.to_bytes().to_vec().into(),
+        ..AvaHeader::default()
+    };
+    let err = feerules::verify_header_gas_fields(&cs, &parent, &header)
+        .expect_err("extDataGasUsed present pre-AP4 rejected");
+    assert!(
+        err.to_string()
+            .contains("invalid extDataGasUsed before fork"),
+        "sentinel parity: {err}"
+    );
+}
+
+// ─── acp176_base_fee_advance: Task-1 time-advance false-reject guard (Task 7) ─
+
+/// Go-recorded false-reject guard for the Task-1 time-advance: for every
+/// recorded (parent fee state, elapsed) — including NONZERO excess, where the
+/// old raw-parent read diverged — Rust's `base_fee` must equal what coreth's
+/// `customheader.BaseFee` computed. A mismatch here means the verify path
+/// would falsely reject an honest Go block under load.
+#[test]
+fn acp176_base_fee_advance_matches_go_vectors() {
+    let raw = include_str!("vectors/cchain/fees/acp176/base_fee_advance.json");
+    let doc: Value = serde_json::from_str(raw).expect("parse advance vectors");
+    let cs = local_all_active_spec();
+    let rows = doc["rows"].as_array().expect("rows array");
+    assert!(rows.len() >= 30, "corpus must not silently shrink");
+    for row in rows {
+        let parent = AvaHeader {
+            number: row["parent_number"].as_u64().expect("parent_number"),
+            time: row["parent_time"].as_u64().expect("parent_time"),
+            extra: hex::decode(row["parent_extra_hex"].as_str().expect("extra"))
+                .expect("decode extra")
+                .into(),
+            ..AvaHeader::default()
+        };
+        let child_ms = row["child_time_ms"].as_u64().expect("child_time_ms");
+        let ctx = ava_evm::evmconfig::AvaNextBlockCtx {
+            timestamp: child_ms / 1000,
+            timestamp_ms: child_ms,
+            parent_fee_state: feerules::parent_fee_state_of(&cs, &parent).expect("fee state"),
+            ..ava_evm::evmconfig::AvaNextBlockCtx::default()
+        };
+        assert_eq!(
+            feerules::base_fee(&cs, &parent, &ctx).expect("base_fee"),
+            row["expected_base_fee"]
+                .as_u64()
+                .expect("expected_base_fee"),
+            "row {row:?}"
+        );
+    }
 }

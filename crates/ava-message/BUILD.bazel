@@ -1,5 +1,5 @@
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_message",
@@ -142,5 +142,19 @@ rust_test(
         "@crates//:proptest",
         "@crates//:serde",
         "@crates//:serde_json",
+    ],
+)
+
+rust_binary(
+    name = "message_framing",
+    srcs = ["benches/message_framing.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        ":build_script",
+        "@crates//:bytes",
+        "@crates//:criterion",
     ],
 )

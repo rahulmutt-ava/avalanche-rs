@@ -82,7 +82,7 @@ const EMPTY_EXT_DATA_HASH: [u8; 32] = [
 /// (`difficulty`, `base_fee`, `ext_data_gas_used`, `block_gas_cost`) are
 /// [`U256`] encoded as RLP scalars (minimal big-endian), matching Go
 /// `WriteBigInt`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AvaHeader {
     /// `ParentHash`.
     pub parent_hash: B256,
@@ -675,8 +675,13 @@ impl EvmBlock {
     /// # Errors
     /// Returns [`Error`] if the parent view is unavailable, execution fails, the
     /// computed root disagrees with the header, or gas usage disagrees.
-    pub fn verify(&self, ctx: &EvmBlockContext, parent_state_root: B256) -> Result<B256> {
-        self.verify_with_predicates(ctx, parent_state_root, &AvaExecCtx::default())
+    pub fn verify(
+        &self,
+        ctx: &EvmBlockContext,
+        parent_state_root: B256,
+        parent: &AvaHeader,
+    ) -> Result<B256> {
+        self.verify_with_predicates(ctx, parent_state_root, parent, &AvaExecCtx::default())
     }
 
     /// [`EvmBlock::verify`] with an explicit per-block precompile execution
@@ -914,6 +919,7 @@ impl EvmBlock {
         &self,
         ctx: &EvmBlockContext,
         parent_state_root: B256,
+        parent: &AvaHeader,
         exec_ctx: &AvaExecCtx,
     ) -> Result<B256> {
         // Structural syntacticVerify port — runs before any execution work
@@ -921,6 +927,18 @@ impl EvmBlock {
         // the state transition; a violating block is invalid regardless of its
         // declared state root).
         self.syntactic_verify(ctx.chain_spec())?;
+
+        // Contextual (parent-dependent) fee/gas header equality checks — coreth
+        // dummy-engine `verifyHeaderGasFields` (`consensus/dummy/consensus.go:125-176`),
+        // the complement to the parent-less `syntactic_verify`. Runs BEFORE any
+        // execution work, mirroring Go's header verification ordering: a header
+        // whose gas limit / extra prefix / base fee / block gas cost / ext-data
+        // gas disagree with the parent-derived recompute is invalid regardless
+        // of its (attacker-chosen) declared state root. Without this, a Byzantine
+        // proposer could craft a self-consistent block (valid state root) with
+        // wrong fee/gas fields that the verify path would accept — the fail-open
+        // this closes.
+        crate::feerules::verify_header_gas_fields(ctx.chain_spec(), parent, self.header())?;
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)

@@ -236,6 +236,51 @@ simply dropped. Sibling blocks of the same parent each hold an independent
 Firewood proposal (proposal-on-proposal is supported, 04 §4.2). This eliminates
 the entire class of reth `TreeState`/fork-choice reorg machinery.
 
+> **AS-BUILT (verifyHeaderGasFields port, 2026-07-18).** Step 2 of `Block::verify` above
+> ("semantic verify against parent state") now additionally runs the contextual
+> `feerules::verify_header_gas_fields` (coreth `consensus/dummy/consensus.go:125-176`) immediately
+> after `syntactic_verify` and before sender recovery/execution — Go's ordering. It recomputes and
+> equality-checks `GasLimit` (`customheader/gas_limit.go:101-160`, incl. the pre-AP1 bound-divisor
+> arm), the ACP-176/AP3 extra prefix (`customheader/extra.go:62-111`), `BaseFee`, `BlockGasCost`, and
+> gates `ExtDataGasUsed`, all against the parent — resolved via a new `Shared::parent_header`, which
+> is **VERIFIED-MAP ONLY and fail-closed**: it resolves solely from the in-memory `verified`
+> processing tree (accepted blocks are retained there after `accept`, and genesis is seeded into the
+> same map by `from_genesis`); there is no `CanonicalStore` fallback (the store persists only the
+> header commitment + ext_data, not a reconstructable full header) and no separate genesis fallback.
+> Any parent not found in `verified` fails CLOSED with `Error::MissingProposal`, matching
+> `parent_state_root`'s and `build_block`'s resolution contract. This is unreachable in production
+> today because `from_genesis` is the only production construction path (it seeds `verified`), but the
+> contract will need extending when advanced-tip resume / real-DB threading lands and parents can be
+> evicted from the processing tree before a verify call needs them. `base_fee` is now
+> time-advance-correct (`customheader/base_fee.go:27-33`'s `feeStateBeforeBlock`, ported at the source
+> by changing `feerules::base_fee`'s parent parameter to `&AvaHeader` so builder, RPC, and verifier
+> share one function) — byte-parity guarded by a 30-row recorded Go-oracle advance corpus plus a
+> 10-mutation Go-verdict corpus (up from 5) asserting matched Go/Rust rejection classes. This closes
+> the Byzantine-proposer fail-open the M9.15 whole-branch review flagged
+> (`plan/M9-interop-hardening.md` AS-BUILT addendum); design detail in
+> `docs/superpowers/specs/2026-07-18-verify-header-gas-fields-design.md`. Residual gap (documented,
+> non-gating on the honest arm, same Byzantine class as the port above — MUST be ported before any
+> BFT-exposed deployment claim): three pre-`verifyHeaderGasFields` Go rejection surfaces remain
+> unported. (1) Go's `VerifyGasUsed`/`verifyIntrinsicGas` family (`wrapped_block.go:260-278` →
+> `customheader/gas_limit.go:60-99`) — a pre-execution gas-capacity / summed-intrinsic-gas check — has
+> no direct Rust mirror; Rust's executor instead equality-checks `gas_used` against the real
+> post-execution result, which is currently sufficient but not the same check. (2) Go's `VerifyTime`
+> and siblings (`VerifyMinDelayExcess`, `VerifyTargetExponent`, `VerifyMinPriceExponent`,
+> `VerifySettled`, the `errIsHeliconBlock` guard — `customheader/time.go:46-110`, called from
+> `wrapped_block.go:358` before `verifyHeaderGasFields`) have no Rust equivalent at all; `syntactic_verify`
+> does no timestamp checking, and the new checks trust `header_time_ms` (`header.time_milliseconds`,
+> falling back to `time*1000` when absent) as-is, so a Granite header with missing/inconsistent
+> `time_milliseconds` that Go rejects (`ErrTimeMillisecondsRequired`/`Mismatched`) can pass Rust if the
+> fee fields are stamped self-consistently at the fallback ms — the highest-value follow-up of the
+> three. (3) The atomic-extension `ExtDataGasUsed` VALUE check (Go
+> `plugin/evm/atomic/vm/block_extension.go:147-175`, which requires `ExtDataGasUsed` to equal the
+> recomputed atomic-batch gas plus the AP5 `AtomicGasLimit` bound) has no Rust mirror either; Rust
+> never compares the claimed value against actual atomic gas, and at Fortuna+ an inflated claim
+> self-consistently stamped into the extra prefix passes `verify_extra_prefix` (the claim feeds the
+> recompute), so Go rejects where Rust accepts. All three are pre-existing gaps — this branch's
+> coverage is strictly improved, not regressed — and honest-arm-safe (the Rust builder stamps correct
+> values everywhere, so every live gate stays green).
+
 ### 3.2 Driving reth's executor for verify
 
 ```rust

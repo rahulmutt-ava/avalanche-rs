@@ -31,3 +31,23 @@ rust_test(
         "@crates//:tempfile",
     ],
 )
+
+rust_test(
+    name = "init_logging_e2e",
+    srcs = ["tests/init_logging_e2e.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_logging",
+        "@crates//:assert_matches",
+        "@crates//:chrono",
+        "@crates//:flate2",
+        "@crates//:parking_lot",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:thiserror",
+        "@crates//:tracing",
+        "@crates//:tracing-appender",
+        "@crates//:tracing-subscriber",
+    ],
+)

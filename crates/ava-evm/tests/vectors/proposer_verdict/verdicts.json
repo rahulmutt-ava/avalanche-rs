@@ -1,5 +1,5 @@
 {
-  "_comment": "LIVE Go-oracle verdict leg for avalanche-rs M9.15 Task 6: coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 5 adversarial header mutations) over the genesis.json committed beside this corpus.",
+  "_comment": "LIVE Go-oracle verdict leg for avalanche-rs M9.15 Task 6: coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 10 adversarial header mutations) over the genesis.json committed beside this corpus.",
   "go_commit": "a4290dc0f47f2694572e156cadb94ef43e2eab22",
   "verdicts": [
     {
@@ -20,6 +20,31 @@
       "name": "nonzero_nonce",
       "accepted": false,
       "error": "syntactic block verification failed: expected nonce to be 0 but got 1: invalid nonce"
+    },
+    {
+      "name": "oversized_ext_data_gas_used",
+      "accepted": false,
+      "error": "failed to verify block: failed to verify intrinsic gas: invalid gas used relative to capacity: invalid extra data gas used: 18446744073709551616 is not a uint64"
+    },
+    {
+      "name": "tampered_fee_state_prefix",
+      "accepted": false,
+      "error": "incorrect fee state: expected {Gas:{Capacity:3979000 Excess:21000} TargetExcess:0}, found {Gas:{Capacity:3979000 Excess:281474976731656} TargetExcess:0}"
+    },
+    {
+      "name": "wrong_base_fee",
+      "accepted": false,
+      "error": "expected base fee 1, found 2"
+    },
+    {
+      "name": "wrong_block_gas_cost",
+      "accepted": false,
+      "error": "invalid block gas cost: have 123, want 0"
+    },
+    {
+      "name": "wrong_gas_limit",
+      "accepted": false,
+      "error": "invalid gas limit: have 10000001, want 10000000"
     },
     {
       "name": "wrong_tx_root",
