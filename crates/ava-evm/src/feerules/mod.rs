@@ -23,7 +23,9 @@ use crate::error::Error;
 use crate::evmconfig::{AvaFeeState, AvaNextBlockCtx};
 use crate::feerules::acp176::Acp176State;
 use crate::feerules::acp226::{DelayExcess, INITIAL_DELAY_EXCESS};
-use crate::feerules::blockgas::{BLOCK_GAS_COST_STEP_AP4, ap4_block_gas_cost};
+use crate::feerules::blockgas::{
+    BLOCK_GAS_COST_STEP_AP4, BLOCK_GAS_COST_STEP_AP5, ap4_block_gas_cost,
+};
 use crate::feerules::window::{INTRINSIC_BLOCK_GAS, Window};
 
 // Spec 21 §0: re-export the shared exponential + gas state from the canonical
@@ -581,6 +583,114 @@ pub fn parent_fee_state_of(spec: &AvaChainSpec, parent: &AvaHeader) -> Result<Av
         // Pre-AP3: legacy pricing has no fee state (base_fee dispatch returns
         // `NilBaseFee` regardless of this value).
         FeeRegime::Legacy => Ok(AvaFeeState::default()),
+    }
+}
+
+// ─── verifyHeaderGasFields (spec 21 §7 verify path) ────────────────────────
+//
+// Port of coreth `consensus/dummy/consensus.go:125-176` + the
+// `customheader/block_gas_cost.go:31-59` wrapper it calls into.
+
+/// coreth `customheader/block_gas_cost.go:31-59` — `BlockGasCost`, the
+/// fork-gated wrapper over [`blockgas::block_gas_cost`]: `None` pre-AP4,
+/// `Some(0)` at Granite, else the AP4/AP5-stepped cost off the parent.
+#[must_use]
+pub fn expected_block_gas_cost(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    timestamp: u64,
+) -> Option<u64> {
+    // block_gas_cost.go:36-38
+    if !spec.is_apricot_phase4(timestamp) {
+        return None;
+    }
+    // block_gas_cost.go:42-45
+    let step = if spec.is_apricot_phase5(timestamp) {
+        BLOCK_GAS_COST_STEP_AP5
+    } else {
+        BLOCK_GAS_COST_STEP_AP4
+    };
+    // block_gas_cost.go:46-53 — an invalid parent/current time combination
+    // counts as 0 elapsed time.
+    let time_elapsed = timestamp.saturating_sub(parent.time);
+    Some(blockgas::block_gas_cost(
+        parent
+            .block_gas_cost
+            .map(|c| u64::try_from(c).unwrap_or(u64::MAX)),
+        step,
+        time_elapsed,
+        spec.is_granite(timestamp),
+    ))
+}
+
+/// coreth `consensus/dummy/consensus.go:125-176` — `verifyHeaderGasFields`.
+///
+/// The contextual (parent-dependent) fee/gas equality checks that complement
+/// the parent-less structural checks in `EvmBlock::syntactic_verify` — coreth
+/// keeps both layers, and so do we. Checks run in Go's order so a multi-fault
+/// header reports Go's first rejection class. Go's `VerifyGasUsed` is NOT
+/// called here (same comment as consensus.go:126-127): gas-used correctness
+/// is checked by execution (`EvmBlock::verify` asserts executed gas ==
+/// `header.gas_used`).
+///
+/// # Errors
+/// The first failing check's error (see the per-check variants); recompute
+/// failures propagate as [`Error::InvalidFeeState`] / [`Error::NilBaseFee`].
+pub fn verify_header_gas_fields(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    // consensus.go:128-130
+    verify_gas_limit(spec, parent, header)?;
+    // consensus.go:131-133
+    verify_extra_prefix(spec, parent, header)?;
+
+    // consensus.go:136-144 — expected base fee via the SAME `base_fee` the
+    // builder stamps with (nil pre-AP3; `utils.BigEqual` treats nil-vs-non-nil
+    // as unequal in both directions). Go dispatches off `timeMS`
+    // (`customtypes.HeaderTimeMilliseconds(header)`); `header.time` is the
+    // same instant at second granularity, so `spec.fork_at(header.time)`
+    // resolves the identical phase.
+    let phase = spec.fork_at(header.time);
+    let expected_base_fee = if phase >= AvaPhase::ApricotPhase3 {
+        let ctx = AvaNextBlockCtx {
+            timestamp: header.time,
+            timestamp_ms: header_time_ms(header),
+            parent_fee_state: parent_fee_state_of(spec, parent)?,
+            ..AvaNextBlockCtx::default()
+        };
+        Some(U256::from(base_fee(spec, parent, &ctx)?))
+    } else {
+        None
+    };
+    if header.base_fee != expected_base_fee {
+        return Err(Error::BaseFeeMismatch {
+            expected: expected_base_fee,
+            found: header.base_fee,
+        });
+    }
+
+    // consensus.go:146-156 — BlockGasCost equality (`utils.BigEqual`: nil == nil).
+    let want = expected_block_gas_cost(spec, parent, header.time).map(U256::from);
+    if header.block_gas_cost != want {
+        return Err(Error::BlockGasCostMismatch {
+            have: header.block_gas_cost,
+            want,
+        });
+    }
+
+    // consensus.go:158-175 — ExtDataGasUsed fork gating.
+    if phase < AvaPhase::ApricotPhase4 {
+        if let Some(v) = header.ext_data_gas_used {
+            return Err(Error::ExtDataGasUsedBeforeFork(v));
+        }
+        return Ok(());
+    }
+    match header.ext_data_gas_used {
+        None => Err(Error::NilExtDataGasUsed),
+        Some(v) if v > U256::from(u64::MAX) => Err(Error::ExtDataGasUsedTooLarge(v)),
+        Some(_) => Ok(()),
     }
 }
 

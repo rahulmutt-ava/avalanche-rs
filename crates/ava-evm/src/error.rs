@@ -91,6 +91,32 @@ pub enum Error {
     #[error("invalid header.Extra prefix: expected {expected} as prefix, found {found}")]
     InvalidExtraPrefix { expected: String, found: String },
 
+    /// coreth `consensus/dummy/consensus.go:142`
+    /// (`"expected base fee %d, found %d"`; nil renders as `<nil>` in Go —
+    /// `Option::None`'s `{:?}` is the Rust analogue).
+    #[error("expected base fee {expected:?}, found {found:?}")]
+    BaseFeeMismatch {
+        expected: Option<U256>,
+        found: Option<U256>,
+    },
+    /// coreth `consensus/dummy/consensus.go:154`
+    /// (`"invalid block gas cost: have %d, want %d"`).
+    #[error("invalid block gas cost: have {have:?}, want {want:?}")]
+    BlockGasCostMismatch {
+        have: Option<U256>,
+        want: Option<U256>,
+    },
+    /// coreth `consensus/dummy/consensus.go:160`
+    /// (`"invalid extDataGasUsed before fork: have %d, want <nil>"`).
+    #[error("invalid extDataGasUsed before fork: have {0}, want <nil>")]
+    ExtDataGasUsedBeforeFork(U256),
+    /// coreth `consensus/dummy/consensus.go:28` `errExtDataGasUsedNil`.
+    #[error("extDataGasUsed is nil")]
+    NilExtDataGasUsed,
+    /// coreth `consensus/dummy/consensus.go:29` `errExtDataGasUsedTooLarge`.
+    #[error("extDataGasUsed is not uint64")]
+    ExtDataGasUsedTooLarge(U256),
+
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.
     #[error("conflicting atomic inputs")]
