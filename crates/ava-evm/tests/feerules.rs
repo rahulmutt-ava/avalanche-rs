@@ -10,6 +10,7 @@
 
 use ava_evm::block::AvaHeader;
 use ava_evm::chainspec::{AvaChainSpec, CChainGenesis, NetworkUpgrades};
+use ava_evm::error::Error;
 use ava_evm::feerules;
 use ava_evm::feerules::blockgas::{
     BLOCK_GAS_COST_STEP_AP4, BLOCK_GAS_COST_STEP_AP5, MAX_BLOCK_GAS_COST, ap4_block_gas_cost,
@@ -605,6 +606,41 @@ fn verify_extra_prefix_window_arm() {
         .expect_err("tampered window prefix rejected");
     assert!(
         err.to_string().contains("invalid header.Extra prefix"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/extra.go:69-72` — a Fortuna+ header whose claimed
+/// ACP-176 state is too short to parse (< `acp176::STATE_SIZE` = 24 bytes)
+/// fails at the `acp176.ParseState` step itself, surfacing
+/// `Error::InvalidFeeState` ("parsing remote fee state: ..."), NOT the
+/// Fortuna full-struct-mismatch sentinel (`Error::IncorrectFeeState`) — the
+/// two are distinct failure modes at distinct points in the Go function.
+#[test]
+fn verify_extra_prefix_fortuna_short_extra_is_invalid_fee_state() {
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+    let short = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        time_milliseconds: Some((GENESIS + 2) * 1000),
+        extra: vec![0u8; 23].into(), // one byte short of STATE_SIZE (24).
+        ..AvaHeader::default()
+    };
+    let err = feerules::verify_extra_prefix(&cs, &parent, &short)
+        .expect_err("short claimed extra rejected before any fee-state comparison");
+    assert!(
+        matches!(err, Error::InvalidFeeState(_)),
+        "expected InvalidFeeState, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("parsing remote fee state"),
         "sentinel parity: {err}"
     );
 }

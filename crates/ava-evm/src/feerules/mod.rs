@@ -486,10 +486,12 @@ pub fn extra_prefix(
 /// `[AP3, Fortuna)`: `Extra` must start with the recomputed fee window's
 /// bytes. Pre-AP3: no expected prefix.
 ///
-/// upstream-delta: coreth's `IsHelicon` arm short-circuits Fortuna's check
-/// (the ACP-176 state leaves `header.Extra` under Helicon); `AvaPhase` has no
-/// Helicon variant yet — fold the arm in when it grows one (same callout as
-/// `EvmBlock::syntactic_verify`'s `VerifyExtra` port).
+/// `VerifyExtraPrefix` has no Helicon arm — the Fortuna check still runs
+/// under Helicon (forks are cumulative, so `IsFortuna` stays true). The
+/// `IsHelicon` short-circuit (`return nil`) belongs only to the sibling
+/// `VerifyExtra` (`extra.go:120-121`), ported separately in
+/// `EvmBlock::syntactic_verify` (`block.rs`, its own upstream-delta callout);
+/// add no Helicon handling to this function.
 ///
 /// # Errors
 /// [`Error::IncorrectFeeState`] / [`Error::InvalidExtraPrefix`] on mismatch;
