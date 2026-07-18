@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_codec",
@@ -74,4 +74,16 @@ rust_test(
     name = "ava_codec_test",
     compile_data = ["Cargo.toml"],
     crate = ":ava_codec",
+)
+
+rust_binary(
+    name = "codec",
+    srcs = ["benches/codec.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_codec",
+        "@crates//:criterion",
+    ],
 )

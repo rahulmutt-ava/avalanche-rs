@@ -2,7 +2,10 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_saevm_adaptor",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/sync.rs",
+    ],
     compile_data = ["Cargo.toml"],
     proc_macro_deps = ["@crates//:async-trait"],
     visibility = ["//visibility:public"],
@@ -31,6 +34,22 @@ rust_test(
         "//crates/ava-version:ava_version",
         "//crates/ava-vm:ava_vm",
         "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "sync",
+    srcs = ["tests/sync.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_adaptor",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:assert_matches",
         "@crates//:tokio",
         "@crates//:tokio-util",
     ],

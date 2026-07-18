@@ -4,12 +4,17 @@ rust_library(
     name = "ava_differential",
     srcs = [
         "src/atomic.rs",
+        "src/crash.rs",
         "src/driver.rs",
         "src/lib.rs",
+        "src/livenet.rs",
         "src/network.rs",
         "src/observation.rs",
+        "src/plugin.rs",
         "src/program.rs",
+        "src/rpc.rs",
         "src/saevm.rs",
+        "src/tls_repro.rs",
         "src/xchain.rs",
     ],
     compile_data = ["Cargo.toml"],
@@ -17,8 +22,10 @@ rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//crates/ava-avm:ava_avm",
+        "//crates/ava-crypto:ava_crypto",
         "//crates/ava-database:ava_database",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-network:ava_network",
         "//crates/ava-saevm/blocks:ava_saevm_blocks",
         "//crates/ava-saevm/core:ava_saevm_core",
         "//crates/ava-saevm/gastime:ava_saevm_gastime",
@@ -27,10 +34,14 @@ rust_library(
         "//crates/ava-secp256k1fx:ava_secp256k1fx",
         "//crates/ava-snow:ava_snow",
         "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
         "//crates/ava-version:ava_version",
         "//crates/ava-vm:ava_vm",
+        "@crates//:anyhow",
         "@crates//:arbitrary",
         "@crates//:hex",
+        "@crates//:rustls",
+        "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:thiserror",
         "@crates//:tokio",
@@ -115,10 +126,102 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":ava_differential",
     deps = [
-        "//crates/ava-crypto:ava_crypto",
         "//crates/ava-message:ava_message",
-        "//crates/ava-network:ava_network",
         "@crates//:pretty_assertions",
         "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "crash_injection",
+    srcs = ["tests/crash_injection.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_differential"],
+)
+
+rust_test(
+    name = "definition_of_done",
+    srcs = ["tests/definition_of_done.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "determinism_repeat",
+    srcs = ["tests/determinism_repeat.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "mixed_network",
+    srcs = ["tests/mixed_network.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:proptest",
+    ],
+)
+
+rust_test(
+    name = "mixed_network_smoke",
+    srcs = ["tests/mixed_network_smoke.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_differential"],
+)
+
+rust_test(
+    name = "plugin_go_in_rust",
+    srcs = ["tests/plugin_go_in_rust.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "plugin_rust_in_go",
+    srcs = ["tests/plugin_rust_in_go.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "plugin_wire_matrix",
+    srcs = ["tests/plugin_wire_matrix.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = ["//crates/ava-crypto:ava_crypto"],
+)
+
+rust_test(
+    name = "tls_handshake_repro",
+    srcs = ["tests/tls_handshake_repro.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_differential"],
+)
+
+rust_test(
+    name = "version_interop",
+    srcs = ["tests/version_interop.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_differential",
+        "//crates/ava-version:ava_version",
     ],
 )

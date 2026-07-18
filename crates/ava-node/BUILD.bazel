@@ -15,6 +15,7 @@ rust_library(
         "src/init/dispatchers.rs",
         "src/init/health.rs",
         "src/init/identity.rs",
+        "src/init/inbound_decode.rs",
         "src/init/message.rs",
         "src/init/metrics.rs",
         "src/init/mod.rs",
@@ -78,6 +79,7 @@ rust_test(
     crate = ":ava_node",
     deps = [
         "//crates/ava-types:ava_types",
+        "@crates//:bytes",
         "@crates//:parking_lot",
         "@crates//:tempfile",
     ],

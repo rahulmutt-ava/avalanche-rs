@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_library(
     name = "ava_avm",
@@ -15,6 +15,7 @@ rust_library(
         "src/fx/mod.rs",
         "src/fx/secp.rs",
         "src/fx_index.rs",
+        "src/genesis.rs",
         "src/jsonrpc.rs",
         "src/lib.rs",
         "src/mempool.rs",
@@ -35,6 +36,7 @@ rust_library(
         "src/state/mod.rs",
         "src/state/state.rs",
         "src/state/versions.rs",
+        "src/stop_vertex.rs",
         "src/txs/base_tx.rs",
         "src/txs/codec.rs",
         "src/txs/components.rs",
@@ -393,5 +395,114 @@ rust_test(
         "@crates//:serde_json",
         "@crates//:tokio",
         "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "clock_injection",
+    srcs = ["tests/clock_injection.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:serde_json",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "genesis_differential",
+    srcs = ["tests/genesis_differential.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/genesis/local.hex",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-types:ava_types",
+        "@crates//:hex",
+    ],
+)
+
+rust_test(
+    name = "genesis_init",
+    srcs = ["tests/genesis_init.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "genesis_parse",
+    srcs = ["tests/genesis_parse.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [":ava_avm"],
+)
+
+rust_test(
+    name = "golden_x_genesis_block",
+    srcs = ["tests/golden_x_genesis_block.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-snow:ava_snow",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "tx_utxos",
+    srcs = ["tests/tx_utxos.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+    ],
+)
+
+rust_binary(
+    name = "mempool_push_pop",
+    srcs = ["benches/mempool_push_pop.rs"],
+    compile_data = ["Cargo.toml"],
+    tags = ["bench"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_avm",
+        "//crates/ava-codec:ava_codec",
+        "//crates/ava-secp256k1fx:ava_secp256k1fx",
+        "//crates/ava-types:ava_types",
+        "@crates//:criterion",
     ],
 )

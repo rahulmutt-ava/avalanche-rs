@@ -32,6 +32,7 @@ rust_library(
         "src/precompile/registry.rs",
         "src/precompile/rewardmanager.rs",
         "src/precompile/warp.rs",
+        "src/receipts.rs",
         "src/rpc/admin.rs",
         "src/rpc/avax.rs",
         "src/rpc/eth.rs",
@@ -77,6 +78,7 @@ rust_library(
         "@crates//:thiserror",
         "@crates//:tokio",
         "@crates//:tokio-util",
+        "@crates//:tracing",
     ],
 )
 
@@ -297,6 +299,7 @@ rust_test(
     deps = [
         ":ava_evm",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
         "@crates//:proptest",
         "@crates//:ruint",
     ],
@@ -447,9 +450,11 @@ rust_test(
     visibility = ["//visibility:public"],
     deps = [
         ":ava_evm",
+        "//crates/ava-crypto:ava_crypto",
         "//crates/ava-database:ava_database",
         "//crates/ava-evm-reth:ava_evm_reth",
         "@crates//:hex",
+        "@crates//:parking_lot",
         "@crates//:serde_json",
         "@crates//:tempfile",
     ],
@@ -507,6 +512,7 @@ rust_test(
         "//crates/ava-avm:ava_avm",
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-database:ava_database",
+        "//crates/ava-evm-reth:ava_evm_reth",
         "//crates/ava-secp256k1fx:ava_secp256k1fx",
         "//crates/ava-types:ava_types",
         "@crates//:assert_matches",
@@ -677,6 +683,69 @@ rust_test(
         "//crates/ava-evm-reth:ava_evm_reth",
         "//crates/ava-types:ava_types",
         "//crates/ava-vm:ava_vm",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "pending_work_waiter",
+    srcs = ["tests/pending_work_waiter.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/cchain/genesis/local.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_evm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "tx_pipeline",
+    srcs = ["tests/tx_pipeline.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/cchain/genesis/local.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_evm",
+        "//crates/ava-crypto:ava_crypto",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "verify_gas_fields",
+    srcs = ["tests/verify_gas_fields.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/cchain/block_wire/live_local_block1.json",
+        "tests/vectors/cchain/genesis/local.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:serde_json",
         "@crates//:tempfile",
         "@crates//:tokio",
         "@crates//:tokio-util",

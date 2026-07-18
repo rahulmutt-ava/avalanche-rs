@@ -14,6 +14,7 @@ rust_library(
         "src/split.rs",
         "src/unparsed.rs",
         "src/validate.rs",
+        "src/validators.rs",
     ],
     compile_data = [
         "Cargo.toml",
@@ -76,6 +77,7 @@ rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":ava_genesis",
     deps = [
+        "//crates/ava-platformvm:ava_platformvm",
         "//crates/ava-types:ava_types",
         "@crates//:assert_matches",
     ],

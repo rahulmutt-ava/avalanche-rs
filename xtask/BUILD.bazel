@@ -1,12 +1,13 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 rust_binary(
     name = "xtask",
     srcs = [
+        "src/acceptance.rs",
+        "src/bench_guard.rs",
         "src/check_sae_lints.rs",
         "src/gen_flags.rs",
         "src/gen_genesis.rs",
-        "src/lint_determinism.rs",
         "src/main.rs",
         "src/porting.rs",
         "src/saevm_exit_gate.rs",
@@ -21,7 +22,62 @@ rust_binary(
     rustc_env = {"CARGO": "cargo"},
     visibility = ["//visibility:public"],
     deps = [
+        ":xtask_lib",
         "@crates//:anyhow",
         "@crates//:clap",
+        "@crates//:proc-macro2",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:syn",
+        "@crates//:toml",
+        "@crates//:walkdir",
     ],
+)
+
+rust_library(
+    name = "xtask_lib",
+    srcs = [
+        "src/lib.rs",
+        "src/lint_determinism.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    crate_name = "xtask",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:clap",
+        "@crates//:proc-macro2",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:syn",
+        "@crates//:toml",
+        "@crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "lint_determinism",
+    srcs = ["tests/lint_determinism.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":xtask_lib",
+        "@crates//:anyhow",
+        "@crates//:clap",
+        "@crates//:proc-macro2",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:sha2",
+        "@crates//:syn",
+        "@crates//:toml",
+        "@crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "xtask_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":xtask",
 )

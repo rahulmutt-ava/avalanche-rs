@@ -10,6 +10,7 @@ rust_library(
         "src/execute_step.rs",
         "src/executor.rs",
         "src/lib.rs",
+        "src/metrics.rs",
     ],
     compile_data = ["Cargo.toml"],
     visibility = ["//visibility:public"],
@@ -26,6 +27,7 @@ rust_library(
         "//crates/ava-vm:ava_vm",
         "@crates//:arc-swap",
         "@crates//:parking_lot",
+        "@crates//:prometheus",
         "@crates//:thiserror",
         "@crates//:tokio",
         "@crates//:tokio-util",
@@ -117,5 +119,26 @@ rust_test(
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "metrics",
+    srcs = ["tests/metrics.rs"],
+    compile_data = ["Cargo.toml"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_saevm_exec",
+        "//crates/ava-database:ava_database",
+        "//crates/ava-evm:ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-saevm/blocks:ava_saevm_blocks",
+        "//crates/ava-saevm/db:ava_saevm_db",
+        "//crates/ava-saevm/gastime:ava_saevm_gastime",
+        "//crates/ava-saevm/hook:ava_saevm_hook",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:prometheus",
+        "@crates//:tempfile",
+        "@crates//:tokio",
     ],
 )
