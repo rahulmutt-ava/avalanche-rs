@@ -1,8 +1,8 @@
 # avalanche-rs — Cargo workspace root.
 #
 # Bootstrapped in milestone M0 (see plan/M0-foundations.md, task M0.1). The
-# `ava-*` crates land tier-by-tier in later milestones; `crates/*` is globbed so
-# each new crate is picked up automatically.
+# `ava-*` crates land tier-by-tier in later milestones; members are explicit
+# literals (see the note on `members` below — no glob).
 #
 # NOTE: deeper dev-env (Nix, Bazel, cargo-deny, CI, scripts/run_task.sh / xtask,
 # the differential harness, and the extract-vectors maturation) is owned by
@@ -13,12 +13,51 @@ resolver = "3"
 # The SAE sub-workspace lives two levels deep at `crates/ava-saevm/<name>/`
 # (crate names `ava-saevm-<name>`) — Cargo does not support nested `[workspace]`
 # tables, so each sub-crate is a member of this root workspace (M7.1, specs/11
-# §3). `crates/*` would also match the bare `crates/ava-saevm` container
-# directory (which has no manifest — it only holds the shared proptest.toml +
-# tests/), so that container is excluded below; the sub-crates are listed as
-# explicit literal members, which always win over `exclude`.
+# §3). Members are EXPLICIT literals (no `crates/*` glob): the bare
+# `crates/ava-saevm` container has no manifest (it only holds the shared
+# proptest.toml + tests/), and while Cargo's `exclude` used to shield the glob
+# from it, rules_rust's crate_universe splicing drops `exclude` when it
+# synthesizes its temp workspace, so a glob member breaks `bazelisk mod tidy`
+# (cold-cache splice: "failed to load manifest for workspace member ...
+# crates/ava-saevm referenced via `crates/*`", found 2026-07-18). New crates
+# must be added here explicitly.
 members = [
-  "crates/*",
+  "crates/ava-api-macros",
+  "crates/ava-api",
+  "crates/ava-archivedb",
+  "crates/ava-avm",
+  "crates/ava-blockdb",
+  "crates/ava-chains",
+  "crates/ava-codec-derive",
+  "crates/ava-codec",
+  "crates/ava-config",
+  "crates/ava-crypto",
+  "crates/ava-database",
+  "crates/ava-engine",
+  "crates/ava-evm-reth",
+  "crates/ava-evm",
+  "crates/ava-genesis",
+  "crates/ava-indexer",
+  "crates/ava-logging",
+  "crates/ava-merkledb",
+  "crates/ava-message",
+  "crates/ava-network",
+  "crates/ava-node",
+  "crates/ava-platformvm",
+  "crates/ava-proposervm",
+  "crates/ava-secp256k1fx",
+  "crates/ava-simplex",
+  "crates/ava-snow",
+  "crates/ava-testvectors",
+  "crates/ava-types",
+  "crates/ava-utils",
+  "crates/ava-validators",
+  "crates/ava-version",
+  "crates/ava-vm-rpc",
+  "crates/ava-vm",
+  "crates/ava-wallet",
+  "crates/ava-warp",
+  "crates/avalanchers",
   "crates/ava-saevm/params",
   "crates/ava-saevm/intmath",
   "crates/ava-saevm/cmputils",
@@ -42,7 +81,6 @@ members = [
   "tests/load",
   "tests/upgrade",
 ]
-exclude = [ "crates/ava-saevm" ]
 
 [workspace.package]
 version = "0.1.0"
