@@ -168,16 +168,72 @@ pub fn gas_limit(
             AvaFeeState::Window { .. } => Err(Error::NilBaseFee),
         };
     }
-    // coreth `params/avalanche_params.go`: ApricotPhase1GasLimit = 8_000_000,
-    // CortinaGasLimit = 15_000_000.
-    const APRICOT_PHASE1_GAS_LIMIT: u64 = 8_000_000;
-    const CORTINA_GAS_LIMIT: u64 = 15_000_000;
     let default_limit = if phase >= AvaPhase::Cortina {
         CORTINA_GAS_LIMIT
     } else {
         APRICOT_PHASE1_GAS_LIMIT
     };
     Ok(ctx.gas_limit_hint.unwrap_or(default_limit))
+}
+
+/// coreth `params/avalanche_params.go` — static pre-Fortuna gas limits.
+pub const APRICOT_PHASE1_GAS_LIMIT: u64 = 8_000_000;
+pub const CORTINA_GAS_LIMIT: u64 = 15_000_000;
+/// coreth `plugin/evm/upgrade/ap0/params.go:27-28` — the pre-AP1 launch range.
+pub const AP0_MIN_GAS_LIMIT: u64 = 5_000;
+pub const AP0_MAX_GAS_LIMIT: u64 = 0x7fff_ffff_ffff_ffff;
+
+/// coreth `customheader/gas_limit.go:101-145` — `VerifyGasLimit`.
+///
+/// The verify-side complement of [`gas_limit`]: recomputes the expected gas
+/// limit from the parent and equality-checks the header's claim (range-checks
+/// pre-AP1). At Fortuna+ the expectation is the ACP-176 `MaxCapacity()` off the
+/// time-advanced pre-block state (`gas_limit.go:107-120`).
+///
+/// # Errors
+/// [`Error::GasLimitMismatch`] / [`Error::GasLimitOutOfRange`] on a wrong
+/// claim; propagates [`Error::InvalidFeeState`] from the fee-state recompute.
+pub fn verify_gas_limit(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    let phase = spec.fork_at(header.time);
+    if phase >= AvaPhase::Fortuna {
+        // gas_limit.go:107-120
+        let state = fee_state_before_block(spec, parent, header_time_ms(header))?;
+        let want = state.max_capacity().0;
+        if header.gas_limit != want {
+            return Err(Error::GasLimitMismatch {
+                have: header.gas_limit,
+                want,
+            });
+        }
+    } else if phase >= AvaPhase::Cortina {
+        // gas_limit.go:121-128
+        if header.gas_limit != CORTINA_GAS_LIMIT {
+            return Err(Error::GasLimitMismatch {
+                have: header.gas_limit,
+                want: CORTINA_GAS_LIMIT,
+            });
+        }
+    } else if phase >= AvaPhase::ApricotPhase1 {
+        // gas_limit.go:129-136
+        if header.gas_limit != APRICOT_PHASE1_GAS_LIMIT {
+            return Err(Error::GasLimitMismatch {
+                have: header.gas_limit,
+                want: APRICOT_PHASE1_GAS_LIMIT,
+            });
+        }
+    } else if header.gas_limit < AP0_MIN_GAS_LIMIT || header.gas_limit > AP0_MAX_GAS_LIMIT {
+        // gas_limit.go:137-144
+        return Err(Error::GasLimitOutOfRange {
+            have: header.gas_limit,
+            min: AP0_MIN_GAS_LIMIT,
+            max: AP0_MAX_GAS_LIMIT,
+        });
+    }
+    Ok(())
 }
 
 // ─── ACP-176 fee-state extra prefix + parent-fee-state plumbing (spec 21 §5) ──

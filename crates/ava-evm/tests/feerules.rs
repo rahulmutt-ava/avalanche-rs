@@ -8,11 +8,16 @@
 //! file's `_provenance` field. This test asserts the Rust fee math matches them
 //! bit-for-bit, plus property tests for the saturating window invariants.
 
+use ava_evm::block::AvaHeader;
+use ava_evm::chainspec::{AvaChainSpec, CChainGenesis, NetworkUpgrades};
+use ava_evm::feerules;
 use ava_evm::feerules::blockgas::{
     BLOCK_GAS_COST_STEP_AP4, BLOCK_GAS_COST_STEP_AP5, MAX_BLOCK_GAS_COST, ap4_block_gas_cost,
     block_gas_cost,
 };
 use ava_evm::feerules::window::{BaseFeeParams, Window, base_fee_from_window};
+use ava_evm_reth::{Bytes, Chain};
+use ava_types::constants::LOCAL_ID;
 use proptest::prelude::*;
 use ruint::aliases::U256;
 use serde_json::Value;
@@ -217,5 +222,181 @@ fn fee_state_after_block_matches_live_go_block_extra() {
         expected,
         "coreth feeStateAfterBlock parity: recomputed ACP-176 state must equal the \
          live Go block's extra prefix (Go computed this via customheader.ExtraPrefix)"
+    );
+}
+
+// ─── verify_gas_limit: per-fork VerifyGasLimit arms (M9.15 task 2) ────────────
+
+/// A chain spec with every fork (including Fortuna+Granite) active at genesis —
+/// the local-network genesis, mirroring `fee_schedule.rs::local_all_active_spec()`.
+fn local_all_active_spec() -> AvaChainSpec {
+    let genesis = CChainGenesis::parse(include_str!("vectors/cchain/genesis/local.json"))
+        .expect("parse local genesis");
+    AvaChainSpec::c_chain(LOCAL_ID, Chain::from_id(genesis.chain_id()))
+}
+
+/// A schedule with each pre-Fortuna fork at a distinct activation timestamp, so
+/// a single spec can select any pre-Fortuna arm by varying `header.time` —
+/// mirrors `fee_schedule.rs::staged_schedule()`.
+fn phase_staggered_spec() -> AvaChainSpec {
+    AvaChainSpec::from_parts(
+        NetworkUpgrades {
+            apricot_phase_1: 1_000,
+            apricot_phase_2: 2_000,
+            apricot_phase_3: 3_000,
+            apricot_phase_4: 4_000,
+            apricot_phase_5: 5_000,
+            apricot_phase_pre_6: 6_000,
+            apricot_phase_6: 7_000,
+            apricot_phase_post_6: 8_000,
+            banff: 9_000,
+            cortina: 10_000,
+            durango: 11_000,
+            etna: 12_000,
+            fortuna: 13_000,
+            granite: 14_000,
+            helicon: u64::MAX,
+        },
+        Chain::from_id(43_114),
+        false,
+    )
+}
+
+/// The 24-byte ACP-176 fee-state extra prefix: capacity(8) | excess(8) |
+/// target_excess(8), all big-endian.
+fn acp176_extra(capacity: u64, excess: u64, target_excess: u64) -> Bytes {
+    let mut e = Vec::with_capacity(24);
+    e.extend_from_slice(&capacity.to_be_bytes());
+    e.extend_from_slice(&excess.to_be_bytes());
+    e.extend_from_slice(&target_excess.to_be_bytes());
+    e.into()
+}
+
+/// coreth `customheader/gas_limit.go:101-145` — `VerifyGasLimit` per-fork arms.
+#[test]
+fn verify_gas_limit_fortuna_equality() {
+    // `local_all_active_spec`'s "genesis" is the local network's real
+    // `InitiallyActiveTime` (2020-12-05 05:00:00 UTC = 1_607_144_400, spec 10
+    // §7.4), not unix-epoch 0 — see `fee_schedule.rs`'s identical convention.
+    const GENESIS: u64 = 1_607_144_400;
+    let cs = local_all_active_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: GENESIS,
+        extra: acp176_extra(2_000_000, 0, 1_500_000),
+        ..AvaHeader::default()
+    };
+    let want = feerules::fee_state_before_block(&cs, &parent, (GENESIS + 2) * 1000)
+        .expect("pre-block state")
+        .max_capacity()
+        .0;
+    let ok = AvaHeader {
+        number: 2,
+        time: GENESIS + 2,
+        gas_limit: want,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &ok).expect("exact MaxCapacity accepted");
+
+    let bad = AvaHeader {
+        gas_limit: want + 1,
+        ..ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
+    assert!(
+        err.to_string().contains("invalid gas limit"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:101-145` — the Cortina static-limit arm.
+#[test]
+fn verify_gas_limit_cortina_is_15m() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 10_000,
+        ..AvaHeader::default()
+    };
+    let ok = AvaHeader {
+        number: 2,
+        time: 10_500, // Cortina-active, pre-Durango.
+        gas_limit: 15_000_000,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &ok).expect("exact CortinaGasLimit accepted");
+
+    let bad = AvaHeader {
+        gas_limit: 15_000_001,
+        ..ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
+    assert!(
+        err.to_string().contains("invalid gas limit"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:101-145` — the ApricotPhase1 static-limit
+/// arm.
+#[test]
+fn verify_gas_limit_ap1_is_8m() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 1_000,
+        ..AvaHeader::default()
+    };
+    let ok = AvaHeader {
+        number: 2,
+        time: 1_500, // ApricotPhase1-active, pre-ApricotPhase2.
+        gas_limit: 8_000_000,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &ok).expect("exact ApricotPhase1GasLimit accepted");
+
+    let bad = AvaHeader {
+        gas_limit: 8_000_001,
+        ..ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("off-by-one rejected");
+    assert!(
+        err.to_string().contains("invalid gas limit"),
+        "sentinel parity: {err}"
+    );
+}
+
+/// coreth `customheader/gas_limit.go:101-145` / `plugin/evm/upgrade/ap0/params.go:27-28`
+/// — the pre-AP1 `[MinGasLimit, MaxGasLimit]` range arm.
+#[test]
+fn verify_gas_limit_ap0_range() {
+    let cs = phase_staggered_spec();
+    let parent = AvaHeader {
+        number: 1,
+        time: 100,
+        ..AvaHeader::default()
+    };
+    let min_ok = AvaHeader {
+        number: 2,
+        time: 500, // pre-ApricotPhase1.
+        gas_limit: 5_000,
+        ..AvaHeader::default()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &min_ok).expect("AP0 min bound accepted");
+
+    let max_ok = AvaHeader {
+        gas_limit: 0x7fff_ffff_ffff_ffff,
+        ..min_ok.clone()
+    };
+    feerules::verify_gas_limit(&cs, &parent, &max_ok).expect("AP0 max bound accepted");
+
+    let bad = AvaHeader {
+        gas_limit: 4_999,
+        ..min_ok
+    };
+    let err = feerules::verify_gas_limit(&cs, &parent, &bad).expect_err("below AP0 min rejected");
+    assert!(
+        err.to_string().contains("invalid gas limit"),
+        "sentinel parity: {err}"
     );
 }

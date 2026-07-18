@@ -55,6 +55,16 @@ pub enum Error {
     #[error("invalid fee state: {0}")]
     InvalidFeeState(String),
 
+    /// coreth `customheader/gas_limit.go:24` `errInvalidGasLimit` — equality arms
+    /// ("%w: have %d, want %d" / "%w: expected to be %d in ..., but found %d").
+    #[error("invalid gas limit: have {have}, want {want}")]
+    GasLimitMismatch { have: u64, want: u64 },
+
+    /// coreth `gas_limit.go:138-144` — the pre-AP1 range arm
+    /// ("%w: %d not in range [%d, %d]").
+    #[error("invalid gas limit: {have} not in range [{min}, {max}]")]
+    GasLimitOutOfRange { have: u64, min: u64, max: u64 },
+
     /// `ErrConflictingAtomicInputs` — two atomic txs (in a block or across its
     /// ancestry / shared memory) consume the same source UTXO.
     #[error("conflicting atomic inputs")]
