@@ -636,6 +636,7 @@ rust_test(
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-database:ava_database",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-snow:ava_snow",
         "//crates/ava-types:ava_types",
         "//crates/ava-vm:ava_vm",
         "@crates//:hex",
@@ -742,6 +743,29 @@ rust_test(
     deps = [
         ":ava_evm",
         "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:hex",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+    ],
+)
+
+rust_test(
+    name = "semantic_verify",
+    srcs = ["tests/semantic_verify.rs"],
+    compile_data = [
+        "Cargo.toml",
+        "tests/vectors/cchain/block_wire/live_local_block1.json",
+        "tests/vectors/cchain/genesis/local.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_evm",
+        "//crates/ava-evm-reth:ava_evm_reth",
+        "//crates/ava-snow:ava_snow",
         "//crates/ava-types:ava_types",
         "//crates/ava-vm:ava_vm",
         "@crates//:hex",
