@@ -56,6 +56,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
@@ -86,7 +87,7 @@ use crate::builder::BlockBuilderDriver;
 use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, CChainGenesis};
 use crate::error::Error;
-use crate::evmconfig::{AvaEvmConfig, AvaNextBlockCtx};
+use crate::evmconfig::{AvaEvmConfig, AvaExecCtx, AvaNextBlockCtx};
 use crate::mempool::EvmMempool;
 use crate::receipts::AcceptedTxIndex;
 use crate::rpc::admin::AdminRpc;
@@ -159,9 +160,26 @@ impl VmBlock for VerifiedEvmBlock {
         // checks — resolved from the SAME set `parent_state_root` covers, so both
         // reads agree on which parent this block verifies against.
         let parent_header = self.shared.parent_header(self.parent)?;
+        // Live reads, mirroring Go's b.vm.clock.Time() / b.vm.bootstrapped.Get()
+        // at verify time (wrapped_block.go:359,376).
+        let now_ms = {
+            let clock = Arc::clone(&self.shared.clock.lock());
+            clock
+                .now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        };
+        let bootstrapped = self.shared.bootstrapped.load(Ordering::Acquire);
         let precommit = self
             .block
-            .verify(&self.ctx, parent_root, &parent_header)
+            .verify_with_predicates(
+                &self.ctx,
+                parent_root,
+                &parent_header,
+                &AvaExecCtx::default(),
+                now_ms,
+                bootstrapped,
+            )
             .map_err(ava_snow::Error::from)?;
         // Promote into the processing-block tree, recording the pre-commit root
         // so accept/reject can commit/discard exactly it.
@@ -258,6 +276,17 @@ struct Shared {
     /// txs the just-accepted block included, without threading the handle
     /// through every block.
     evm_mempool: Arc<parking_lot::Mutex<EvmMempool>>,
+    /// Injectable wall clock (specs/24 hazard #5) — the single live-read
+    /// source for build_block's timestamp AND verify's `VerifyTime` future
+    /// bound (Go `vm.clock`). Behind a mutex so the builder-style
+    /// [`EvmVm::with_clock`] can swap it after `Shared` is assembled; reads
+    /// clone the `Arc` (cheap) and never hold the lock across work.
+    clock: parking_lot::Mutex<Arc<dyn Clock>>,
+    /// Go `vm.bootstrapped` (`utils.Atomic[bool]`): true once `set_state`
+    /// enters `NormalOp`. Read live at verify time to gate
+    /// `verifyIntrinsicGas` (wrapped_block.go:376) — a wrap-time copy would
+    /// be stale for blocks re-verified after bootstrap completes.
+    bootstrapped: AtomicBool,
 }
 
 impl Shared {
@@ -357,11 +386,6 @@ pub struct EvmVm {
     ctx: Option<Arc<ChainContext>>,
     /// The current engine phase (Go `vm.bootstrapped`).
     engine_state: EngineState,
-    /// Injectable wall clock — the ONLY source of build-time wall-clock reads
-    /// (specs/24 hazard #5). `build_block` stamps the next-block header time from
-    /// `self.clock.unix()`; defaults to [`RealClock`], overridable in tests via
-    /// [`EvmVm::with_clock`].
-    clock: Arc<dyn Clock>,
 }
 
 impl EvmVm {
@@ -403,6 +427,8 @@ impl EvmVm {
             verified: DashMap::new(),
             last_accepted: ArcSwap::from_pointee(tip),
             evm_mempool: Arc::clone(&evm_mempool),
+            clock: parking_lot::Mutex::new(Arc::new(RealClock)),
+            bootstrapped: AtomicBool::new(false),
         });
         let txpool = Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
             4096,
@@ -420,7 +446,6 @@ impl EvmVm {
             evm_mempool,
             ctx: None,
             engine_state: EngineState::Initializing,
-            clock: Arc::new(RealClock),
         }
     }
 
@@ -524,8 +549,8 @@ impl EvmVm {
     /// test seam mirroring `ava-platformvm`'s `with_clock`; production keeps the
     /// [`RealClock`] seeded by [`EvmVm::new`].
     #[must_use]
-    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
-        self.clock = clock;
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
+        *self.shared.clock.lock() = clock;
         self
     }
 
@@ -765,6 +790,11 @@ impl Vm for EvmVm {
 
     async fn set_state(&mut self, _token: &CancellationToken, state: EngineState) -> VmResult<()> {
         self.engine_state = state;
+        // Go coreth vm.go SetState → bootstrapped.Set(state == snow.NormalOp):
+        // onNormalOperationsStarted flips true; re-entering bootstrap flips false.
+        self.shared
+            .bootstrapped
+            .store(matches!(state, EngineState::NormalOp), Ordering::Release);
         Ok(())
     }
 
@@ -915,7 +945,12 @@ impl ChainVm for EvmVm {
         // `feeStateBeforeBlock`/`feeWindow` initial state) so the child base fee is
         // derived from the actual parent state, not a default. The atomic gas
         // budget is the post-AP5 limit the mempool packs against.
-        let now_secs = self.clock.unix().max(parent_header.time.saturating_add(1));
+        let now_secs = self
+            .shared
+            .clock
+            .lock()
+            .unix()
+            .max(parent_header.time.saturating_add(1));
         let parent_fee_state =
             crate::feerules::parent_fee_state_of(self.evm_config.chain_spec(), &parent_header)
                 .map_err(VmError::from)?;

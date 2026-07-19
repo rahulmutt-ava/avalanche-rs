@@ -681,7 +681,21 @@ impl EvmBlock {
         parent_state_root: B256,
         parent: &AvaHeader,
     ) -> Result<B256> {
-        self.verify_with_predicates(ctx, parent_state_root, parent, &AvaExecCtx::default())
+        // Bootstrap-shape verify: `now` pinned to the block's own timestamp
+        // (the future bound is vacuous for canonically-accepted history —
+        // the same effective behavior as Go verifying old blocks against a
+        // real clock) and bootstrapped=false (intrinsic-gas + predicate
+        // checks deferred, wrapped_block.go:372-386). The production path
+        // (`VerifiedEvmBlock::verify`) supplies live values instead.
+        let now_ms = crate::feerules::header_time_ms(self.header());
+        self.verify_with_predicates(
+            ctx,
+            parent_state_root,
+            parent,
+            &AvaExecCtx::default(),
+            now_ms,
+            false,
+        )
     }
 
     /// [`EvmBlock::verify`] with an explicit per-block precompile execution
@@ -921,6 +935,8 @@ impl EvmBlock {
         parent_state_root: B256,
         parent: &AvaHeader,
         exec_ctx: &AvaExecCtx,
+        now_ms: u64,
+        bootstrapped: bool,
     ) -> Result<B256> {
         // Structural syntacticVerify port — runs before any execution work
         // (coreth fail-closes these in `wrappedBlock.syntacticVerify` before
@@ -939,6 +955,25 @@ impl EvmBlock {
         // wrong fee/gas fields that the verify path would accept — the fail-open
         // this closes.
         crate::feerules::verify_header_gas_fields(ctx.chain_spec(), parent, self.header())?;
+
+        // ── coreth `wrappedBlock.semanticVerify` (wrapped_block.go:335-391),
+        // in Go's call order. VerifyTargetExponent / VerifyMinPriceExponent /
+        // VerifySettled (wrapped_block.go:350-366) are structurally covered:
+        // `AvaHeader::decode_rlp` fail-closes on the SAE-only trailing tail
+        // fields (block.rs:250-252), so a violating block never parses — Go
+        // rejects the same block at verify; same verdict, different stage.
+        // The errIsHeliconBlock guard (wrapped_block.go:368) is n/a — Helicon
+        // is unscheduled and `AvaPhase` carries no Helicon variant (see the
+        // verify_extra_prefix Helicon callout).
+        // wrapped_block.go:345.
+        crate::feerules::verify_min_delay_excess(ctx.chain_spec(), parent, self.header())?;
+        // wrapped_block.go:359.
+        crate::feerules::verify_time(ctx.chain_spec(), parent, self.header(), now_ms)?;
+        // wrapped_block.go:372-379 — bootstrapped-gated (during bootstrap the
+        // block is canonically accepted; required indices may be absent).
+        // Task 5 inserts verify_intrinsic_gas here.
+        let _ = bootstrapped; // consumed by Task 5's insertion
+        // Task 6 inserts atomic verify_ext_data_gas_used here.
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
