@@ -14,8 +14,8 @@ bootstrapper) are listed as `n/a` with reasons.
 
 Legend: ⬜ not ported · 🟡 partial · ✅ ported · n/a not applicable
 
-**Summary (shipped scope):** 103 ported ✅ / 9 partial 🟡 / 0 not-ported ⬜ /
-38 n/a · 0 wip rows.
+**Summary (shipped scope):** 108 ported ✅ / 11 partial 🟡 / 0 not-ported ⬜ /
+39 n/a · 0 wip rows.
 
 Shipped scope covers: block wire codec / chainspec / fee rules / lifecycle
 (verify/accept/reject) / atomic tx codec / atomic mempool / atomic trie /
@@ -154,6 +154,30 @@ guard proving the Byzantine-proposer fail-open the whole-branch review flagged
 | `VerifyGasLimit` (`customheader/gas_limit.go:101-160`, incl. the pre-AP1 bound-divisor arm) | ✅ ported | `feerules::verify_gas_limit` — `feerules.rs::{verify_gas_limit_fortuna_equality, verify_gas_limit_cortina_is_15m, verify_gas_limit_ap1_is_8m, verify_gas_limit_ap0_range, verify_gas_limit_ap0_bound_divisor}` (the bound-divisor arm was missed by the original design pass and added mid-task once the real Go span was read) |
 | `VerifyExtraPrefix` (`customheader/extra.go:62-111`) | ✅ ported | `feerules::verify_extra_prefix` — `feerules.rs::{verify_extra_prefix_fortuna_honest_and_tampered, verify_extra_prefix_target_excess_clamp, verify_extra_prefix_window_arm, verify_extra_prefix_fortuna_short_extra_is_invalid_fee_state}` (Fortuna full-struct equality incl. the claimed-target-excess clamp trick, the AP3 window-prefix byte match, tampered-bytes rejection) |
 | `BaseFee` time-advance (`customheader/base_fee.go:27-33`) | ✅ ported | `feerules::base_fee`'s signature changed to take the parent as `&AvaHeader` (not a reth `Header`, which carries no `time_milliseconds`) so the ACP-176 arm can perform the `feeStateBeforeBlock` time-advance; `feerules.rs::acp176_base_fee_advance_matches_go_vectors` (30-row recorded Go-oracle corpus incl. nonzero-excess/sustained-load rows) is the false-reject regression guard; builder, RPC (`eth_gasPrice`), and verifier now share this one function so they cannot drift apart |
+
+---
+
+## `wrappedBlock.semanticVerify` family (C-Chain semantic-verify port)
+
+coreth's `semanticVerify` (`plugin/evm/wrapped_block.go:335-391`) runs the
+parent-dependent checks + the atomic extension's `SemanticVerify`
+(`atomic/vm/block_extension.go:142-190`) in Go's call order. The rows below
+track the Rust port of that stage as wired into
+`EvmBlock::verify_with_predicates` (`block.rs:963`). The SAE-only header tail
+fields Go rejects at `semanticVerify` (`VerifyTargetExponent` /
+`VerifyMinPriceExponent` / `VerifySettled`) are covered by a **parse-stage**
+fail-close equivalence instead — the same verdict, one stage earlier.
+
+| Go check | Status | Rust counterpart / note |
+|---|---|---|
+| `VerifyTime` (`customheader/time.go`) | ✅ ported | `feerules::verify_time` (called from `block.rs::verify_with_predicates`); `semantic_verify.rs::{mismatched_time_milliseconds_is_rejected, strip_time_milliseconds_is_rejected, far_future_block_is_rejected, honest_block_still_verifies}` |
+| `VerifyMinDelayExcess` (`customheader/min_delay_excess.go:45`) | ✅ ported | `feerules::verify_min_delay_excess`; `semantic_verify.rs::wrong_min_delay_excess_is_rejected` |
+| `VerifyGasUsed` / `GasCapacity` (`customheader/gas_limit.go:61,164`) | ✅ ported | `feerules::{verify_gas_used, gas_capacity}` (in `EvmBlock::verify_intrinsic_gas`, bootstrapped-gated — matching Go's `verifyIntrinsicGas` placement) |
+| `verifyIntrinsicGas` (`wrapped_block.go:287`, bootstrapped-gated) | ✅ ported | `EvmBlock::verify_intrinsic_gas` (bootstrapped-gated, `block.rs:1005`); `semantic_verify.rs::{understated_gas_used_is_rejected_when_bootstrapped, understated_gas_used_skipped_while_bootstrapping}` |
+| `blockExtension.SemanticVerify` `ExtDataGasUsed` (`block_extension.go:142`) | 🟡 partial | `atomic::verify::verify_ext_data_gas_used` + `Tx::gas_used`; unit + golden-constant coverage (`atomic::verify::verify_ext_data_gas_used_arms`, `cchain_atomic_tx::constants_match_go_vectors`) + a HEADER-level cross-binary oracle leg (`proposer_candidates.rs::oversized_ext_data_gas_used`, Go `invalid extra data gas used` / Rust `fee overflow`). Oracle leg for the ATOMIC export-tx value-equality (`inflated_ext_data_gas_used`) deferred: the Go judge (`vmtest.SetupTestVM`) takes `CChainID`/`XChainID`/`AVAXAssetID` from `ids.GenerateTestID()` (process-counter-derived), so an offline Rust-built export tx cannot match them and coreth's `ExportTx.SemanticVerify` rejects on a chain/asset mismatch before `ExtDataGasUsed` — a fixture reason unrelated to this branch (Task 8 Step 6 fallback; see the `// DEFERRED:` note in `proposer_candidates.rs`). Lift by injecting fixed chain/asset IDs into the Go judge's snow context. |
+| `VerifyTargetExponent` / `VerifyMinPriceExponent` / `VerifySettled` (`wrapped_block.go:350-366`) | n/a | parse fail-close equivalence — `AvaHeader::decode_rlp` rejects the six SAE-only header tail fields at the trailing-bytes check (`block.rs:250-252`); pinned by `block::tests::trailing_sae_tail_field_fails_decode`. Go rejects the same bytes at `semanticVerify`; same verdict, different stage |
+| `verifyPredicates` (`wrapped_block.go:376-386`, bootstrapped-gated) | 🟡 partial | the warp predicate pass exists (`precompile/warp.rs::build_block_predicates`) but is NOT invoked on the prod verify path — `VerifiedEvmBlock::verify` (`vm.rs:175-181`) passes `AvaExecCtx::default()` (empty predicates) and no async predicate pass runs before it (grep finds no production caller of `build_block_predicates`). Pre-existing M6.31 deferral. Follow-up: when the pass is wired on the verify path, gate it on the same `bootstrapped` flag Go uses (and this branch threads through `verify_with_predicates`) |
+| `verifyUTXOsPresent` (`block_extension.go:179-190`, bootstrapped-gated) | ✅ ported | `atomic::verify::verify_utxos_present` — wired into `block.rs::verify_with_predicates` under the `bootstrapped` flag + a wired atomic backend; skips bonus blocks (`is_bonus_block`) and rejects an absent import UTXO with `Error::MissingUtxos` (coreth `ErrMissingUTXOs`). `atomic::verify::{verify_utxos_present_import, verify_utxos_present_skips_bonus_block}`. NOTE: this closed a fail-open — no shared-memory presence check existed on the verify path before (only `SharedMemory::apply` at accept). See the design-spec AS-BUILT note re: the broader NoopPreHook verify-path caveat. Independently of that caveat, the check is additionally unreachable end-to-end today because `EvmBlockContext::with_atomic_backend` has no production caller (grep confirms the only match outside its own definition/doc-comments in `block.rs` is the test suite), so `ctx.atomic_backend()` is always `None` on the prod verify path |
 
 ---
 

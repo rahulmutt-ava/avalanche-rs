@@ -16,9 +16,12 @@
 //!    already the Go-oracle genesis fixture `cancun_clamp.rs` boots — LOCAL_ID's
 //!    schedule activates every fork through Granite at `InitiallyActiveTime`,
 //!    matching Go's `upgradetest.Granite`), carrying one signed EVM tx — plus
-//!    ten adversarial mutations of it (decode → mutate → re-encode, the
-//!    `cancun_clamp.rs:57-96` pattern). Writes `<name>.rlp.hex` + a copy of the
-//!    genesis JSON into the output directory.
+//!    sixteen adversarial mutations of it (Task 6 added five `verifyHeaderGasFields`
+//!    legs; Task 8 added six `semanticVerify`-family legs). Most are the
+//!    decode → mutate → re-encode `cancun_clamp.rs:57-96` pattern; the restamp
+//!    mutants recompute the ACP-176 prefix, and `trailing_sae_tail_field` is
+//!    raw-byte surgery. Writes `<name>.rlp.hex` + a copy of the genesis JSON
+//!    into the output directory.
 //! 2. The companion Go judge (`tests/differential/go-oracle/
 //!    rust_built_block_verdict_test.go`, dropped into `~/avalanchego/graft/
 //!    coreth/plugin/evm/` to run) boots a real coreth test VM over the SAME
@@ -57,7 +60,9 @@ use std::sync::Arc;
 use ava_crypto::secp256k1::PrivateKey;
 use ava_database::{DynDatabase, MemDb};
 use ava_evm::atomic::mempool::AtomicMempool;
-use ava_evm::block::{AvaBlockParts, EvmBlockContext, assemble_ava_block, decode_ava_evm_block};
+use ava_evm::block::{
+    AvaBlockParts, AvaHeader, EvmBlockContext, assemble_ava_block, decode_ava_evm_block,
+};
 use ava_evm::builder::BlockBuilderDriver;
 use ava_evm::canonical::CanonicalStore;
 use ava_evm::chainspec::{AvaChainSpec, CChainGenesis};
@@ -66,12 +71,14 @@ use ava_evm::feerules::parent_fee_state_of;
 use ava_evm::state::FirewoodStateProvider;
 use ava_evm::vm::EvmVm;
 use ava_evm_reth::{
-    Address, B256, Chain, EvmSignature, SignableTransaction, SignerRecoverable, TransactionSigned,
-    TxKind, TxLegacy, U256,
+    Address, B256, Chain, EvmSignature, RlpEncodable as _, RlpListHeader, SignableTransaction,
+    SignerRecoverable, TransactionSigned, TxKind, TxLegacy, U256,
 };
+use ava_snow::EngineState;
 use ava_types::constants::LOCAL_ID;
 use ava_types::id::Id;
 use ava_vm::block::ChainVm;
+use ava_vm::vm::Vm;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -114,7 +121,34 @@ type Mutation = (&'static str, fn(&mut AvaBlockParts));
 /// exactly one fee/gas equality check, leaving every earlier-checked field
 /// untouched so the first rejection is the intended one (Go's check order:
 /// GasLimit -> ExtraPrefix -> BaseFee -> BlockGasCost -> ExtData).
-const MUTATIONS: [Mutation; 10] = [
+///
+/// Task 8 adds two more `fn`-based mutants targeting the `semanticVerify`
+/// family ported in the C-Chain semantic-verify branch (coreth
+/// `wrapped_block.go:335-391` — `VerifyMinDelayExcess` / `VerifyTime`):
+/// `missing_time_milliseconds` and `wrong_min_delay_excess`. Neither shifts the
+/// header's timestamp, so neither disturbs the ACP-176 fee-state recompute —
+/// they need no restamp and remain plain `AvaBlockParts` edits.
+///
+/// The other four Task-8 mutants CANNOT be plain edits and are emitted directly
+/// by [`emit_proposer_candidates`]:
+///
+/// * `mismatched_time_milliseconds` / `far_future_time` — shifting the time
+///   fields DOES change the fee-state recompute (contrary to the brief's
+///   "restamp-free" prediction: the genesis fee state's `excess` is at its
+///   attractor `0`, but its `capacity` is NOT saturated at block 1 — it grows
+///   with elapsed time, so a later timestamp recomputes a larger capacity than
+///   the honest `extra` prefix encodes). Because Rust runs
+///   `verify_header_gas_fields` BEFORE `verify_time` (`block.rs:988,1002`),
+///   without a restamp Rust would reject these at `IncorrectFeeState` before
+///   ever reaching `VerifyTime`, whereas Go — which runs `VerifyTime` inside
+///   `semanticVerify`, BEFORE its `verifyHeaderGasFields` — reaches the time
+///   check. So these two are RESTAMPED (extra prefix recomputed at the mutated
+///   time) to stay self-consistent for every other check and isolate
+///   `VerifyTime` on BOTH sides — the same Byzantine-proposer shape
+///   `understated_gas_used` uses.
+/// * `understated_gas_used` (restamp) and `trailing_sae_tail_field` (raw-byte
+///   splice) — as before.
+const MUTATIONS: [Mutation; 12] = [
     ("zero_difficulty", |p| p.header.difficulty = U256::ZERO),
     ("missing_cancun_tail", |p| {
         p.header.parent_beacon_root = None;
@@ -150,6 +184,31 @@ const MUTATIONS: [Mutation; 10] = [
     }),
     ("oversized_ext_data_gas_used", |p| {
         p.header.ext_data_gas_used = Some(U256::from(u64::MAX) + U256::from(1))
+    }),
+    // ── semanticVerify family (wrapped_block.go:335-391), Task 8. All four are
+    // restamp-free (see the MUTATIONS doc above): the genesis fee state is at
+    // its steady-state attractor, so shifting time fields leaves every fee/gas
+    // recompute unchanged and isolates the one intended check.
+    //
+    // `missing_time_milliseconds`: forcing `None` while `min_delay_excess`
+    // (t8) is present cannot omit the t7 slot — the encoder writes the nil
+    // scalar `0x80`, which decodes back as `Some(0)` on BOTH sides (Go's
+    // `rlp:"optional"` `*uint64` decoder does the same). The header then reads
+    // as timestamped at the Unix epoch, which is EARLIER than the parent
+    // genesis timestamp, so `verify_header_gas_fields`'s `feeStateBeforeBlock`
+    // monotonic-time guard rejects it ("invalid fee state") one stage before
+    // `VerifyTime`'s own `ErrTimeMillisecondsRequired` could fire — the same
+    // reachability result Task 4 recorded (`ErrTimeMillisecondsRequired` is
+    // only reachable via a direct `verify_time` call, covered by the feerules
+    // unit test). Recorded honestly rather than forced to the brief's table.
+    ("missing_time_milliseconds", |p| {
+        p.header.time_milliseconds = None
+    }),
+    // `wrong_min_delay_excess`: an unreachable claim (min_delay_excess.go:73-79).
+    // A bare header-tail field, not a fee-prefix input, so no other expectation
+    // shifts — VerifyMinDelayExcess is the first rejection.
+    ("wrong_min_delay_excess", |p| {
+        p.header.min_delay_excess = Some(u64::MAX)
     }),
 ];
 
@@ -207,7 +266,37 @@ const MUTATIONS: [Mutation; 10] = [
 /// of the SAME malformed field, at the earliest check each implementation
 /// happens to run it through — not a struct-equality mismatch like
 /// `tampered_fee_state_prefix`'s `IncorrectFeeState` / "incorrect fee state".
-const REJECTION_CLASSES: [(&str, &str, &str); 10] = [
+/// Task 8 appends the six `semanticVerify`-family classes. Five reject at the
+/// full `parse_block → verify` entry like the rest; `understated_gas_used` needs
+/// the verifying node BOOTSTRAPPED on both sides (Go's `verifyIntrinsicGas` is
+/// `bootstrapped`-gated — `wrapped_block.go:375` — and the Go judge boots via
+/// `vmtest.SetupTestVM`, which sets `snow.NormalOp`; Rust mirrors it by flipping
+/// the VM to `NormalOp` before verifying), and `trailing_sae_tail_field` rejects
+/// one stage earlier on the Rust side, at PARSE (`decode_rlp`'s trailing-bytes
+/// fail-close) rather than at verify. Which Rust entry each candidate is driven
+/// through is selected by [`rust_stage_for`]; the Go substrings below are the
+/// classes the LIVE judge actually recorded (`verdicts.json`).
+///
+/// Two Task-8 Go classes were recorded honestly rather than forced to the
+/// brief's prediction table (both anticipated by the task context):
+///
+/// * `missing_time_milliseconds` — the brief's table predicted
+///   `TimeMilliseconds is required` on both sides, but through the wire that
+///   mutation is indistinguishable from `Some(0)` (the t7 slot is forced by
+///   the present t8 `min_delay_excess`, and `None` encodes as the same `0x80`
+///   nil scalar both sides decode as `Some(0)`). The block then reads as
+///   epoch-timestamped — earlier than its parent — and is rejected by the
+///   fee-state monotonic-time guard BEFORE `VerifyTime`'s required-field arm is
+///   reached, on both sides. Matched-but-earlier class, the same honest
+///   asymmetry `oversized_ext_data_gas_used` documents above.
+/// * `trailing_sae_tail_field` — Go decodes the spliced ninth header scalar as
+///   the SAE `TargetExponent` and rejects it at `semanticVerify`'s
+///   `VerifyTargetExponent` ("remote target exponent should be nil"); Rust's
+///   `AvaHeader::decode_rlp` fail-closes on the trailing bytes at PARSE, one
+///   stage earlier. Same verdict (the block is invalid), different stage — the
+///   same parse-vs-semantic asymmetry `block.rs::trailing_sae_tail_field_fails_decode`
+///   documents for the whole SAE tail-field family.
+const REJECTION_CLASSES: [(&str, &str, &str); 16] = [
     (
         "zero_difficulty",
         "invalid difficulty",
@@ -244,7 +333,89 @@ const REJECTION_CLASSES: [(&str, &str, &str); 10] = [
         "invalid extra data gas used",
         "fee overflow",
     ),
+    // ── Task 8 semanticVerify family. The Go and Rust CHECK ORDERS differ:
+    // Go runs `VerifyMinDelayExcess`/`VerifyTargetExponent`/`VerifyTime` inside
+    // `semanticVerify` (`wrapped_block.go:345-366`) BEFORE the consensus
+    // engine's `verifyHeaderGasFields` (which runs later, in the chain insert),
+    // whereas Rust runs `verify_header_gas_fields` BEFORE `verify_time`
+    // (`block.rs:988,1002`). For every mutant below whose broken field is the
+    // one and only fault, both reach the same intended check and the classes
+    // match verbatim. `missing_time_milliseconds` is the exception the order
+    // difference exposes, recorded honestly (see the REJECTION_CLASSES doc).
+    (
+        // ASYMMETRIC (matched-but-earlier): the forced `None` round-trips as
+        // `Some(0)` on both sides (t7 slot forced by the present t8), so the
+        // header reads as epoch-timestamped — earlier than its parent. Go's
+        // `VerifyTime` (semanticVerify, runs first) catches it as `errBlockTooOld`;
+        // Rust's `verify_header_gas_fields` fee-state monotonic guard (runs
+        // first on the Rust side) catches it as `InvalidFeeState`. Both reject
+        // the same epoch-timestamp block at each side's earliest check.
+        "missing_time_milliseconds",
+        "block timestamp is too old",
+        "invalid fee state",
+    ),
+    (
+        "mismatched_time_milliseconds",
+        "TimeMilliseconds does not match",
+        "TimeMilliseconds does not match",
+    ),
+    (
+        "far_future_time",
+        "too far in the future",
+        "too far in the future",
+    ),
+    (
+        "wrong_min_delay_excess",
+        "incorrect min delay excess",
+        "incorrect min delay excess",
+    ),
+    (
+        // Bootstrapped-gated on BOTH sides (see [`rust_stage_for`] +
+        // `REJECTION_CLASSES` doc). Restamped so the extra prefix stays
+        // consistent with `gas_used == 0`, isolating `verifyIntrinsicGas`.
+        "understated_gas_used",
+        "intrinsic gas",
+        "intrinsic gas",
+    ),
+    (
+        // ASYMMETRIC (matched-but-earlier stage): Go decodes the spliced ninth
+        // header scalar as the SAE `TargetExponent` and rejects it at
+        // `semanticVerify`'s `VerifyTargetExponent`; Rust's `decode_rlp`
+        // fail-closes on the trailing bytes at PARSE. The Rust substring is
+        // empty — for a parse-stage candidate the checker only requires that
+        // `parse_block` itself errors (verify is never reached); the incidental
+        // Rust message is the generic `rlp_err` mapping (`block.rs:1607`).
+        "trailing_sae_tail_field",
+        "remote target exponent",
+        "",
+    ),
 ];
+
+/// Which Rust entry point each candidate is driven through in
+/// [`proposer_verdicts_hold`]. Everything defaults to the full non-bootstrapped
+/// `parse_block → verify` path; the two Task-8 exceptions are called out
+/// explicitly (mirroring the Go judge, which boots bootstrapped via
+/// `vmtest.SetupTestVM` and decodes the SAE tail field before its own semantic
+/// checks).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RustStage {
+    /// `parse_block → verify`, node NOT bootstrapped (the common case).
+    Verify,
+    /// `parse_block → verify` with the VM flipped to `NormalOp` first — Go's
+    /// `verifyIntrinsicGas` is `bootstrapped`-gated (`wrapped_block.go:375`).
+    VerifyBootstrapped,
+    /// `parse_block` alone must reject; `verify` is never reached (Rust
+    /// fail-closes the SAE tail field one stage earlier than Go).
+    Parse,
+}
+
+fn rust_stage_for(name: &str) -> RustStage {
+    match name {
+        "understated_gas_used" => RustStage::VerifyBootstrapped,
+        "trailing_sae_tail_field" => RustStage::Parse,
+        _ => RustStage::Verify,
+    }
+}
 
 /// Decodes `base`, applies `mutate` to its parts, and re-assembles fresh
 /// self-consistent wire bytes (the block hash is recomputed over the mutated
@@ -261,13 +432,114 @@ fn mutate_candidate(spec: &AvaChainSpec, base: &[u8], mutate: fn(&mut AvaBlockPa
         .to_vec()
 }
 
+/// Splices one extra RLP `u64` scalar (a would-be SAE `TargetExponent`, t9)
+/// onto the END of the header list payload of an encoded coreth block, fixing
+/// up both the header list-header and the outer block list-header. This is the
+/// Task 7 technique (`block.rs::trailing_sae_tail_field_fails_decode`) lifted
+/// to the whole-block level: `AvaBlockParts`/`assemble_ava_block` model no SAE
+/// tail field, so the `trailing_sae_tail_field` mutant is built by raw byte
+/// surgery on the honest bytes instead. Everything after the header (txs /
+/// uncles / ext_data) is copied verbatim, so the mutant differs from the honest
+/// block by exactly the one spliced field.
+fn splice_trailing_header_field(block_bytes: &[u8]) -> Vec<u8> {
+    // Outer block RLP list: [header, txs, uncles, ext_data?].
+    let mut outer_cursor = block_bytes;
+    let outer = RlpListHeader::decode(&mut outer_cursor).expect("decode outer block list");
+    assert!(outer.list, "block must be an RLP list");
+    // `outer_cursor` now points at the outer payload start (exactly
+    // `payload_length` bytes, since nothing trails a whole block).
+    let outer_payload = &outer_cursor[..outer.payload_length];
+
+    // First outer element = the header list.
+    let mut hdr_cursor = outer_payload;
+    let hdr = RlpListHeader::decode(&mut hdr_cursor).expect("decode header list");
+    assert!(hdr.list, "header must be an RLP list");
+    let hdr_prefix_len = outer_payload.len() - hdr_cursor.len(); // header list-header bytes
+    let hdr_total_len = hdr_prefix_len + hdr.payload_length;
+    let hdr_payload = &outer_payload[hdr_prefix_len..hdr_total_len];
+    let rest_of_outer = &outer_payload[hdr_total_len..]; // txs + uncles + ext_data, verbatim
+
+    // Extended header payload = original header fields + one trailing u64.
+    let mut new_hdr_payload = hdr_payload.to_vec();
+    1u64.encode(&mut new_hdr_payload); // the trailing SAE field (t9)
+    let mut new_hdr = Vec::new();
+    RlpListHeader {
+        list: true,
+        payload_length: new_hdr_payload.len(),
+    }
+    .encode(&mut new_hdr);
+    new_hdr.extend_from_slice(&new_hdr_payload);
+
+    // Reassemble the outer block list around the extended header.
+    let mut new_outer_payload = new_hdr;
+    new_outer_payload.extend_from_slice(rest_of_outer);
+    let mut out = Vec::new();
+    RlpListHeader {
+        list: true,
+        payload_length: new_outer_payload.len(),
+    }
+    .encode(&mut out);
+    out.extend_from_slice(&new_outer_payload);
+    out
+}
+
+/// Decodes `honest_bytes`, applies `mutate`, RESTAMPS the ACP-176 `extra`
+/// prefix so it stays consistent with the mutated header (recomputing
+/// `feeStateAfterBlock` at the header's own `time`/`time_milliseconds`/`gas_used`
+/// and splicing it over the first `STATE_SIZE` bytes, preserving the Durango
+/// predicate-results suffix), re-assembles, and writes `<name>.rlp.hex`.
+///
+/// Used for the three restamp mutants (`understated_gas_used`,
+/// `mismatched_time_milliseconds`, `far_future_time`): each corrupts one field
+/// that ALSO feeds the fee-state recompute (`gas_used`, or the timestamp that
+/// drives capacity growth), so without restamping Rust's earlier-running
+/// `verify_header_gas_fields` would reject at `IncorrectFeeState` before the
+/// intended `verifyIntrinsicGas`/`VerifyTime` check. Restamping keeps every
+/// OTHER check satisfied (the Byzantine-proposer shape), isolating the one
+/// intended rejection on BOTH sides. Mirrors
+/// `semantic_verify.rs::understated_gas_used_block`.
+fn emit_restamped_candidate(
+    out_dir: &std::path::Path,
+    name: &str,
+    honest_bytes: &[u8],
+    chain_spec: &AvaChainSpec,
+    genesis_header: &AvaHeader,
+    mutate: fn(&mut AvaBlockParts),
+) {
+    let block = decode_ava_evm_block(honest_bytes, chain_spec)
+        .unwrap_or_else(|_| panic!("decode honest for {name}"));
+    let mut parts = block.into_parts();
+    mutate(&mut parts);
+    let after = ava_evm::feerules::fee_state_after_block(
+        chain_spec,
+        genesis_header,
+        parts.header.time,
+        parts.header.time_milliseconds,
+        parts.header.gas_used,
+        0, // no atomic gas in these EVM-only candidates
+        None,
+    )
+    .unwrap_or_else(|_| panic!("restamp fee state for {name}"));
+    let mut extra = after.to_bytes().to_vec();
+    extra.extend_from_slice(&parts.header.extra[ava_evm::feerules::acp176::STATE_SIZE..]);
+    parts.header.extra = extra.into();
+    let bytes = assemble_ava_block(parts, chain_spec)
+        .unwrap_or_else(|_| panic!("assemble {name}"))
+        .encoded_bytes()
+        .to_vec();
+    std::fs::write(out_dir.join(format!("{name}.rlp.hex")), hex::encode(&bytes))
+        .unwrap_or_else(|e| panic!("write {name}.rlp.hex: {e}"));
+}
+
 /// Env-gated candidate writer (operator step). Builds the honest candidate —
 /// a real block the Task 2-5 [`BlockBuilderDriver`] produces on the committed
 /// local genesis, carrying one signed EVM tx from the pre-funded "ewoq"
 /// key — asserts it passes Rust's own full `syntactic_verify` (never freeze a
 /// corpus whose honest candidate Rust itself would reject), then emits it plus
-/// the ten [`MUTATIONS`] as `<name>.rlp.hex` alongside a copy of the genesis
-/// JSON, into `$EMIT_PROPOSER_CANDIDATES`.
+/// the [`MUTATIONS`] and the four special-cased Task-8 mutants (three restamps
+/// via [`emit_restamped_candidate`] + the raw-byte [`splice_trailing_header_field`])
+/// as `<name>.rlp.hex` alongside a copy of the genesis JSON, into
+/// `$EMIT_PROPOSER_CANDIDATES`.
 #[test]
 fn emit_proposer_candidates() {
     let Ok(out_dir) = std::env::var("EMIT_PROPOSER_CANDIDATES") else {
@@ -377,11 +649,100 @@ fn emit_proposer_candidates() {
         std::fs::write(out_dir.join(format!("{name}.rlp.hex")), hex::encode(&bytes))
             .unwrap_or_else(|e| panic!("write {name}.rlp.hex: {e}"));
     }
+
+    // ── Task 8 restamp mutants (see `emit_restamped_candidate`). Each corrupts
+    // one field that also feeds the fee-state recompute, so the extra prefix is
+    // restamped to keep every other check satisfied and isolate the intended
+    // rejection — the Byzantine-proposer shape.
+    //
+    // `understated_gas_used`: gas_used below the single transfer's 21_000
+    // intrinsic floor → isolates `verifyIntrinsicGas` (bootstrapped-gated).
+    emit_restamped_candidate(
+        &out_dir,
+        "understated_gas_used",
+        &honest_bytes,
+        &chain_spec,
+        &genesis_header,
+        |p| p.header.gas_used = 0,
+    );
+    // `mismatched_time_milliseconds`: +5s in ms only → `Time != TimeMilliseconds/1000`
+    // (time.go:94-101) → isolates `VerifyTime`'s mismatch arm.
+    emit_restamped_candidate(
+        &out_dir,
+        "mismatched_time_milliseconds",
+        &honest_bytes,
+        &chain_spec,
+        &genesis_header,
+        |p| {
+            let ms = p
+                .header
+                .time_milliseconds
+                .expect("honest Granite header carries TimeMilliseconds");
+            p.header.time_milliseconds = Some(ms.saturating_add(5_000));
+        },
+    );
+    // `far_future_time`: year-4000 timestamp, deterministically beyond now+10s
+    // for any real-clock run (time.go:72-79) → isolates `VerifyTime`'s
+    // future-bound arm. Both `time` and `time_milliseconds` move together so
+    // the Time==ms/1000 arm still holds and the future-bound arm fires first.
+    emit_restamped_candidate(
+        &out_dir,
+        "far_future_time",
+        &honest_bytes,
+        &chain_spec,
+        &genesis_header,
+        |p| {
+            const YEAR_4000: u64 = 64_060_588_800; // 4000-01-01 UTC, seconds.
+            p.header.time = YEAR_4000;
+            p.header.time_milliseconds = Some(YEAR_4000.saturating_mul(1000));
+        },
+    );
+
+    // ── Task 8 raw-bytes mutant (`trailing_sae_tail_field`): splice one extra
+    // RLP u64 (a would-be SAE `TargetExponent`) onto the header list — a shape
+    // `AvaBlockParts`/`assemble_ava_block` cannot express. Rust rejects it at
+    // PARSE (`decode_rlp` trailing-bytes fail-close); Go decodes it as
+    // `TargetExponent` and rejects at `semanticVerify`'s `VerifyTargetExponent`.
+    std::fs::write(
+        out_dir.join("trailing_sae_tail_field.rlp.hex"),
+        hex::encode(splice_trailing_header_field(&honest_bytes)),
+    )
+    .expect("write trailing_sae_tail_field.rlp.hex");
+
+    // DEFERRED (Task 8 Step 6 — export-tx `inflated_ext_data_gas_used` leg):
+    // an atomic-export-bearing candidate would give the ExtDataGasUsed
+    // value-equality (`atomic/vm/block_extension.go:142` → `Tx.GasUsed`) a
+    // cross-binary check. It cannot pass the Go judge OFFLINE: the Go judge
+    // boots via `vmtest.SetupTestVM`, whose snow context takes `CChainID`,
+    // `XChainID`, and `AVAXAssetID` from `ids.GenerateTestID()`
+    // (`snow/snowtest/context.go:30-32` → `ids/test_generator.go:11`,
+    // `Empty.Prefix(offset++)`) — process-counter-derived test IDs, NOT stable
+    // well-known constants an offline Rust emitter can reproduce. An export
+    // tx's `blockchain_id` must equal the VM's `CChainID`, its
+    // `destination_chain` the `XChainID`, and its `asset_id` the `AVAXAssetID`;
+    // built with any fixed IDs, coreth's atomic extension `SemanticVerify`
+    // (`ExportTx.SemanticVerify` → `verifySpend`/`GetVerifiedAtomicUTXOs`)
+    // rejects the block on a chain/asset mismatch (e.g. `errWrongChainID`)
+    // BEFORE the `ExtDataGasUsed` equality is reached — a fixture reason
+    // unrelated to this branch — so the "honest export candidate is accepted"
+    // invariant cannot hold. The ExtDataGasUsed surface still has: (1) a
+    // header-level cross-binary oracle leg via `oversized_ext_data_gas_used`
+    // above (Go `invalid extra data gas used` / Rust `fee overflow`); and
+    // (2) unit + golden-constant coverage (`atomic::verify::verify_ext_data_gas_used_arms`,
+    // `cchain_atomic_tx::constants_match_go_vectors`). See PORTING.md's
+    // `verify_ext_data_gas_used` row and the Task 8 report AS-BUILT note. To
+    // lift this, the Go judge would need to inject FIXED chain/asset IDs into
+    // its snow context (a judge-file change), tracked as a follow-up.
+
     std::fs::write(out_dir.join("genesis.json"), genesis_json).expect("write genesis.json");
 
+    // 1 honest + the `fn`-based MUTATIONS + the four special-cased Task-8
+    // mutants (understated_gas_used, mismatched_time_milliseconds,
+    // far_future_time, trailing_sae_tail_field).
+    let extra_task8 = 4;
     eprintln!(
         "wrote {} proposer-verdict candidates to {}",
-        1 + MUTATIONS.len(),
+        1 + MUTATIONS.len() + extra_task8,
         out_dir.display()
     );
 }
@@ -412,6 +773,41 @@ async fn parse_and_verify(genesis_json: &str, bytes: &[u8]) -> Result<(), String
         .await
         .map_err(|e| e.to_string())?;
     blk.verify(&token).await.map_err(|e| e.to_string())
+}
+
+/// As [`parse_and_verify`], but flips the VM to `NormalOp` (Go
+/// `vm.bootstrapped.Set(true)`) before verifying, so `verify_intrinsic_gas`
+/// (`wrapped_block.go:372-379`, bootstrapped-gated) actually runs — the Go judge
+/// boots bootstrapped via `vmtest.SetupTestVM` (`SetState(snow.NormalOp)`), so
+/// the Rust side must match. Mirrors `semantic_verify.rs::parse_and_verify_bootstrapped`.
+async fn parse_and_verify_bootstrapped(genesis_json: &str, bytes: &[u8]) -> Result<(), String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (mut vm, _genesis_id) = EvmVm::from_genesis(LOCAL_ID, dir.path(), genesis_json.as_bytes())
+        .expect("EvmVm::from_genesis over the committed local genesis");
+    let token = CancellationToken::new();
+    vm.set_state(&token, EngineState::NormalOp)
+        .await
+        .expect("set_state(NormalOp)");
+    let blk = vm
+        .parse_block(&token, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+    blk.verify(&token).await.map_err(|e| e.to_string())
+}
+
+/// Drives ONLY Rust's `EvmVm::parse_block` (never `verify`) over `bytes` —
+/// used for the `trailing_sae_tail_field` candidate, which Rust fail-closes one
+/// stage earlier than Go, at PARSE. Returns `Ok(())` if the bytes parse (which
+/// makes the caller fail: a parse-stage candidate MUST be rejected at parse).
+async fn parse_only(genesis_json: &str, bytes: &[u8]) -> Result<(), String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (vm, _genesis_id) = EvmVm::from_genesis(LOCAL_ID, dir.path(), genesis_json.as_bytes())
+        .expect("EvmVm::from_genesis over the committed local genesis");
+    let token = CancellationToken::new();
+    vm.parse_block(&token, bytes)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Per-PR reader (TDD RED until the recording step writes `verdicts.json`):
@@ -476,9 +872,19 @@ async fn proposer_verdicts_hold() {
             .unwrap_or_else(|e| panic!("read {name}.rlp.hex: {e}"));
         let bytes = hex::decode(hex_str.trim()).unwrap_or_else(|e| panic!("decode {name}: {e}"));
 
-        let rust_err = parse_and_verify(&genesis_json, &bytes)
-            .await
-            .expect_err(&format!("Rust must also reject {name}"));
+        // Drive Rust's own entry over the identical bytes, through whichever
+        // stage this candidate is meant to be rejected at (see `rust_stage_for`).
+        let rust_err = match rust_stage_for(name) {
+            RustStage::Verify => parse_and_verify(&genesis_json, &bytes)
+                .await
+                .expect_err(&format!("Rust must also reject {name}")),
+            RustStage::VerifyBootstrapped => parse_and_verify_bootstrapped(&genesis_json, &bytes)
+                .await
+                .expect_err(&format!("Rust (bootstrapped) must also reject {name}")),
+            RustStage::Parse => parse_only(&genesis_json, &bytes).await.expect_err(&format!(
+                "Rust must reject {name} at PARSE (verify is never reached)"
+            )),
+        };
         assert!(
             rust_err.contains(rust_substr),
             "{name}: Rust error {rust_err:?} does not contain {rust_substr:?}"

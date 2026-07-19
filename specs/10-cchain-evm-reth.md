@@ -281,6 +281,35 @@ the entire class of reth `TreeState`/fork-choice reorg machinery.
 > coverage is strictly improved, not regressed — and honest-arm-safe (the Rust builder stamps correct
 > values everywhere, so every live gate stays green).
 
+> **AS-BUILT (semantic-verify family port, branch `cchain-semantic-verify`, 2026-07-19) — residual
+> gaps (1)-(3) above are now CLOSED.** (1) `EvmBlock::verify_intrinsic_gas`
+> (`wrapped_block.go:287-332`, bootstrapped-gated) ports the pre-execution gas-capacity / summed-
+> intrinsic-gas check; caveat: the understated-`GasUsed` mutant it targets was already fail-closed via
+> the executor's `NoGasUsed` post-execution backstop, so this port's value is coreth parity + cheaper
+> pre-execution rejection, not a new fail-open closure. (2) `feerules::verify_time`
+> (`time.go:55-124`) and `feerules::verify_min_delay_excess` (`min_delay_excess.go:45-81`) now run
+> live on the verify path (clock + a new `bootstrapped` flag threaded via `Shared`), closing the
+> highest-value gap; `VerifyTargetExponent`/`VerifyMinPriceExponent`/`VerifySettled` (the SAE-only
+> tail fields) remain modeled only via the equivalence pin below, since `AvaHeader` doesn't carry
+> them. (3) `atomic::verify::verify_ext_data_gas_used` (`block_extension.go:142-177`) now
+> equality-checks the claimed `ExtDataGasUsed` against the recomputed atomic-batch gas plus the AP5
+> bound. A further, unplanned gap was found and closed in the same branch:
+> `atomic::verify::verify_utxos_present` (`block_extension.go:179-190`/`254-275`) — a forward guard,
+> since the verify path still runs atomic import/export via `NoopPreHook` (M6.15, unaffected by this
+> branch) and so cannot pass an import block at verify regardless today. Equivalence pin:
+> `block::tests::trailing_sae_tail_field_fails_decode` — a coreth block carrying any SAE-only
+> `HeaderExtra` tail field that Go rejects at `semanticVerify` is instead rejected by Rust at PARSE
+> (`decode_rlp`'s trailing-bytes fail-close, `block.rs:250-252`); same verdict, earlier stage.
+> Documented ordering divergence (verdicts match, not a gap): Rust runs `verify_header_gas_fields`
+> before `verify_time`; Go's `semanticVerify` runs `VerifyTime` first. Go-oracle verdict corpus grew
+> 10→16 mutants at pin `a4290dc0f4` (unchanged by this branch). Remaining open, non-gating on the
+> honest arm: warp predicate pass has no live caller to gate yet; the export-tx `ExtDataGasUsed`
+> oracle leg is deferred (Go judge's `ids.GenerateTestID()`-derived chain/asset IDs make an offline
+> Rust-built export tx fixture-incompatible; `PORTING.md` row 🟡); the M6.15 `NoopPreHook` atomic-
+> verify-execution gap itself remains open. Full detail:
+> `plan/M9-interop-hardening.md` (same-dated AS-BUILT block) and
+> `docs/superpowers/specs/2026-07-19-cchain-semantic-verify-family-design.md`.
+
 ### 3.2 Driving reth's executor for verify
 
 ```rust

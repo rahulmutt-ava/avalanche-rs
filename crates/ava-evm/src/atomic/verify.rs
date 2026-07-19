@@ -42,9 +42,13 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
+use ava_evm_reth::U256;
 use ava_types::id::Id;
+use ava_vm::components::avax::shared_memory::SharedMemory;
 
-use crate::atomic::tx::AtomicTx;
+use crate::atomic::tx::{AP5_ATOMIC_GAS_LIMIT, AtomicTx, Tx};
+use crate::block::AvaHeader;
+use crate::chainspec::{AvaChainSpec, AvaPhase};
 use crate::error::{Error, Result};
 
 /// `(UnsignedAtomicTx).InputUTXOs` — the set of UTXO ids `tx` consumes (coreth
@@ -117,6 +121,55 @@ pub fn verify_no_conflicts(txs: &[AtomicTx], ancestor_inputs: &BTreeSet<Id>) -> 
             return Err(Error::ConflictingAtomicInputs);
         }
         seen.extend(inputs);
+    }
+    Ok(())
+}
+
+/// coreth `atomic/vm/block_extension.go:142-177` — the extension
+/// `SemanticVerify`'s `ExtDataGasUsed` value check (AP4+): the claimed header
+/// value must equal the recomputed atomic-batch gas
+/// ([`Tx::gas_used`], fixed fee from AP5), bounded by
+/// [`AP5_ATOMIC_GAS_LIMIT`] in the AP5..pre-Fortuna window (Fortuna+ the
+/// bound is enforced by `VerifyGasUsed`'s capacity instead —
+/// block_extension.go:152-154). Go's nil-claim semantics carry over: both
+/// `BigLessOrEqualUint64(nil, …)` and `BigEqualUint64(nil, …)` are false
+/// (`graft/evm/utils/numbers.go:42-54`), so an absent claim rejects.
+///
+/// # Errors
+/// [`Error::TooLargeExtDataGasUsed`] / [`Error::InvalidExtDataGasUsed`] /
+/// [`Error::FeeOverflow`].
+pub fn verify_ext_data_gas_used(
+    spec: &AvaChainSpec,
+    header: &AvaHeader,
+    atomic_txs: &[Tx],
+) -> Result<()> {
+    let phase = spec.fork_at(header.time);
+    // block_extension.go:148 — pre-AP4: nothing to check.
+    if phase < AvaPhase::ApricotPhase4 {
+        return Ok(());
+    }
+    let claimed = header.ext_data_gas_used;
+    // block_extension.go:154-158 — AP5..pre-Fortuna bound.
+    if phase >= AvaPhase::ApricotPhase5 && !spec.is_fortuna(header.time) {
+        let within = matches!(claimed, Some(c) if c <= U256::from(AP5_ATOMIC_GAS_LIMIT));
+        if !within {
+            return Err(Error::TooLargeExtDataGasUsed(claimed));
+        }
+    }
+    // block_extension.go:159-172 — Σ GasUsed(fixedFee = AP5+).
+    let fixed_fee = phase >= AvaPhase::ApricotPhase5;
+    let mut total: u64 = 0;
+    for tx in atomic_txs {
+        total = total
+            .checked_add(tx.gas_used(fixed_fee)?)
+            .ok_or(Error::FeeOverflow)?;
+    }
+    // block_extension.go:174-176 — equality (nil claim fails).
+    if claimed != Some(U256::from(total)) {
+        return Err(Error::InvalidExtDataGasUsed {
+            have: claimed,
+            want: total,
+        });
     }
     Ok(())
 }
@@ -222,6 +275,55 @@ pub fn is_bonus_block(height: u64, id: Id) -> bool {
     mainnet_bonus_blocks().get(&height) == Some(&id)
 }
 
+/// Port of coreth `blockExtension.verifyUTXOsPresent`
+/// (`plugin/evm/atomic/vm/block_extension.go:254-275`): verify that every
+/// source UTXO an import tx names is present in shared memory at verify time.
+///
+/// Go runs this from `extension.SemanticVerify` **only when the VM is
+/// bootstrapped** (`block_extension.go:179-190`) — during bootstrap the peer
+/// chains may not have populated their indices yet, and a canonically-accepted
+/// block is trusted to have valid inputs. The caller must reproduce that gate.
+///
+/// As in Go, this "does not fully verify that this block can spend these UTXOs"
+/// (the conflict/spend checks live in [`verify_no_conflicts`] +
+/// `EVMStateTransfer`); it guarantees only that a block failing later checks was
+/// built by an incorrect proposer, so such a block is classified correctly.
+/// Bonus blocks (the historical mainnet repair set) are skipped exactly as Go's
+/// `AtomicBackend.IsBonus` short-circuit does (`block_extension.go:258-261`).
+///
+/// Each source's `RemoveRequests` are looked up via `SharedMemory.Get`
+/// (`block_extension.go:270`); export txs carry only `PutRequests`, so their
+/// (empty) remove set is a no-op, matching Go.
+///
+/// # Errors
+/// - [`Error::MissingUtxos`] if a `SharedMemory.Get` fails (a named UTXO is
+///   absent) — coreth `ErrMissingUTXOs`.
+/// - [`Error::ConflictingAtomicInputs`] if computing an export tx's atomic ops
+///   fails to serialize (coreth's `utx.AtomicOps()` error path).
+pub fn verify_utxos_present(
+    shared_memory: &dyn SharedMemory,
+    txs: &[Tx],
+    height: u64,
+    block_id: Id,
+) -> Result<()> {
+    if is_bonus_block(height, block_id) {
+        return Ok(());
+    }
+    for tx in txs {
+        let (chain_id, requests) = tx
+            .unsigned
+            .atomic_ops(tx.id())
+            .map_err(|_| Error::ConflictingAtomicInputs)?;
+        // Mirror Go: `SharedMemory.Get(chainID, requests.RemoveRequests)`
+        // unconditionally. For an export tx the remove set is empty, so the
+        // lookup is a no-op; for an import tx it names the consumed UTXO(s).
+        shared_memory
+            .get(chain_id, &requests.remove)
+            .map_err(|_| Error::MissingUtxos)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +343,209 @@ mod tests {
     fn empty_block_no_conflict() {
         let empty: BTreeSet<Id> = BTreeSet::new();
         verify_no_conflicts(&[], &empty).expect("empty block verifies");
+    }
+
+    // Repeats of feerules/mod.rs::semantic_verify_tests's `spec_from` / `hdr`
+    // (test convention: repeat-don't-import).
+    use ava_avm::txs::components::{Input as FxInput, TransferableInput};
+    use ava_evm_reth::{Address, B256, Bytes, Chain, keccak256};
+    use ava_secp256k1fx::TransferInput;
+
+    use crate::atomic::tx::{EvmOutput, UnsignedImportTx};
+    use crate::chainspec::NetworkUpgrades;
+
+    fn spec_from(fortuna: u64, granite: u64, ap3: u64) -> AvaChainSpec {
+        const FF: u64 = u64::MAX;
+        let upgrades = NetworkUpgrades {
+            apricot_phase_1: 0,
+            apricot_phase_2: 0,
+            apricot_phase_3: ap3,
+            apricot_phase_4: ap3,
+            apricot_phase_5: ap3,
+            apricot_phase_pre_6: ap3,
+            apricot_phase_6: ap3,
+            apricot_phase_post_6: ap3,
+            banff: ap3,
+            cortina: ap3,
+            durango: ap3,
+            etna: fortuna.min(granite),
+            fortuna,
+            granite,
+            helicon: FF,
+        };
+        AvaChainSpec::from_parts(upgrades, Chain::from_id(43112), false)
+    }
+
+    fn hdr(number: u64, time: u64, time_ms: Option<u64>, mde: Option<u64>) -> AvaHeader {
+        AvaHeader {
+            parent_hash: B256::ZERO,
+            uncle_hash: B256::ZERO,
+            coinbase: Address::ZERO,
+            state_root: B256::ZERO,
+            tx_root: B256::ZERO,
+            receipt_root: B256::ZERO,
+            bloom: Bytes::from(vec![0u8; 256]),
+            difficulty: U256::ZERO,
+            number,
+            gas_limit: 15_000_000,
+            gas_used: 0,
+            time,
+            extra: Bytes::new(),
+            mix_digest: B256::ZERO,
+            nonce: [0u8; 8],
+            ext_data_hash: keccak256([]),
+            base_fee: Some(U256::from(25_000_000_000u64)),
+            ext_data_gas_used: None,
+            block_gas_cost: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_root: None,
+            time_milliseconds: time_ms,
+            min_delay_excess: mde,
+        }
+    }
+
+    const T: u64 = 1_700_000_000; // an arbitrary base timestamp (seconds)
+
+    /// Repeat of `atomic/tx.rs`'s test-module `golden_import()` builder.
+    fn golden_import() -> UnsignedImportTx {
+        let id32 = |b: u8| Id::from([b; 32]);
+        let avax_asset = id32(0xAA);
+        UnsignedImportTx {
+            network_id: 1,
+            blockchain_id: id32(0x11),
+            source_chain: id32(0x22),
+            imported_inputs: vec![TransferableInput {
+                tx_id: id32(0x44),
+                output_index: 1,
+                asset_id: avax_asset,
+                r#in: FxInput::SecpTransfer(TransferInput::new(5000, vec![0])),
+            }],
+            outs: vec![EvmOutput {
+                address: [0x01; 20],
+                amount: 4999,
+                asset_id: avax_asset,
+            }],
+        }
+    }
+
+    #[test]
+    fn verify_ext_data_gas_used_arms() {
+        // block_extension.go:142-177.
+        let spec = spec_from(u64::MAX, u64::MAX, 0); // AP4+AP5 on, Fortuna off
+        let mut tx = Tx::new(AtomicTx::Import(golden_import()));
+        tx.initialize().expect("initialize");
+        let want = tx.gas_used(true).expect("gas");
+        let mut header = hdr(2, T + 2, None, None);
+
+        // (1) equality: claimed == recomputed ⇒ Ok.
+        header.ext_data_gas_used = Some(U256::from(want));
+        assert!(
+            verify_ext_data_gas_used(&spec, &header, std::slice::from_ref(&tx)).is_ok(),
+            "verify_ext_data_gas_used(equal claim)"
+        );
+
+        // (2) inflated claim ⇒ "invalid extDataGasUsed".
+        header.ext_data_gas_used = Some(U256::from(want + 1));
+        assert!(matches!(
+            verify_ext_data_gas_used(&spec, &header, std::slice::from_ref(&tx)),
+            Err(Error::InvalidExtDataGasUsed { .. })
+        ));
+
+        // (3) AP5 pre-Fortuna bound: claim > AtomicGasLimit ⇒ "too large".
+        header.ext_data_gas_used = Some(U256::from(AP5_ATOMIC_GAS_LIMIT + 1));
+        assert!(matches!(
+            verify_ext_data_gas_used(&spec, &header, std::slice::from_ref(&tx)),
+            Err(Error::TooLargeExtDataGasUsed(_))
+        ));
+
+        // (4) nil claim at AP4+ ⇒ reject (Go BigEqualUint64(nil, x) == false).
+        header.ext_data_gas_used = None;
+        assert!(verify_ext_data_gas_used(&spec, &header, std::slice::from_ref(&tx)).is_err());
+
+        // (5) pre-AP4 ⇒ no-op even with a garbage claim: spec_from's third
+        // parameter is the AP3..post-6 activation time, so pushing it
+        // far-future turns AP4 off.
+        let pre_ap4 = spec_from(u64::MAX, u64::MAX, u64::MAX);
+        header.ext_data_gas_used = Some(U256::MAX);
+        assert!(
+            verify_ext_data_gas_used(&pre_ap4, &header, std::slice::from_ref(&tx)).is_ok(),
+            "pre-AP4 no-op"
+        );
+    }
+
+    /// A minimal [`SharedMemory`] whose `get` either succeeds (UTXO present) or
+    /// fails with `NotFound` (absent) — the only method `verify_utxos_present`
+    /// exercises. `indexed`/`apply` return trivial success (never called here).
+    struct MockSharedMemory {
+        present: bool,
+    }
+
+    impl SharedMemory for MockSharedMemory {
+        fn get(&self, _peer_chain: Id, keys: &[Vec<u8>]) -> ava_vm::error::Result<Vec<Vec<u8>>> {
+            if self.present {
+                Ok(keys.iter().map(|_| Vec::new()).collect())
+            } else {
+                Err(ava_vm::error::Error::NotFound)
+            }
+        }
+
+        fn indexed(
+            &self,
+            _peer_chain: Id,
+            _traits: &[Vec<u8>],
+            _start_trait: &[u8],
+            _start_key: &[u8],
+            _limit: usize,
+        ) -> ava_vm::error::Result<ava_vm::components::avax::shared_memory::IndexedResult> {
+            Ok((Vec::new(), Vec::new(), Vec::new()))
+        }
+
+        fn apply(
+            &self,
+            _requests: BTreeMap<Id, ava_vm::components::avax::shared_memory::Requests>,
+            _batches: &[ava_database::BatchOps],
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// block_extension.go:254-275 — an import tx whose source UTXO is absent
+    /// from shared memory is rejected with `ErrMissingUTXOs`; the same block
+    /// verifies once the UTXO is present.
+    #[test]
+    fn verify_utxos_present_import() {
+        let mut tx = Tx::new(AtomicTx::Import(golden_import()));
+        tx.initialize().expect("initialize import");
+        let txs = std::slice::from_ref(&tx);
+
+        // Absent ⇒ ErrMissingUTXOs.
+        let absent = MockSharedMemory { present: false };
+        assert!(
+            matches!(
+                verify_utxos_present(&absent, txs, 2, Id::EMPTY),
+                Err(Error::MissingUtxos)
+            ),
+            "verify_utxos_present rejects an absent import UTXO"
+        );
+
+        // Present ⇒ Ok.
+        let present = MockSharedMemory { present: true };
+        verify_utxos_present(&present, txs, 2, Id::EMPTY)
+            .expect("verify_utxos_present accepts a present import UTXO");
+    }
+
+    /// A bonus block short-circuits to `Ok` even when shared memory reports the
+    /// UTXO absent (coreth `AtomicBackend.IsBonus`, block_extension.go:258-261).
+    #[test]
+    fn verify_utxos_present_skips_bonus_block() {
+        let mut tx = Tx::new(AtomicTx::Import(golden_import()));
+        tx.initialize().expect("initialize import");
+        let bonus_id: Id = "Njm9TcLUXRojZk8YhEM6ksvfiPdC1TME4zJvGaDXgzMCyB6oB"
+            .parse()
+            .expect("valid CB58 bonus id");
+        let absent = MockSharedMemory { present: false };
+        verify_utxos_present(&absent, std::slice::from_ref(&tx), 102972, bonus_id)
+            .expect("bonus block skips the UTXO-presence check");
     }
 }

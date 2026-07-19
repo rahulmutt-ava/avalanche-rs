@@ -681,7 +681,21 @@ impl EvmBlock {
         parent_state_root: B256,
         parent: &AvaHeader,
     ) -> Result<B256> {
-        self.verify_with_predicates(ctx, parent_state_root, parent, &AvaExecCtx::default())
+        // Bootstrap-shape verify: `now` pinned to the block's own timestamp
+        // (the future bound is vacuous for canonically-accepted history —
+        // the same effective behavior as Go verifying old blocks against a
+        // real clock) and bootstrapped=false (intrinsic-gas + predicate
+        // checks deferred, wrapped_block.go:372-386). The production path
+        // (`VerifiedEvmBlock::verify`) supplies live values instead.
+        let now_ms = crate::feerules::header_time_ms(self.header());
+        self.verify_with_predicates(
+            ctx,
+            parent_state_root,
+            parent,
+            &AvaExecCtx::default(),
+            now_ms,
+            false,
+        )
     }
 
     /// [`EvmBlock::verify`] with an explicit per-block precompile execution
@@ -915,12 +929,45 @@ impl EvmBlock {
         Ok(())
     }
 
+    /// coreth `wrapped_block.go:287-332` — `verifyIntrinsicGas`. Runs only on
+    /// a bootstrapped node (wrapped_block.go:376): (1) the claimed GasUsed
+    /// (+ExtDataGasUsed at Fortuna+) must fit the block's gas capacity
+    /// ([`crate::feerules::verify_gas_used`]); (2) the summed per-tx intrinsic
+    /// gas (libevm `core.IntrinsicGas` — the same port the mempool admission
+    /// uses) must not exceed the claimed GasUsed.
+    fn verify_intrinsic_gas(&self, spec: &AvaChainSpec, parent: &AvaHeader) -> Result<()> {
+        // wrapped_block.go:301-304.
+        crate::feerules::verify_gas_used(spec, parent, self.header())
+            .map_err(|e| Error::GasUsedRelativeToCapacity(Box::new(e)))?;
+
+        // wrapped_block.go:306-319 — Σ intrinsic. Shanghai ← Durango
+        // (config_extra.go:83). The Rust port saturates where Go returns
+        // ErrGasUintOverflow; a saturated u64::MAX total still exceeds any
+        // claimable gas_used, so the verdict is identical.
+        let shanghai = spec.fork_at(self.header().time) >= AvaPhase::Durango;
+        let mut total: u64 = 0;
+        for tx in &self.parts().transactions {
+            let gas = crate::mempool::intrinsic_gas(tx, shanghai);
+            total = total.saturating_add(gas);
+        }
+        // wrapped_block.go:321-329.
+        if total > self.header().gas_used {
+            return Err(Error::TotalIntrinsicGasExceedsClaimed {
+                intrinsic: total,
+                claimed: self.header().gas_used,
+            });
+        }
+        Ok(())
+    }
+
     pub fn verify_with_predicates(
         &self,
         ctx: &EvmBlockContext,
         parent_state_root: B256,
         parent: &AvaHeader,
         exec_ctx: &AvaExecCtx,
+        now_ms: u64,
+        bootstrapped: bool,
     ) -> Result<B256> {
         // Structural syntacticVerify port — runs before any execution work
         // (coreth fail-closes these in `wrappedBlock.syntacticVerify` before
@@ -939,6 +986,52 @@ impl EvmBlock {
         // wrong fee/gas fields that the verify path would accept — the fail-open
         // this closes.
         crate::feerules::verify_header_gas_fields(ctx.chain_spec(), parent, self.header())?;
+
+        // ── coreth `wrappedBlock.semanticVerify` (wrapped_block.go:335-391),
+        // in Go's call order. VerifyTargetExponent / VerifyMinPriceExponent /
+        // VerifySettled (wrapped_block.go:350-366) are structurally covered:
+        // `AvaHeader::decode_rlp` fail-closes on the SAE-only trailing tail
+        // fields (block.rs:250-252), so a violating block never parses — Go
+        // rejects the same block at verify; same verdict, different stage.
+        // The errIsHeliconBlock guard (wrapped_block.go:368) is n/a — Helicon
+        // is unscheduled and `AvaPhase` carries no Helicon variant (see the
+        // verify_extra_prefix Helicon callout).
+        // wrapped_block.go:345.
+        crate::feerules::verify_min_delay_excess(ctx.chain_spec(), parent, self.header())?;
+        // wrapped_block.go:359.
+        crate::feerules::verify_time(ctx.chain_spec(), parent, self.header(), now_ms)?;
+        // wrapped_block.go:372-379 — bootstrapped-gated (during bootstrap the
+        // block is canonically accepted; required indices may be absent).
+        if bootstrapped {
+            self.verify_intrinsic_gas(ctx.chain_spec(), parent)?;
+        }
+        // coreth atomic extension SemanticVerify (block_extension.go:142-177)
+        // — the ExtDataGasUsed value check. Unconditional at AP4+ (only the
+        // shared-memory UTXO-presence half of the Go extension is
+        // bootstrapped-gated; see below).
+        crate::atomic::verify::verify_ext_data_gas_used(
+            ctx.chain_spec(),
+            self.header(),
+            self.atomic_txs(),
+        )?;
+        // coreth atomic extension SemanticVerify's second half
+        // (block_extension.go:179-190): the import-tx source UTXOs must be
+        // present in shared memory. Bootstrapped-gated exactly as Go is —
+        // during bootstrap the peer chains may not have populated their indices
+        // and the block is canonically accepted, so the check is skipped. Only
+        // runs when the atomic backend (hence a shared-memory handle) is wired.
+        // NOTE: the atomic Import/Export EVMStateTransfer itself is not yet
+        // applied on this verify path (execute uses NoopPreHook below, M6.15
+        // deferral), so this presence check is the ONLY shared-memory read the
+        // verify path performs today; it is the Go-equivalent early rejection.
+        if bootstrapped && let Some(backend) = ctx.atomic_backend() {
+            crate::atomic::verify::verify_utxos_present(
+                backend.shared_memory().as_ref(),
+                self.atomic_txs(),
+                self.number(),
+                ava_types::id::Id::from(self.hash().0),
+            )?;
+        }
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
@@ -1628,6 +1721,53 @@ mod tests {
         };
         let sig = EvmSignature::new(U256::from(1), U256::from(1), false);
         TransactionSigned::Legacy(tx.into_signed(sig))
+    }
+
+    /// Go's `HeaderExtra` carries six SAE-only optional tail fields beyond
+    /// `MinDelayExcess` (`TargetExponent`, `MinPriceExponent`, and the four
+    /// `Settled{Height,GasUnix,GasNumerator,Excess}` markers —
+    /// `customtypes/header_ext.go:47-53`) that [`AvaHeader`] deliberately does
+    /// not model. A coreth block carrying any of them is rejected by Go at
+    /// `semanticVerify` (`VerifyTargetExponent` / `VerifyMinPriceExponent` /
+    /// `VerifySettled`, `wrapped_block.go:350-366`); Rust rejects the same bytes
+    /// one stage earlier, at PARSE, via `decode_rlp`'s trailing-bytes fail-close
+    /// (`block.rs:250-252`). Same verdict, different stage — this test pins the
+    /// fail-close so a future codec change cannot silently reopen it.
+    #[test]
+    fn trailing_sae_tail_field_fails_decode() {
+        let mut h = test_header(&[], None, None, Bytes::new());
+        // t7 + t8 present so the whole optional tail is emitted; a spliced ninth
+        // scalar then lands exactly where Go's TargetExponent (t9) would.
+        h.time_milliseconds = Some(1_000);
+        h.min_delay_excess = Some(1);
+        let mut bytes = Vec::new();
+        h.encode_rlp(&mut bytes);
+
+        // Splice one extra RLP u64 (a would-be t9 = TargetExponent) into the
+        // list payload and fix up the outer list header.
+        let extended = {
+            let header = RlpListHeader::decode(&mut &bytes[..]).expect("outer list");
+            let payload_start = bytes.len() - header.payload_length;
+            let mut payload = bytes[payload_start..].to_vec();
+            1u64.encode(&mut payload); // the trailing SAE field
+            let mut out = Vec::new();
+            RlpListHeader {
+                list: true,
+                payload_length: payload.len(),
+            }
+            .encode(&mut out);
+            out.extend_from_slice(&payload);
+            out
+        };
+
+        let mut cursor = &extended[..];
+        assert!(
+            AvaHeader::decode_rlp(&mut cursor).is_err(),
+            "a header with an SAE tail field must fail decode (fail-close)"
+        );
+        // Control: the unspliced bytes still decode.
+        let mut ok_cursor = &bytes[..];
+        AvaHeader::decode_rlp(&mut ok_cursor).expect("honest header decodes");
     }
 
     /// coreth `wrapped_block.go:476-483`: `BaseFee == nil` at AP3+ is

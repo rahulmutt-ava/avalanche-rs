@@ -627,8 +627,10 @@ impl EvmMempool {
 }
 
 /// coreth `core/state_transition.go` `IntrinsicGas` (via the vendored libevm
-/// `core/state_transition.go:70-123`).
-fn intrinsic_gas(tx: &TransactionSigned, shanghai: bool) -> u64 {
+/// `core/state_transition.go:70-123`). `pub(crate)` so `block.rs`'s
+/// `verify_intrinsic_gas` (wrapped_block.go:287-332) can reuse the same port
+/// the mempool admission path uses.
+pub(crate) fn intrinsic_gas(tx: &TransactionSigned, shanghai: bool) -> u64 {
     let input = ConsensusTx::input(tx);
     let is_create = ConsensusTx::kind(tx).is_create();
     let mut gas = if is_create {

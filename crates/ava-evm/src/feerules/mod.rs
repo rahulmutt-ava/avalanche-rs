@@ -262,6 +262,148 @@ pub fn verify_gas_limit(
     Ok(())
 }
 
+/// coreth `customheader/gas_limit.go:164-180` — `GasCapacity`.
+///
+/// Pre-Fortuna the capacity IS the gas limit (`GasLimit`, gas_limit.go:30-58:
+/// Cortina 15M / AP1 8M / pre-AP1 the parent's own limit); Fortuna+ it is the
+/// ACP-176 pre-block state's capacity (`feeStateBeforeBlock`).
+///
+/// # Errors
+/// Propagates [`Error::InvalidFeeState`] from the fee-state recompute.
+pub fn gas_capacity(spec: &AvaChainSpec, parent: &AvaHeader, time_ms: u64) -> Result<u64, Error> {
+    // gas_limit.go:169.
+    let timestamp = time_ms / 1000;
+    let phase = spec.fork_at(timestamp);
+    if phase >= AvaPhase::Fortuna {
+        // gas_limit.go:175-179.
+        let state = fee_state_before_block(spec, parent, time_ms)?;
+        return Ok(state.gas.capacity.0);
+    }
+    // gas_limit.go:170-173 → GasLimit's static arms.
+    if phase >= AvaPhase::Cortina {
+        Ok(CORTINA_GAS_LIMIT)
+    } else if phase >= AvaPhase::ApricotPhase1 {
+        Ok(APRICOT_PHASE1_GAS_LIMIT)
+    } else {
+        // gas_limit.go:52-57 — pre-AP1 falls back to the parent's limit.
+        Ok(parent.gas_limit)
+    }
+}
+
+/// coreth `customheader/gas_limit.go:61-98` — `VerifyGasUsed`.
+///
+/// The claimed `GasUsed` (plus `ExtDataGasUsed` at Fortuna+, when present)
+/// must fit within the block's gas capacity. This is the pre-execution
+/// capacity bound Go runs inside `verifyIntrinsicGas` (`wrapped_block.go:302`).
+///
+/// # Errors
+/// [`Error::ExtDataGasUsedTooLarge`] (non-u64 claim) / [`Error::FeeOverflow`]
+/// (u64 overflow of the sum) / [`Error::GasUsedOverCapacity`]; propagates
+/// [`gas_capacity`]'s errors.
+pub fn verify_gas_used(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    let mut gas_used = header.gas_used;
+    // gas_limit.go:69-82 — fold ExtDataGasUsed in at Fortuna+.
+    if spec.is_fortuna(header.time)
+        && let Some(ext) = header.ext_data_gas_used
+    {
+        let ext_u64 = u64::try_from(ext).map_err(|_| Error::ExtDataGasUsedTooLarge(ext))?;
+        gas_used = gas_used.checked_add(ext_u64).ok_or(Error::FeeOverflow)?;
+    }
+    // gas_limit.go:84-96.
+    let capacity = gas_capacity(spec, parent, header_time_ms(header))?;
+    if gas_used > capacity {
+        return Err(Error::GasUsedOverCapacity {
+            have: gas_used,
+            capacity,
+        });
+    }
+    Ok(())
+}
+
+/// coreth `customheader/time.go:20` — `MaxFutureBlockTime` (10 s), in ms.
+pub const MAX_FUTURE_BLOCK_TIME_MS: u64 = 10_000;
+
+/// coreth `customheader/time.go:55-124` — `VerifyTime`.
+///
+/// Verifies the header's `Time`/`TimeMilliseconds` against the parent, the
+/// rules, and the current time `now_ms` (Go passes `b.vm.clock.Time()`):
+/// non-decreasing vs parent (equality allowed), not beyond `now + 10s`,
+/// `TimeMilliseconds` nil pre-Granite / required + consistent at Granite, and
+/// the ACP-226 minimum block delay demanded by the PARENT's `MinDelayExcess`.
+///
+/// # Errors
+/// [`Error::BlockTooOld`] / [`Error::BlockTooFarInFuture`] /
+/// [`Error::TimeMillisecondsBeforeGranite`] / [`Error::TimeMillisecondsRequired`] /
+/// [`Error::TimeMillisecondsMismatched`] / [`Error::MinDelayNotMet`].
+pub fn verify_time(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+    now_ms: u64,
+) -> Result<(), Error> {
+    // time.go:62-63 — both sides through the HeaderTimeMilliseconds fallback.
+    let header_ms = header_time_ms(header);
+    let parent_ms = header_time_ms(parent);
+
+    // time.go:65-70 — non-decreasing; equality allowed.
+    if header_ms < parent_ms {
+        return Err(Error::BlockTooOld {
+            have: header_ms,
+            parent: parent_ms,
+        });
+    }
+
+    // time.go:72-79 — future bound.
+    let max_ms = now_ms.saturating_add(MAX_FUTURE_BLOCK_TIME_MS);
+    if header_ms > max_ms {
+        return Err(Error::BlockTooFarInFuture {
+            have: header_ms,
+            allowed: max_ms,
+        });
+    }
+
+    // time.go:81-87 — pre-Granite: the field must be absent.
+    if !spec.is_granite(header.time) {
+        if header.time_milliseconds.is_some() {
+            return Err(Error::TimeMillisecondsBeforeGranite);
+        }
+        return Ok(());
+    }
+
+    // time.go:89-92 — Granite: required.
+    let Some(ms) = header.time_milliseconds else {
+        return Err(Error::TimeMillisecondsRequired);
+    };
+
+    // time.go:94-101 — Time == TimeMilliseconds/1000.
+    let expected_time = ms / 1000;
+    if header.time != expected_time {
+        return Err(Error::TimeMillisecondsMismatched {
+            time: header.time,
+            expected: expected_time,
+        });
+    }
+
+    // time.go:103-108 — a parent without an excess (the first Granite block)
+    // cannot demand a delay.
+    let Some(parent_excess) = parent.min_delay_excess else {
+        return Ok(());
+    };
+
+    // time.go:110-121 — the ordering check above proved header_ms >= parent_ms,
+    // so the subtraction cannot underflow (Go carries the same comment).
+    let actual = header_ms.saturating_sub(parent_ms);
+    let required = DelayExcess(parent_excess).delay();
+    if actual < required {
+        return Err(Error::MinDelayNotMet { actual, required });
+    }
+    Ok(())
+}
+
 // ─── ACP-176 fee-state extra prefix + parent-fee-state plumbing (spec 21 §5) ──
 //
 // Port of coreth `plugin/evm/customheader/{extra,dynamic_fee_state,
@@ -273,7 +415,7 @@ pub fn verify_gas_limit(
 /// A header with an explicit `TimeMilliseconds` (Granite+) reports it directly;
 /// otherwise the second-granularity `Time × 1000` is used.
 #[must_use]
-fn header_time_ms(h: &AvaHeader) -> u64 {
+pub(crate) fn header_time_ms(h: &AvaHeader) -> u64 {
     match h.time_milliseconds {
         Some(ms) => ms,
         None => h.time.saturating_mul(1000),
@@ -730,6 +872,46 @@ pub fn min_delay_excess_of(
     Ok(Some(mde.0))
 }
 
+/// coreth `customheader/min_delay_excess.go:45-81` — `VerifyMinDelayExcess`.
+///
+/// Granite-only: the header's ACP-226 `MinDelayExcess` must be present and
+/// equal the recompute from the parent with the CLAIMED value as the desired
+/// target — Go's claimed-as-desired trick (`min_delay_excess.go:59-63`): if the
+/// claim was reachable in one update step, the recompute lands exactly on it;
+/// otherwise the recompute stops short and the equality fails.
+///
+/// # Errors
+/// [`Error::RemoteMinDelayExcessNil`] / [`Error::IncorrectMinDelayExcess`];
+/// propagates [`Error::InvalidFeeState`] from [`min_delay_excess_of`].
+pub fn verify_min_delay_excess(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    // min_delay_excess.go:50-52.
+    if !spec.is_granite(header.time) {
+        return Ok(());
+    }
+    // min_delay_excess.go:54-57.
+    let Some(found) = header.min_delay_excess else {
+        return Err(Error::RemoteMinDelayExcessNil);
+    };
+    // min_delay_excess.go:59-71.
+    let Some(expected) = min_delay_excess_of(spec, parent, header.time, Some(DelayExcess(found)))?
+    else {
+        // Unreachable: min_delay_excess_of returns Some whenever the child
+        // timestamp is in Granite, which the guard above established.
+        return Err(Error::InvalidFeeState(
+            "expected min delay excess absent at Granite".to_string(),
+        ));
+    };
+    // min_delay_excess.go:73-79.
+    if found != expected {
+        return Err(Error::IncorrectMinDelayExcess { expected, found });
+    }
+    Ok(())
+}
+
 // ─── Atomic-tx gas / fee (spec 10 §7.3/§17.3) ─────────────────────────────────
 
 /// `atomic_gas` — the gas an atomic (X<->C) tx consumes (coreth
@@ -1080,5 +1262,287 @@ mod fee_state_tests {
             .expect("granite child, pre-granite parent")
             .expect("some at granite");
         assert_eq!(got, INITIAL_DELAY_EXCESS.0 + 200, "moved by at most Q=200");
+    }
+}
+
+#[cfg(test)]
+mod semantic_verify_tests {
+    use ava_evm_reth::{Address, B256, Bytes, Chain, U256, keccak256};
+
+    use super::{
+        CORTINA_GAS_LIMIT, MAX_FUTURE_BLOCK_TIME_MS, gas_capacity, verify_gas_used,
+        verify_min_delay_excess, verify_time,
+    };
+    use crate::block::AvaHeader;
+    use crate::chainspec::{AvaChainSpec, NetworkUpgrades};
+    use crate::error::Error;
+    use crate::feerules::acp226::INITIAL_DELAY_EXCESS;
+
+    // Repeat of fee_state_tests::spec_from (test convention: repeat-don't-import).
+    fn spec_from(fortuna: u64, granite: u64, ap3: u64) -> AvaChainSpec {
+        const FF: u64 = u64::MAX;
+        let upgrades = NetworkUpgrades {
+            apricot_phase_1: 0,
+            apricot_phase_2: 0,
+            apricot_phase_3: ap3,
+            apricot_phase_4: ap3,
+            apricot_phase_5: ap3,
+            apricot_phase_pre_6: ap3,
+            apricot_phase_6: ap3,
+            apricot_phase_post_6: ap3,
+            banff: ap3,
+            cortina: ap3,
+            durango: ap3,
+            etna: fortuna.min(granite),
+            fortuna,
+            granite,
+            helicon: FF,
+        };
+        AvaChainSpec::from_parts(upgrades, Chain::from_id(43112), false)
+    }
+
+    // Repeat of fee_state_tests::hdr, plus a min_delay_excess parameter.
+    fn hdr(number: u64, time: u64, time_ms: Option<u64>, mde: Option<u64>) -> AvaHeader {
+        AvaHeader {
+            parent_hash: B256::ZERO,
+            uncle_hash: B256::ZERO,
+            coinbase: Address::ZERO,
+            state_root: B256::ZERO,
+            tx_root: B256::ZERO,
+            receipt_root: B256::ZERO,
+            bloom: Bytes::from(vec![0u8; 256]),
+            difficulty: U256::ZERO,
+            number,
+            gas_limit: 15_000_000,
+            gas_used: 0,
+            time,
+            extra: Bytes::new(),
+            mix_digest: B256::ZERO,
+            nonce: [0u8; 8],
+            ext_data_hash: keccak256([]),
+            base_fee: Some(U256::from(25_000_000_000u64)),
+            ext_data_gas_used: None,
+            block_gas_cost: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_root: None,
+            time_milliseconds: time_ms,
+            min_delay_excess: mde,
+        }
+    }
+
+    const T: u64 = 1_700_000_000; // an arbitrary base timestamp (seconds)
+
+    #[test]
+    fn verify_time_pre_granite_equal_timestamp_ok() {
+        // time.go:65-70 — equality allowed (multiple blocks per second pre-Granite).
+        let spec = spec_from(0, u64::MAX, 0); // Granite never active
+        let parent = hdr(1, T, None, None);
+        let header = hdr(2, T, None, None);
+        assert!(
+            verify_time(&spec, &parent, &header, T.checked_mul(1000).unwrap()).is_ok(),
+            "verify_time(equal pre-Granite timestamps)"
+        );
+    }
+
+    #[test]
+    fn verify_time_rejects_block_older_than_parent() {
+        // time.go:68-70 — errBlockTooOld.
+        let spec = spec_from(0, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        let header = hdr(2, T - 1, None, None);
+        assert!(matches!(
+            verify_time(&spec, &parent, &header, T * 1000),
+            Err(Error::BlockTooOld { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_time_future_bound_is_inclusive() {
+        // time.go:72-79 — exactly now+10s is allowed; one ms over rejects.
+        let spec = spec_from(0, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        let header = hdr(2, T + 10, None, None); // header_ms = (T+10)*1000
+        let now_ms = T * 1000; // max allowed = now_ms + 10_000 == header_ms
+        assert!(verify_time(&spec, &parent, &header, now_ms).is_ok());
+        assert!(matches!(
+            verify_time(&spec, &parent, &header, now_ms - 1),
+            Err(Error::BlockTooFarInFuture { .. })
+        ));
+        // Sanity on the constant itself (time.go:20).
+        assert_eq!(MAX_FUTURE_BLOCK_TIME_MS, 10_000);
+    }
+
+    #[test]
+    fn verify_time_rejects_time_milliseconds_before_granite() {
+        // time.go:81-86 — ErrTimeMillisecondsBeforeGranite.
+        let spec = spec_from(0, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        let header = hdr(2, T, Some(T * 1000), None);
+        assert!(matches!(
+            verify_time(&spec, &parent, &header, T * 1000),
+            Err(Error::TimeMillisecondsBeforeGranite)
+        ));
+    }
+
+    #[test]
+    fn verify_time_requires_time_milliseconds_at_granite() {
+        // time.go:89-92 — ErrTimeMillisecondsRequired.
+        let spec = spec_from(0, 0, 0); // Granite from genesis
+        let parent = hdr(1, T, Some(T * 1000), None);
+        let header = hdr(2, T + 2, None, None);
+        assert!(matches!(
+            verify_time(&spec, &parent, &header, (T + 2) * 1000),
+            Err(Error::TimeMillisecondsRequired)
+        ));
+    }
+
+    #[test]
+    fn verify_time_rejects_mismatched_time_milliseconds() {
+        // time.go:94-101 — ErrTimeMillisecondsMismatched.
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), None);
+        let header = hdr(2, T + 2, Some((T + 3) * 1000), None); // 	ime != ms/1000
+        assert!(matches!(
+            verify_time(&spec, &parent, &header, (T + 3) * 1000),
+            Err(Error::TimeMillisecondsMismatched { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_time_first_granite_block_skips_min_delay() {
+        // time.go:103-108 — parent without MinDelayExcess is exempt.
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), None); // no excess
+        let header = hdr(2, T, Some(T * 1000 + 1), None); // 1ms delay
+        assert!(verify_time(&spec, &parent, &header, T * 1000 + 1).is_ok());
+    }
+
+    #[test]
+    fn verify_time_enforces_min_delay_boundary() {
+        // time.go:110-121 — actual delay < required rejects; == passes. Each
+        // header derives `time` as `ms / 1000` so the Mismatched arm cannot
+        // fire first, whatever value `required` happens to be.
+        let spec = spec_from(0, 0, 0);
+        let required = INITIAL_DELAY_EXCESS.delay();
+        assert!(required > 0, "test premise: initial excess demands a delay");
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let exact_ms = T * 1000 + required;
+        let exact = hdr(2, exact_ms / 1000, Some(exact_ms), None);
+        let short = hdr(2, (exact_ms - 1) / 1000, Some(exact_ms - 1), None);
+        let now = exact_ms;
+        assert!(verify_time(&spec, &parent, &exact, now).is_ok());
+        assert!(matches!(
+            verify_time(&spec, &parent, &short, now),
+            Err(Error::MinDelayNotMet { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_min_delay_excess_pre_granite_is_noop() {
+        // min_delay_excess.go:50-52.
+        let spec = spec_from(0, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        let header = hdr(2, T + 2, None, None);
+        assert!(verify_min_delay_excess(&spec, &parent, &header).is_ok());
+    }
+
+    #[test]
+    fn verify_min_delay_excess_requires_field_at_granite() {
+        // min_delay_excess.go:54-57 — errRemoteMinDelayExcessNil.
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let header = hdr(2, T + 2, Some((T + 2) * 1000), None);
+        assert!(matches!(
+            verify_min_delay_excess(&spec, &parent, &header),
+            Err(Error::RemoteMinDelayExcessNil)
+        ));
+    }
+
+    #[test]
+    fn verify_min_delay_excess_accepts_reachable_claim() {
+        // min_delay_excess.go:59-71 — claimed-as-desired: an unchanged claim
+        // is always reachable (update toward itself is a no-op).
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let header = hdr(2, T + 2, Some((T + 2) * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        assert!(verify_min_delay_excess(&spec, &parent, &header).is_ok());
+    }
+
+    #[test]
+    fn verify_min_delay_excess_rejects_unreachable_claim() {
+        // min_delay_excess.go:73-79 — errIncorrectMinDelayExcess: a claim the
+        // one-step update from the parent cannot reach recomputes lower.
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let header = hdr(2, T + 2, Some((T + 2) * 1000), Some(u64::MAX));
+        assert!(matches!(
+            verify_min_delay_excess(&spec, &parent, &header),
+            Err(Error::IncorrectMinDelayExcess { .. })
+        ));
+    }
+
+    #[test]
+    fn gas_capacity_pre_fortuna_static_limits() {
+        // gas_limit.go:170-173 → GasLimit: Cortina 15M / AP1 8M / pre-AP1
+        // parent.gas_limit (gas_limit.go:52-57).
+        let cortina = spec_from(u64::MAX, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        assert_eq!(
+            gas_capacity(&cortina, &parent, T * 1000).unwrap(),
+            CORTINA_GAS_LIMIT
+        );
+    }
+
+    #[test]
+    fn gas_capacity_fortuna_uses_pre_block_fee_state() {
+        // gas_limit.go:175-179 — the ACP-176 capacity. A genesis parent whose
+        // elapsed time saturates the fill gives capacity == MaxCapacity (10M
+        // at the default target excess — the live-block-1 golden numbers in
+        // fee_state_tests::after_block_matches_live_block1_numbers).
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(0, T, Some(T * 1000), None);
+        let cap = gas_capacity(&spec, &parent, (T + 1_000_000) * 1000).unwrap();
+        assert_eq!(
+            cap, 10_000_000,
+            "saturated ACP-176 capacity at default target"
+        );
+    }
+
+    #[test]
+    fn verify_gas_used_boundary() {
+        // gas_limit.go:90-96 — errInvalidGasUsed: > capacity rejects, == passes.
+        let spec = spec_from(u64::MAX, u64::MAX, 0); // Cortina static 15M
+        let parent = hdr(1, T, None, None);
+        let mut ok_hdr = hdr(2, T + 2, None, None);
+        ok_hdr.gas_used = CORTINA_GAS_LIMIT;
+        assert!(verify_gas_used(&spec, &parent, &ok_hdr).is_ok());
+        let mut bad = hdr(2, T + 2, None, None);
+        bad.gas_used = CORTINA_GAS_LIMIT + 1;
+        assert!(matches!(
+            verify_gas_used(&spec, &parent, &bad),
+            Err(Error::GasUsedOverCapacity { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_gas_used_folds_ext_data_gas_at_fortuna() {
+        // gas_limit.go:69-82 — Fortuna+: gasUsed + extDataGasUsed vs capacity;
+        // a non-u64 claim errors (errInvalidExtraDataGasUsed).
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(0, T, Some(T * 1000), None);
+        let ms = (T + 1_000_000) * 1000;
+        let mut h = hdr(2, T + 1_000_000, Some(ms), None);
+        h.gas_used = 9_999_999;
+        h.ext_data_gas_used = Some(U256::from(2u64)); // 10_000_001 > 10M
+        assert!(matches!(
+            verify_gas_used(&spec, &parent, &h),
+            Err(Error::GasUsedOverCapacity { .. })
+        ));
+        h.ext_data_gas_used = Some(U256::from(u128::from(u64::MAX)) + U256::from(1u64));
+        assert!(matches!(
+            verify_gas_used(&spec, &parent, &h),
+            Err(Error::ExtDataGasUsedTooLarge(_))
+        ));
     }
 }

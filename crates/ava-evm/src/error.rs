@@ -82,6 +82,11 @@ pub enum Error {
     #[error("invalid gas limit: have {have}, want {want} += {limit}")]
     GasLimitOutOfBound { have: u64, want: u64, limit: u64 },
 
+    /// coreth `customheader/gas_limit.go:90-96` (`errInvalidGasUsed`,
+    /// `"invalid gas used: have %d, capacity %d"`).
+    #[error("invalid gas used: have {have}, capacity {capacity}")]
+    GasUsedOverCapacity { have: u64, capacity: u64 },
+
     /// coreth `customheader/extra.go:22` `errIncorrectFeeState`
     /// ("%w: expected %+v, found %+v") — Fortuna full-struct mismatch.
     #[error("incorrect fee state: expected {expected}, found {found}")]
@@ -90,6 +95,39 @@ pub enum Error {
     /// ("%w: expected %x as prefix, found %x") — AP3 window-prefix mismatch.
     #[error("invalid header.Extra prefix: expected {expected} as prefix, found {found}")]
     InvalidExtraPrefix { expected: String, found: String },
+
+    /// coreth `customheader/time.go:22` (`errBlockTooOld`,
+    /// `"block timestamp is too old: %d < parent %d"`).
+    #[error("block timestamp is too old: {have} < parent {parent}")]
+    BlockTooOld { have: u64, parent: u64 },
+    /// coreth `customheader/time.go:23` (`ErrBlockTooFarInFuture`,
+    /// `"block timestamp is too far in the future: %d > allowed %d"`).
+    #[error("block timestamp is too far in the future: {have} > allowed {allowed}")]
+    BlockTooFarInFuture { have: u64, allowed: u64 },
+    /// coreth `customheader/time.go:24` (`ErrTimeMillisecondsRequired`).
+    #[error("TimeMilliseconds is required after Granite activation")]
+    TimeMillisecondsRequired,
+    /// coreth `customheader/time.go:25` (`ErrTimeMillisecondsMismatched`,
+    /// `"…: header.Time (%d) != TimeMilliseconds/1000 = (%d)"`).
+    #[error(
+        "TimeMilliseconds does not match header.Time: header.Time ({time}) != TimeMilliseconds/1000 = ({expected})"
+    )]
+    TimeMillisecondsMismatched { time: u64, expected: u64 },
+    /// coreth `customheader/time.go:26` (`ErrTimeMillisecondsBeforeGranite`).
+    #[error("TimeMilliseconds should be nil before Granite activation")]
+    TimeMillisecondsBeforeGranite,
+    /// coreth `customheader/time.go:27` (`ErrMinDelayNotMet`,
+    /// `"…: actual delay %dms < required %dms"`).
+    #[error("minimum block delay not met: actual delay {actual}ms < required {required}ms")]
+    MinDelayNotMet { actual: u64, required: u64 },
+
+    /// coreth `customheader/min_delay_excess.go:18` (`errRemoteMinDelayExcessNil`).
+    #[error("remote min delay excess should not be nil")]
+    RemoteMinDelayExcessNil,
+    /// coreth `customheader/min_delay_excess.go:19` (`errIncorrectMinDelayExcess`,
+    /// `"…: expected %d, found %d"`).
+    #[error("incorrect min delay excess: expected {expected}, found {found}")]
+    IncorrectMinDelayExcess { expected: u64, found: u64 },
 
     /// coreth `consensus/dummy/consensus.go:142`
     /// (`"expected base fee %d, found %d"`; nil renders as `<nil>` in Go —
@@ -121,6 +159,22 @@ pub enum Error {
     /// ancestry / shared memory) consume the same source UTXO.
     #[error("conflicting atomic inputs")]
     ConflictingAtomicInputs,
+
+    /// coreth `ErrMissingUTXOs` (`atomic/vm/block_extension.go:271`) — an
+    /// import tx names a source UTXO that is absent from shared memory at
+    /// verify time (bootstrapped-gated presence check, `verifyUTXOsPresent`).
+    #[error("missing UTXOs")]
+    MissingUtxos,
+
+    /// coreth `atomic/vm/block_extension.go:156` (`"too large extDataGasUsed: %d"`).
+    /// Carries the claim as decoded (None mirrors Go's nil, which also fails
+    /// `BigLessOrEqualUint64`).
+    #[error("too large extDataGasUsed: {0:?}")]
+    TooLargeExtDataGasUsed(Option<U256>),
+    /// coreth `atomic/vm/block_extension.go:175`
+    /// (`"invalid extDataGasUsed: have %d, want %d"`).
+    #[error("invalid extDataGasUsed: have {have:?}, want {want}")]
+    InvalidExtDataGasUsed { have: Option<U256>, want: u64 },
 
     /// The C-Chain genesis JSON (coreth `core.Genesis`) failed to parse — bad
     /// JSON, a malformed hex field, or a missing required field (spec 10 §11.1).
@@ -318,6 +372,26 @@ pub enum Error {
     /// which client tooling greps for.
     #[error(transparent)]
     Mempool(#[from] crate::mempool::EvmMempoolError),
+
+    /// coreth `wrapped_block.go:301-304` (`errInvalidGasUsedRelativeToCapacity`,
+    /// `errors.New("invalid gas used relative to capacity")`) — wraps
+    /// [`crate::feerules::verify_gas_used`]'s error (Go: `"%w: %w"`).
+    #[error("invalid gas used relative to capacity: {0}")]
+    GasUsedRelativeToCapacity(Box<Error>),
+
+    /// coreth `wrapped_block.go:321-329`
+    /// (`errTotalIntrinsicGasCostExceedsClaimed`,
+    /// `errors.New("total intrinsic gas cost is greater than claimed gas used")`,
+    /// `"%w: intrinsic gas (%d) > claimed gas used (%d)"`).
+    #[error(
+        "total intrinsic gas cost is greater than claimed gas used: intrinsic gas ({intrinsic}) > claimed gas used ({claimed})"
+    )]
+    TotalIntrinsicGasExceedsClaimed {
+        /// The summed per-tx intrinsic gas (libevm `core.IntrinsicGas` port).
+        intrinsic: u64,
+        /// The header's claimed `gas_used`.
+        claimed: u64,
+    },
 }
 
 /// C-Chain VM result alias.
