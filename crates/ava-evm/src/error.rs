@@ -82,6 +82,11 @@ pub enum Error {
     #[error("invalid gas limit: have {have}, want {want} += {limit}")]
     GasLimitOutOfBound { have: u64, want: u64, limit: u64 },
 
+    /// coreth `customheader/gas_limit.go:90-96` (`errInvalidGasUsed`,
+    /// `"invalid gas used: have %d, capacity %d"`).
+    #[error("invalid gas used: have {have}, capacity {capacity}")]
+    GasUsedOverCapacity { have: u64, capacity: u64 },
+
     /// coreth `customheader/extra.go:22` `errIncorrectFeeState`
     /// ("%w: expected %+v, found %+v") — Fortuna full-struct mismatch.
     #[error("incorrect fee state: expected {expected}, found {found}")]

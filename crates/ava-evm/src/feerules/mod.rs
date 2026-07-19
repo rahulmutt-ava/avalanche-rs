@@ -262,6 +262,68 @@ pub fn verify_gas_limit(
     Ok(())
 }
 
+/// coreth `customheader/gas_limit.go:164-180` — `GasCapacity`.
+///
+/// Pre-Fortuna the capacity IS the gas limit (`GasLimit`, gas_limit.go:30-58:
+/// Cortina 15M / AP1 8M / pre-AP1 the parent's own limit); Fortuna+ it is the
+/// ACP-176 pre-block state's capacity (`feeStateBeforeBlock`).
+///
+/// # Errors
+/// Propagates [`Error::InvalidFeeState`] from the fee-state recompute.
+pub fn gas_capacity(spec: &AvaChainSpec, parent: &AvaHeader, time_ms: u64) -> Result<u64, Error> {
+    // gas_limit.go:169.
+    let timestamp = time_ms / 1000;
+    let phase = spec.fork_at(timestamp);
+    if phase >= AvaPhase::Fortuna {
+        // gas_limit.go:175-179.
+        let state = fee_state_before_block(spec, parent, time_ms)?;
+        return Ok(state.gas.capacity.0);
+    }
+    // gas_limit.go:170-173 → GasLimit's static arms.
+    if phase >= AvaPhase::Cortina {
+        Ok(CORTINA_GAS_LIMIT)
+    } else if phase >= AvaPhase::ApricotPhase1 {
+        Ok(APRICOT_PHASE1_GAS_LIMIT)
+    } else {
+        // gas_limit.go:52-57 — pre-AP1 falls back to the parent's limit.
+        Ok(parent.gas_limit)
+    }
+}
+
+/// coreth `customheader/gas_limit.go:61-98` — `VerifyGasUsed`.
+///
+/// The claimed `GasUsed` (plus `ExtDataGasUsed` at Fortuna+, when present)
+/// must fit within the block's gas capacity. This is the pre-execution
+/// capacity bound Go runs inside `verifyIntrinsicGas` (`wrapped_block.go:302`).
+///
+/// # Errors
+/// [`Error::ExtDataGasUsedTooLarge`] (non-u64 claim) / [`Error::FeeOverflow`]
+/// (u64 overflow of the sum) / [`Error::GasUsedOverCapacity`]; propagates
+/// [`gas_capacity`]'s errors.
+pub fn verify_gas_used(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    let mut gas_used = header.gas_used;
+    // gas_limit.go:69-82 — fold ExtDataGasUsed in at Fortuna+.
+    if spec.is_fortuna(header.time)
+        && let Some(ext) = header.ext_data_gas_used
+    {
+        let ext_u64 = u64::try_from(ext).map_err(|_| Error::ExtDataGasUsedTooLarge(ext))?;
+        gas_used = gas_used.checked_add(ext_u64).ok_or(Error::FeeOverflow)?;
+    }
+    // gas_limit.go:84-96.
+    let capacity = gas_capacity(spec, parent, header_time_ms(header))?;
+    if gas_used > capacity {
+        return Err(Error::GasUsedOverCapacity {
+            have: gas_used,
+            capacity,
+        });
+    }
+    Ok(())
+}
+
 /// coreth `customheader/time.go:20` — `MaxFutureBlockTime` (10 s), in ms.
 pub const MAX_FUTURE_BLOCK_TIME_MS: u64 = 10_000;
 
@@ -1207,7 +1269,10 @@ mod fee_state_tests {
 mod semantic_verify_tests {
     use ava_evm_reth::{Address, B256, Bytes, Chain, U256, keccak256};
 
-    use super::{MAX_FUTURE_BLOCK_TIME_MS, verify_min_delay_excess, verify_time};
+    use super::{
+        CORTINA_GAS_LIMIT, MAX_FUTURE_BLOCK_TIME_MS, gas_capacity, verify_gas_used,
+        verify_min_delay_excess, verify_time,
+    };
     use crate::block::AvaHeader;
     use crate::chainspec::{AvaChainSpec, NetworkUpgrades};
     use crate::error::Error;
@@ -1414,6 +1479,70 @@ mod semantic_verify_tests {
         assert!(matches!(
             verify_min_delay_excess(&spec, &parent, &header),
             Err(Error::IncorrectMinDelayExcess { .. })
+        ));
+    }
+
+    #[test]
+    fn gas_capacity_pre_fortuna_static_limits() {
+        // gas_limit.go:170-173 → GasLimit: Cortina 15M / AP1 8M / pre-AP1
+        // parent.gas_limit (gas_limit.go:52-57).
+        let cortina = spec_from(u64::MAX, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        assert_eq!(
+            gas_capacity(&cortina, &parent, T * 1000).unwrap(),
+            CORTINA_GAS_LIMIT
+        );
+    }
+
+    #[test]
+    fn gas_capacity_fortuna_uses_pre_block_fee_state() {
+        // gas_limit.go:175-179 — the ACP-176 capacity. A genesis parent whose
+        // elapsed time saturates the fill gives capacity == MaxCapacity (10M
+        // at the default target excess — the live-block-1 golden numbers in
+        // fee_state_tests::after_block_matches_live_block1_numbers).
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(0, T, Some(T * 1000), None);
+        let cap = gas_capacity(&spec, &parent, (T + 1_000_000) * 1000).unwrap();
+        assert_eq!(
+            cap, 10_000_000,
+            "saturated ACP-176 capacity at default target"
+        );
+    }
+
+    #[test]
+    fn verify_gas_used_boundary() {
+        // gas_limit.go:90-96 — errInvalidGasUsed: > capacity rejects, == passes.
+        let spec = spec_from(u64::MAX, u64::MAX, 0); // Cortina static 15M
+        let parent = hdr(1, T, None, None);
+        let mut ok_hdr = hdr(2, T + 2, None, None);
+        ok_hdr.gas_used = CORTINA_GAS_LIMIT;
+        assert!(verify_gas_used(&spec, &parent, &ok_hdr).is_ok());
+        let mut bad = hdr(2, T + 2, None, None);
+        bad.gas_used = CORTINA_GAS_LIMIT + 1;
+        assert!(matches!(
+            verify_gas_used(&spec, &parent, &bad),
+            Err(Error::GasUsedOverCapacity { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_gas_used_folds_ext_data_gas_at_fortuna() {
+        // gas_limit.go:69-82 — Fortuna+: gasUsed + extDataGasUsed vs capacity;
+        // a non-u64 claim errors (errInvalidExtraDataGasUsed).
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(0, T, Some(T * 1000), None);
+        let ms = (T + 1_000_000) * 1000;
+        let mut h = hdr(2, T + 1_000_000, Some(ms), None);
+        h.gas_used = 9_999_999;
+        h.ext_data_gas_used = Some(U256::from(2u64)); // 10_000_001 > 10M
+        assert!(matches!(
+            verify_gas_used(&spec, &parent, &h),
+            Err(Error::GasUsedOverCapacity { .. })
+        ));
+        h.ext_data_gas_used = Some(U256::from(u128::from(u64::MAX)) + U256::from(1u64));
+        assert!(matches!(
+            verify_gas_used(&spec, &parent, &h),
+            Err(Error::ExtDataGasUsedTooLarge(_))
         ));
     }
 }
