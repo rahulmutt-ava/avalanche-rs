@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use ava_avm::txs::components::{Output, TransferableInput, TransferableOutput};
+use ava_avm::txs::components::{Input, Output, TransferableInput, TransferableOutput};
 use ava_avm::txs::credential::FxCredential;
 use ava_codec::AvaCodec;
 use ava_codec::error::Result as CodecResult;
@@ -44,6 +44,8 @@ use ava_codec::manager::Manager;
 use ava_crypto::hashing;
 use ava_types::id::Id;
 use ava_vm::components::avax::shared_memory::{Element, Requests};
+
+use crate::error::Error;
 
 /// `atomic.CodecVersion` — the only atomic codec version (coreth
 /// `atomic/codec.go:16`).
@@ -80,6 +82,13 @@ pub const EVM_OUTPUT_GAS: u64 = (20 + 8 + 32) * TX_BYTES_GAS;
 ///
 /// coreth `plugin/evm/atomic/tx.go:54`.
 pub const EVM_INPUT_GAS: u64 = (20 + 8 + 32 + 8) * TX_BYTES_GAS + COST_PER_SIGNATURE;
+
+/// coreth `plugin/evm/upgrade/ap5/params.go:33` — `AtomicGasLimit`: the
+/// AP5..pre-Fortuna cap on a block's total atomic gas.
+pub const AP5_ATOMIC_GAS_LIMIT: u64 = 100_000;
+/// coreth `plugin/evm/upgrade/ap5/params.go:38` — `AtomicTxIntrinsicGas`: the
+/// fixed per-atomic-tx gas charged from AP5 (`GasUsed(fixedFee=true)`).
+pub const AP5_ATOMIC_TX_INTRINSIC_GAS: u64 = 10_000;
 
 // ---------------------------------------------------------------------------
 // EVMOutput / EVMInput (coreth `plugin/evm/atomic/tx.go:64`,`:79`)
@@ -420,6 +429,47 @@ impl Tx {
     pub fn unsigned_bytes(&self) -> &[u8] {
         &self.unsigned_bytes
     }
+
+    /// coreth `atomic/{import_tx.go:136-160, export_tx.go:134-153}` —
+    /// `GasUsed(fixedFee)`. Priced over the UNSIGNED bytes (Go
+    /// `Metadata.Bytes()`, `metadata.go:30` — see the `unsigned_bytes` field
+    /// doc): `len·TxBytesGas` + per-input signature costs (+ the AP5 fixed
+    /// fee). NOTE this is deliberately NOT [`crate::feerules::atomic_gas`]
+    /// (the EVMInput/EVMOutput complexity accumulator) — the verify-side
+    /// equality (`block_extension.go:174`) compares against THIS formula.
+    ///
+    /// # Errors
+    /// [`Error::FeeOverflow`] on u64 overflow (Go `math.Add`).
+    pub fn gas_used(&self, fixed_fee: bool) -> Result<u64, Error> {
+        // tx.go:340-342 — calcBytesCost over unsigned bytes.
+        let len = u64::try_from(self.unsigned_bytes.len()).map_err(|_| Error::FeeOverflow)?;
+        let mut cost = TX_BYTES_GAS.checked_mul(len).ok_or(Error::FeeOverflow)?;
+        match &self.unsigned {
+            // import_tx.go:141-150 — Σ in.In.Cost() (secp: sigIndices·1000).
+            AtomicTx::Import(tx) => {
+                for input in &tx.imported_inputs {
+                    let Input::SecpTransfer(transfer_in) = &input.r#in;
+                    let c = transfer_in.input.cost().map_err(|_| Error::FeeOverflow)?;
+                    cost = cost.checked_add(c).ok_or(Error::FeeOverflow)?;
+                }
+            }
+            // export_tx.go:135-143 — len(Ins) · CostPerSignature.
+            AtomicTx::Export(tx) => {
+                let ins = u64::try_from(tx.ins.len()).map_err(|_| Error::FeeOverflow)?;
+                let sig_cost = ins
+                    .checked_mul(COST_PER_SIGNATURE)
+                    .ok_or(Error::FeeOverflow)?;
+                cost = cost.checked_add(sig_cost).ok_or(Error::FeeOverflow)?;
+            }
+        }
+        // import_tx.go:151-156 / export_tx.go:145-150.
+        if fixed_fee {
+            cost = cost
+                .checked_add(AP5_ATOMIC_TX_INTRINSIC_GAS)
+                .ok_or(Error::FeeOverflow)?;
+        }
+        Ok(cost)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +675,47 @@ mod tests {
             "0505050505050505050505050505050505050505"
         );
         assert_eq!(hex::encode(&elem.value), EXPORT_UTXO_VALUE_HEX);
+    }
+
+    #[test]
+    fn gas_used_matches_go_formula() {
+        // coreth import_tx.go:136-160 / export_tx.go:134-153.
+        let mut import = Tx::new(AtomicTx::Import(golden_import()));
+        // Tx::new does not populate unsigned_bytes; run the same
+        // initialize path the golden round-trip test uses to fill the cache.
+        import.initialize().expect("initialize import");
+        let base = import.gas_used(false).expect("import gas");
+        // import = len(unsigned_bytes)*TxBytesGas + Σ in.cost(); the golden
+        // import has one input with one sig index ⇒ + COST_PER_SIGNATURE.
+        assert_eq!(
+            base,
+            import.unsigned_bytes.len() as u64 * TX_BYTES_GAS + COST_PER_SIGNATURE,
+            "Tx::gas_used(import, fixed_fee=false)"
+        );
+        // fixedFee (AP5+) adds exactly ap5.AtomicTxIntrinsicGas.
+        assert_eq!(
+            import.gas_used(true).expect("import gas fixed"),
+            base + AP5_ATOMIC_TX_INTRINSIC_GAS
+        );
+
+        let mut export = Tx::new(AtomicTx::Export(golden_export()));
+        export.initialize().expect("initialize export");
+        let ins = match &export.unsigned {
+            AtomicTx::Export(t) => t.ins.len() as u64,
+            AtomicTx::Import(_) => unreachable!(),
+        };
+        assert_eq!(
+            export.gas_used(false).expect("export gas"),
+            export.unsigned_bytes.len() as u64 * TX_BYTES_GAS + ins * COST_PER_SIGNATURE,
+            "Tx::gas_used(export, fixed_fee=false)"
+        );
+    }
+
+    #[test]
+    fn ap5_constants_match_go() {
+        // coreth plugin/evm/upgrade/ap5/params.go:33,38.
+        assert_eq!(AP5_ATOMIC_GAS_LIMIT, 100_000);
+        assert_eq!(AP5_ATOMIC_TX_INTRINSIC_GAS, 10_000);
     }
 
     #[test]

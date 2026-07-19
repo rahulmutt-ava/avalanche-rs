@@ -1005,7 +1005,15 @@ impl EvmBlock {
         if bootstrapped {
             self.verify_intrinsic_gas(ctx.chain_spec(), parent)?;
         }
-        // Task 6 inserts atomic verify_ext_data_gas_used here.
+        // coreth atomic extension SemanticVerify (block_extension.go:142-177)
+        // — the ExtDataGasUsed value check. Unconditional at AP4+ (only the
+        // shared-memory UTXO-presence half of the Go extension is
+        // bootstrapped-gated; see Task 7's equivalence finding).
+        crate::atomic::verify::verify_ext_data_gas_used(
+            ctx.chain_spec(),
+            self.header(),
+            self.atomic_txs(),
+        )?;
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)

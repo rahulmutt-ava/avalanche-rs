@@ -160,6 +160,16 @@ pub enum Error {
     #[error("conflicting atomic inputs")]
     ConflictingAtomicInputs,
 
+    /// coreth `atomic/vm/block_extension.go:156` (`"too large extDataGasUsed: %d"`).
+    /// Carries the claim as decoded (None mirrors Go's nil, which also fails
+    /// `BigLessOrEqualUint64`).
+    #[error("too large extDataGasUsed: {0:?}")]
+    TooLargeExtDataGasUsed(Option<U256>),
+    /// coreth `atomic/vm/block_extension.go:175`
+    /// (`"invalid extDataGasUsed: have %d, want %d"`).
+    #[error("invalid extDataGasUsed: have {have:?}, want {want}")]
+    InvalidExtDataGasUsed { have: Option<U256>, want: u64 },
+
     /// The C-Chain genesis JSON (coreth `core.Genesis`) failed to parse — bad
     /// JSON, a malformed hex field, or a missing required field (spec 10 §11.1).
     #[error("invalid C-Chain genesis: {0}")]
