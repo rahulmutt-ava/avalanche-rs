@@ -226,3 +226,61 @@ Three-layer gate, identical in shape to the `verifyHeaderGasFields` branch:
   extend the existing single callout (predecessor branch, plan AS-BUILT).
 - Out of scope: tx gossip, `VerifyTime`'s SAE/saevm analog, the M9.15 follower follow-up
   sweep, nightly live-arm cadence.
+
+## AS-BUILT notes
+
+### SAE-tail parse fail-close (pin, Task 7)
+
+`AvaHeader` models only the eight coreth optional header tail fields
+(`base_fee` … `min_delay_excess`); the six SAE-only fields Go's `HeaderExtra`
+adds beyond them (`TargetExponent`, `MinPriceExponent`,
+`Settled{Height,GasUnix,GasNumerator,Excess}` —
+`customtypes/header_ext.go:47-53`) are not modelled. A coreth block carrying any
+of them is rejected by Rust at PARSE via `decode_rlp`'s trailing-bytes
+fail-close (`block.rs:250-252`: `!body.is_empty() ⇒ RlpError::UnexpectedLength`),
+whereas Go rejects it at `semanticVerify`
+(`VerifyTargetExponent`/`VerifyMinPriceExponent`/`VerifySettled`,
+`wrapped_block.go:350-366`). Same verdict, different stage. Pinned by
+`block::tests::trailing_sae_tail_field_fails_decode` (splices a ninth trailing
+RLP u64 where t9 = TargetExponent would sit; asserts decode errs and the
+unspliced control decodes). The pin was proven able to fail by temporarily
+neutering the trailing-bytes check.
+
+### Check item 1 — predicate-pass gating: DEFERRED (equivalence NOT yet needed)
+
+Verified: the warp predicate pass (`precompile/warp.rs::build_block_predicates`)
+has **no production caller** — grep across `crates/` finds only doc-comment
+references. The prod verify path `VerifiedEvmBlock::verify` (`vm.rs:175-181`)
+passes `AvaExecCtx::default()` (empty predicate results, `pchain_height = 0`) and
+runs no async predicate pass beforehand. So there is nothing to `bootstrapped`-gate
+yet; Go's `verifyPredicates` gate (`wrapped_block.go:376-386`) has no live Rust
+analog. This is a pre-existing M6.31-scoped deferral, **not** a one-line gate —
+NOT wired in this branch. Follow-up: when the predicate pass is wired onto the
+verify path, gate its invocation on the same `bootstrapped` flag Task 4 threaded
+through `verify_with_predicates`.
+
+### Check item 2 — atomic UTXO presence: GAP CONFIRMED → `verify_utxos_present` ported (Task 7)
+
+Traced the verify path: `EvmBlock::verify_with_predicates` executes the EVM
+batch with `NoopPreHook` (`block.rs:1047`), so the atomic Import/Export
+`EVMStateTransfer` is **not** applied at verify (an M6.15 deferral — the
+`AtomicStateHook` is wired only on the build path, `builder.rs:199/242`), and
+even that hook only mutates EVM overlay state (`atomic/hook.rs`) — it never reads
+shared memory. The atomic backend touches shared memory **only via
+`SharedMemory::apply` at accept** (`atomic/backend.rs:151`); there was **no
+`SharedMemory::get` anywhere on the verify path**. Go's `verifyUTXOsPresent`
+(`block_extension.go:179-190`, bootstrapped-gated) is the shared-memory
+import-UTXO presence check with no Rust analog — a fail-open (the fifth this
+family closes). Per the gap branch, `atomic::verify::verify_utxos_present` was
+added (mirrors `block_extension.go:254-275`: bonus-block skip via
+`is_bonus_block`, `SharedMemory::get(chainID, RemoveRequests)` per tx, `Error::MissingUtxos`
+= coreth `ErrMissingUTXOs`) and wired into `verify_with_predicates` under
+`bootstrapped && atomic_backend.is_some()`, right after the `ExtDataGasUsed`
+check (mirroring Go's extension-`SemanticVerify` placement). Tests:
+`atomic::verify::{verify_utxos_present_import, verify_utxos_present_skips_bonus_block}`
+(mock `SharedMemory` returning `NotFound`). Caveat: because the verify path still
+uses `NoopPreHook`, an import block cannot currently pass verify regardless (its
+declared state root includes atomic credits the verify recompute omits); this
+presence check is the Go-equivalent *early* rejection and closes the specific
+`verifyUTXOsPresent` gap, but the broader atomic-verify EVMStateTransfer wiring
+(M6.15) remains a separate open deferral.

@@ -157,6 +157,30 @@ guard proving the Byzantine-proposer fail-open the whole-branch review flagged
 
 ---
 
+## `wrappedBlock.semanticVerify` family (C-Chain semantic-verify port)
+
+coreth's `semanticVerify` (`plugin/evm/wrapped_block.go:335-391`) runs the
+parent-dependent checks + the atomic extension's `SemanticVerify`
+(`atomic/vm/block_extension.go:142-190`) in Go's call order. The rows below
+track the Rust port of that stage as wired into
+`EvmBlock::verify_with_predicates` (`block.rs:963`). The SAE-only header tail
+fields Go rejects at `semanticVerify` (`VerifyTargetExponent` /
+`VerifyMinPriceExponent` / `VerifySettled`) are covered by a **parse-stage**
+fail-close equivalence instead — the same verdict, one stage earlier.
+
+| Go check | Status | Rust counterpart / note |
+|---|---|---|
+| `VerifyTime` (`customheader/time.go`) | ✅ ported | `feerules::verify_time` (called from `block.rs::verify_with_predicates`); `semantic_verify.rs::{mismatched_time_milliseconds_is_rejected, strip_time_milliseconds_is_rejected, far_future_block_is_rejected, honest_block_still_verifies}` |
+| `VerifyMinDelayExcess` (`customheader/min_delay_excess.go:45`) | ✅ ported | `feerules::verify_min_delay_excess`; `semantic_verify.rs::wrong_min_delay_excess_is_rejected` |
+| `VerifyGasUsed` / `GasCapacity` (`customheader/gas_limit.go:61,164`) | ✅ ported | `feerules::{verify_gas_used, gas_capacity}` (in `verify_header_gas_fields`) |
+| `verifyIntrinsicGas` (`wrapped_block.go:287`, bootstrapped-gated) | ✅ ported | `EvmBlock::verify_intrinsic_gas` (bootstrapped-gated, `block.rs:1005`); `semantic_verify.rs::{understated_gas_used_is_rejected_when_bootstrapped, understated_gas_used_skipped_while_bootstrapping}` |
+| `blockExtension.SemanticVerify` `ExtDataGasUsed` (`block_extension.go:142`) | ✅ ported | `atomic::verify::verify_ext_data_gas_used` + `Tx::gas_used`; `atomic::verify::verify_ext_data_gas_used_arms` |
+| `VerifyTargetExponent` / `VerifyMinPriceExponent` / `VerifySettled` (`wrapped_block.go:350-366`) | n/a | parse fail-close equivalence — `AvaHeader::decode_rlp` rejects the six SAE-only header tail fields at the trailing-bytes check (`block.rs:250-252`); pinned by `block::tests::trailing_sae_tail_field_fails_decode`. Go rejects the same bytes at `semanticVerify`; same verdict, different stage |
+| `verifyPredicates` (`wrapped_block.go:376-386`, bootstrapped-gated) | 🟡 partial | the warp predicate pass exists (`precompile/warp.rs::build_block_predicates`) but is NOT invoked on the prod verify path — `VerifiedEvmBlock::verify` (`vm.rs:175-181`) passes `AvaExecCtx::default()` (empty predicates) and no async predicate pass runs before it (grep finds no production caller of `build_block_predicates`). Pre-existing M6.31 deferral. Follow-up: when the pass is wired on the verify path, gate it on the same `bootstrapped` flag Go uses (and this branch threads through `verify_with_predicates`) |
+| `verifyUTXOsPresent` (`block_extension.go:179-190`, bootstrapped-gated) | ✅ ported | `atomic::verify::verify_utxos_present` — wired into `block.rs::verify_with_predicates` under the `bootstrapped` flag + a wired atomic backend; skips bonus blocks (`is_bonus_block`) and rejects an absent import UTXO with `Error::MissingUtxos` (coreth `ErrMissingUTXOs`). `atomic::verify::{verify_utxos_present_import, verify_utxos_present_skips_bonus_block}`. NOTE: this closed a fail-open — no shared-memory presence check existed on the verify path before (only `SharedMemory::apply` at accept). See the design-spec AS-BUILT note re: the broader NoopPreHook verify-path caveat |
+
+---
+
 ## plugin/evm/atomic (root — tx, gossip)
 
 | Go test | Status | Rust counterpart / note |
