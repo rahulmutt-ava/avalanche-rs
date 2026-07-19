@@ -810,6 +810,46 @@ pub fn min_delay_excess_of(
     Ok(Some(mde.0))
 }
 
+/// coreth `customheader/min_delay_excess.go:45-81` — `VerifyMinDelayExcess`.
+///
+/// Granite-only: the header's ACP-226 `MinDelayExcess` must be present and
+/// equal the recompute from the parent with the CLAIMED value as the desired
+/// target — Go's claimed-as-desired trick (`min_delay_excess.go:59-63`): if the
+/// claim was reachable in one update step, the recompute lands exactly on it;
+/// otherwise the recompute stops short and the equality fails.
+///
+/// # Errors
+/// [`Error::RemoteMinDelayExcessNil`] / [`Error::IncorrectMinDelayExcess`];
+/// propagates [`Error::InvalidFeeState`] from [`min_delay_excess_of`].
+pub fn verify_min_delay_excess(
+    spec: &AvaChainSpec,
+    parent: &AvaHeader,
+    header: &AvaHeader,
+) -> Result<(), Error> {
+    // min_delay_excess.go:50-52.
+    if !spec.is_granite(header.time) {
+        return Ok(());
+    }
+    // min_delay_excess.go:54-57.
+    let Some(found) = header.min_delay_excess else {
+        return Err(Error::RemoteMinDelayExcessNil);
+    };
+    // min_delay_excess.go:59-71.
+    let Some(expected) = min_delay_excess_of(spec, parent, header.time, Some(DelayExcess(found)))?
+    else {
+        // Unreachable: min_delay_excess_of returns Some whenever the child
+        // timestamp is in Granite, which the guard above established.
+        return Err(Error::InvalidFeeState(
+            "expected min delay excess absent at Granite".to_string(),
+        ));
+    };
+    // min_delay_excess.go:73-79.
+    if found != expected {
+        return Err(Error::IncorrectMinDelayExcess { expected, found });
+    }
+    Ok(())
+}
+
 // ─── Atomic-tx gas / fee (spec 10 §7.3/§17.3) ─────────────────────────────────
 
 /// `atomic_gas` — the gas an atomic (X<->C) tx consumes (coreth
@@ -1167,7 +1207,7 @@ mod fee_state_tests {
 mod semantic_verify_tests {
     use ava_evm_reth::{Address, B256, Bytes, Chain, U256, keccak256};
 
-    use super::{MAX_FUTURE_BLOCK_TIME_MS, verify_time};
+    use super::{MAX_FUTURE_BLOCK_TIME_MS, verify_min_delay_excess, verify_time};
     use crate::block::AvaHeader;
     use crate::chainspec::{AvaChainSpec, NetworkUpgrades};
     use crate::error::Error;
@@ -1330,6 +1370,50 @@ mod semantic_verify_tests {
         assert!(matches!(
             verify_time(&spec, &parent, &short, now),
             Err(Error::MinDelayNotMet { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_min_delay_excess_pre_granite_is_noop() {
+        // min_delay_excess.go:50-52.
+        let spec = spec_from(0, u64::MAX, 0);
+        let parent = hdr(1, T, None, None);
+        let header = hdr(2, T + 2, None, None);
+        assert!(verify_min_delay_excess(&spec, &parent, &header).is_ok());
+    }
+
+    #[test]
+    fn verify_min_delay_excess_requires_field_at_granite() {
+        // min_delay_excess.go:54-57 — errRemoteMinDelayExcessNil.
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let header = hdr(2, T + 2, Some((T + 2) * 1000), None);
+        assert!(matches!(
+            verify_min_delay_excess(&spec, &parent, &header),
+            Err(Error::RemoteMinDelayExcessNil)
+        ));
+    }
+
+    #[test]
+    fn verify_min_delay_excess_accepts_reachable_claim() {
+        // min_delay_excess.go:59-71 — claimed-as-desired: an unchanged claim
+        // is always reachable (update toward itself is a no-op).
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let header = hdr(2, T + 2, Some((T + 2) * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        assert!(verify_min_delay_excess(&spec, &parent, &header).is_ok());
+    }
+
+    #[test]
+    fn verify_min_delay_excess_rejects_unreachable_claim() {
+        // min_delay_excess.go:73-79 — errIncorrectMinDelayExcess: a claim the
+        // one-step update from the parent cannot reach recomputes lower.
+        let spec = spec_from(0, 0, 0);
+        let parent = hdr(1, T, Some(T * 1000), Some(INITIAL_DELAY_EXCESS.0));
+        let header = hdr(2, T + 2, Some((T + 2) * 1000), Some(u64::MAX));
+        assert!(matches!(
+            verify_min_delay_excess(&spec, &parent, &header),
+            Err(Error::IncorrectMinDelayExcess { .. })
         ));
     }
 }

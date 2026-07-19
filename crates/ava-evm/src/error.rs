@@ -116,6 +116,14 @@ pub enum Error {
     #[error("minimum block delay not met: actual delay {actual}ms < required {required}ms")]
     MinDelayNotMet { actual: u64, required: u64 },
 
+    /// coreth `customheader/min_delay_excess.go:18` (`errRemoteMinDelayExcessNil`).
+    #[error("remote min delay excess should not be nil")]
+    RemoteMinDelayExcessNil,
+    /// coreth `customheader/min_delay_excess.go:19` (`errIncorrectMinDelayExcess`,
+    /// `"…: expected %d, found %d"`).
+    #[error("incorrect min delay excess: expected {expected}, found {found}")]
+    IncorrectMinDelayExcess { expected: u64, found: u64 },
+
     /// coreth `consensus/dummy/consensus.go:142`
     /// (`"expected base fee %d, found %d"`; nil renders as `<nil>` in Go —
     /// `Option::None`'s `{:?}` is the Rust analogue).
