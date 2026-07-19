@@ -1564,6 +1564,37 @@ git add crates/ava-evm/tests/proposer_candidates.rs crates/ava-evm/tests/vectors
 git commit -m "test(ava-evm): verdict corpus grows semantic-verify mutations — Go and Rust reject identically (recorded oracle re-run)"
 ```
 
+> **AS-BUILT (Task 8, 2026-07-19).** Corpus grew from 10 → **16 adversarial
+> mutants** (+ honest), all GREEN via `proposer_verdicts_hold` against the LIVE
+> Go judge (oracle pin `a4290dc0f4`, rpcchainvm=45). The six new
+> `semanticVerify`-family classes:
+> `mismatched_time_milliseconds`/`far_future_time`/`wrong_min_delay_excess`/`understated_gas_used`
+> reject with IDENTICAL Go+Rust sentinels; `missing_time_milliseconds` and
+> `trailing_sae_tail_field` are recorded as documented **matched-but-earlier
+> asymmetries** (both reject, at each side's earliest check).
+> - **Finding (brief table correction, beyond the two the task context already
+>   flagged):** the honest candidate is block 1 on genesis, whose ACP-176 fee
+>   state has `excess` at its attractor `0` but `capacity` NOT saturated
+>   (it grows with elapsed time). So `mismatched_time_milliseconds` /
+>   `far_future_time` are NOT "restamp-free" as the brief predicted — shifting
+>   the timestamp changes the capacity recompute, and because Rust runs
+>   `verify_header_gas_fields` before `verify_time` (Go runs `VerifyTime` first,
+>   in `semanticVerify`), un-restamped Rust would reject at `IncorrectFeeState`
+>   before `VerifyTime`. Both are therefore RESTAMPED (like `understated_gas_used`),
+>   isolating `VerifyTime` on both sides. No production code changed; no check
+>   weakened.
+> - **Step 6 (export-tx `inflated_ext_data_gas_used`) — DEFERRED (fallback taken).**
+>   The Go judge (`vmtest.SetupTestVM`) takes `CChainID`/`XChainID`/`AVAXAssetID`
+>   from `ids.GenerateTestID()` (`snow/snowtest/context.go:30-32`,
+>   process-counter-derived), so an offline Rust-built export tx cannot match
+>   them; coreth's `ExportTx.SemanticVerify` rejects on a chain/asset mismatch
+>   before `ExtDataGasUsed` — a fixture reason unrelated to this branch, and the
+>   "honest export accepted" invariant cannot hold. Documented as a `// DEFERRED:`
+>   note in `proposer_candidates.rs`; PORTING.md `ExtDataGasUsed` row set 🟡
+>   (unit + golden-constant + the HEADER-level `oversized_ext_data_gas_used`
+>   oracle leg still cover the surface). Lift by injecting fixed chain/asset IDs
+>   into the Go judge's snow context (a judge-file change) — tracked follow-up.
+
 ---
 
 ### Task 9: Closeout — docs, workspace gates, live gates

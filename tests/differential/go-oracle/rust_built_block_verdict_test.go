@@ -117,7 +117,7 @@ func TestRustBuiltBlockVerdicts(t *testing.T) {
 	}
 
 	out := rustVerdictsFileJSON{
-		Comment:  "LIVE Go-oracle verdict leg for avalanche-rs M9.15 Task 6: coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 10 adversarial header mutations) over the genesis.json committed beside this corpus.",
+		Comment:  "LIVE Go-oracle verdict leg for avalanche-rs (M9.15 Task 6 + C-Chain semantic-verify Task 8): coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 16 adversarial mutations spanning syntacticVerify structural checks, verifyHeaderGasFields fee/gas equality checks, and the semanticVerify family — VerifyTime / VerifyMinDelayExcess / verifyIntrinsicGas / VerifyTargetExponent) over the genesis.json committed beside this corpus.",
 		GoCommit: rustVerdictGoCommit(),
 		Verdicts: verdicts,
 	}

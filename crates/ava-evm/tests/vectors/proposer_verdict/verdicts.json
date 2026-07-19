@@ -1,5 +1,5 @@
 {
-  "_comment": "LIVE Go-oracle verdict leg for avalanche-rs M9.15 Task 6: coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 10 adversarial header mutations) over the genesis.json committed beside this corpus.",
+  "_comment": "LIVE Go-oracle verdict leg for avalanche-rs (M9.15 Task 6 + C-Chain semantic-verify Task 8): coreth judges Rust-built C-Chain candidate blocks (the honest builder output + 16 adversarial mutations spanning syntacticVerify structural checks, verifyHeaderGasFields fee/gas equality checks, and the semanticVerify family — VerifyTime / VerifyMinDelayExcess / verifyIntrinsicGas / VerifyTargetExponent) over the genesis.json committed beside this corpus.",
   "go_commit": "a4290dc0f47f2694572e156cadb94ef43e2eab22",
   "verdicts": [
     {
@@ -8,13 +8,28 @@
       "error": "syntactic block verification failed: invalid coinbase 0x3333333333333333333333333333333333333333 does not match required blackhole address 0x0100000000000000000000000000000000000000"
     },
     {
+      "name": "far_future_time",
+      "accepted": false,
+      "error": "failed to verify block: block timestamp is too far in the future: 64060588800000 \u003e allowed 1784454771891"
+    },
+    {
       "name": "honest",
       "accepted": true
+    },
+    {
+      "name": "mismatched_time_milliseconds",
+      "accepted": false,
+      "error": "failed to verify block: TimeMilliseconds does not match header.Time: header.Time (1607144402) != TimeMilliseconds/1000 = (1607144407)"
     },
     {
       "name": "missing_cancun_tail",
       "accepted": false,
       "error": "rlp: input string too short for common.Hash, decoding into (types.Block)(types.extblock)(*types.Header)(customtypes.HeaderSerializable).ParentBeaconRoot"
+    },
+    {
+      "name": "missing_time_milliseconds",
+      "accepted": false,
+      "error": "failed to verify block: block timestamp is too old: 0 \u003c parent 1607144400000"
     },
     {
       "name": "nonzero_nonce",
@@ -32,6 +47,16 @@
       "error": "incorrect fee state: expected {Gas:{Capacity:3979000 Excess:21000} TargetExcess:0}, found {Gas:{Capacity:3979000 Excess:281474976731656} TargetExcess:0}"
     },
     {
+      "name": "trailing_sae_tail_field",
+      "accepted": false,
+      "error": "failed to verify block: remote target exponent should be nil: 0xe430a5f9aba05ce91224da3bca240a949577ab430c56e8730925b8d315df2c56"
+    },
+    {
+      "name": "understated_gas_used",
+      "accepted": false,
+      "error": "failed to verify block: failed to verify intrinsic gas: total intrinsic gas cost is greater than claimed gas used: intrinsic gas (21000) \u003e claimed gas used (0)"
+    },
+    {
       "name": "wrong_base_fee",
       "accepted": false,
       "error": "expected base fee 1, found 2"
@@ -45,6 +70,11 @@
       "name": "wrong_gas_limit",
       "accepted": false,
       "error": "invalid gas limit: have 10000001, want 10000000"
+    },
+    {
+      "name": "wrong_min_delay_excess",
+      "accepted": false,
+      "error": "failed to verify block: incorrect min delay excess: expected 7970324, found 18446744073709551615"
     },
     {
       "name": "wrong_tx_root",
