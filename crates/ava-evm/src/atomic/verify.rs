@@ -44,6 +44,7 @@ use std::sync::OnceLock;
 
 use ava_evm_reth::U256;
 use ava_types::id::Id;
+use ava_vm::components::avax::shared_memory::SharedMemory;
 
 use crate::atomic::tx::{AP5_ATOMIC_GAS_LIMIT, AtomicTx, Tx};
 use crate::block::AvaHeader;
@@ -274,6 +275,55 @@ pub fn is_bonus_block(height: u64, id: Id) -> bool {
     mainnet_bonus_blocks().get(&height) == Some(&id)
 }
 
+/// Port of coreth `blockExtension.verifyUTXOsPresent`
+/// (`plugin/evm/atomic/vm/block_extension.go:254-275`): verify that every
+/// source UTXO an import tx names is present in shared memory at verify time.
+///
+/// Go runs this from `extension.SemanticVerify` **only when the VM is
+/// bootstrapped** (`block_extension.go:179-190`) — during bootstrap the peer
+/// chains may not have populated their indices yet, and a canonically-accepted
+/// block is trusted to have valid inputs. The caller must reproduce that gate.
+///
+/// As in Go, this "does not fully verify that this block can spend these UTXOs"
+/// (the conflict/spend checks live in [`verify_no_conflicts`] +
+/// `EVMStateTransfer`); it guarantees only that a block failing later checks was
+/// built by an incorrect proposer, so such a block is classified correctly.
+/// Bonus blocks (the historical mainnet repair set) are skipped exactly as Go's
+/// `AtomicBackend.IsBonus` short-circuit does (`block_extension.go:258-261`).
+///
+/// Each source's `RemoveRequests` are looked up via `SharedMemory.Get`
+/// (`block_extension.go:270`); export txs carry only `PutRequests`, so their
+/// (empty) remove set is a no-op, matching Go.
+///
+/// # Errors
+/// - [`Error::MissingUtxos`] if a `SharedMemory.Get` fails (a named UTXO is
+///   absent) — coreth `ErrMissingUTXOs`.
+/// - [`Error::ConflictingAtomicInputs`] if computing an export tx's atomic ops
+///   fails to serialize (coreth's `utx.AtomicOps()` error path).
+pub fn verify_utxos_present(
+    shared_memory: &dyn SharedMemory,
+    txs: &[Tx],
+    height: u64,
+    block_id: Id,
+) -> Result<()> {
+    if is_bonus_block(height, block_id) {
+        return Ok(());
+    }
+    for tx in txs {
+        let (chain_id, requests) = tx
+            .unsigned
+            .atomic_ops(tx.id())
+            .map_err(|_| Error::ConflictingAtomicInputs)?;
+        // Mirror Go: `SharedMemory.Get(chainID, requests.RemoveRequests)`
+        // unconditionally. For an export tx the remove set is empty, so the
+        // lookup is a no-op; for an import tx it names the consumed UTXO(s).
+        shared_memory
+            .get(chain_id, &requests.remove)
+            .map_err(|_| Error::MissingUtxos)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +472,80 @@ mod tests {
             verify_ext_data_gas_used(&pre_ap4, &header, std::slice::from_ref(&tx)).is_ok(),
             "pre-AP4 no-op"
         );
+    }
+
+    /// A minimal [`SharedMemory`] whose `get` either succeeds (UTXO present) or
+    /// fails with `NotFound` (absent) — the only method `verify_utxos_present`
+    /// exercises. `indexed`/`apply` return trivial success (never called here).
+    struct MockSharedMemory {
+        present: bool,
+    }
+
+    impl SharedMemory for MockSharedMemory {
+        fn get(&self, _peer_chain: Id, keys: &[Vec<u8>]) -> ava_vm::error::Result<Vec<Vec<u8>>> {
+            if self.present {
+                Ok(keys.iter().map(|_| Vec::new()).collect())
+            } else {
+                Err(ava_vm::error::Error::NotFound)
+            }
+        }
+
+        fn indexed(
+            &self,
+            _peer_chain: Id,
+            _traits: &[Vec<u8>],
+            _start_trait: &[u8],
+            _start_key: &[u8],
+            _limit: usize,
+        ) -> ava_vm::error::Result<ava_vm::components::avax::shared_memory::IndexedResult> {
+            Ok((Vec::new(), Vec::new(), Vec::new()))
+        }
+
+        fn apply(
+            &self,
+            _requests: BTreeMap<Id, ava_vm::components::avax::shared_memory::Requests>,
+            _batches: &[ava_database::BatchOps],
+        ) -> ava_vm::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// block_extension.go:254-275 — an import tx whose source UTXO is absent
+    /// from shared memory is rejected with `ErrMissingUTXOs`; the same block
+    /// verifies once the UTXO is present.
+    #[test]
+    fn verify_utxos_present_import() {
+        let mut tx = Tx::new(AtomicTx::Import(golden_import()));
+        tx.initialize().expect("initialize import");
+        let txs = std::slice::from_ref(&tx);
+
+        // Absent ⇒ ErrMissingUTXOs.
+        let absent = MockSharedMemory { present: false };
+        assert!(
+            matches!(
+                verify_utxos_present(&absent, txs, 2, Id::EMPTY),
+                Err(Error::MissingUtxos)
+            ),
+            "verify_utxos_present rejects an absent import UTXO"
+        );
+
+        // Present ⇒ Ok.
+        let present = MockSharedMemory { present: true };
+        verify_utxos_present(&present, txs, 2, Id::EMPTY)
+            .expect("verify_utxos_present accepts a present import UTXO");
+    }
+
+    /// A bonus block short-circuits to `Ok` even when shared memory reports the
+    /// UTXO absent (coreth `AtomicBackend.IsBonus`, block_extension.go:258-261).
+    #[test]
+    fn verify_utxos_present_skips_bonus_block() {
+        let mut tx = Tx::new(AtomicTx::Import(golden_import()));
+        tx.initialize().expect("initialize import");
+        let bonus_id: Id = "Njm9TcLUXRojZk8YhEM6ksvfiPdC1TME4zJvGaDXgzMCyB6oB"
+            .parse()
+            .expect("valid CB58 bonus id");
+        let absent = MockSharedMemory { present: false };
+        verify_utxos_present(&absent, std::slice::from_ref(&tx), 102972, bonus_id)
+            .expect("bonus block skips the UTXO-presence check");
     }
 }

@@ -1008,12 +1008,30 @@ impl EvmBlock {
         // coreth atomic extension SemanticVerify (block_extension.go:142-177)
         // — the ExtDataGasUsed value check. Unconditional at AP4+ (only the
         // shared-memory UTXO-presence half of the Go extension is
-        // bootstrapped-gated; see Task 7's equivalence finding).
+        // bootstrapped-gated; see below).
         crate::atomic::verify::verify_ext_data_gas_used(
             ctx.chain_spec(),
             self.header(),
             self.atomic_txs(),
         )?;
+        // coreth atomic extension SemanticVerify's second half
+        // (block_extension.go:179-190): the import-tx source UTXOs must be
+        // present in shared memory. Bootstrapped-gated exactly as Go is —
+        // during bootstrap the peer chains may not have populated their indices
+        // and the block is canonically accepted, so the check is skipped. Only
+        // runs when the atomic backend (hence a shared-memory handle) is wired.
+        // NOTE: the atomic Import/Export EVMStateTransfer itself is not yet
+        // applied on this verify path (execute uses NoopPreHook below, M6.15
+        // deferral), so this presence check is the ONLY shared-memory read the
+        // verify path performs today; it is the Go-equivalent early rejection.
+        if bootstrapped && let Some(backend) = ctx.atomic_backend() {
+            crate::atomic::verify::verify_utxos_present(
+                backend.shared_memory().as_ref(),
+                self.atomic_txs(),
+                self.number(),
+                ava_types::id::Id::from(self.hash().0),
+            )?;
+        }
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
         // block if its atomic txs double-spend each other (intra-block conflict)
@@ -1703,6 +1721,53 @@ mod tests {
         };
         let sig = EvmSignature::new(U256::from(1), U256::from(1), false);
         TransactionSigned::Legacy(tx.into_signed(sig))
+    }
+
+    /// Go's `HeaderExtra` carries six SAE-only optional tail fields beyond
+    /// `MinDelayExcess` (`TargetExponent`, `MinPriceExponent`, and the four
+    /// `Settled{Height,GasUnix,GasNumerator,Excess}` markers —
+    /// `customtypes/header_ext.go:47-53`) that [`AvaHeader`] deliberately does
+    /// not model. A coreth block carrying any of them is rejected by Go at
+    /// `semanticVerify` (`VerifyTargetExponent` / `VerifyMinPriceExponent` /
+    /// `VerifySettled`, `wrapped_block.go:350-366`); Rust rejects the same bytes
+    /// one stage earlier, at PARSE, via `decode_rlp`'s trailing-bytes fail-close
+    /// (`block.rs:250-252`). Same verdict, different stage — this test pins the
+    /// fail-close so a future codec change cannot silently reopen it.
+    #[test]
+    fn trailing_sae_tail_field_fails_decode() {
+        let mut h = test_header(&[], None, None, Bytes::new());
+        // t7 + t8 present so the whole optional tail is emitted; a spliced ninth
+        // scalar then lands exactly where Go's TargetExponent (t9) would.
+        h.time_milliseconds = Some(1_000);
+        h.min_delay_excess = Some(1);
+        let mut bytes = Vec::new();
+        h.encode_rlp(&mut bytes);
+
+        // Splice one extra RLP u64 (a would-be t9 = TargetExponent) into the
+        // list payload and fix up the outer list header.
+        let extended = {
+            let header = RlpListHeader::decode(&mut &bytes[..]).expect("outer list");
+            let payload_start = bytes.len() - header.payload_length;
+            let mut payload = bytes[payload_start..].to_vec();
+            1u64.encode(&mut payload); // the trailing SAE field
+            let mut out = Vec::new();
+            RlpListHeader {
+                list: true,
+                payload_length: payload.len(),
+            }
+            .encode(&mut out);
+            out.extend_from_slice(&payload);
+            out
+        };
+
+        let mut cursor = &extended[..];
+        assert!(
+            AvaHeader::decode_rlp(&mut cursor).is_err(),
+            "a header with an SAE tail field must fail decode (fail-close)"
+        );
+        // Control: the unspliced bytes still decode.
+        let mut ok_cursor = &bytes[..];
+        AvaHeader::decode_rlp(&mut ok_cursor).expect("honest header decodes");
     }
 
     /// coreth `wrapped_block.go:476-483`: `BaseFee == nil` at AP3+ is

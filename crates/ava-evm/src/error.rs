@@ -160,6 +160,12 @@ pub enum Error {
     #[error("conflicting atomic inputs")]
     ConflictingAtomicInputs,
 
+    /// coreth `ErrMissingUTXOs` (`atomic/vm/block_extension.go:271`) — an
+    /// import tx names a source UTXO that is absent from shared memory at
+    /// verify time (bootstrapped-gated presence check, `verifyUTXOsPresent`).
+    #[error("missing UTXOs")]
+    MissingUtxos,
+
     /// coreth `atomic/vm/block_extension.go:156` (`"too large extDataGasUsed: %d"`).
     /// Carries the claim as decoded (None mirrors Go's nil, which also fails
     /// `BigLessOrEqualUint64`).

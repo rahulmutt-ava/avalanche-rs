@@ -106,6 +106,14 @@ impl AtomicBackend {
         self.trie.root()
     }
 
+    /// The cross-chain [`SharedMemory`] handle (coreth `vm.Ctx.SharedMemory`),
+    /// for the verify-time import-UTXO presence check
+    /// ([`crate::atomic::verify::verify_utxos_present`]).
+    #[must_use]
+    pub fn shared_memory(&self) -> &Arc<dyn SharedMemory> {
+        &self.shared_memory
+    }
+
     /// The most recent `commitInterval`-boundary checkpoint root
     /// (coreth `AtomicTrie.LastCommitted` root).
     #[must_use]
