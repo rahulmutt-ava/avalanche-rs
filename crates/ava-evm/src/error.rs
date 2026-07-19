@@ -91,6 +91,31 @@ pub enum Error {
     #[error("invalid header.Extra prefix: expected {expected} as prefix, found {found}")]
     InvalidExtraPrefix { expected: String, found: String },
 
+    /// coreth `customheader/time.go:22` (`errBlockTooOld`,
+    /// `"block timestamp is too old: %d < parent %d"`).
+    #[error("block timestamp is too old: {have} < parent {parent}")]
+    BlockTooOld { have: u64, parent: u64 },
+    /// coreth `customheader/time.go:23` (`ErrBlockTooFarInFuture`,
+    /// `"block timestamp is too far in the future: %d > allowed %d"`).
+    #[error("block timestamp is too far in the future: {have} > allowed {allowed}")]
+    BlockTooFarInFuture { have: u64, allowed: u64 },
+    /// coreth `customheader/time.go:24` (`ErrTimeMillisecondsRequired`).
+    #[error("TimeMilliseconds is required after Granite activation")]
+    TimeMillisecondsRequired,
+    /// coreth `customheader/time.go:25` (`ErrTimeMillisecondsMismatched`,
+    /// `"…: header.Time (%d) != TimeMilliseconds/1000 = (%d)"`).
+    #[error(
+        "TimeMilliseconds does not match header.Time: header.Time ({time}) != TimeMilliseconds/1000 = ({expected})"
+    )]
+    TimeMillisecondsMismatched { time: u64, expected: u64 },
+    /// coreth `customheader/time.go:26` (`ErrTimeMillisecondsBeforeGranite`).
+    #[error("TimeMilliseconds should be nil before Granite activation")]
+    TimeMillisecondsBeforeGranite,
+    /// coreth `customheader/time.go:27` (`ErrMinDelayNotMet`,
+    /// `"…: actual delay %dms < required %dms"`).
+    #[error("minimum block delay not met: actual delay {actual}ms < required {required}ms")]
+    MinDelayNotMet { actual: u64, required: u64 },
+
     /// coreth `consensus/dummy/consensus.go:142`
     /// (`"expected base fee %d, found %d"`; nil renders as `<nil>` in Go —
     /// `Option::None`'s `{:?}` is the Rust analogue).
