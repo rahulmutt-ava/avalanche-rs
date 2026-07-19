@@ -356,6 +356,26 @@ pub enum Error {
     /// which client tooling greps for.
     #[error(transparent)]
     Mempool(#[from] crate::mempool::EvmMempoolError),
+
+    /// coreth `wrapped_block.go:301-304` (`errInvalidGasUsedRelativeToCapacity`,
+    /// `errors.New("invalid gas used relative to capacity")`) — wraps
+    /// [`crate::feerules::verify_gas_used`]'s error (Go: `"%w: %w"`).
+    #[error("invalid gas used relative to capacity: {0}")]
+    GasUsedRelativeToCapacity(Box<Error>),
+
+    /// coreth `wrapped_block.go:321-329`
+    /// (`errTotalIntrinsicGasCostExceedsClaimed`,
+    /// `errors.New("total intrinsic gas cost is greater than claimed gas used")`,
+    /// `"%w: intrinsic gas (%d) > claimed gas used (%d)"`).
+    #[error(
+        "total intrinsic gas cost is greater than claimed gas used: intrinsic gas ({intrinsic}) > claimed gas used ({claimed})"
+    )]
+    TotalIntrinsicGasExceedsClaimed {
+        /// The summed per-tx intrinsic gas (libevm `core.IntrinsicGas` port).
+        intrinsic: u64,
+        /// The header's claimed `gas_used`.
+        claimed: u64,
+    },
 }
 
 /// C-Chain VM result alias.

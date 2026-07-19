@@ -42,11 +42,13 @@
 //! brief's literal expectation.
 
 use ava_evm::block::{AvaBlockParts, assemble_ava_block, decode_ava_evm_block};
-use ava_evm::chainspec::AvaChainSpec;
+use ava_evm::chainspec::{AvaChainSpec, CChainGenesis};
 use ava_evm::vm::EvmVm;
-use ava_evm_reth::Chain;
+use ava_evm_reth::{B256, Chain};
+use ava_snow::EngineState;
 use ava_types::constants::LOCAL_ID;
 use ava_vm::block::ChainVm;
+use ava_vm::vm::Vm;
 use tokio_util::sync::CancellationToken;
 
 /// Extracts the inner coreth block bytes from a proposervm unsigned post-fork
@@ -62,6 +64,17 @@ fn inner_block_of(container: &[u8]) -> &[u8] {
 /// produced under — Etna (== Cancun) active from genesis.
 fn local_spec() -> AvaChainSpec {
     AvaChainSpec::c_chain(LOCAL_ID, Chain::from_id(43112))
+}
+
+/// The genesis header block 1's mutants are built against — same mechanism
+/// `feerules.rs::fee_state_after_block_matches_live_go_block_extra` uses (the
+/// genesis state root is irrelevant to the ACP-176 fee-state recompute, only
+/// its time/number matter — `fee_state_after_block` seeds the zero state for a
+/// number-0 parent).
+fn genesis_header_of(spec: &AvaChainSpec) -> ava_evm::block::AvaHeader {
+    let genesis = CChainGenesis::parse(include_str!("vectors/cchain/genesis/local.json"))
+        .expect("parse local genesis");
+    genesis.genesis_header(B256::ZERO, spec.network_upgrades())
 }
 
 /// Decodes the captured live block 1, applies `mutate` to its parts, and
@@ -95,6 +108,27 @@ async fn parse_and_verify(bytes: &[u8]) -> Result<(), String> {
     let (vm, _genesis_id) = EvmVm::from_genesis(LOCAL_ID, dir.path(), genesis_json.as_bytes())
         .expect("EvmVm::from_genesis over the local genesis");
     let token = CancellationToken::new();
+    let blk = vm
+        .parse_block(&token, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+    blk.verify(&token).await.map_err(|e| e.to_string())
+}
+
+/// As [`parse_and_verify`], but flips the VM to `NormalOp` (Go
+/// `vm.bootstrapped.Set(true)`) before verifying, so `verify_intrinsic_gas`
+/// (wrapped_block.go:372-379) actually runs. `EvmVm::set_state` stores this on
+/// an atomic the block's `verify` reads live, so the ordering relative to
+/// `parse_block` doesn't matter — only that it happens before `blk.verify`.
+async fn parse_and_verify_bootstrapped(bytes: &[u8]) -> Result<(), String> {
+    let genesis_json = include_str!("vectors/cchain/genesis/local.json");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (mut vm, _genesis_id) = EvmVm::from_genesis(LOCAL_ID, dir.path(), genesis_json.as_bytes())
+        .expect("EvmVm::from_genesis over the local genesis");
+    let token = CancellationToken::new();
+    vm.set_state(&token, EngineState::NormalOp)
+        .await
+        .expect("set_state(NormalOp)");
     let blk = vm
         .parse_block(&token, bytes)
         .await
@@ -180,5 +214,67 @@ async fn wrong_min_delay_excess_is_rejected() {
     assert!(
         err.contains("incorrect min delay excess"),
         "want errIncorrectMinDelayExcess, got: {err}"
+    );
+}
+
+/// Lowers the claimed `gas_used` below the tx's intrinsic floor (21_000 for
+/// the single legacy transfer) and restamps the ACP-176 extra prefix so the
+/// mutated header stays self-consistent for every OTHER check (the exact
+/// shape a Byzantine proposer would use to reach `verifyIntrinsicGas`).
+fn understated_gas_used_block() -> Vec<u8> {
+    let spec = local_spec();
+    mutated_live_block(|parts| {
+        parts.header.gas_used = 0;
+        // Restamp the ACP-176 prefix: recompute the post-block fee state at
+        // the mutated gas_used and splice it over the first STATE_SIZE bytes
+        // of `extra` (the Durango predicate-results suffix is preserved).
+        let genesis = genesis_header_of(&spec); // the same parent the honest
+        // vector was built on.
+        let after = ava_evm::feerules::fee_state_after_block(
+            &spec,
+            &genesis,
+            parts.header.time,
+            parts.header.time_milliseconds,
+            0, // the mutated gas_used
+            0, // no atomic gas in this block
+            None,
+        )
+        .expect("restamp fee state");
+        let mut extra = after.to_bytes().to_vec();
+        extra.extend_from_slice(&parts.header.extra[ava_evm::feerules::acp176::STATE_SIZE..]);
+        parts.header.extra = extra.into();
+    })
+}
+
+#[tokio::test]
+async fn understated_gas_used_is_rejected_when_bootstrapped() {
+    // wrapped_block.go:321-329 — Σ intrinsic gas (21_000 for the single
+    // legacy transfer) > claimed gas_used (0). Gated on bootstrapped, so the
+    // driver must SetState(NormalOp) first. The extra prefix is restamped for
+    // the new gas_used (fee_state_after_block consumes it); base_fee /
+    // block_gas_cost / gas_limit are gas_used-independent recomputes.
+    let bytes = understated_gas_used_block();
+    let err = parse_and_verify_bootstrapped(&bytes)
+        .await
+        .expect_err("must reject");
+    assert!(
+        err.contains("intrinsic gas"),
+        "want errTotalIntrinsicGasCostExceedsClaimed, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn understated_gas_used_skipped_while_bootstrapping() {
+    // wrapped_block.go:376 — the SAME bytes verify while NOT bootstrapped
+    // (the gate must skip, not reject) … and then fail the execution-layer
+    // gas_used equality instead, which is the pre-existing backstop. Assert
+    // the error does NOT name intrinsic gas.
+    let bytes = understated_gas_used_block();
+    let err = parse_and_verify(&bytes)
+        .await
+        .expect_err("execution backstop");
+    assert!(
+        !err.contains("intrinsic gas"),
+        "bootstrapping node must skip verifyIntrinsicGas, got: {err}"
     );
 }

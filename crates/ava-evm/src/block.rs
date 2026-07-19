@@ -929,6 +929,37 @@ impl EvmBlock {
         Ok(())
     }
 
+    /// coreth `wrapped_block.go:287-332` — `verifyIntrinsicGas`. Runs only on
+    /// a bootstrapped node (wrapped_block.go:376): (1) the claimed GasUsed
+    /// (+ExtDataGasUsed at Fortuna+) must fit the block's gas capacity
+    /// ([`crate::feerules::verify_gas_used`]); (2) the summed per-tx intrinsic
+    /// gas (libevm `core.IntrinsicGas` — the same port the mempool admission
+    /// uses) must not exceed the claimed GasUsed.
+    fn verify_intrinsic_gas(&self, spec: &AvaChainSpec, parent: &AvaHeader) -> Result<()> {
+        // wrapped_block.go:301-304.
+        crate::feerules::verify_gas_used(spec, parent, self.header())
+            .map_err(|e| Error::GasUsedRelativeToCapacity(Box::new(e)))?;
+
+        // wrapped_block.go:306-319 — Σ intrinsic. Shanghai ← Durango
+        // (config_extra.go:83). The Rust port saturates where Go returns
+        // ErrGasUintOverflow; a saturated u64::MAX total still exceeds any
+        // claimable gas_used, so the verdict is identical.
+        let shanghai = spec.fork_at(self.header().time) >= AvaPhase::Durango;
+        let mut total: u64 = 0;
+        for tx in &self.parts().transactions {
+            let gas = crate::mempool::intrinsic_gas(tx, shanghai);
+            total = total.saturating_add(gas);
+        }
+        // wrapped_block.go:321-329.
+        if total > self.header().gas_used {
+            return Err(Error::TotalIntrinsicGasExceedsClaimed {
+                intrinsic: total,
+                claimed: self.header().gas_used,
+            });
+        }
+        Ok(())
+    }
+
     pub fn verify_with_predicates(
         &self,
         ctx: &EvmBlockContext,
@@ -971,8 +1002,9 @@ impl EvmBlock {
         crate::feerules::verify_time(ctx.chain_spec(), parent, self.header(), now_ms)?;
         // wrapped_block.go:372-379 — bootstrapped-gated (during bootstrap the
         // block is canonically accepted; required indices may be absent).
-        // Task 5 inserts verify_intrinsic_gas here.
-        let _ = bootstrapped; // consumed by Task 5's insertion
+        if bootstrapped {
+            self.verify_intrinsic_gas(ctx.chain_spec(), parent)?;
+        }
         // Task 6 inserts atomic verify_ext_data_gas_used here.
 
         // Atomic semantic verify (spec 10 §6.5, coreth `verifyTxs`): reject the
