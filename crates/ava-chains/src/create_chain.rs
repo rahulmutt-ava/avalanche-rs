@@ -836,6 +836,7 @@ async fn forward_pending_work(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -845,18 +846,33 @@ mod tests {
 
     use super::forward_pending_work;
 
-    /// Narrow local mock: `wait()` resolves once per permit the test releases.
-    /// Stands in for the ACP-226-paced EVM waiter — "gated" == pacing (or an
-    /// empty pool) is holding the forwarder back.
-    struct GatedWaiter(Semaphore);
+    /// Narrow local mock: `wait()` resolves once per permit the test releases
+    /// on `gate`, exactly like the production waiter's ACP-226-paced parking.
+    /// `has_pending` is deliberately **decoupled** from `gate` via its own
+    /// `pending` flag: `forward_pending_work` never calls `has_pending`
+    /// itself, but the flag lets a test express the divergent state the old
+    /// (pre-pacing) implementation reacted to — buildable work sitting in the
+    /// mempool (`pending == true`) while `wait()` is still gated (pacing has
+    /// not elapsed / the pool is otherwise empty of *new* releases).
+    struct GatedWaiter {
+        gate: Semaphore,
+        pending: AtomicBool,
+    }
 
     impl GatedWaiter {
         fn new() -> Arc<Self> {
-            Arc::new(Self(Semaphore::new(0)))
+            Arc::new(Self {
+                gate: Semaphore::new(0),
+                pending: AtomicBool::new(false),
+            })
         }
 
         fn release(&self, n: usize) {
-            self.0.add_permits(n);
+            self.gate.add_permits(n);
+        }
+
+        fn set_pending(&self, pending: bool) {
+            self.pending.store(pending, Ordering::Relaxed);
         }
     }
 
@@ -864,12 +880,13 @@ mod tests {
     impl PendingWorkWaiter for GatedWaiter {
         fn has_pending(&self) -> bool {
             // Unused by the forwarder (pacing subsumed the re-arm guard);
-            // required by the trait.
-            self.0.available_permits() > 0
+            // required by the trait. Independent of `gate` — see the struct
+            // doc comment.
+            self.pending.load(Ordering::Relaxed)
         }
 
         async fn wait(&self) {
-            self.0
+            self.gate
                 .acquire()
                 .await
                 .expect("test semaphore is never closed")
@@ -995,6 +1012,57 @@ mod tests {
             .await
             .expect("cancel during the retry floor must terminate the forwarder")
             .expect("forwarder must not panic");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rearm_stays_paced_while_work_pending() {
+        let waiter = GatedWaiter::new();
+        let (vm_tx, mut rx) = mpsc::channel::<VmEvent>(8);
+        let token = CancellationToken::new();
+
+        // Mark work pending BEFORE the first send: on the single-threaded
+        // paused-time runtime, the forwarder runs un-interrupted from
+        // `wait()` through the send and (in the old shape) its
+        // `has_pending()` re-arm check — the test task is not rescheduled
+        // in between. So `has_pending()` must already read `true` at spawn
+        // time for the divergent state to be observed at all.
+        waiter.set_pending(true);
+        waiter.release(1);
+        let task = tokio::spawn(forward_pending_work(
+            Arc::clone(&waiter) as Arc<dyn PendingWorkWaiter>,
+            vm_tx,
+            token.clone(),
+        ));
+
+        rx.recv().await.expect("first signal");
+
+        // Buildable work remains pending but the gate has no more permits —
+        // pacing has not elapsed. The old inner re-arm loop
+        // (`while waiter.has_pending() { sleep(2s); send }`) fires an
+        // unpaced second send here once the 2s floor auto-advances; the
+        // paced implementation must stay parked in `wait()` regardless of
+        // `has_pending()`.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(60), rx.recv())
+                .await
+                .is_err(),
+            "re-arm must stay paced: no unpaced send while work is pending but wait() is gated"
+        );
+
+        // Releasing the gate is what unblocks the next signal — proving the
+        // loop is still alive (parked in wait()), not wedged.
+        waiter.release(1);
+        let evt = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .expect("releasing the gate must produce a signal")
+            .expect("engine channel stays open");
+        assert!(
+            matches!(evt, VmEvent::PendingTxs),
+            "forwarder signals PendingTxs"
+        );
+
+        token.cancel();
+        task.await.expect("forwarder exits cleanly on cancel");
     }
 
     #[tokio::test(start_paused = true)]

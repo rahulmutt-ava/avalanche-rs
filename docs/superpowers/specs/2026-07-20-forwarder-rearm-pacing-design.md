@@ -102,6 +102,20 @@ avoid paused time.
    floor sleep both terminate the task.
 4. **Closed channel:** dropping the receiver terminates the task after the
    failed send.
+5. **Paced re-arm under sustained pending work (the final-review
+   regression):** while the VM has buildable work but `wait()` is still
+   gated, the forwarder must stay parked — no unpaced send.
+
+**AS-BUILT:** the mock is `Semaphore`-gated, not `Notify`-gated — `wait()`
+acquires-and-forgets a permit, so "release `n`" == "n releases queue n
+resolutions," closer to the production waiter than a counted `Notify`. There
+is no manual `advance()`; `start_paused = true` auto-advances whenever the
+runtime goes idle, which is sufficient since the mock's gating is entirely
+test-controlled (no `MockClock` to race against). The mock also carries an
+independent `pending: AtomicBool` (decoupled from the semaphore) so a test can
+express the divergent state — work pending while `wait()` remains gated —
+that the pre-pacing implementation's inner `has_pending()` re-arm loop reacted
+to; see `rearm_stays_paced_while_work_pending`.
 
 System-level gate: rerun both live arms (`mixed_network`,
 `mixed_network_rust_proposes`) with the oracle-gate + prewarm protocol.
