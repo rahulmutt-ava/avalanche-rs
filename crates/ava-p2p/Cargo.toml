@@ -1,0 +1,25 @@
+[package]
+name = "ava-p2p"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Port of Go network/p2p + network/p2p/gossip: generated proto/sdk messages (PushGossip, PullGossip*), handler/mux/client/gossip modules (C-Chain tx gossip design)."
+
+[dependencies]
+prost = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+# Compiles proto/sdk/sdk.proto into OUT_DIR (generated code is NOT committed).
+prost-build = { workspace = true }
+
+[dev-dependencies]
+# `bytes::Bytes` literals in the pinned wire-bytes round-trip test (src/pb.rs).
+bytes = { workspace = true }
+
+[lints]
+workspace = true

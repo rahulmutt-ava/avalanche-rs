@@ -43,6 +43,7 @@ members = [
   "crates/ava-message",
   "crates/ava-network",
   "crates/ava-node",
+  "crates/ava-p2p",
   "crates/ava-platformvm",
   "crates/ava-proposervm",
   "crates/ava-secp256k1fx",
@@ -183,6 +184,10 @@ bytes = "1"
 # sync `Database` trait blocks on at the call site (specs/04 §1.2). Proto `bytes`
 # fields map to `bytes::Bytes` for zero-copy (specs/15 §5).
 prost = "0.13"
+# `ava-p2p`'s proto/sdk carries no gRPC service (opaque AppRequest/AppGossip
+# payload bytes), so its build.rs drives `prost-build` directly rather than
+# `tonic-build` — pinned in lockstep with `prost` above.
+prost-build = "0.13"
 tonic = "0.12"
 tonic-build = "0.12"
 tokio = { version = "1", features = [ "rt-multi-thread", "macros", "sync", "net", "time" ] }

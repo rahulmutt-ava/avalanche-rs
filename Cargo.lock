@@ -1583,6 +1583,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ava-p2p"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "prost 0.13.5",
+ "prost-build 0.13.5",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ava-platformvm"
 version = "0.1.0"
 dependencies = [
