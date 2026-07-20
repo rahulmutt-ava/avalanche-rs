@@ -16,6 +16,7 @@ description = "P2P networking: TLS transport + node identity + IP signing (byte-
 [dependencies]
 ava-crypto = { path = "../ava-crypto" }
 ava-types = { path = "../ava-types" }
+ava-utils = { path = "../ava-utils" }
 # Wave C runtime: the codec (Creator/InboundMessage, and OutboundMessage carried
 # by the outbound MessageQueue, specs/05 §3.3) + the version-compat rule.
 ava-message = { path = "../ava-message" }

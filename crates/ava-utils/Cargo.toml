@@ -9,9 +9,10 @@ repository.workspace = true
 publish.workspace = true
 description = "Standalone utilities: deterministic RNG/samplers, set/bag/Bits, CB58, clock, safemath (M0 / specs 03 §4, 24)."
 
-# Dependency direction (specs/03 §0): ava-utils is standalone — it depends on no
-# other ava-* crate. CB58 lives here (not ava-crypto) to break the
-# ava-types -> ava-crypto cycle (plan M0.6/M0.11); its checksum uses sha2 directly.
+# Dependency direction (specs/03 §0): ava-utils was standalone — now includes
+# hoisted bloom (M2.17 anticipated; moved here for tx gossip). CB58 + bloom live
+# here without pulling ava-crypto to break the ava-types -> ava-crypto cycle;
+# both use sha2 directly for hashing. Bloom uses ring for CSPRNG.
 [dependencies]
 thiserror = { workspace = true }
 num-bigint = { workspace = true }
@@ -23,6 +24,8 @@ parking_lot = { workspace = true }
 # monotonic reading (M0.12) so tests compose with `start_paused`.
 chrono = { workspace = true }
 tokio = { version = "1", features = [ "time" ] }
+# Bloom filter (M2.17 hoisted from ava-network): ring for CSPRNG.
+ring = { workspace = true }
 
 [dev-dependencies]
 serde = { workspace = true }

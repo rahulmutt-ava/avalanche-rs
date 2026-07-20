@@ -21,6 +21,7 @@
 
 pub mod bag;
 pub mod bits;
+pub mod bloom;
 pub mod cb58;
 pub mod clock;
 pub mod error;
