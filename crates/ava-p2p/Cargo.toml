@@ -12,6 +12,21 @@ description = "Port of Go network/p2p + network/p2p/gossip: generated proto/sdk 
 [dependencies]
 prost = { workspace = true }
 thiserror = { workspace = true }
+# NodeId (Handler/P2pNetwork signatures).
+ava-types = { path = "../ava-types" }
+# AppHandler/AppSender/AppError/Connector/SendConfig — the traits P2pNetwork
+# implements/consumes (specs 07 §2.2, §2.6).
+ava-vm = { path = "../ava-vm" }
+# `version.Application` on `Connector::connected`.
+ava-version = { path = "../ava-version" }
+# `Handler`/`AppHandler`/`Connector` are async traits.
+async-trait = { workspace = true }
+# Interior-mutability maps/sets on `P2pNetwork` so its `&mut self` trait impls
+# (AppHandler/Connector) stay thin (handler brief §"note").
+parking_lot = { workspace = true }
+# `&CancellationToken` on every Handler/AppHandler/Connector method.
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 
 [build-dependencies]
 # Compiles proto/sdk/sdk.proto into OUT_DIR (generated code is NOT committed).
@@ -20,6 +35,8 @@ prost-build = { workspace = true }
 [dev-dependencies]
 # `bytes::Bytes` literals in the pinned wire-bytes round-trip test (src/pb.rs).
 bytes = { workspace = true }
+# Mux tests drive the `AppHandler`/`Connector` impls, which are `async fn`.
+tokio = { workspace = true, features = [ "macros", "rt" ] }
 
 [lints]
 workspace = true

@@ -1586,10 +1586,18 @@ dependencies = [
 name = "ava-p2p"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "ava-types",
+ "ava-version",
+ "ava-vm",
  "bytes",
+ "parking_lot",
  "prost 0.13.5",
  "prost-build 0.13.5",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
