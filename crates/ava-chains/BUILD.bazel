@@ -142,3 +142,18 @@ rust_test(
         "@crates//:tokio-util",
     ],
 )
+
+rust_test(
+    name = "ava_chains_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_chains",
+    deps = [
+        "@crates//:assert_matches",
+        "@crates//:proptest",
+        "@crates//:rcgen",
+        "@crates//:ring",
+        "@crates//:rustls-pemfile",
+        "@crates//:sha2",
+        "@crates//:tokio",
+    ],
+)
