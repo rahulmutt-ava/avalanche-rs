@@ -636,6 +636,13 @@ commit thread / `spawn_blocking` (§1.2).
 > Firewood-direct exactly as this section prescribes; the Go package is Go
 > converging on the same architecture. Details + parity notes in `11` §7.1.
 
+> **Upstream delta (avalanchego `b826fc962e`, #5655 — folded 2026-07-20).** The
+> package above is now **consumed**: the SAE VM constructs its state trie via a
+> new `state-scheme: firewood` operator-config key (Firewood parameters derived
+> from `CommitInterval`; settled-root-only commits; snapshots disabled). Still
+> no Rust storage-layer work — full details + parity notes in `11` §7.1
+> (staged as `plan/M7` M7.68).
+
 ```rust
 use firewood::db::{Db, DbConfig, BatchOp};
 use firewood::api::{Db as _, DbView, Proposal as _}; // trait imports (real path)

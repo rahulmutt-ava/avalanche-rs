@@ -934,6 +934,30 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 
 ---
 
+### Task M7.67: `saedb` trie-index protection + `allow-missing-tries` config key **[UPSTREAM DELTA — added 2026-07-20]** ⬜ TODO
+**Sub-crate:** ava-saevm-db + ava-saevm-cchain (config)  ·  **Depends on:** M7.12 (Tracker), M7.52/M7.64 (operator config)  ·  **Spec:** `11` §7.1 upstream-delta (Go `ba0678d58c` #5640)
+> **Upstream parity (Go `ba0678d58c`, #5640).** `NewTracker` runs a `protectTrieIndex` guard: archival runs persistently mark the DB (`customrawdb.WritePruningDisabled`, never removed); a pruning run against a marked DB errors (`errRefuseToCorruptArchiver`) unless `saedb.Config.AllowMissingTries` is set — a bypass that does **not** clear the marker. New cchain key **`allow-missing-tries`**.
+> **Rust task:** add the config key + a persistent archival marker check to the `ava-saevm-db` Tracker constructor (Firewood-direct: the guard protects archival revision history from a pruning restart, not a hash-trie index). Table-test the four run-pair transitions + the bypass-doesn't-clear case (Go `TestProtectTrieIndex`). **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/db/src/lib.rs`, `crates/ava-saevm/cchain/src/config.rs`, `tests/`.
+
+---
+
+### Task M7.68: wire Firewood into the SAE VM (`state-scheme`, settled-root commits) **[UPSTREAM DELTA — added 2026-07-20]** ⬜ TODO
+**Sub-crate:** ava-saevm-db + ava-saevm-cchain (config) + ava-saevm-core (genesis/recovery plumbing)  ·  **Depends on:** M7.12 (Firewood-direct Tracker), M7.52/M7.64 (operator config)  ·  **Spec:** `11` §7.1 + `04` §4.2 upstream-deltas (Go `b826fc962e` #5655; consumes `ef0f0b18db` #5433)
+> **Upstream parity (Go `b826fc962e`, #5655).** Go's SAE VM now constructs its state trie from `saedb.Config.Scheme` (cchain key **`state-scheme`**: hash vs `firewood`); `TrieDBConfig(dataDir, log)` derives Firewood params from existing config (`RevisionsInMemory = 2·CommitInterval`, `DeferredCommitInterval = CommitInterval`, archival ⇒ `CommitInterval = 1`, snapshots disabled); `MaybeCommit` under Firewood always commits the **settled root** (Firewood keeps only the latest on-disk state — committing the execution root would break re-execute-since-settled recovery); genesis setup closes its temporary triedb; missing revision ⇒ `MissingNodeError`.
+> **Rust task:** no architecture change (M7.12 is already Firewood-direct) — add the `state-scheme` key (validate hash/firewood; Rust only really supports firewood, so hash likely maps to an unsupported-scheme error, documented), align the commit policy to settled-root-only + the derived parameters, and pin with a differential/parity test once Go's SAE runs Firewood in CI. **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/db/src/lib.rs`, `crates/ava-saevm/cchain/src/config.rs`, `crates/ava-saevm/core/src/{genesis,recovery}.rs`, `tests/`.
+
+---
+
+### Task M7.69: `debug_trace*` honors JS + native (`callTracer`) tracers **[UPSTREAM DELTA — added 2026-07-20]** ⬜ TODO
+**Sub-crate:** ava-saevm-core (sae-rpc)  ·  **Depends on:** M7.19 (RPC surface)  ·  **Spec:** `11` §8 upstream-delta (Go `fdffd80a55` #5669)
+> **Upstream parity (Go `fdffd80a55`, #5669).** Go force-loads libevm's `eth/tracers/js` + `eth/tracers/native` engines in `sae/rpc/server.go`, so `debug_trace*` accepts JS tracer configs (with `timeout` → "execution timeout") and named native tracers (`callTracer`); pinned by stateful-RPC tests.
+> **Rust task:** enable the equivalent in the `ava-saevm` RPC `debug` namespace — revm-inspectors' native `callTracer` + the `js-tracer` (boa) feature — and mirror the two Go test cases (JS infinite-loop timeout; `callTracer` call-frame golden). **Non-gating** (Helicon unscheduled).
+**Files (anticipated):** `crates/ava-saevm/core/src/rpc/**`, `Cargo.toml` (js-tracer feature), `tests/`.
+
+---
+
 ## Spec coverage check
 
 | Spec section | Subject | Task(s) |
@@ -991,6 +1015,9 @@ Headline test IDs: **`prop::sae_execution_determinism` is implemented in M7.16**
 | `11` §8 upstream-delta | `cchain` wires `allow-unprotected-txs` + `batch-request-limit` config keys + decode-time `RPCConfig.Verify()` (Go `736a6f98a5` #5596, `c7e93845c3` #5607) | **M7.57** (non-gating, Helicon; extends M7.52) |
 | `11` §4.2 upstream-delta | drop `Block.MarkSynchronous`; `RestoreExecutionArtefacts` derives synchronous results from header + genesis finalized via `WriteFinalizedBlockHash` (Go `50893e60d2` #5555, `d8a8473be2` #5556) | **M7.58** (non-gating, Helicon; recovery/lifecycle refactor) |
 | `11` §1.1 + §1.4 upstream-delta | store last-accepted hash — `AcceptBlock`/genesis co-write `HeadFast`; recovery walk bounds on `ReadHeadFastBlockHash` instead of open-ended canonical scan (unset ⇒ empty accepted set) (Go `c6654c34a4` #5544) | **M7.59** (non-gating, Helicon; recovery correctness) |
+| `11` §7.1 upstream-delta | `saedb` trie-index protection guard + `allow-missing-tries` config key (Go `ba0678d58c` #5640) | **M7.67** (non-gating, Helicon; state-safety guard) |
+| `11` §7.1 + `04` §4.2 upstream-delta | Firewood wired into the SAE VM — `state-scheme` key, derived params, settled-root-only commits (Go `b826fc962e` #5655) | **M7.68** (non-gating, Helicon; Go converges on Rust's architecture) |
+| `11` §8 upstream-delta | `debug_trace*` honors JS + native (`callTracer`) tracer configs (Go `fdffd80a55` #5669) | **M7.69** (non-gating, Helicon; RPC parity) |
 | `00` §6.1 | Determinism (no wall-clock/map-order in consensus output) | M7.14, M7.16, M7.25 (inv 11) |
 | `00` §7.7 / §8 | SAE stricter lint bar | M7.1, enforced in M7.32 |
 | `00` §9 | Pipelined-commit optimization | M7.12, M7.14, validated by M7.30 |

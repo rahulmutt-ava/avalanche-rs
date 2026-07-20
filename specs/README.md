@@ -10,11 +10,11 @@ from these documents.
 
 > **Upstream provenance.** These specs were generated from avalanchego commit
 > `fb174e8925ba86e9ba5fd84eb4d6e5e8c23ffc11` (2026-06-03). Upstream commits through
-> `a4290dc0f4` (2026-07-16) have been reviewed and folded in as **"Upstream
+> `5c4d318161` (2026-07-17) have been reviewed and folded in as **"Upstream
 > delta"** callouts in the affected files (`04`, `08`, `10`, `11`, `12`, `13`,
 > `14`, `18`, `21`, `27`) and plan files (`plan/M1`, `plan/M4`, `plan/M7`,
 > `plan/M8`). When re-syncing against newer avalanchego, start the review from
-> `a4290dc0f4`.
+> `5c4d318161`.
 >
 > The `cc3b103b91 → 0b0b57143c` sync (reviewed 2026-06-15) folded three SAE
 > commits — ACP-194 minimum-gas floor enforcement (`0b0b57143c`, #5424), SAE
@@ -206,6 +206,27 @@ from these documents.
 > CI packaging (`1457ae8f18` #5180, `fc3bdf3d77` #5412), unused-constant removal
 > `NetworkHRPToNetworkID` (`48d6831ed2`, #5621 — not referenced by any spec),
 > x/crypto dep bump (`9ea99ca6ca`, #5633).
+>
+> The `a4290dc0f4 → 5c4d318161` sync (reviewed 2026-07-20) folded four
+> spec-relevant commits of seven. **SAE (Helicon-dormant, non-gating) →
+> `plan/M7` M7.67–M7.69:** (1) **`allow-missing-tries` + `protectTrieIndex`
+> archival-marker guard** (`ba0678d58c`, #5640) → `11` §7.1 / **M7.67**;
+> (2) **Firewood wired into the SAE VM** — `state-scheme` config key,
+> `TrieDBConfig(dataDir, log)` signature ripple, derived Firewood params
+> (`2·CommitInterval` revisions, archival ⇒ interval 1, snapshots off),
+> settled-root-only `MaybeCommit`, force-close handles, `MissingNodeError`
+> mapping (`b826fc962e`, #5655 — consumes the `ef0f0b18db` package) → `11` §7.1
+> + `04` §4.2 / **M7.68**; (3) **`debug_trace*` honors JS + native
+> (`callTracer`) tracers** via force-loaded libevm engines + libevm bump
+> (`fdffd80a55`, #5669) → `11` §8 / **M7.69**. **Node config (live plumbing,
+> Helicon-dormant floor):** (4) **network-dependent stake-duration defaults +
+> `helicon-min-stake-duration` validation** (Mainnet 336h/48h, Testnet 24h/1h;
+> two new `getStakingConfig` error cases) (`7d8721750b`, #5678) → `13`
+> §staking-economics / extends **M8.33**. **Irrelevant (comment / log-level
+> only, no spec surface):** saeexec finalize-comment wording (`fb664dcfb9`,
+> #5674), stale-TODO removal + Debug→Trace log in `cchain/state`
+> (`9038e346c6`, #5677), builder execution-lagging log Warn→Debug
+> (`5c4d318161`, #5679).
 
 ## Read this first
 

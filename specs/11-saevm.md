@@ -925,6 +925,52 @@ settled-by height for that block), or the head if archival.
 > will then define the differential-parity surface (state roots stay
 > ethhash-identical either way). See `04` §4.2.
 
+> **Upstream delta (avalanchego `ba0678d58c`, #5640 — folded 2026-07-20).**
+> `saedb` gains a **trie-index protection guard** (`protectTrieIndex`, run by
+> `NewTracker` before opening the state cache): an archival run persistently
+> marks the DB via `customrawdb.WritePruningDisabled` (the marker is never
+> removed); a pruning run against a marked DB fails with
+> `errRefuseToCorruptArchiver` unless the new `saedb.Config.AllowMissingTries`
+> is set, which bypasses the check **without clearing the marker** (a later
+> plain pruning run still refuses). Surfaced as the cchain operator key
+> **`allow-missing-tries`** (un-commented from the M7.52 stub set). **Rust
+> seam:** the M7.52/M7.64 config decode + a marker check in the
+> `ava-saevm-db` Tracker constructor — the Rust Tracker is Firewood-direct
+> with no hash-trie index, so the guard maps to protecting an archival
+> Firewood revision history from a pruning restart. Staged as `plan/M7`
+> **M7.67**. **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `b826fc962e`, #5655 — folded 2026-07-20).**
+> Go **wires `vms/saevm/firewood` into the VM** — the `ef0f0b18db` package
+> (previous callout) is no longer unconsumed. New `saedb.Config.Scheme`
+> (`""`/`hash` → HashDB, `firewood` → the Firewood `triedb.DBOverride`),
+> surfaced as the cchain operator key **`state-scheme`** (un-commented;
+> `customrawdb.FirewoodScheme`). `Config.TrieDBConfig()` becomes
+> **`TrieDBConfig(dataDir, log)`** (Firewood needs an on-disk path
+> `<ChainDataDir>/firewood` + a logger), with knock-on signature changes:
+> `saedb.NewTracker(db, c, lastExecuted, dataDir, log)`, `saexec.New(...,
+> snowCtx, reg)` (takes `*snow.Context` in place of a logger), and the `sae`
+> recovery struct carries `snowCtx`; `SinceGenesis.Initialize` extracts a
+> `setupGenesis` helper that **closes its temporary `triedb`** (Firewood
+> handles must be released). Firewood parameters derive from existing config:
+> `RevisionsInMemory = 2·CommitInterval`, `DeferredCommitInterval =
+> CommitInterval`, archival forces `CommitInterval = 1`, a zero trie cache
+> defaults to `DefaultTrieCacheSizeMiB`, and **snapshots are disabled under
+> Firewood** (its value lookups make the snapshot layer redundant).
+> `Tracker.MaybeCommit` gains a new top-priority branch: under Firewood the
+> **settled root** is always committed — Firewood keeps only the most recent
+> state on disk after shutdown, so persisting the execution root would make
+> recovery's re-execute-since-settled impossible. In the firewood package
+> itself, `TrieDB.Close` now force-closes open handles
+> (`ffi.WithForceCloseHandles()`, dropping the drain-and-GC dance), and a
+> missing revision maps to `trie.MissingNodeError` so `state.Database`
+> callers see the canonical geth error. **No Rust architecture work** — the
+> Rust Tracker is already Firewood-direct (M7.12); the parity surface is the
+> **`state-scheme` config key, the settled-root-only commit policy, and the
+> derived Firewood parameters**, which now define the differential-comparison
+> behavior once Go runs SAE on Firewood. Staged as `plan/M7` **M7.68**.
+> **Non-gating** (Helicon unscheduled).
+
 ---
 
 ## 8. `cchain` — the minimal EVM C-Chain on `sae.VM` (reuse decision vs 10)
@@ -1257,6 +1303,18 @@ is a thin VM that **composes** `sae::Vm` with the C-Chain-specific pieces:
 > now also `Verify()`s the resulting `RPCConfig` at decode time. **Rust seam:** extend
 > the M7.52 config decode with these two RPC keys + the decode-time verify. Staged as
 > `plan/M7` **M7.57**. **Non-gating** (Helicon unscheduled).
+
+> **Upstream delta (avalanchego `fdffd80a55`, #5669 — folded 2026-07-20).**
+> `sae/rpc/server.go` force-loads libevm's tracer engines (blank imports of
+> `eth/tracers/js` + `eth/tracers/native`), so **`debug_trace*` now honors JS
+> tracer configs** (including the `timeout` option → "execution timeout") **and
+> named native tracers** (`callTracer`); pinned by new stateful-RPC tests
+> (JS infinite-loop timeout + a `callTracer` `CallFrame` golden). Also bumps
+> libevm to `…f887fa4393ca`. **Rust seam:** the `ava-saevm` RPC `debug`
+> namespace — reth's tracing stack (revm-inspectors) provides `callTracer`
+> natively and JS tracers behind its `js-tracer` (boa) feature; parity =
+> enable both and match the timeout error surface. Staged as `plan/M7`
+> **M7.69**. **Non-gating** (Helicon unscheduled).
 
 > **Upstream delta (avalanchego `ac7452d86c`, #5563 — folded 2026-07-16).**
 > **`vms/transitionvm` — the coreth→SAE migration vehicle.** A new generic

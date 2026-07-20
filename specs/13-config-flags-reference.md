@@ -214,6 +214,18 @@ networks.
 > The 48h validation floor is **Helicon-gated / dormant** (unscheduled fork), but
 > the flag/config plumbing is real. Tracked as a `plan/M8` config task.
 
+> **Upstream delta (avalanchego `7d8721750b`, #5678 — folded 2026-07-20).** The
+> stake-duration defaults become **network-dependent** (per `config.md`):
+> `--min-stake-duration` defaults to `336h` (2 weeks) on Mainnet and `24h`
+> (1 day) on Testnet; `--helicon-min-stake-duration` defaults to `48h` (2 days)
+> on Mainnet and `1h` (1 hour) on Testnet. `getStakingConfig` validation (local
+> networks only, same guard chain as `min-stake-duration`) now also rejects
+> `HeliconMinStakeDuration <= 0` (`errInvalidHeliconMinStakeDuration`) and
+> `MaxStakeDuration < HeliconMinStakeDuration`
+> (`errHeliconMinStakeDurationAboveMax`). **Rust seam:** folded into the
+> `plan/M8` **M8.33** flag task (network-dependent defaults + the two extra
+> validation checks in the staking-config decode).
+
 **Network-dependent / validation (`getStakingConfig`):**
 - On **Mainnet/Fuji**, the entire staking-economics block (`uptime-requirement`,
   the stake amounts/durations, reward rates, `min-delegation-fee`) is **ignored**;
