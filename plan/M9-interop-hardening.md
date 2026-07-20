@@ -2221,6 +2221,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > deviation:** coreth's 100 ms `RetryDelay` retry arm (same-parent retry tracking, `block_builder.go:31,189-190`)
 > unported — the forwarder's existing 2 s re-arm covers the retry-same-parent role; the pacing itself
 > closes the liveness papercut. See `docs/superpowers/specs/2026-07-19-builder-min-delay-pacing-design.md`.
+> **Residual (follow-up):** pacing covers the first signal after idle (the live-verified papercut); the forwarder's 2 s re-arm path (`ava-chains/src/create_chain.rs`) is still unpaced under sustained load — consecutive builds there can still hit `MinDelayNotMet` until the re-arm is routed through the paced `wait()`.
 
 ---
 

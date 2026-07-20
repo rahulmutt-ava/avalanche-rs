@@ -727,7 +727,7 @@ impl Connector for EvmVm {
 /// only `Arc`s the VM already owns — NEVER the outer `Arc<Mutex<dyn Vm>>` a
 /// proposal forwarder would otherwise have to hold to call `wait_for_event`
 /// (the M7.18 lock-parking hazard this seam exists to avoid): `verified` is a
-/// `DashMap`, the clock read clones an `Arc`, and no lock is held across an
+/// `DashMap`, the clock read takes the clock mutex only for the duration of the read, and no lock is held across an
 /// `.await`.
 struct EvmPendingWorkWaiter {
     atomic: Arc<parking_lot::Mutex<AtomicMempool>>,
