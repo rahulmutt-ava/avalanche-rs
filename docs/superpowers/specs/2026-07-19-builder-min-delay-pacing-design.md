@@ -1,7 +1,7 @@
 # Builder min-delay pacing (ACP-226) — design
 
 **Date:** 2026-07-19
-**Status:** approved
+**Status:** implemented
 **Follow-up from:** semantic-verify family merge `b5157d5` (final-review ★ triage item)
 
 ## Problem
@@ -147,3 +147,7 @@ Standard gates: scoped `cargo nextest -p ava-evm -p ava-chains`, clippy
 - Rust stamps whole-second timestamps (coreth stamps real `UnixMilli`); the
   wait rounds up to the next whole second so the stamp still clears the delay.
   Whole-second `TimeMilliseconds` values are a valid subset under `VerifyTime`.
+
+## AS-BUILT notes
+
+> **AS-BUILT note (2026-07-20):** pacing lives in `EvmPendingWorkWaiter::wait()` only. `EvmVm::wait_for_event` (the rpcchainvm guest path, `ava-vm-rpc/src/guest/mod.rs:234`) remains unpaced — deliberate asymmetry, latent today because no production path serves the Rust C-Chain EVM as a plugin; revisit if a plugin arm ships. The `ava-chains` forwarder's 2 s re-arm is likewise unpaced under sustained load (see the M9 AS-BUILT residual).

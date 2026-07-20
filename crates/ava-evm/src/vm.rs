@@ -360,7 +360,9 @@ pub struct EvmVm {
     builder: BlockBuilderDriver,
     /// The currently preferred (leaf) block id (Go `vm.preferred`). Record-only:
     /// Snowman owns fork choice, so `set_preference` does no reorg work (G6).
-    preferred: ArcSwap<Id>,
+    /// Behind an `Arc` so the [`EvmPendingWorkWaiter`] can watch the next
+    /// build's parent without holding the VM.
+    preferred: Arc<ArcSwap<Id>>,
     /// The accepted-atomic-tx index the `avax.*` handlers read (coreth
     /// `AtomicRepository`). The accept-side writer wiring (recording each
     /// accepted block's atomic txs) is the M8 follow-up noted in
@@ -440,7 +442,7 @@ impl EvmVm {
             evm_config,
             txpool,
             builder,
-            preferred: ArcSwap::from_pointee(tip.0),
+            preferred: Arc::new(ArcSwap::from_pointee(tip.0)),
             accepted_atomic_txs: Arc::new(AcceptedAtomicTxIndex::new()),
             accepted_tx_index: Arc::new(AcceptedTxIndex::new()),
             evm_mempool,
@@ -720,13 +722,21 @@ impl Connector for EvmVm {
 // ---------------------------------------------------------------------------
 
 /// A lock-free [`PendingWorkWaiter`] over `EvmVm`'s two mempools (the atomic
-/// X<->C pool and the EVM pool). Holds only the pool `Arc`s the VM already
-/// owns — NEVER the outer `Arc<Mutex<dyn Vm>>` a proposal forwarder would
-/// otherwise have to hold to call `wait_for_event` (the M7.18 lock-parking
-/// hazard this seam exists to avoid).
+/// X<->C pool and the EVM pool), paced by the parent's ACP-226 minimum block
+/// delay (coreth `waitForEvent`, `plugin/evm/block_builder.go:140-214`). Holds
+/// only `Arc`s the VM already owns — NEVER the outer `Arc<Mutex<dyn Vm>>` a
+/// proposal forwarder would otherwise have to hold to call `wait_for_event`
+/// (the M7.18 lock-parking hazard this seam exists to avoid): `verified` is a
+/// `DashMap`, the clock read takes the clock mutex only for the duration of the read, and no lock is held across an
+/// `.await`.
 struct EvmPendingWorkWaiter {
     atomic: Arc<parking_lot::Mutex<AtomicMempool>>,
     evm: Arc<parking_lot::Mutex<EvmMempool>>,
+    /// The shared core — the preferred parent's header (`verified`) and the
+    /// injected clock, the two ACP-226 pacing inputs.
+    shared: Arc<Shared>,
+    /// The preferred (leaf) block id the next build will extend.
+    preferred: Arc<ArcSwap<Id>>,
 }
 
 impl EvmPendingWorkWaiter {
@@ -751,16 +761,49 @@ impl PendingWorkWaiter for EvmPendingWorkWaiter {
         loop {
             let atomic_notify = self.atomic.lock().subscribe();
             let evm_notify = self.evm.lock().subscribe();
-            if self.pending() {
+            if !self.pending() {
+                tokio::select! {
+                    () = atomic_notify.notified() => {}
+                    () = evm_notify.notified() => {}
+                }
+                // Loop back: re-subscribe and re-check. A spurious wake (e.g.
+                // the admission that woke us was immediately drained by a
+                // concurrent `build_block`) simply re-arms.
+                continue;
+            }
+
+            // Work exists. coreth waitForEvent (block_builder.go:140-163): do
+            // not signal the engine before the ACP-226 minimum delay after
+            // the parent has elapsed — a block built earlier dies at its own
+            // VerifyTime with MinDelayNotMet. Fail-open: an unresolvable
+            // preferred id or a pre-Granite parent means nothing to wait for
+            // (verify remains the safety backstop; coreth's nil-arm).
+            let preferred = *self.preferred.load_full();
+            let Some(min_next_ms) = self
+                .shared
+                .verified
+                .get(&preferred)
+                .and_then(|pb| crate::feerules::min_next_block_time_ms(pb.block.header()))
+            else {
+                return;
+            };
+            // `build_block` stamps whole seconds (`timestamp_ms = secs *
+            // 1000`), so round UP to the next whole second that clears the
+            // delay — a Go-built parent can carry a mid-second ms timestamp,
+            // and flooring would still fail MinDelayNotMet.
+            let target_secs = min_next_ms.div_ceil(1000);
+            let now_secs = self.shared.clock.lock().unix();
+            let remaining = target_secs.saturating_sub(now_secs);
+            if remaining == 0 {
                 return;
             }
-            tokio::select! {
-                () = atomic_notify.notified() => {}
-                () = evm_notify.notified() => {}
-            }
-            // Loop back: re-subscribe and re-check. A spurious wake (e.g. the
-            // admission that woke us was immediately drained by a concurrent
-            // `build_block`) simply re-arms instead of returning early.
+            // Sleep the remainder, then loop back to the top: the preference
+            // may have moved or the work may have drained while we slept.
+            // Each iteration either returns or sleeps a strictly positive
+            // remainder — no busy-spin. Cancellation-safe: the forwarder
+            // `select!`s this future against the chain token, so a sleeping
+            // waiter is simply dropped at teardown.
+            tokio::time::sleep(Duration::from_secs(remaining)).await;
         }
     }
 }
@@ -908,6 +951,8 @@ impl Vm for EvmVm {
         Some(Arc::new(EvmPendingWorkWaiter {
             atomic: Arc::clone(&self.txpool),
             evm: Arc::clone(&self.evm_mempool),
+            shared: Arc::clone(&self.shared),
+            preferred: Arc::clone(&self.preferred),
         }))
     }
 }

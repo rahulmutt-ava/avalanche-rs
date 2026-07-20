@@ -16,7 +16,7 @@
 //! `create_handlers` hands to `EthRpc::new`).
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use ava_crypto::secp256k1::PrivateKey;
 use ava_evm::mempool::{AdmissionRules, SenderAccount};
@@ -26,7 +26,10 @@ use ava_evm_reth::{
     TxLegacy, U256,
 };
 use ava_types::constants::LOCAL_ID;
+use ava_utils::clock::MockClock;
+use ava_vm::block::ChainVm;
 use ava_vm::vm::Vm;
+use tokio_util::sync::CancellationToken;
 
 /// The well-known "ewoq" pre-funded private key on `local` networks (matches
 /// `proposer_candidates.rs::EWOQ_KEY_HEX` / `tx_pipeline.rs::EWOQ_KEY_HEX`).
@@ -38,6 +41,12 @@ const CHAIN_ID: u64 = 43112;
 /// A gas price comfortably above the AP3 genesis base fee (225 gwei) so the tx
 /// is never dropped as underpriced (`tx_pipeline.rs::GAS_PRICE_WEI`).
 const GAS_PRICE_WEI: u128 = 300_000_000_000;
+
+/// The committed local C-Chain genesis timestamp (`local.json` `"timestamp":
+/// "0x5FCB13D0"`). The genesis header is Granite-active on `local`, so it
+/// carries `min_delay_excess = INITIAL_DELAY_EXCESS` (delay = 2000 ms) — the
+/// earliest legal child stamp is GENESIS_TIME_SECS + 2.
+const GENESIS_TIME_SECS: u64 = 1_607_144_400;
 
 /// The committed C-Chain local genesis JSON — the sole `alloc` entry funds ewoq.
 fn local_genesis_json() -> &'static str {
@@ -201,4 +210,94 @@ async fn no_lost_wake_between_check_and_wait() {
     let admitted = admit.await.expect("admit task must not panic");
     assert_eq!(admitted, tx_hash, "add_local returns the tx hash");
     assert!(waiter.has_pending(), "has_pending true after admission");
+}
+
+#[tokio::test]
+async fn wait_resolves_immediately_when_min_delay_elapsed() {
+    // Clock already at genesis + 2s (== the ACP-226 target for the initial
+    // delay excess): pacing must add ZERO wait — guards against over-waiting.
+    let (vm, _dir) = build_vm();
+    let clock = MockClock::at(UNIX_EPOCH + Duration::from_secs(GENESIS_TIME_SECS + 2));
+    let vm = vm.with_clock(Arc::new(clock));
+
+    let (tx, _hash) = signed_transfer(0);
+    let sender = SenderAccount {
+        nonce: 0,
+        balance: ewoq_balance(),
+    };
+    let rules = AdmissionRules {
+        chain_id: CHAIN_ID,
+        ..Default::default()
+    };
+    vm.evm_mempool_handle()
+        .lock()
+        .add_local(tx, &sender, &rules)
+        .expect("admit ewoq transfer");
+
+    let waiter = vm
+        .pending_work_waiter()
+        .expect("EvmVm exposes a PendingWorkWaiter");
+    tokio::time::timeout(Duration::from_secs(1), waiter.wait())
+        .await
+        .expect("min delay already elapsed => wait() resolves without pacing");
+}
+
+#[tokio::test]
+async fn wait_gates_on_min_delay_then_built_block_passes_self_verify() {
+    // The papercut regression test. Clock pinned at genesis + 1s: one second
+    // of the 2000ms ACP-226 minimum delay remains, so wait() must NOT resolve
+    // yet (pre-pacing it resolved the instant work existed, and the block
+    // built at genesis+1 died at its own verify with MinDelayNotMet).
+    let (vm, _dir) = build_vm();
+    let clock = MockClock::at(UNIX_EPOCH + Duration::from_secs(GENESIS_TIME_SECS + 1));
+    let mut vm = vm.with_clock(Arc::new(clock.clone()));
+
+    let (tx, _hash) = signed_transfer(0);
+    let sender = SenderAccount {
+        nonce: 0,
+        balance: ewoq_balance(),
+    };
+    let rules = AdmissionRules {
+        chain_id: CHAIN_ID,
+        ..Default::default()
+    };
+    vm.evm_mempool_handle()
+        .lock()
+        .add_local(tx, &sender, &rules)
+        .expect("admit ewoq transfer");
+
+    let waiter = vm
+        .pending_work_waiter()
+        .expect("EvmVm exposes a PendingWorkWaiter");
+    let w2 = Arc::clone(&waiter);
+    let mut parked = tokio::spawn(async move { w2.wait().await });
+
+    // 300ms into a ~1s pacing window: still gated. (Self-healing on slow
+    // machines: if the waiter's sleep elapses before the clock is advanced
+    // below, it recomputes a positive remainder and sleeps again.)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !parked.is_finished(),
+        "wait() must gate until GENESIS_TIME_SECS + 2 (ACP-226 min delay)"
+    );
+
+    // The chain clock reaching the target lets the pacing loop resolve once
+    // its pending sleep elapses.
+    clock.set(UNIX_EPOCH + Duration::from_secs(GENESIS_TIME_SECS + 2));
+    tokio::time::timeout(Duration::from_secs(5), &mut parked)
+        .await
+        .expect("wait() resolves once the min delay has elapsed")
+        .expect("parked wait() task must not panic");
+
+    // The paced build stamps clock.unix() == genesis+2 and passes its OWN
+    // verify — no MinDelayNotMet (actual 2000ms == required 2000ms).
+    let token = CancellationToken::new();
+    let built = vm
+        .build_block(&token)
+        .await
+        .expect("build_block after the paced wait");
+    built
+        .verify(&token)
+        .await
+        .expect("self-verify after paced build: MinDelayNotMet papercut is closed");
 }

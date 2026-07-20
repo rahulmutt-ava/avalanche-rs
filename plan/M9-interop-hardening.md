@@ -2210,6 +2210,19 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > still reject the same malformed block). Design detail:
 > `docs/superpowers/specs/2026-07-19-cchain-semantic-verify-family-design.md` (`## AS-BUILT notes`).
 
+> **AS-BUILT (builder min-delay pacing, follow-up to semantic-verify, 2026-07-20) — CLOSED.**
+> The ★ builder min-delay pacing follow-up from the final-review triage is now implemented. Two
+> items landed: `feerules::min_next_block_time_ms` (ports coreth's `minNextBlockTime` at
+> `block_builder.go:202`; the ACP-226 min-delay timestamp bound) and the paced `EvmPendingWorkWaiter::wait()`
+> (ports coreth's `waitForEvent` pacing at `block_builder.go:140-214`; the waiter now sleeps until
+> `parent_time_ms + parent.MinDelayExcess.Delay()` before returning work). Whole-second round-up
+> applied: Rust builder stamps whole-second block timestamps, so the pacing sleeps until the next
+> whole second >= computed min-time to avoid immediate `MinDelayNotMet` on block submission. **Deliberate
+> deviation:** coreth's 100 ms `RetryDelay` retry arm (same-parent retry tracking, `block_builder.go:31,189-190`)
+> unported — the forwarder's existing 2 s re-arm covers the retry-same-parent role; the pacing itself
+> closes the liveness papercut. See `docs/superpowers/specs/2026-07-19-builder-min-delay-pacing-design.md`.
+> **Residual (follow-up):** pacing covers the first signal after idle (the live-verified papercut); the forwarder's 2 s re-arm path (`ava-chains/src/create_chain.rs`) is still unpaced under sustained load — consecutive builds there can still hit `MinDelayNotMet` until the re-arm is routed through the paced `wait()`.
+
 ---
 
 ## Spec coverage check
