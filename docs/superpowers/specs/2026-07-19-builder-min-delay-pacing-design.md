@@ -150,4 +150,4 @@ Standard gates: scoped `cargo nextest -p ava-evm -p ava-chains`, clippy
 
 ## AS-BUILT notes
 
-> **AS-BUILT note (2026-07-20):** pacing lives in `EvmPendingWorkWaiter::wait()` only. `EvmVm::wait_for_event` (the rpcchainvm guest path, `ava-vm-rpc/src/guest/mod.rs:234`) remains unpaced — deliberate asymmetry, latent today because no production path serves the Rust C-Chain EVM as a plugin; revisit if a plugin arm ships. The `ava-chains` forwarder's 2 s re-arm is likewise unpaced under sustained load (see the M9 AS-BUILT residual).
+> **AS-BUILT note (2026-07-20):** pacing lives in `EvmPendingWorkWaiter::wait()` only. `EvmVm::wait_for_event` (the rpcchainvm guest path, `ava-vm-rpc/src/guest/mod.rs:234`) remains unpaced — deliberate asymmetry, latent today because no production path serves the Rust C-Chain EVM as a plugin; revisit if a plugin arm ships. The `ava-chains` forwarder's 2 s re-arm was subsequently paced through `wait()` on 2026-07-20 (`forward_pending_work`; see `2026-07-20-forwarder-rearm-pacing-design.md`).

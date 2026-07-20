@@ -1,7 +1,7 @@
 # Forwarder re-arm pacing (ACP-226 residual) — design
 
 **Date:** 2026-07-20
-**Status:** approved
+**Status:** implemented
 **Follow-up from:** builder min-delay pacing merge `56a95a3` (final-review Important
 finding: unpaced 2 s re-arm under sustained load).
 
