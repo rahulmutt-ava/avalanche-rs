@@ -21,6 +21,13 @@ pub enum Error {
     /// %d: %w"`).
     #[error("failed to register handler id {0}: existing app protocol")]
     DuplicateHandler(u64),
+    /// `Client::app_request` allocated a request id that is still awaiting a
+    /// response/failure in the pending map (Go `network/p2p/client.go:79-88`'s
+    /// `ErrRequestPending`, wrapped as `"failed to issue request with request
+    /// id %d: %w"`). The stale pending entry is left untouched — only the new
+    /// request is rejected.
+    #[error("failed to issue request with request id {0}: request pending")]
+    RequestPending(u32),
 }
 
 /// Convenience alias for `Result<T, Error>`.

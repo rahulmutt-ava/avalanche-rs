@@ -7,24 +7,35 @@
 //! ## Register-happens-before-send
 //!
 //! Go's `Client.AppRequest` runs its whole body — id allocation, the
-//! (synchronous) `SendAppRequest` call, and the pending-map insert — under
-//! `c.router.lock` (`network/p2p/client.go:70-107`), so Go's cooperative,
-//! non-preemptive scheduling guarantees no other goroutine can observe an
-//! `AppResponse`/`AppRequestFailed` for a request id before that id's entry
-//! exists in `pendingAppRequests`, even though the map insert
-//! (`client.go:104-106`) textually follows the send.
+//! (synchronous) `SendAppRequest` call, and the pending-map insert — while
+//! holding `c.router.lock` for the entire critical section
+//! (`network/p2p/client.go:70-107` acquires it on entry and only releases it
+//! via `defer` on return; `router.pendingAppRequests`/`router.requestID` are
+//! themselves declared right next to that same `lock` at `router.go:65-84`).
+//! That shared mutex — not goroutine scheduling — is what makes it safe for
+//! Go to insert into `pendingAppRequests` (`client.go:104-106`) *after* the
+//! send: no other goroutine can call into the router's `AppResponse`/
+//! `AppRequestFailed` (which also take `router.lock`, `router.go` `clearAppRequest`)
+//! and observe the map mid-update.
 //!
-//! This port's [`AppSender::send_app_request`] is `async` and may genuinely
-//! yield to the executor mid-call, so a literal transliteration (insert the
-//! pending entry only *after* `send_app_request`'s future resolves) would
+//! This port has no equivalent single lock spanning "allocate id, send,
+//! insert" — [`AppSender::send_app_request`] is `async` and may genuinely
+//! yield to the executor mid-call, and holding [`PendingMap`]'s
+//! `parking_lot::Mutex` across that `.await` is exactly what this crate must
+//! not do (a `Mutex` guard held across an await point). Without Go's
+//! router-wide lock, inserting only *after* `send_app_request` resolves would
 //! open a window where a fast peer's `AppResponse`/`AppRequestFailed` — routed
 //! through a different task calling
 //! [`P2pNetwork::handle_app_response`](crate::network::P2pNetwork::handle_app_response) —
 //! arrives and finds nothing to correlate against. [`Client::app_request`]
 //! below instead inserts `on_response` into the pending map *before* awaiting
-//! `send_app_request`, the same register-happens-before-send ordering used
-//! elsewhere in this port (Task 3's `network.rs` module doc references the
-//! same "STEP-p" pattern).
+//! `send_app_request` (dropping the lock guard immediately after the insert,
+//! not held across the await), the same register-happens-before-send ordering
+//! used elsewhere in this port (Task 3's `network.rs` module doc references
+//! the same "STEP-p" pattern). [`PendingGuard`] then covers the flip side:
+//! if the caller drops/cancels the `app_request` future while that send is
+//! still in flight (e.g. `tokio::time::timeout`), the pending entry must not
+//! outlive it either.
 //!
 //! ## Narrowed from Go's multi-node fan-out
 //!
@@ -82,6 +93,58 @@ pub type OnResponse = Box<dyn FnOnce(NodeId, Result<Vec<u8>, AppError>) + Send>;
 /// response routed through the network's `handle_app_response` can resolve a
 /// callback registered by any of that network's `Client`s.
 pub(crate) type PendingMap = Arc<Mutex<std::collections::HashMap<u32, OnResponse>>>;
+
+/// Removes a just-inserted pending entry on drop unless [`Self::disarm`] was
+/// called first.
+///
+/// [`Client::app_request`] inserts `on_response` into the pending map before
+/// awaiting [`AppSender::send_app_request`] (see the module doc's
+/// "register-happens-before-send" section) so a fast reply can't race ahead
+/// of the insert. That ordering, on its own, would leak the entry forever if
+/// the caller cancels the `app_request` future while that send is still
+/// in-flight — e.g. `tokio::time::timeout`, `select!`, or simply dropping the
+/// future — since no later `handle_app_response`/`handle_app_request_failed`
+/// call is coming to remove it. `PendingGuard` closes that window: it is
+/// armed for the lifetime of the in-flight send and, if dropped while still
+/// armed (early-return error *or* the surrounding future being dropped
+/// mid-`.await`), removes the entry itself. A wire response/failure that
+/// later arrives for an id a `PendingGuard` already cleaned up is dropped
+/// silently by `P2pNetwork::handle_app_response`/`handle_app_request_failed`
+/// — the same unknown/already-resolved-id policy applied to every other stray
+/// delivery.
+struct PendingGuard {
+    pending: PendingMap,
+    request_id: u32,
+    armed: bool,
+}
+
+impl PendingGuard {
+    /// Wraps an already-inserted `request_id`, armed to remove it on drop.
+    fn new(pending: PendingMap, request_id: u32) -> Self {
+        Self {
+            pending,
+            request_id,
+            armed: true,
+        }
+    }
+
+    /// Disarms the guard: the pending entry is no longer removed on drop.
+    /// Call this once the request has been durably issued (the send
+    /// succeeded) — from that point on, only
+    /// `P2pNetwork::handle_app_response`/`handle_app_request_failed` may
+    /// remove the entry.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.pending.lock().remove(&self.request_id);
+        }
+    }
+}
 
 /// Issues correlated `AppRequest`s and fire-and-forget `AppGossip`s on behalf
 /// of one registered handler (Go `network/p2p/client.go` `Client`).
@@ -141,15 +204,24 @@ impl Client {
     /// `Client.AppRequest`, `network/p2p/client.go:64-107`, narrowed to a
     /// single node — see the module doc).
     ///
-    /// Allocates the next id off the shared request-id counter and registers
-    /// `on_response` in the pending map *before* awaiting
+    /// Allocates the next id off the shared request-id counter. If that id is
+    /// still present in the pending map (Go `client.go:82-88`'s
+    /// `ErrRequestPending` check, which peeks `pendingAppRequests` before
+    /// issuing the send), returns [`crate::Error::RequestPending`] without
+    /// touching the existing entry or sending anything — this should only be
+    /// reachable after the `u32` id space wraps all the way around while very
+    /// old requests are still outstanding.
+    ///
+    /// Otherwise, registers `on_response` in the pending map *before* awaiting
     /// [`AppSender::send_app_request`] (see the module doc's
-    /// "register-happens-before-send" section). If the send itself returns an
-    /// error, the just-inserted pending entry is removed and the error is
-    /// returned to the caller directly — `on_response` is not invoked,
-    /// mirroring Go returning the `SendAppRequest` error straight to the
-    /// caller rather than resolving the callback for a request that never
-    /// went out.
+    /// "register-happens-before-send" section), guarded by a [`PendingGuard`]
+    /// that removes the entry again if the send returns an error *or* this
+    /// future is dropped/cancelled before the send resolves (see
+    /// `PendingGuard`'s doc). `on_response` is only ever invoked by
+    /// `P2pNetwork::handle_app_response`/`handle_app_request_failed`, never
+    /// from here — mirroring Go returning the `SendAppRequest` error straight
+    /// to the caller rather than resolving the callback for a request that
+    /// never went out.
     pub async fn app_request(
         &self,
         token: &CancellationToken,
@@ -158,24 +230,37 @@ impl Client {
         on_response: OnResponse,
     ) -> crate::Result<()> {
         let request_id = self.request_id.fetch_add(1, Ordering::Relaxed);
+
         // Register before the send even starts (not merely before its await
         // resolves) so a same-thread synchronous fast-path response can never
-        // race ahead of the insert either.
-        self.pending.lock().insert(request_id, on_response);
+        // race ahead of the insert either. The lock is held only for this
+        // check-and-insert, never across the `send_app_request` await below.
+        {
+            let mut pending = self.pending.lock();
+            if pending.contains_key(&request_id) {
+                return Err(crate::Error::RequestPending(request_id));
+            }
+            pending.insert(request_id, on_response);
+        }
+        let guard = PendingGuard::new(self.pending.clone(), request_id);
 
         let mut nodes = HashSet::with_capacity(1);
         nodes.insert(node);
         let prefixed = prefix_message(&self.prefix, &bytes);
 
-        if let Err(err) = self
-            .sender
+        // If this future is dropped while suspended on this `.await` (e.g.
+        // `tokio::time::timeout` elapsing, or a `select!` losing), `guard`
+        // is dropped along with it — still armed — and removes the pending
+        // entry itself; nothing further to do on that path.
+        self.sender
             .send_app_request(token, &nodes, request_id, prefixed)
             .await
-        {
-            self.pending.lock().remove(&request_id);
-            return Err(crate::Error::Send(err.to_string()));
-        }
+            .map_err(|err| crate::Error::Send(err.to_string()))?;
 
+        // The send succeeded: the entry is now durably owned by the pending
+        // map, to be resolved by a later `handle_app_response`/
+        // `handle_app_request_failed` call, not by this guard.
+        guard.disarm();
         Ok(())
     }
 
@@ -466,8 +551,10 @@ mod tests {
         let token = CancellationToken::new();
 
         // No app_request was ever issued for id 42; this must not panic and
-        // must return Ok (Go: the router's timeout synthesis racing a real
-        // reply is expected, not an error condition).
+        // must return Ok. Go's `router.AppResponse`/`AppRequestFailed` treat
+        // this as fatal (`ErrUnrequestedResponse`); this port deliberately
+        // diverges and drops it silently instead (network.rs's
+        // `handle_app_request_failed` doc has the full rationale).
         network
             .handle_app_response(&token, test_node(1), 42, b"stray")
             .await
@@ -510,6 +597,173 @@ mod tests {
         // The pending entry was cleaned up, not leaked: a stray response for
         // request id 0 (the only id ever allocated here) is dropped silently
         // rather than resolving the (already-failed) callback again.
+        network
+            .handle_app_response(&token, node, 0, b"late")
+            .await
+            .unwrap();
+        assert!(!*called.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn app_request_rejects_id_still_pending() {
+        let sender = Arc::new(RecordingSender::default());
+        let network = P2pNetwork::new(test_node(0), sender.clone());
+        let client = network
+            .add_handler(TEST_HANDLER_ID, Arc::new(NoopHandler))
+            .unwrap();
+        let token = CancellationToken::new();
+        let node = test_node(1);
+
+        // A fresh network's request-id counter starts at 0
+        // (`AtomicU32::new(0)`), so the very first `app_request` is
+        // guaranteed to allocate id 0. Seed the pending map with that id
+        // directly (the `client` test module is a descendant of `client`, so
+        // `Client`'s private fields are visible here) to simulate "the
+        // allocator handed out an id that's still outstanding" without
+        // needing to actually wrap a `u32` counter.
+        let stale_called = Arc::new(StdMutex::new(false));
+        let stale_called_clone = stale_called.clone();
+        client.pending.lock().insert(
+            0,
+            Box::new(move |_, _| {
+                *stale_called_clone.lock().unwrap() = true;
+            }),
+        );
+
+        let err = client
+            .app_request(&token, node, b"req".to_vec(), Box::new(|_, _| {}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::Error::RequestPending(0)),
+            "got: {err:?}"
+        );
+
+        // Nothing was ever sent for the rejected request...
+        assert!(
+            sender.requests.lock().unwrap().is_empty(),
+            "a rejected app_request must not call send_app_request"
+        );
+        // ...and the original stale entry is untouched, not clobbered.
+        assert!(
+            client.pending.lock().contains_key(&0),
+            "the original pending entry must survive the rejection"
+        );
+        network
+            .handle_app_response(&token, node, 0, b"resp")
+            .await
+            .unwrap();
+        assert!(
+            *stale_called.lock().unwrap(),
+            "the original (untouched) callback must still be resolvable"
+        );
+    }
+
+    #[tokio::test]
+    async fn app_request_cancelled_mid_send_does_not_leak_entry() {
+        /// Signals `started` the instant `send_app_request` is entered, then
+        /// hangs forever — so the caller can be certain the pending entry
+        /// has already been inserted (this port inserts before the send,
+        /// see the module doc) before cancelling.
+        struct HangingSender {
+            started: tokio::sync::Notify,
+        }
+
+        #[async_trait]
+        impl AppSender for HangingSender {
+            async fn send_app_request(
+                &self,
+                _token: &CancellationToken,
+                _nodes: &HashSet<NodeId>,
+                _request_id: u32,
+                _bytes: Vec<u8>,
+            ) -> VmResult<()> {
+                self.started.notify_one();
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+
+            async fn send_app_response(
+                &self,
+                _token: &CancellationToken,
+                _node: NodeId,
+                _request_id: u32,
+                _bytes: Vec<u8>,
+            ) -> VmResult<()> {
+                Ok(())
+            }
+
+            async fn send_app_error(
+                &self,
+                _token: &CancellationToken,
+                _node: NodeId,
+                _request_id: u32,
+                _code: i32,
+                _message: &str,
+            ) -> VmResult<()> {
+                Ok(())
+            }
+
+            async fn send_app_gossip(
+                &self,
+                _token: &CancellationToken,
+                _config: SendConfig,
+                _bytes: Vec<u8>,
+            ) -> VmResult<()> {
+                Ok(())
+            }
+        }
+
+        let sender = Arc::new(HangingSender {
+            started: tokio::sync::Notify::new(),
+        });
+        let network = P2pNetwork::new(test_node(0), sender.clone());
+        let client = Arc::new(
+            network
+                .add_handler(TEST_HANDLER_ID, Arc::new(NoopHandler))
+                .unwrap(),
+        );
+        let node = test_node(1);
+
+        let called = Arc::new(StdMutex::new(false));
+        let called_clone = called.clone();
+        let client_clone = client.clone();
+        let handle = tokio::spawn(async move {
+            let token = CancellationToken::new();
+            client_clone
+                .app_request(
+                    &token,
+                    node,
+                    b"req".to_vec(),
+                    Box::new(move |_, _| {
+                        *called_clone.lock().unwrap() = true;
+                    }),
+                )
+                .await
+        });
+
+        // Block until the spawned task is provably suspended inside
+        // `send_app_request` (i.e. past the pending-map insert), then abort
+        // it — dropping its future, and with it the armed `PendingGuard`,
+        // mid-`.await`.
+        sender.started.notified().await;
+        handle.abort();
+        let result = handle.await;
+        assert!(
+            result.unwrap_err().is_cancelled(),
+            "the spawned app_request task must have been cancelled, not completed"
+        );
+
+        // The pending entry must not have leaked past the cancellation.
+        assert!(
+            !client.pending.lock().contains_key(&0),
+            "a cancelled app_request must not leak its pending entry"
+        );
+
+        // A later wire response for that id is dropped silently (same policy
+        // as any other unknown/already-resolved id) rather than invoking the
+        // orphaned callback.
+        let token = CancellationToken::new();
         network
             .handle_app_response(&token, node, 0, b"late")
             .await

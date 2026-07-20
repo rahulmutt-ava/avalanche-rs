@@ -217,10 +217,20 @@ impl P2pNetwork {
     /// `&self` dispatch for an inbound `AppRequestFailed` (Go
     /// `router.AppRequestFailed`): removes the pending entry for
     /// `request_id`, if any, and invokes its callback with `Err(err)` exactly
-    /// once. A failure for an unknown/already-resolved id is dropped silently
-    /// — the engine router's timeout synthesis can race a real reply, so
-    /// dedup-by-removal (rather than treating this as an error) is the same
-    /// safety the Go router relies on.
+    /// once.
+    ///
+    /// **Deliberate divergence from Go**: Go's `router.AppRequestFailed`
+    /// treats an unmatched id as fatal — `clearAppRequest`'s `!ok` branch
+    /// returns `ErrUnrequestedResponse` (`network/p2p/router.go:148-153`),
+    /// and the doc comment right above it says any such error "is considered
+    /// fatal" (`router.go:146-147`), i.e. Go expects this to never happen and
+    /// escalates hard if it does. This port instead drops a failure for an
+    /// unknown/already-resolved id silently (log + `Ok(())`) — the plan
+    /// mandates this because the engine router's timeout synthesis can race a
+    /// real reply for the same id, and `client.rs`'s `PendingGuard`-driven
+    /// cleanup on cancellation (see its module doc) makes a late,
+    /// now-orphaned delivery for a removed id an expected occurrence here,
+    /// not the "should never happen" case Go is guarding against.
     pub async fn handle_app_request_failed(
         &self,
         _token: &CancellationToken,
@@ -245,8 +255,10 @@ impl P2pNetwork {
     /// `&self` dispatch for an inbound `AppResponse` (Go `router.AppResponse`):
     /// removes the pending entry for `request_id`, if any, and invokes its
     /// callback with `Ok(response)` exactly once. A response for an
-    /// unknown/already-resolved id is dropped silently — see
-    /// [`Self::handle_app_request_failed`]'s doc for why.
+    /// unknown/already-resolved id is dropped silently — a deliberate
+    /// divergence from Go's `router.AppResponse`, which instead treats this
+    /// as fatal (`ErrUnrequestedResponse`); see
+    /// [`Self::handle_app_request_failed`]'s doc for the full rationale.
     pub async fn handle_app_response(
         &self,
         _token: &CancellationToken,
