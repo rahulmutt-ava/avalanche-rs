@@ -31,7 +31,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -45,6 +45,7 @@ use ava_vm::app_sender::AppSender;
 use ava_vm::connector::Connector;
 use ava_vm::error::Result as VmResult;
 
+use crate::client::{Client, PendingMap};
 use crate::handler::{Handler, err_unregistered_handler};
 
 /// Encode `handler_id` as an unsigned LEB128 varint (Go `binary.AppendUvarint`,
@@ -79,6 +80,14 @@ pub struct P2pNetwork {
     peers: Mutex<BTreeSet<NodeId>>,
     /// Seeds the deterministic LCG in [`Self::sample_peer`].
     sample_counter: AtomicU64,
+    /// In-flight `AppRequest`s awaiting a response/failure, shared with every
+    /// [`Client`] this network hands out (Go `router.pendingAppRequests`).
+    pending: PendingMap,
+    /// Allocates request ids for every [`Client`] issued off this network —
+    /// one shared id space, like Go's `router.requestID`. See `client.rs`'s
+    /// module doc for why this port doesn't reserve odd numbers the way Go
+    /// does.
+    request_id: Arc<AtomicU32>,
 }
 
 impl P2pNetwork {
@@ -94,6 +103,8 @@ impl P2pNetwork {
             handlers: Mutex::new(HashMap::new()),
             peers: Mutex::new(BTreeSet::new()),
             sample_counter: AtomicU64::new(0),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            request_id: Arc::new(AtomicU32::new(0)),
         })
     }
 
@@ -103,21 +114,29 @@ impl P2pNetwork {
         self.node_id
     }
 
-    /// Reserves `handler_id` for `handler` (Go `Network.AddHandler` /
-    /// `router.addHandler`, `network/p2p/router.go:88-104`). Returns
+    /// Reserves `handler_id` for `handler` and returns a [`Client`] for
+    /// issuing correlated requests/gossip under that handler id (Go
+    /// `Network.AddHandler` / `router.addHandler`,
+    /// `network/p2p/router.go:88-104`, plus `Network.NewClient`). Returns
     /// [`crate::Error::DuplicateHandler`] if `handler_id` is already
     /// registered, mirroring Go's `ErrExistingAppProtocol`.
     ///
-    /// Returns `Ok(())` for now; Task 4 changes the success type to a
-    /// `Client` (Go `Network.NewClient`) once the pending-request map lands —
-    /// the error path stays the same.
-    pub fn add_handler(&self, handler_id: u64, handler: Arc<dyn Handler>) -> crate::Result<()> {
+    /// The returned `Client` shares this network's pending-request map and
+    /// request-id counter, so a response/failure this network dispatches via
+    /// [`Self::handle_app_response`]/[`Self::handle_app_request_failed`]
+    /// resolves the callback the `Client` registered.
+    pub fn add_handler(&self, handler_id: u64, handler: Arc<dyn Handler>) -> crate::Result<Client> {
         let mut handlers = self.handlers.lock();
         if handlers.contains_key(&handler_id) {
             return Err(crate::Error::DuplicateHandler(handler_id));
         }
         handlers.insert(handler_id, handler);
-        Ok(())
+        Ok(Client::new(
+            handler_id,
+            self.sender.clone(),
+            self.pending.clone(),
+            self.request_id.clone(),
+        ))
     }
 
     /// Uniformly samples one connected peer, or `None` if there are none
@@ -195,8 +214,13 @@ impl P2pNetwork {
         }
     }
 
-    /// `&self` no-op stub for `AppRequestFailed` until Task 4 wires the
-    /// pending-request map (Go `router.AppRequestFailed`).
+    /// `&self` dispatch for an inbound `AppRequestFailed` (Go
+    /// `router.AppRequestFailed`): removes the pending entry for
+    /// `request_id`, if any, and invokes its callback with `Err(err)` exactly
+    /// once. A failure for an unknown/already-resolved id is dropped silently
+    /// — the engine router's timeout synthesis can race a real reply, so
+    /// dedup-by-removal (rather than treating this as an error) is the same
+    /// safety the Go router relies on.
     pub async fn handle_app_request_failed(
         &self,
         _token: &CancellationToken,
@@ -204,29 +228,42 @@ impl P2pNetwork {
         request_id: u32,
         err: AppError,
     ) -> VmResult<()> {
-        tracing::debug!(
-            node = %node,
-            request_id,
-            code = err.code,
-            "app request failed with no pending-request map registered (Task 4)"
-        );
+        let callback = self.pending.lock().remove(&request_id);
+        let Some(callback) = callback else {
+            tracing::debug!(
+                node = %node,
+                request_id,
+                code = err.code,
+                "app request failed for unknown/already-resolved request id"
+            );
+            return Ok(());
+        };
+        callback(node, Err(err));
         Ok(())
     }
 
-    /// `&self` no-op stub for `AppResponse` until Task 4 wires the
-    /// pending-request map (Go `router.AppResponse`).
+    /// `&self` dispatch for an inbound `AppResponse` (Go `router.AppResponse`):
+    /// removes the pending entry for `request_id`, if any, and invokes its
+    /// callback with `Ok(response)` exactly once. A response for an
+    /// unknown/already-resolved id is dropped silently — see
+    /// [`Self::handle_app_request_failed`]'s doc for why.
     pub async fn handle_app_response(
         &self,
         _token: &CancellationToken,
         node: NodeId,
         request_id: u32,
-        _response: &[u8],
+        response: &[u8],
     ) -> VmResult<()> {
-        tracing::debug!(
-            node = %node,
-            request_id,
-            "app response received with no pending-request map registered (Task 4)"
-        );
+        let callback = self.pending.lock().remove(&request_id);
+        let Some(callback) = callback else {
+            tracing::debug!(
+                node = %node,
+                request_id,
+                "app response received for unknown/already-resolved request id"
+            );
+            return Ok(());
+        };
+        callback(node, Ok(response.to_vec()));
         Ok(())
     }
 
@@ -587,6 +624,8 @@ mod tests {
             handlers: Mutex::new(HashMap::new()),
             peers: Mutex::new(BTreeSet::new()),
             sample_counter: AtomicU64::new(0),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            request_id: Arc::new(AtomicU32::new(0)),
         };
         let handler = Arc::new(RecordingHandler::default());
         network.add_handler(0, handler.clone()).unwrap();

@@ -6,15 +6,18 @@
 //! This crate is under active development as part of the C-Chain tx gossip
 //! effort. So far it has the generated `proto/sdk` messages ([`pb::sdk`]),
 //! the crate's error model ([`error`]), the per-protocol [`handler::Handler`]
-//! trait, and the varint-prefixed protocol mux ([`network::P2pNetwork`]).
-//! The `Client`/gossip modules land in later tasks.
+//! trait, the varint-prefixed protocol mux ([`network::P2pNetwork`]), and
+//! request/response correlation ([`client::Client`]). The gossip modules land
+//! in later tasks.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod client;
 pub mod error;
 pub mod handler;
 pub mod network;
 pub mod pb;
 
+pub use client::Client;
 pub use error::{Error, Result};
