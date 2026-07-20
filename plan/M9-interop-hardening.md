@@ -2218,7 +2218,7 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 > `parent_time_ms + parent.MinDelayExcess.Delay()` before returning work). Whole-second round-up
 > applied: Rust builder stamps whole-second block timestamps, so the pacing sleeps until the next
 > whole second >= computed min-time to avoid immediate `MinDelayNotMet` on block submission. **Deliberate
-> deviation:** coreth's 100 ms `RetryDelay` retry arm (same-parent retry tracking, `block_builder.go:175-176`)
+> deviation:** coreth's 100 ms `RetryDelay` retry arm (same-parent retry tracking, `block_builder.go:31,189-190`)
 > unported — the forwarder's existing 2 s re-arm covers the retry-same-parent role; the pacing itself
 > closes the liveness papercut. See `docs/superpowers/specs/2026-07-19-builder-min-delay-pacing-design.md`.
 
