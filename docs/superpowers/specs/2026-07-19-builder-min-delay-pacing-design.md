@@ -1,7 +1,7 @@
 # Builder min-delay pacing (ACP-226) — design
 
 **Date:** 2026-07-19
-**Status:** approved
+**Status:** implemented
 **Follow-up from:** semantic-verify family merge `b5157d5` (final-review ★ triage item)
 
 ## Problem
