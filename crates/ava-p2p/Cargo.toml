@@ -14,6 +14,10 @@ prost = { workspace = true }
 thiserror = { workspace = true }
 # NodeId (Handler/P2pNetwork signatures).
 ava-types = { path = "../ava-types" }
+# Hoisted bloom filter (`gossip::bloom::BloomSet` wraps `bloom::Filter` /
+# `bloom::ReadFilter` / `bloom::{hash,fill_random_pub,optimal_parameters,
+# estimate_count}` — Go `network/p2p/gossip/bloom.go` parity).
+ava-utils = { path = "../ava-utils" }
 # AppHandler/AppSender/AppError/Connector/SendConfig — the traits P2pNetwork
 # implements/consumes (specs 07 §2.2, §2.6).
 ava-vm = { path = "../ava-vm" }
