@@ -4,11 +4,30 @@
 //! The varint-prefixed protocol mux (Go `network/p2p/network.go` `Network` +
 //! `network/p2p/router.go` `router`).
 //!
-//! [`P2pNetwork`] implements `ava_vm`'s [`AppHandler`]/[`Connector`] and
-//! dispatches inbound `AppGossip`/`AppRequest` payloads to whichever
-//! [`Handler`] was registered under the payload's varint-encoded prefix
-//! (Go `ProtocolPrefix`/`ParseMessage`), mirroring the Go `router`'s
+//! [`P2pNetwork`] dispatches inbound `AppGossip`/`AppRequest` payloads to
+//! whichever [`Handler`] was registered under the payload's varint-encoded
+//! prefix (Go `ProtocolPrefix`/`ParseMessage`), mirroring the Go `router`'s
 //! `parse` + `responder` dispatch (`network/p2p/router.go:107-138,261`).
+//!
+//! ## `&self` vs. `&mut self`
+//!
+//! `ava_vm::{AppHandler, Connector}` take `&mut self`, but production callers
+//! hold `P2pNetwork` behind a shared `Arc<P2pNetwork>` (it's also handed out
+//! to every [`Handler`]/future `Client` for the lifetime of the node) — a
+//! shared `Arc` can never yield the `&mut self` those trait methods need
+//! (`Arc::get_mut` only succeeds with a unique refcount, which doesn't hold
+//! once any clone is outstanding; `unsafe` aliasing is forbidden crate-wide).
+//! `crates/ava-avm/src/network/atomic.rs` hit the same wall and worked around
+//! it with a bespoke local `&self` trait; `P2pNetwork` instead exposes its
+//! *entire* dispatch surface as inherent `&self` methods
+//! (`handle_app_request`/`handle_app_response`/`handle_app_request_failed`/
+//! `handle_app_gossip`/`handle_connected`/`handle_disconnected`, all sound
+//! because the mutable state they touch already lives behind
+//! `parking_lot::Mutex`), and the `AppHandler`/`Connector` trait impls below
+//! are one-line `&mut self` delegations to those methods. Callers that need
+//! the trait objects (e.g. a uniquely-owned `Box<dyn AppHandler>`) still work;
+//! callers holding a shared `Arc<P2pNetwork>` (e.g. Task 12's `EvmVm`
+//! delegation) call the inherent `&self` methods directly instead.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -48,14 +67,12 @@ pub fn parse_prefix(msg: &[u8]) -> Option<(u64, &[u8])> {
 }
 
 /// Exposes networking state and dispatches p2p application protocols
-/// (Go `network/p2p/network.go` `Network`).
-///
-/// `ava_vm::{AppHandler, Connector}` take `&mut self`; `P2pNetwork` keeps its
-/// mutable state (`handlers`, `peers`) behind `parking_lot::Mutex` so those
-/// trait impls stay thin wrappers over shared (`&self`) helpers.
+/// (Go `network/p2p/network.go` `Network`). See the module doc for why this
+/// type's dispatch surface is inherent `&self` methods rather than living
+/// only in the `AppHandler`/`Connector` trait impls.
 pub struct P2pNetwork {
     /// This node's own id (currently unused by dispatch; kept for parity with
-    /// the Go constructor shape and for handlers that need it later).
+    /// the constructor shape and for handlers that need it later).
     node_id: NodeId,
     sender: Arc<dyn AppSender>,
     handlers: Mutex<HashMap<u64, Arc<dyn Handler>>>,
@@ -87,11 +104,20 @@ impl P2pNetwork {
     }
 
     /// Reserves `handler_id` for `handler` (Go `Network.AddHandler` /
-    /// `router.addHandler`). Returns `()` for now; Task 4 changes the return
-    /// type to a `Client` (Go `Network.NewClient`) once the pending-request
-    /// map lands.
-    pub fn add_handler(&self, handler_id: u64, handler: Arc<dyn Handler>) {
-        self.handlers.lock().insert(handler_id, handler);
+    /// `router.addHandler`, `network/p2p/router.go:88-104`). Returns
+    /// [`crate::Error::DuplicateHandler`] if `handler_id` is already
+    /// registered, mirroring Go's `ErrExistingAppProtocol`.
+    ///
+    /// Returns `Ok(())` for now; Task 4 changes the success type to a
+    /// `Client` (Go `Network.NewClient`) once the pending-request map lands —
+    /// the error path stays the same.
+    pub fn add_handler(&self, handler_id: u64, handler: Arc<dyn Handler>) -> crate::Result<()> {
+        let mut handlers = self.handlers.lock();
+        if handlers.contains_key(&handler_id) {
+            return Err(crate::Error::DuplicateHandler(handler_id));
+        }
+        handlers.insert(handler_id, handler);
+        Ok(())
     }
 
     /// Uniformly samples one connected peer, or `None` if there are none
@@ -121,12 +147,14 @@ impl P2pNetwork {
         let idx = x.checked_rem(len as u64).unwrap_or(0) as usize;
         peers.iter().nth(idx).copied()
     }
-}
 
-#[async_trait]
-impl AppHandler for P2pNetwork {
-    async fn app_request(
-        &mut self,
+    /// `&self` dispatch for an inbound `AppRequest` (Go `router.AppRequest`):
+    /// parses the varint handler-id prefix, and either forwards the
+    /// unprefixed payload to the registered [`Handler`] (sending its response
+    /// or `AppError` back via `sender`) or, if the prefix is unparsable or
+    /// unregistered, replies with `ErrUnregisteredHandler`.
+    pub async fn handle_app_request(
+        &self,
         token: &CancellationToken,
         node: NodeId,
         request_id: u32,
@@ -167,15 +195,15 @@ impl AppHandler for P2pNetwork {
         }
     }
 
-    async fn app_request_failed(
-        &mut self,
+    /// `&self` no-op stub for `AppRequestFailed` until Task 4 wires the
+    /// pending-request map (Go `router.AppRequestFailed`).
+    pub async fn handle_app_request_failed(
+        &self,
         _token: &CancellationToken,
         node: NodeId,
         request_id: u32,
         err: AppError,
     ) -> VmResult<()> {
-        // The pending-request map lands in Task 4 (Go `router.pendingAppRequests`
-        // + `Client`'s callback); until then there is nothing to route this to.
         tracing::debug!(
             node = %node,
             request_id,
@@ -185,14 +213,15 @@ impl AppHandler for P2pNetwork {
         Ok(())
     }
 
-    async fn app_response(
-        &mut self,
+    /// `&self` no-op stub for `AppResponse` until Task 4 wires the
+    /// pending-request map (Go `router.AppResponse`).
+    pub async fn handle_app_response(
+        &self,
         _token: &CancellationToken,
         node: NodeId,
         request_id: u32,
         _response: &[u8],
     ) -> VmResult<()> {
-        // See `app_request_failed` above: no-op stub until Task 4.
         tracing::debug!(
             node = %node,
             request_id,
@@ -201,8 +230,12 @@ impl AppHandler for P2pNetwork {
         Ok(())
     }
 
-    async fn app_gossip(
-        &mut self,
+    /// `&self` dispatch for an inbound `AppGossip` (Go `router.AppGossip`):
+    /// parses the varint handler-id prefix and forwards the unprefixed
+    /// payload to the registered [`Handler`], or silently drops it if the
+    /// prefix is unparsable or unregistered.
+    pub async fn handle_app_gossip(
+        &self,
         _token: &CancellationToken,
         node: NodeId,
         msg: &[u8],
@@ -222,12 +255,10 @@ impl AppHandler for P2pNetwork {
         handler.app_gossip(node, payload).await;
         Ok(())
     }
-}
 
-#[async_trait]
-impl Connector for P2pNetwork {
-    async fn connected(
-        &mut self,
+    /// `&self` dispatch for a peer connecting (Go `Network.Connected`).
+    pub async fn handle_connected(
+        &self,
         _token: &CancellationToken,
         node: NodeId,
         _version: Application,
@@ -236,9 +267,76 @@ impl Connector for P2pNetwork {
         Ok(())
     }
 
-    async fn disconnected(&mut self, _token: &CancellationToken, node: NodeId) -> VmResult<()> {
+    /// `&self` dispatch for a peer disconnecting (Go `Network.Disconnected`).
+    pub async fn handle_disconnected(
+        &self,
+        _token: &CancellationToken,
+        node: NodeId,
+    ) -> VmResult<()> {
         self.peers.lock().remove(&node);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl AppHandler for P2pNetwork {
+    async fn app_request(
+        &mut self,
+        token: &CancellationToken,
+        node: NodeId,
+        request_id: u32,
+        deadline: Instant,
+        request: &[u8],
+    ) -> VmResult<()> {
+        self.handle_app_request(token, node, request_id, deadline, request)
+            .await
+    }
+
+    async fn app_request_failed(
+        &mut self,
+        token: &CancellationToken,
+        node: NodeId,
+        request_id: u32,
+        err: AppError,
+    ) -> VmResult<()> {
+        self.handle_app_request_failed(token, node, request_id, err)
+            .await
+    }
+
+    async fn app_response(
+        &mut self,
+        token: &CancellationToken,
+        node: NodeId,
+        request_id: u32,
+        response: &[u8],
+    ) -> VmResult<()> {
+        self.handle_app_response(token, node, request_id, response)
+            .await
+    }
+
+    async fn app_gossip(
+        &mut self,
+        token: &CancellationToken,
+        node: NodeId,
+        msg: &[u8],
+    ) -> VmResult<()> {
+        self.handle_app_gossip(token, node, msg).await
+    }
+}
+
+#[async_trait]
+impl Connector for P2pNetwork {
+    async fn connected(
+        &mut self,
+        token: &CancellationToken,
+        node: NodeId,
+        version: Application,
+    ) -> VmResult<()> {
+        self.handle_connected(token, node, version).await
+    }
+
+    async fn disconnected(&mut self, token: &CancellationToken, node: NodeId) -> VmResult<()> {
+        self.handle_disconnected(token, node).await
     }
 }
 
@@ -353,34 +451,30 @@ mod tests {
         NodeId::from([byte; 20])
     }
 
-    /// Builds a bare (non-`Arc`) `P2pNetwork` so tests can call the `&mut
-    /// self` `AppHandler`/`Connector` methods directly on an owned, `mut`
-    /// local — sidestepping `P2pNetwork::new`'s `Arc<Self>` return, which
-    /// exists for production call sites that need to share the network
-    /// across the VM and the `Client`s created from it (Task 4).
-    fn test_network(sender: Arc<dyn AppSender>) -> P2pNetwork {
-        P2pNetwork {
-            node_id: test_node(0),
-            sender,
-            handlers: Mutex::new(HashMap::new()),
-            peers: Mutex::new(BTreeSet::new()),
-            sample_counter: AtomicU64::new(0),
-        }
+    /// Builds a `P2pNetwork` the same way production callers do — through
+    /// `P2pNetwork::new`'s `Arc<Self>` — and drives it via the inherent
+    /// `&self` `handle_*` methods, proving the production (shared-`Arc`)
+    /// shape actually works end to end.
+    fn test_network(sender: Arc<dyn AppSender>) -> Arc<P2pNetwork> {
+        P2pNetwork::new(test_node(0), sender)
     }
 
     #[tokio::test]
     async fn dispatches_gossip_to_registered_handler() {
         let sender = Arc::new(RecordingSender::default());
-        let mut network = test_network(sender);
+        let network = test_network(sender);
         let handler = Arc::new(RecordingHandler::default());
-        network.add_handler(0, handler.clone());
+        network.add_handler(0, handler.clone()).unwrap();
 
         let token = CancellationToken::new();
         let node = test_node(1);
         let mut framed = protocol_prefix(0);
         framed.extend_from_slice(b"hello");
 
-        network.app_gossip(&token, node, &framed).await.unwrap();
+        network
+            .handle_app_gossip(&token, node, &framed)
+            .await
+            .unwrap();
 
         let gossips = handler.gossips.lock().unwrap();
         assert_eq!(gossips.len(), 1);
@@ -392,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn drops_gossip_for_unregistered_handler() {
         let sender = Arc::new(RecordingSender::default());
-        let mut network = test_network(sender);
+        let network = test_network(sender);
         let token = CancellationToken::new();
         let node = test_node(1);
         let mut framed = protocol_prefix(99);
@@ -400,15 +494,18 @@ mod tests {
 
         // Unregistered-handler gossip is silently dropped (Go
         // `router.AppGossip`'s `!ok` branch): no panic, no error, no send.
-        network.app_gossip(&token, node, &framed).await.unwrap();
+        network
+            .handle_app_gossip(&token, node, &framed)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn request_dispatches_and_sends_response() {
         let sender = Arc::new(RecordingSender::default());
-        let mut network = test_network(sender.clone());
+        let network = test_network(sender.clone());
         let handler = Arc::new(RecordingHandler::default());
-        network.add_handler(0, handler);
+        network.add_handler(0, handler).unwrap();
 
         let token = CancellationToken::new();
         let node = test_node(1);
@@ -416,7 +513,7 @@ mod tests {
         framed.extend_from_slice(b"req");
 
         network
-            .app_request(&token, node, 7, Instant::now(), &framed)
+            .handle_app_request(&token, node, 7, Instant::now(), &framed)
             .await
             .unwrap();
 
@@ -428,13 +525,13 @@ mod tests {
     #[tokio::test]
     async fn request_for_unregistered_handler_sends_app_error() {
         let sender = Arc::new(RecordingSender::default());
-        let mut network = test_network(sender.clone());
+        let network = test_network(sender.clone());
         let token = CancellationToken::new();
         let node = test_node(1);
         let framed = protocol_prefix(99);
 
         network
-            .app_request(&token, node, 7, Instant::now(), &framed)
+            .handle_app_request(&token, node, 7, Instant::now(), &framed)
             .await
             .unwrap();
 
@@ -450,19 +547,59 @@ mod tests {
     #[tokio::test]
     async fn connect_and_disconnect_update_peers_and_sample() {
         let sender = Arc::new(RecordingSender::default());
-        let mut network = test_network(sender);
+        let network = test_network(sender);
         assert_eq!(network.sample_peer(), None);
 
         let token = CancellationToken::new();
         let node = test_node(1);
         network
-            .connected(&token, node, Application::new("avalanchers", 1, 0, 0))
+            .handle_connected(&token, node, Application::new("avalanchers", 1, 0, 0))
             .await
             .unwrap();
 
         assert_eq!(network.sample_peer(), Some(node));
 
-        network.disconnected(&token, node).await.unwrap();
+        network.handle_disconnected(&token, node).await.unwrap();
         assert_eq!(network.sample_peer(), None);
+    }
+
+    #[test]
+    fn add_handler_rejects_duplicate_id() {
+        let sender = Arc::new(RecordingSender::default());
+        let network = test_network(sender);
+        let handler_a = Arc::new(RecordingHandler::default());
+        let handler_b = Arc::new(RecordingHandler::default());
+
+        network.add_handler(0, handler_a).unwrap();
+        let err = network.add_handler(0, handler_b).unwrap_err();
+        assert!(matches!(err, crate::Error::DuplicateHandler(0)));
+    }
+
+    #[tokio::test]
+    async fn app_handler_trait_impl_delegates_through_mut_self() {
+        // Proves the `&mut self` `AppHandler`/`Connector` impls still work
+        // for uniquely-owned callers (not just the inherent `&self` surface
+        // exercised by the tests above).
+        let sender = Arc::new(RecordingSender::default());
+        let mut network = P2pNetwork {
+            node_id: test_node(0),
+            sender,
+            handlers: Mutex::new(HashMap::new()),
+            peers: Mutex::new(BTreeSet::new()),
+            sample_counter: AtomicU64::new(0),
+        };
+        let handler = Arc::new(RecordingHandler::default());
+        network.add_handler(0, handler.clone()).unwrap();
+
+        let token = CancellationToken::new();
+        let node = test_node(1);
+        let mut framed = protocol_prefix(0);
+        framed.extend_from_slice(b"hello");
+
+        AppHandler::app_gossip(&mut network, &token, node, &framed)
+            .await
+            .unwrap();
+
+        assert_eq!(handler.gossips.lock().unwrap().len(), 1);
     }
 }

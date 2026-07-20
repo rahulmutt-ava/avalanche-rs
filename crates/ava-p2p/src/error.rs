@@ -15,6 +15,12 @@ pub enum Error {
     /// A set/bloom-filter operation failed.
     #[error("set: {0}")]
     Set(String),
+    /// `Network.AddHandler`/`router.addHandler` was called twice for the same
+    /// handler id (Go `network/p2p/router.go:88-104`'s
+    /// `ErrExistingAppProtocol`, wrapped as `"failed to register handler id
+    /// %d: %w"`).
+    #[error("failed to register handler id {0}: existing app protocol")]
+    DuplicateHandler(u64),
 }
 
 /// Convenience alias for `Result<T, Error>`.
