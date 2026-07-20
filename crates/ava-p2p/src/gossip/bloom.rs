@@ -18,7 +18,7 @@
 //! consensus paths" rule targets codec/consensus, not gossip dedup filters).
 
 use ava_types::id::Id;
-use ava_utils::bloom::{self, Filter, ReadFilter};
+use ava_utils::bloom::{self, Filter};
 
 use crate::error::{Error, Result};
 
@@ -105,18 +105,13 @@ impl BloomSet {
 
     /// Returns whether `id` is (possibly) present (Go `BloomFilter.Has`).
     ///
-    /// `ava_utils::bloom::Filter` (the writer half) does not expose a
-    /// `contains` of its own — only the read-only `ReadFilter` half does —
-    /// so this reuses the exact wire encoding via `marshal`+`parse`, which is
-    /// no more expensive than what already happens whenever this filter is
-    /// gossiped out to a peer.
+    /// `O(num_hashes)`, via `ava_utils::bloom::Filter::contains_key` — a
+    /// direct bit test against the writer's own seeds/entries, matching Go
+    /// `bloom.Contains(b.bloom, h[:], b.salt[:])` (`gossip/bloom.go`'s
+    /// `BloomFilter.Has`). No marshal/parse round trip.
     #[must_use]
     pub fn has(&self, id: &Id) -> bool {
-        let bytes = self.bloom.marshal();
-        let Ok(read_filter) = ReadFilter::parse(&bytes) else {
-            return false;
-        };
-        read_filter.contains_key(id.as_bytes(), &self.salt)
+        self.bloom.contains_key(id.as_bytes(), &self.salt)
     }
 
     /// Returns the current `(bloom_marshal_bytes, salt)` (Go
@@ -198,6 +193,8 @@ fn new_bloom(
 
 #[cfg(test)]
 mod tests {
+    use ava_utils::bloom::ReadFilter;
+
     use super::*;
 
     #[test]
@@ -231,25 +228,47 @@ mod tests {
         );
     }
 
+    /// Builds a distinct [`Id`] per `index` (big-endian in the first 4
+    /// bytes, zero-padded) — used where a test needs more than the 256
+    /// distinct values a single repeated byte (`[i; 32]`) can provide.
+    fn indexed_id(index: u32) -> Id {
+        let mut bytes = [0u8; 32];
+        if let Some(slot) = bytes.get_mut(0..4) {
+            slot.copy_from_slice(&index.to_be_bytes());
+        }
+        Id::from(bytes)
+    }
+
     #[test]
     fn reset_regenerates_salt_and_refills() {
-        // min_target_elements=16, target_fpp=0.5 -> a 4-entry-byte (32-bit),
-        // 2-hash filter; reset_fpp=0.1 -> maxCount=7 (see
-        // ava_utils::bloom::{optimal_parameters,estimate_count}). 32 bits
-        // gives enough headroom that additions aren't undercounted by
-        // saturation before maxCount is reached (unlike a 1-byte filter,
-        // where bit collisions can stall `count()` right at the boundary),
-        // so crossing maxCount within a few dozen distinct adds is reliable.
-        let mut bs = BloomSet::new(16, 0.5, 0.1).expect("BloomSet::new");
-        let all_ids: Vec<Id> = (0u8..64).map(|i| Id::from([i; 32])).collect();
+        // min_target_elements=16, target_fpp=0.5, reset_fpp=0.1 ->
+        // optimal_parameters(16, 0.5) = (num_hashes=2, num_entries=3) i.e. a
+        // 3-entry-byte (24-bit), 2-hash filter, and
+        // estimate_count(2, 3, 0.1) = maxCount=5 (verified directly against
+        // `ava_utils::bloom::{optimal_parameters,estimate_count}`, not
+        // hand-derived — see task-5-report.md's review fix-up for the prior,
+        // incorrect hand-derivation).
+        //
+        // Rather than relying on hitting that maxCount within a fixed,
+        // probabilistically-sized number of adds (which is what caused the
+        // original version of this test to be flaky — see the report), loop
+        // `add`ing fresh ids and calling `reset_if_needed` after each one,
+        // with a hard upper bound far beyond anything the birthday bound on
+        // a 24-bit filter could plausibly need. This makes the *outcome*
+        // deterministic (the assert below is not "got lucky within N tries",
+        // it's "any real bloom filter will have crossed maxCount long before
+        // the bound"), without needing an RNG seam to force a reset directly.
+        const MAX_ADDS: u32 = 10_000;
 
+        let mut bs = BloomSet::new(16, 0.5, 0.1).expect("BloomSet::new");
         let (_, old_salt) = bs.marshal();
 
         let mut known: Vec<Id> = Vec::new();
         let mut reset_happened = false;
-        for id in &all_ids {
-            bs.add(id);
-            known.push(*id);
+        for i in 0..MAX_ADDS {
+            let id = indexed_id(i);
+            bs.add(&id);
+            known.push(id);
             let did_reset = bs
                 .reset_if_needed(known.len(), &mut |add| {
                     for k in &known {
@@ -265,7 +284,7 @@ mod tests {
 
         assert!(
             reset_happened,
-            "reset should trigger well within 64 adds at the tiny maxCount"
+            "reset should have triggered within {MAX_ADDS} adds at maxCount=5"
         );
         let (_, new_salt) = bs.marshal();
         assert_ne!(old_salt, new_salt, "salt is regenerated on reset");

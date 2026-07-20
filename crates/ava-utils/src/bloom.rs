@@ -256,6 +256,41 @@ impl Filter {
         self.add(hash(key, salt))
     }
 
+    /// Returns whether `hash` is (possibly) present, without marshaling
+    /// (Go `Filter.Contains`, `utils/bloom/filter.go`'s `(f *Filter)
+    /// Contains`/free `contains` helper) — an `O(num_hashes)` bit test over
+    /// the writer's own seeds/entries, identical in shape to
+    /// [`ReadFilter::contains`] (same rotate-`HASH_ROTATION`/XOR-seed/
+    /// AND-accumulator loop, same early-exit once `accumulator` hits 0), just
+    /// reading `self.num_bits`/`self.entries` directly instead of a parsed
+    /// wire blob.
+    #[must_use]
+    pub fn contains(&self, mut hash: u64) -> bool {
+        if self.num_bits == 0 {
+            return false;
+        }
+        let mut accumulator: u8 = 1;
+        for &seed in &self.hash_seeds {
+            if accumulator == 0 {
+                break;
+            }
+            hash = hash.rotate_left(HASH_ROTATION) ^ seed;
+            let index = hash.checked_rem(self.num_bits).unwrap_or(0);
+            let byte_index = (index.checked_div(BITS_PER_BYTE).unwrap_or(0)) as usize;
+            let bit_index = (index.checked_rem(BITS_PER_BYTE).unwrap_or(0)) as u32;
+            let entry = self.entries.get(byte_index).copied().unwrap_or(0);
+            accumulator &= entry.checked_shr(bit_index).unwrap_or(0);
+        }
+        accumulator != 0
+    }
+
+    /// Returns whether `key` salted with `salt` is (possibly) present (Go
+    /// free function `bloom.Contains`).
+    #[must_use]
+    pub fn contains_key(&self, key: &[u8], salt: &[u8]) -> bool {
+        self.contains(hash(key, salt))
+    }
+
     /// Serialize to the wire format `[num_hashes] || seeds(BE) || entries`
     /// (Go `Filter.Marshal` / `marshal`).
     #[must_use]
@@ -430,6 +465,44 @@ mod tests {
             !rf.contains_key(b"absent-key-xyz", b""),
             "absent key not contained"
         );
+    }
+
+    #[test]
+    fn filter_contains_agrees_with_read_filter_for_members_and_non_members() {
+        // Go `utils/bloom/filter.go`'s `Filter.Contains` is an O(numHashes)
+        // bit test directly on the writer's own seeds/entries — no
+        // marshal/parse round trip needed. This pins that `Filter::contains`
+        // (a) reports every added key as present on the writer directly, and
+        // (b) agrees exactly with `ReadFilter::parse(marshal).contains` for
+        // both members and non-members (i.e. the writer-side fast path and
+        // the wire-parsed read path are the same bloom, just read two ways).
+        let mut f = Filter::new(4, 64).expect("Filter::new");
+        let members: [&[u8]; 3] = [b"node-a", b"node-b", b"node-c"];
+        let non_members: [&[u8]; 2] = [b"node-x", b"node-y"];
+
+        for key in members {
+            f.add_key(key, b"salt");
+        }
+
+        let rf = ReadFilter::parse(&f.marshal()).expect("ReadFilter::parse of marshal()");
+        for key in members {
+            assert!(
+                f.contains_key(key, b"salt"),
+                "writer Filter::contains_key should report added key {key:?} present"
+            );
+            assert_eq!(
+                f.contains_key(key, b"salt"),
+                rf.contains_key(key, b"salt"),
+                "writer and ReadFilter verdicts should agree for member key {key:?}"
+            );
+        }
+        for key in non_members {
+            assert_eq!(
+                f.contains_key(key, b"salt"),
+                rf.contains_key(key, b"salt"),
+                "writer and ReadFilter verdicts should agree for non-member key {key:?}"
+            );
+        }
     }
 
     #[test]
