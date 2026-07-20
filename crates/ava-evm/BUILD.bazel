@@ -703,10 +703,12 @@ rust_test(
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-evm-reth:ava_evm_reth",
         "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
         "//crates/ava-vm:ava_vm",
         "@crates//:hex",
         "@crates//:tempfile",
         "@crates//:tokio",
+        "@crates//:tokio-util",
     ],
 )
 
