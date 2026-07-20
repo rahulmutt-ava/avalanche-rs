@@ -431,7 +431,6 @@ pub(crate) fn header_time_ms(h: &AvaHeader) -> u64 {
 /// (coreth's nil-arm). Callers that stamp whole-second timestamps must round
 /// the result UP to the next whole second.
 #[must_use]
-#[allow(dead_code)]
 pub(crate) fn min_next_block_time_ms(parent: &AvaHeader) -> Option<u64> {
     let excess = parent.min_delay_excess?;
     Some(header_time_ms(parent).saturating_add(DelayExcess(excess).delay()))
