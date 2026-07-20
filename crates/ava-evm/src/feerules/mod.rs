@@ -422,6 +422,21 @@ pub(crate) fn header_time_ms(h: &AvaHeader) -> u64 {
     }
 }
 
+/// coreth `plugin/evm/block_builder.go:202` — `minNextBlockTime`.
+///
+/// The earliest millisecond timestamp a child of `parent` may carry under the
+/// parent's ACP-226 `MinDelayExcess`: `header_time_ms(parent) + delay`. `None`
+/// when the parent pre-dates Granite (`min_delay_excess` absent) — the rule
+/// does not apply to the block being built, so there is nothing to wait for
+/// (coreth's nil-arm). Callers that stamp whole-second timestamps must round
+/// the result UP to the next whole second.
+#[must_use]
+#[allow(dead_code)]
+pub(crate) fn min_next_block_time_ms(parent: &AvaHeader) -> Option<u64> {
+    let excess = parent.min_delay_excess?;
+    Some(header_time_ms(parent).saturating_add(DelayExcess(excess).delay()))
+}
+
 /// Narrows an optional `U256` header field to `u64` (ext-data-gas / block-gas
 /// values are bounded well below `u64::MAX`; an out-of-range value saturates —
 /// the same convention `builder.rs::u256_to_u64` uses).
@@ -1006,7 +1021,7 @@ mod fee_state_tests {
 
     use super::{
         AvaFeeState, Gas, GasState, extra_prefix, fee_state_after_block, fee_state_before_block,
-        fee_window, min_delay_excess_of, parent_fee_state_of,
+        fee_window, min_delay_excess_of, min_next_block_time_ms, parent_fee_state_of,
     };
     use crate::block::AvaHeader;
     use crate::chainspec::{AvaChainSpec, NetworkUpgrades};
@@ -1262,6 +1277,56 @@ mod fee_state_tests {
             .expect("granite child, pre-granite parent")
             .expect("some at granite");
         assert_eq!(got, INITIAL_DELAY_EXCESS.0 + 200, "moved by at most Q=200");
+    }
+
+    // ── min_next_block_time_ms: coreth minNextBlockTime (block_builder.go:202) ─
+
+    #[test]
+    fn min_next_block_time_ms_pre_granite_parent_is_none() {
+        // No MinDelayExcess on the parent => the ACP-226 rule does not apply to
+        // the child; there is nothing to wait for (coreth's nil-arm returns the
+        // zero time).
+        let parent = hdr(0, 1_607_144_400, None, vec![]);
+        assert_eq!(
+            min_next_block_time_ms(&parent),
+            None,
+            "pre-Granite parent (no MinDelayExcess) => no minimum next block time"
+        );
+    }
+
+    #[test]
+    fn min_next_block_time_ms_adds_parent_delay() {
+        // Local genesis shape: whole-second ms timestamp, initial delay excess
+        // (delay() == 2000 ms).
+        let mut parent = hdr(0, 1_607_144_400, Some(1_607_144_400_000), vec![]);
+        parent.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+        assert_eq!(
+            min_next_block_time_ms(&parent),
+            Some(1_607_144_402_000),
+            "min next block time = parent_ms + 2000ms initial delay"
+        );
+    }
+
+    #[test]
+    fn min_next_block_time_ms_mid_second_parent_and_seconds_fallback() {
+        // A Go-built parent can carry a mid-second ms timestamp — the sum is
+        // mid-second too (the CALLER rounds up to whole seconds).
+        let mut parent = hdr(0, 1_607_144_400, Some(1_607_144_400_277), vec![]);
+        parent.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+        assert_eq!(
+            min_next_block_time_ms(&parent),
+            Some(1_607_144_402_277),
+            "mid-second parent ms is preserved in the target"
+        );
+
+        // No TimeMilliseconds => header_time_ms falls back to Time * 1000.
+        let mut secs_only = hdr(0, 1_607_144_400, None, vec![]);
+        secs_only.min_delay_excess = Some(INITIAL_DELAY_EXCESS.0);
+        assert_eq!(
+            min_next_block_time_ms(&secs_only),
+            Some(1_607_144_402_000),
+            "seconds-only parent uses the Time*1000 fallback"
+        );
     }
 }
 
