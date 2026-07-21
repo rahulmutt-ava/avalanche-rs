@@ -15,6 +15,7 @@ a normal `go test` never runs it:
 | `atomic_tx_gas_emitter_test.go` | `AVAX_RS_EMIT_ATOMIC_GAS` | `ava-evm atomic_mempool.rs::gas_used_matches_coreth_oracle` (M6.29) | `gas_used` block in `crates/ava-evm/tests/vectors/cchain/atomic/atomic_txs.json` |
 | `rust_built_block_verdict_test.go` | `RUST_BLOCK_VERDICT_DIR` (judge; the Rust side emits via `EMIT_PROPOSER_CANDIDATES`) | `ava-evm proposer_candidates.rs::proposer_verdicts_hold` (M9.15 Task 6) | `crates/ava-evm/tests/vectors/proposer_verdict/` |
 | `base_fee_advance_emitter_test.go` | `BASE_FEE_ADVANCE_OUT` | `ava-evm feerules.rs::acp176_base_fee_advance_matches_go_vectors` (verifyHeaderGasFields-port Task 7) | `crates/ava-evm/tests/vectors/cchain/fees/acp176/base_fee_advance.json` |
+| `p2p_sdk_wire_emitter_test.go` | `P2P_SDK_EMIT_WIRE_GOLDENS` | `ava-p2p wire_goldens.rs` (cchain-tx-gossip Task 15) | `tests/vectors/p2p_sdk/*.bin` |
 
 > The two SAE emitters redeclare a few shared helper names (`observe*Frontier`,
 > `*HexBytes`) under distinct prefixes, but to be safe drop **one emitter at a
@@ -334,3 +335,46 @@ drove the full build/verify/accept lifecycle against the Rust guest. Verified li
   returning `PendingTxs` unconditionally produces an unbounded build loop (tight
   CPU + huge logs). The `testvm_plugin` caps it at 16 events then long-polls
   (blocks until cancel) — the correct "no pending event" semantics.
+
+## p2p SDK wire-frame goldens (cchain-tx-gossip Task 15)
+
+`p2p_sdk_wire_emitter_test.go` is the **live Go oracle** for
+`crates/ava-p2p/tests/wire_goldens.rs`. Unlike the SAE emitters above, it needs
+no unexported test harness — it's a same-package (`network/p2p`) test that
+calls only that package's own exported `ProtocolPrefix`/`PrefixMessage`, plus
+`proto/pb/sdk` + `google.golang.org/protobuf/proto`.
+
+For three fixed `sdk` messages (`PushGossip`, `PullGossipRequest`,
+`PullGossipResponse`) it writes `PrefixMessage(ProtocolPrefix(0),
+proto.Marshal(msg))` to its own `.bin` file — exactly the framing
+`network/p2p.Network`'s gossip/request dispatch uses on the wire (mirrored by
+the Rust `network::protocol_prefix`/`parse_prefix` pair). The Rust reader
+builds the identical frame from the same fixed inputs and byte-compares
+against the committed golden (encode leg), then parses + prost-decodes the
+golden back and asserts the fields round-trip (decode leg). See
+`tests/vectors/p2p_sdk/MANIFEST.md` for the fixed-input table and provenance.
+
+### Re-freezing the corpus (live mode)
+
+```sh
+./scripts/check_oracle_binary.sh   # must print OK before capture
+
+AVALANCHEGO_DIR=${AVALANCHEGO_DIR:-../avalanchego}
+cp tests/differential/go-oracle/p2p_sdk_wire_emitter_test.go \
+   "$AVALANCHEGO_DIR/network/p2p/"
+
+cd "$AVALANCHEGO_DIR"
+P2P_SDK_EMIT_WIRE_GOLDENS="$OLDPWD/tests/vectors/p2p_sdk" \
+  go test ./network/p2p/ -run TestEmitP2pSdkWireGoldens -count=1 -v
+
+rm network/p2p/p2p_sdk_wire_emitter_test.go
+```
+
+Then re-run the Rust per-PR test to confirm parity:
+
+```sh
+cargo nextest run -p ava-p2p --test wire_goldens
+```
+
+Without `P2P_SDK_EMIT_WIRE_GOLDENS` set, `TestEmitP2pSdkWireGoldens` is
+skipped, so the emitter never runs during a normal `go test`.

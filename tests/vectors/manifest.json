@@ -14,7 +14,8 @@
     "message": "committed — app_request.json, chits.json, get.json, get_peerlist.json, handshake.json, peerlist.json, ping.json, ping_zero.json, pong.json, signed_ip.json",
     "saevm": "committed — MANIFEST.json, atomic/*.bin, blocks/*.json, recovery/*, recovery_differential/*, settlement/*, streaming_differential/*",
     "sync": "committed — proof/single_proof_envelope.json",
-    "tls": "committed — staker.json"
+    "tls": "committed — staker.json",
+    "p2p_sdk": "committed — push_gossip_frame.bin, pull_gossip_request.bin, pull_gossip_response.bin (see MANIFEST.md; live Go-oracle emitter, NOT tools/extract-vectors — pinned to a different avalanchego revision, see that file)"
   },
   "todo": [
     "codec/*.json (M0.16)",
