@@ -2218,6 +2218,7 @@ dependencies = [
  "ava-message",
  "ava-network",
  "ava-node",
+ "ava-p2p",
  "ava-platformvm",
  "ava-proposervm",
  "ava-saevm-adaptor",

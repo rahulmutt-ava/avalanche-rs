@@ -45,6 +45,10 @@ ava-api = { path = "../ava-api" }
 # `proto/p2p` → `ava_network::network::Network::send`/`gossip`), replacing the
 # in-process `RecordingSender` for the networked case.
 ava-network = { path = "../ava-network" }
+# cchain-tx-gossip task 14 test seam: `run_queued_chains_over_network_for_test`
+# threads an optional `GossipParams` override into the queued C-Chain's boot
+# (`EvmVm::with_gossip_params_for_test`).
+ava-p2p = { path = "../ava-p2p" }
 ava-snow = { path = "../ava-snow" }
 ava-types = { path = "../ava-types" }
 ava-utils = { path = "../ava-utils" }

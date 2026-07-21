@@ -2079,6 +2079,69 @@ pub async fn run_queued_chains_over_network(
     beacons: BTreeMap<NodeId, u64>,
     api_server: Option<&Arc<HttpApiServer>>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
+    run_queued_chains_over_network_core(
+        manager, network_id, base_db, network, router, gate, beacons, api_server, None,
+    )
+    .await
+}
+
+/// **Test seam** (cchain-tx-gossip task 14): like [`run_queued_chains_over_network`],
+/// but additionally overrides the queued C-Chain's gossip cadence via
+/// [`EvmVm::with_gossip_params_for_test`](ava_evm::vm::EvmVm::with_gossip_params_for_test)
+/// when `cchain_gossip_params` is `Some`. Lets a test disable one node's push
+/// gossip (`push_period: Duration::from_secs(3600)`) while leaving pull gossip
+/// on its production cadence, to exercise the pull-only reconciliation path in
+/// isolation — production keeps calling the unmodified
+/// [`run_queued_chains_over_network`], which always passes `None` (unchanged
+/// `GossipParams::default()` behavior).
+///
+/// # Errors
+/// Propagates a chain boot failure (genesis / DB / VM-init / consensus / identity
+/// / timeout).
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_queued_chains_over_network_for_test(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    base_db: Arc<dyn DynDatabase>,
+    network: Arc<dyn ava_network::network::Network>,
+    router: Arc<ChainRouter>,
+    gate: watch::Receiver<bool>,
+    beacons: BTreeMap<NodeId, u64>,
+    api_server: Option<&Arc<HttpApiServer>>,
+    cchain_gossip_params: Option<ava_p2p::gossip::GossipParams>,
+) -> Result<Vec<NetworkChainBootHandle>> {
+    run_queued_chains_over_network_core(
+        manager,
+        network_id,
+        base_db,
+        network,
+        router,
+        gate,
+        beacons,
+        api_server,
+        cchain_gossip_params,
+    )
+    .await
+}
+
+/// Shared core for [`run_queued_chains_over_network`] /
+/// [`run_queued_chains_over_network_for_test`]; see the former for the dispatch
+/// semantics. `cchain_gossip_params`, when `Some`, overrides the queued
+/// C-Chain's [`GossipParams`](ava_p2p::gossip::GossipParams) before boot
+/// (`None` everywhere in production).
+#[allow(clippy::too_many_arguments)]
+async fn run_queued_chains_over_network_core(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    base_db: Arc<dyn DynDatabase>,
+    network: Arc<dyn ava_network::network::Network>,
+    router: Arc<ChainRouter>,
+    gate: watch::Receiver<bool>,
+    beacons: BTreeMap<NodeId, u64>,
+    api_server: Option<&Arc<HttpApiServer>>,
+    cchain_gossip_params: Option<ava_p2p::gossip::GossipParams>,
+) -> Result<Vec<NetworkChainBootHandle>> {
     use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
 
@@ -2144,6 +2207,13 @@ pub async fn run_queued_chains_over_network(
             let (chain_token, _tasks) =
                 manager.register_chain(params.id, params.subnet_id, &root_subnet_token);
             let (vm, genesis_id, data_dir) = resolve_cchain_vm(network_id, &params.genesis_data)?;
+            // Task 14 test seam: override this queued C-Chain's gossip cadence
+            // before boot (`None` in production — see
+            // `run_queued_chains_over_network_for_test`'s doc comment).
+            let vm = match cchain_gossip_params.clone() {
+                Some(gossip_params) => vm.with_gossip_params_for_test(gossip_params),
+                None => vm,
+            };
             let mut handle = boot_chain_over_network_core(
                 NetBootSpec {
                     network_id,
@@ -2223,6 +2293,42 @@ pub async fn drive_startup_chains_over_network(
 ) -> Result<Vec<NetworkChainBootHandle>> {
     run_queued_chains_over_network(
         manager, network_id, base_db, network, router, gate, beacons, api_server,
+    )
+    .await
+}
+
+/// **Test seam** (cchain-tx-gossip task 14): like
+/// [`drive_startup_chains_over_network`], but threading an optional queued
+/// C-Chain [`GossipParams`](ava_p2p::gossip::GossipParams) override through to
+/// [`run_queued_chains_over_network_for_test`] — see that function's doc
+/// comment. Production keeps calling the unmodified
+/// [`drive_startup_chains_over_network`].
+///
+/// # Errors
+/// Propagates a chain boot failure from [`run_queued_chains_over_network_for_test`].
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub async fn drive_startup_chains_over_network_for_test(
+    manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
+    network_id: u32,
+    base_db: Arc<dyn DynDatabase>,
+    network: Arc<dyn ava_network::network::Network>,
+    router: Arc<ChainRouter>,
+    gate: watch::Receiver<bool>,
+    beacons: BTreeMap<NodeId, u64>,
+    api_server: Option<&Arc<HttpApiServer>>,
+    cchain_gossip_params: Option<ava_p2p::gossip::GossipParams>,
+) -> Result<Vec<NetworkChainBootHandle>> {
+    run_queued_chains_over_network_for_test(
+        manager,
+        network_id,
+        base_db,
+        network,
+        router,
+        gate,
+        beacons,
+        api_server,
+        cchain_gossip_params,
     )
     .await
 }

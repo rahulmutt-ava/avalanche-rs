@@ -310,6 +310,14 @@ struct Shared {
     /// before `initialize` ever spawns a loop is just as harmless as
     /// cancelling it after — there is simply nothing listening yet.
     gossip_token: CancellationToken,
+    /// The [`GossipParams`] `initialize` builds the push/pull gossipers with
+    /// (cchain-tx-gossip task 14 test seam). Seeded to [`GossipParams::default`]
+    /// by [`EvmVm::new`]; [`EvmVm::with_gossip_params_for_test`] overrides it
+    /// (builder-style, mirroring [`EvmVm::with_clock`]) so a test can disable a
+    /// node's push cadence (e.g. `push_period: Duration::from_secs(3600)`)
+    /// while leaving pull gossip live, to exercise the pull-only reconciliation
+    /// path without waiting out the production 100ms push period.
+    gossip_params: parking_lot::Mutex<GossipParams>,
 }
 
 impl Shared {
@@ -456,6 +464,7 @@ impl EvmVm {
             bootstrapped: AtomicBool::new(false),
             p2p: ArcSwapOption::from(None),
             gossip_token: CancellationToken::new(),
+            gossip_params: parking_lot::Mutex::new(GossipParams::default()),
         });
         let txpool = Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
             4096,
@@ -578,6 +587,22 @@ impl EvmVm {
     #[must_use]
     pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
         *self.shared.clock.lock() = clock;
+        self
+    }
+
+    /// **Test-only seam** (cchain-tx-gossip task 14): overrides the
+    /// [`GossipParams`] `initialize` builds the push/pull gossip loops with.
+    /// Builder-style, mirroring [`EvmVm::with_clock`]; production keeps
+    /// [`GossipParams::default`] seeded by [`EvmVm::new`]. Lets a test disable
+    /// push gossip on one node (e.g. `push_period: Duration::from_secs(3600)`)
+    /// while leaving pull gossip on its production cadence, to exercise the
+    /// pull-only reconciliation path in isolation. Must be called before
+    /// [`Vm::initialize`] runs — `initialize` reads the value once when it
+    /// builds the gossip system and a later override has no effect.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_gossip_params_for_test(self, params: GossipParams) -> Self {
+        *self.shared.gossip_params.lock() = params;
         self
     }
 
@@ -914,7 +939,9 @@ impl Vm for EvmVm {
             rules,
         )?);
 
-        let params = GossipParams::default();
+        // Task 14 test seam: `with_gossip_params_for_test` overrides this
+        // (production keeps `GossipParams::default`, seeded by `EvmVm::new`).
+        let params = self.shared.gossip_params.lock().clone();
         // Both the push and pull gossipers need a `Client` bound to
         // `TX_GOSSIP_HANDLER_ID`; `P2pNetwork::client` mints one WITHOUT
         // registering a handler (Go `Network.NewClient`/`AddHandler` are
