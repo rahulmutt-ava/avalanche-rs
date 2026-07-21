@@ -19,6 +19,7 @@ use ava_engine::common::sender::{SendConfig, Sender};
 use ava_engine::networking::ChainMessageSink;
 use ava_engine::networking::router::{InboundMessage, Router, op};
 use ava_engine::networking::sender::OutboundSender;
+use ava_engine::networking::vm_app_sender::VmAppSender;
 use ava_message::codec::{MsgBuilder, OutboundMessage};
 use ava_message::ops::Op;
 use ava_message::proto::p2p;
@@ -27,6 +28,8 @@ use ava_network::network::{
 };
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_vm::app_sender::{AppSender, SendConfig as VmSendConfig};
+use tokio_util::sync::CancellationToken;
 
 /// A `Router` that records every `register_request` / `fail_request` call (the
 /// only methods the `OutboundSender` drives) and no-ops the rest.
@@ -400,4 +403,37 @@ async fn app_request_registers_for_timeout() {
         vec![(node(1), chain_id(), 21, op::APP_REQUEST)],
         "app_request registers exactly one timeout"
     );
+}
+
+/// [`VmAppSender`] over a real [`OutboundSender`] must delegate
+/// `send_app_gossip` straight through to the wire: the recorded gossip message
+/// decodes back to the `AppGossip` the VM asked for (M9.19 Task 9 — the VM
+/// AppSender boot-path swap).
+#[tokio::test]
+async fn vm_app_sender_gossip_reaches_the_wire() {
+    let (net, _router, sender) = harness();
+    let vm_app_sender = VmAppSender::new(Arc::new(sender));
+    let token = CancellationToken::new();
+
+    vm_app_sender
+        .send_app_gossip(
+            &token,
+            VmSendConfig {
+                peers: 1,
+                ..Default::default()
+            },
+            b"hi".to_vec(),
+        )
+        .await
+        .expect("send_app_gossip");
+
+    let rec = net.last();
+    assert!(rec.via_gossip, "app_gossip must use the gossip path");
+    assert_eq!(rec.msg.op, Op::AppGossip, "op");
+    assert_eq!(rec.subnet, subnet_id(), "subnet");
+    let p2p::message::Message::AppGossip(g) = decode(&rec.msg) else {
+        panic!("expected AppGossip variant");
+    };
+    assert_eq!(g.chain_id.as_ref(), chain_id().as_bytes(), "chain_id");
+    assert_eq!(g.app_bytes.as_ref(), b"hi", "app_bytes");
 }

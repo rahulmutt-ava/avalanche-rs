@@ -149,4 +149,14 @@ pub enum Error {
     /// collision).
     #[error("failed registering metric")]
     FailedRegistering,
+
+    // ---- AppSender bridge (specs 07 §2.6) ----
+    /// An underlying app-message transport (e.g. the engine `Sender` a
+    /// `VmAppSender` bridges onto, or the `proto/appsender` RPC channel)
+    /// failed to dispatch a `send_app_*`/`send_app_gossip` call. Carries the
+    /// transport failure's message: `ava-vm` cannot depend on the crate that
+    /// defines the underlying error (that dependency runs the other way), so
+    /// bridging adapters map it into this sentinel by `Display` text.
+    #[error("app send failed: {0}")]
+    AppSendFailed(String),
 }

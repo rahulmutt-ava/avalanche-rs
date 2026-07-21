@@ -41,6 +41,7 @@ use ava_engine::networking::handler::ChainHandlerSink;
 use ava_engine::networking::router::{ChainMessageSink, ChainRouter, InboundOp, Router};
 use ava_engine::networking::sender::OutboundSender;
 use ava_engine::networking::timeout::{AdaptiveTimeoutConfig, AdaptiveTimeoutManager};
+use ava_engine::networking::vm_app_sender::VmAppSender;
 use ava_proposervm::{BlockSigner, StakingIdentity};
 use ava_snow::snowball::Parameters;
 use ava_types::id::Id;
@@ -1350,7 +1351,16 @@ where
         chain_data_dir: std::path::PathBuf::new(),
     });
 
-    let app_sender: Arc<dyn AppSender> = Arc::new(NoopAppSender);
+    // The VM's outbound app-message handle is the very same `Sender` the
+    // engine drives (`VmAppSender`, M9.19 Task 9): a networked boot's VM app
+    // requests/gossip now reach real peers through the production
+    // `OutboundSender`, and an in-process boot's VM app sends go through the
+    // `RecordingSender`/`NoopSender` loopback `Sender` (both no-op their
+    // `send_app_*`, so this is not a behavior change for the in-process boot
+    // paths that share this helper — see `build_in_process_chain`'s
+    // still-untouched standalone `NoopAppSender` for the fully-standalone
+    // loopback chain).
+    let app_sender: Arc<dyn AppSender> = Arc::new(VmAppSender::new(Arc::clone(&sender)));
 
     // Frontier-agreement beacon set: the single self node (weight 1) when
     // bootstrapping from a peer, or empty for a solo node that short-circuits

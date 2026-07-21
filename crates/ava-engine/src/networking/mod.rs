@@ -15,6 +15,7 @@ pub mod router;
 pub mod sender;
 pub mod timeout;
 pub mod tracker;
+pub mod vm_app_sender;
 
 pub use benchlist::{Benchlist, BenchlistConfig};
 pub use engine_adapter::{BootstrapperEngineAdapter, SnowmanEngineAdapter, transition_channel};
@@ -29,3 +30,4 @@ pub use timeout::{
     AdaptiveTimeoutConfig, AdaptiveTimeoutManager, RequestId, TimeoutError, TimeoutHandler,
 };
 pub use tracker::{CumulativeTracker, ResourceTracker, Targeter, TargeterConfig};
+pub use vm_app_sender::VmAppSender;
