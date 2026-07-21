@@ -73,6 +73,7 @@ async fn boot(node: &Arc<Node>, beacons: BTreeMap<NodeId, u64>) -> Vec<NetworkCh
         node.networking.on_sufficiently_connected.clone(),
         beacons,
         None,
+        None,
     )
     .await
     .expect("drive_startup_chains_over_network")

@@ -143,6 +143,7 @@ async fn inbound_frontier_request_routes_to_a_production_booted_chain() {
         Arc::new(MemDb::new()),
         token.clone(),
         Some(BTreeMap::new()),
+        None,
     )
     .await
     .expect("boot");
@@ -232,6 +233,7 @@ async fn beaconed_boot_broadcasts_frontier_request_to_the_configured_beacon() {
         token.clone(),
         Some(rx),
         Some(beacons.clone()),
+        None,
     )
     .await
     .expect("boot follower");

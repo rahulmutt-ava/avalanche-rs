@@ -148,6 +148,7 @@ async fn boot_over_network_carries_frontier_broadcast_out_to_the_network() {
         token.clone(),
         None,
         None,
+        None,
     )
     .await
     .expect("boot_chain_over_network");

@@ -112,6 +112,7 @@ async fn bootstrap_waits_for_sufficient_beacons_before_frontier() {
         token.clone(),
         Some(connected_rx),
         None,
+        None,
     )
     .await
     .expect("boot_chain_over_network");

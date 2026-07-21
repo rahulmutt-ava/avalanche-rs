@@ -171,6 +171,15 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
             .iter()
             .map(|b| (b.id, 1u64))
             .collect();
+        // T16 fix: every networked chain must carry the node's REAL staking
+        // identity — the same TLS credential the P2P layer handshakes with —
+        // not a throwaway generated one, or the post-Durango windower's
+        // `expected == self.ctx.node_id` check for this node's proposer slot
+        // can never be true and the node can never propose a signed block.
+        let staking = avalanchers::wiring::chains::staking_identity_from_tls(
+            &node.config.staking_config.identity,
+        )
+        .context("failed to derive the node's staking identity for chain boot")?;
         let _chain_handles = avalanchers::wiring::chains::drive_startup_chains_over_network(
             &node.chain_manager,
             node.config.network_id,
@@ -184,6 +193,7 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
             // /ext/bc/C/rpc. Registration happens before `dispatch` starts
             // `serve()`, so the composed router carries the chain routes.
             Some(&node.api_server),
+            Some(staking),
         )
         .await
         .context("failed to drive the startup chains")?;

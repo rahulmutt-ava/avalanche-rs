@@ -198,6 +198,7 @@ async fn follower_bootstraps_from_beacon_to_finished() {
         a_token.clone(),
         None,                  // A: no connectivity gate — start immediately.
         Some(BTreeMap::new()), // A: beaconless ⇒ short-circuit to NormalOp.
+        None,
     )
     .await
     .expect("boot A");
@@ -233,6 +234,7 @@ async fn follower_bootstraps_from_beacon_to_finished() {
         b_token.clone(),
         Some(connected_rx), // B: REAL connectivity gate (Task 4).
         Some(beacons),      // B: A is the sole bootstrap beacon.
+        None,
     )
     .await
     .expect("boot B");
@@ -334,6 +336,7 @@ async fn follower_bootstraps_despite_unreachable_beacon() {
         a_token.clone(),
         None,
         Some(BTreeMap::new()),
+        None,
     )
     .await
     .expect("boot A");
@@ -365,6 +368,7 @@ async fn follower_bootstraps_despite_unreachable_beacon() {
         b_token.clone(),
         Some(connected_rx),
         Some(beacons),
+        None,
     )
     .await
     .expect("boot B");

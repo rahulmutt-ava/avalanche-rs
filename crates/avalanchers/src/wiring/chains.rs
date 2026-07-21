@@ -344,6 +344,49 @@ fn staking_identity() -> Result<(StakingIdentity, NodeId)> {
     ))
 }
 
+/// Builds a [`StakingIdentity`] (+ its derived [`NodeId`]) from an already
+/// resolved `ava_network::identity::Identity` — the node's REAL staking TLS
+/// credential (loaded from `--staking-tls-cert-file`, or ephemeral-generated
+/// once at config-parse time), as opposed to [`staking_identity`]'s throwaway
+/// fresh-cert-per-call generator.
+///
+/// Shared by the production network-boot path (`main.rs`, via
+/// `drive_startup_chains_over_network`) and tests so both derive the chain's
+/// node id / block-signing identity from the SAME conversion — this is the
+/// fix for the T16 bug: without it, a networked chain's `ChainContext.node_id`
+/// / proposervm signer never matched the identity the P2P layer handshaked
+/// with, so the windower's `expected == self.ctx.node_id` check could never
+/// select this node as proposer.
+///
+/// The signer wraps [`ava_network::identity::Identity::tls_signing_key`],
+/// which — unlike [`staking_identity`]'s ECDSA-only closure — handles BOTH
+/// RSA (PKCS#1/PKCS#8) and ECDSA-P256 staking keys, matching every staker
+/// format avalanchego mints (the real genesis stakers include RSA keys). The
+/// signing key is resolved once, outside the returned closure, so a bad key
+/// fails fast at boot instead of on every block-signing call.
+///
+/// # Errors
+/// [`Error::Identity`] if the identity's private key cannot be loaded as a
+/// [`ava_network::identity::TlsSigningKey`].
+pub fn staking_identity_from_tls(
+    identity: &ava_network::identity::Identity,
+) -> Result<(StakingIdentity, NodeId)> {
+    let signing_key = identity
+        .tls_signing_key()
+        .map_err(|e| Error::Identity(format!("load tls signing key: {e}")))?;
+    let certificate = identity.cert_der().to_vec();
+    let node_id = staking::node_id_from_cert(identity.cert_der());
+    let signer: BlockSigner =
+        Arc::new(move |msg: &[u8]| signing_key.sign(msg).map_err(|e| e.to_string()));
+    Ok((
+        StakingIdentity {
+            certificate,
+            signer,
+        },
+        node_id,
+    ))
+}
+
 /// Single-node consensus parameters (k=1, one self-validator).
 fn single_node_params() -> Parameters {
     Parameters {
@@ -1129,6 +1172,11 @@ where
             // Loopback boot: no real genesis staker identity to match, so the
             // windower stays on the synthetic self+beacons `FixedState`.
             use_genesis_validator_state: false,
+            // No real staking identity to carry for an in-process loopback
+            // boot: a fresh throwaway identity is self-consistent with the
+            // synthetic `FixedState` validator set built around it (T16 item 4
+            // — no behavior change on this path).
+            staking: None,
         },
         Arc::clone(&recording),
         router,
@@ -1199,6 +1247,21 @@ struct ChainAssemblySpec {
     /// registration below is unaffected either way — that is a separate
     /// connectedness/gossip concern, not the windower.
     use_genesis_validator_state: bool,
+    /// The node's pre-resolved REAL staking identity (T16 fix), or `None` to
+    /// fall back to [`staking_identity`]'s fresh throwaway cert.
+    ///
+    /// `Some((identity, node_id))` is used for ALL THREE identity-sensitive
+    /// pieces of the assembled chain: `ChainContext.node_id`, the proposervm's
+    /// [`StakingIdentity`] (block-signing cert + signer), and the self-staker
+    /// entry registered in the chain's validator manager — so the chain's
+    /// on-wire identity, its block-signer, and its windower self-entry all
+    /// agree with the P2P layer's handshake identity.
+    ///
+    /// `None` (the loopback boot, [`boot_chain`]) is byte-identical to the
+    /// pre-fix behavior: a fresh ECDSA identity generated per boot, matching
+    /// the synthetic self-consistent `FixedState` validator set built around
+    /// it.
+    staking: Option<(StakingIdentity, NodeId)>,
 }
 
 /// The full chain identity a production network boot needs (the analogue of the
@@ -1279,8 +1342,14 @@ where
 {
     let reg = Registry::new();
 
-    // Self validator: one equally-weighted staker with a fresh staking identity.
-    let (identity, node_id) = staking_identity()?;
+    // Self validator: one equally-weighted staker with the node's REAL staking
+    // identity when supplied (T16 fix — production network boot), else a
+    // fresh throwaway staking identity (loopback / existing test paths,
+    // byte-identical to the pre-fix behavior).
+    let (identity, node_id) = match spec.staking {
+        Some((identity, node_id)) => (identity, node_id),
+        None => staking_identity()?,
+    };
     let validators = Arc::new(DefaultManager::new());
     validators.add_staker(
         ava_types::constants::PRIMARY_NETWORK_ID,
@@ -1533,6 +1602,11 @@ pub struct NetworkChainBootHandle {
 /// beaconless short-circuit `Bootstrapping → NormalOp` (solo / beacon role);
 /// `Some(map)` non-empty ⇒ frontier from those remote peers.
 ///
+/// `staking`: `Some((identity, node_id))` ⇒ the node's REAL staking identity
+/// (T16 fix) is used for `ChainContext.node_id`, the proposervm signer, and
+/// the self-staker entry; `None` ⇒ a fresh throwaway identity (test paths that
+/// don't carry a real network identity).
+///
 /// # Errors
 /// Propagates a VM-init / consensus-construction / identity / timeout failure.
 #[allow(clippy::too_many_arguments)]
@@ -1548,6 +1622,7 @@ async fn boot_chain_over_network_core<V>(
     token: CancellationToken,
     connectivity_gate: Option<watch::Receiver<bool>>,
     beacons: Option<BTreeMap<NodeId, u64>>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1578,6 +1653,7 @@ where
             // Production network boot: the windower must agree with Go on
             // proposer-window order, so it uses the real genesis validator set.
             use_genesis_validator_state: true,
+            staking,
         },
         sender,
         router,
@@ -1651,6 +1727,11 @@ where
 ///   those peers over the [`ava_network::network::Network`] (M9.15 G5 — real
 ///   follower bootstrap from a remote beacon).
 ///
+/// `staking`: `Some((identity, node_id))` ⇒ the node's REAL staking identity
+/// (T16 fix); `None` ⇒ a fresh throwaway identity (unchanged pre-fix
+/// behavior — the existing standalone test callers of this function pass
+/// `None`).
+///
 /// # Errors
 /// Propagates a VM-init / consensus-construction / identity / timeout-manager
 /// failure from [`boot_chain_with_sender`].
@@ -1666,6 +1747,7 @@ pub async fn boot_chain_over_network<V>(
     token: CancellationToken,
     connectivity_gate: Option<watch::Receiver<bool>>,
     beacons: Option<BTreeMap<NodeId, u64>>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1709,6 +1791,7 @@ where
         token,
         connectivity_gate,
         beacons,
+        staking,
     )
     .await
 }
@@ -1717,6 +1800,11 @@ where
 /// (`LOCAL_ID`, alias `"network"`, empty asset id, sha256 genesis id). Lets an
 /// integration test drive the shared-router production boot core without exposing
 /// the private `NetBootSpec`.
+///
+/// `staking`: `Some((identity, node_id))` ⇒ the node's REAL staking identity
+/// (T16 fix — the `network_boot_real_staking_identity` test uses this to
+/// prove the assembled chain's `ChainContext.node_id` matches a known
+/// identity); `None` ⇒ a fresh throwaway identity.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub async fn boot_chain_over_network_core_for_test<V>(
@@ -1731,6 +1819,7 @@ pub async fn boot_chain_over_network_core_for_test<V>(
     base_db: Arc<dyn DynDatabase>,
     token: CancellationToken,
     beacons: Option<BTreeMap<NodeId, u64>>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1756,6 +1845,7 @@ where
         token,
         None,
         beacons,
+        staking,
     )
     .await
 }
@@ -1778,6 +1868,7 @@ pub async fn boot_chain_over_network_core_for_test_gated<V>(
     token: CancellationToken,
     connectivity_gate: Option<watch::Receiver<bool>>,
     beacons: Option<BTreeMap<NodeId, u64>>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1803,6 +1894,7 @@ where
         token,
         connectivity_gate,
         beacons,
+        staking,
     )
     .await
 }
@@ -2065,6 +2157,11 @@ pub async fn drive_startup_chains_with_db(
 /// When `api_server` is supplied, each booted chain's HTTP handlers are
 /// registered with it (see [`run_queued_chains_with_db`]; M9.15 rung 2).
 ///
+/// `staking`: the node's REAL staking identity (T16 fix), applied to every
+/// queued chain this call boots — a node has exactly ONE staking identity
+/// across all its chains, matching the P2P layer's handshake identity.
+/// `None` falls back to a fresh throwaway identity per chain.
+///
 /// # Errors
 /// Propagates a chain boot failure (genesis / DB / VM-init / consensus / identity
 /// / timeout).
@@ -2078,9 +2175,10 @@ pub async fn run_queued_chains_over_network(
     gate: watch::Receiver<bool>,
     beacons: BTreeMap<NodeId, u64>,
     api_server: Option<&Arc<HttpApiServer>>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     run_queued_chains_over_network_core(
-        manager, network_id, base_db, network, router, gate, beacons, api_server, None,
+        manager, network_id, base_db, network, router, gate, beacons, api_server, None, staking,
     )
     .await
 }
@@ -2111,6 +2209,9 @@ pub async fn run_queued_chains_over_network_for_test(
     api_server: Option<&Arc<HttpApiServer>>,
     cchain_gossip_params: Option<ava_p2p::gossip::GossipParams>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
+    // This test seam carries no real staking identity input (unchanged from
+    // pre-T16 behavior — its callers exercise gossip-cadence overrides, not
+    // identity); each booted chain gets a fresh throwaway identity.
     run_queued_chains_over_network_core(
         manager,
         network_id,
@@ -2121,6 +2222,7 @@ pub async fn run_queued_chains_over_network_for_test(
         beacons,
         api_server,
         cchain_gossip_params,
+        None,
     )
     .await
 }
@@ -2129,7 +2231,8 @@ pub async fn run_queued_chains_over_network_for_test(
 /// [`run_queued_chains_over_network_for_test`]; see the former for the dispatch
 /// semantics. `cchain_gossip_params`, when `Some`, overrides the queued
 /// C-Chain's [`GossipParams`](ava_p2p::gossip::GossipParams) before boot
-/// (`None` everywhere in production).
+/// (`None` everywhere in production). `staking`, when `Some`, is the node's
+/// REAL staking identity (T16 fix), applied to every chain this call boots.
 #[allow(clippy::too_many_arguments)]
 async fn run_queued_chains_over_network_core(
     manager: &Arc<ava_node::init::chain_manager::AssemblyChainManager>,
@@ -2141,6 +2244,7 @@ async fn run_queued_chains_over_network_core(
     beacons: BTreeMap<NodeId, u64>,
     api_server: Option<&Arc<HttpApiServer>>,
     cchain_gossip_params: Option<ava_p2p::gossip::GossipParams>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
@@ -2175,6 +2279,7 @@ async fn run_queued_chains_over_network_core(
                 chain_token,
                 Some(gate.clone()),
                 Some(beacons.clone()),
+                staking.clone(),
             )
             .await?
         } else if params.vm_id == avm_id() {
@@ -2201,6 +2306,7 @@ async fn run_queued_chains_over_network_core(
                 chain_token,
                 Some(gate.clone()),
                 Some(beacons.clone()),
+                staking.clone(),
             )
             .await?
         } else if params.vm_id == evm_id() {
@@ -2233,6 +2339,7 @@ async fn run_queued_chains_over_network_core(
                 chain_token,
                 Some(gate.clone()),
                 Some(beacons.clone()),
+                staking.clone(),
             )
             .await?;
             // The Firewood scratch dir must outlive the running VM (the handle
@@ -2278,6 +2385,16 @@ async fn run_queued_chains_over_network_core(
 /// registered on it so the live node serves `/ext/bc/P`, `/ext/bc/X`,
 /// `/ext/bc/C/rpc` (M9.15 rung 2; `None` for probe boots without HTTP).
 ///
+/// `staking`: the node's REAL staking identity (T16 fix) — e.g.
+/// `node.config.staking_config.identity` converted via
+/// [`staking_identity_from_tls`]. Applied to every chain this call boots, so
+/// `ChainContext.node_id` / the proposervm signer / the self-staker entry all
+/// agree with the identity the P2P layer handshaked with (without this, the
+/// windower's `expected == self.ctx.node_id` check for this node's proposer
+/// slot could never be true — the T16 bug). `None` falls back to a fresh
+/// throwaway identity per chain (test callers that don't carry a real network
+/// identity).
+///
 /// # Errors
 /// Propagates a chain boot failure from [`run_queued_chains_over_network`].
 #[allow(clippy::too_many_arguments)]
@@ -2290,9 +2407,10 @@ pub async fn drive_startup_chains_over_network(
     gate: watch::Receiver<bool>,
     beacons: BTreeMap<NodeId, u64>,
     api_server: Option<&Arc<HttpApiServer>>,
+    staking: Option<(StakingIdentity, NodeId)>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     run_queued_chains_over_network(
-        manager, network_id, base_db, network, router, gate, beacons, api_server,
+        manager, network_id, base_db, network, router, gate, beacons, api_server, staking,
     )
     .await
 }
@@ -2331,4 +2449,42 @@ pub async fn drive_startup_chains_over_network_for_test(
         cchain_gossip_params,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// T16 signer-parity test: [`staking_identity_from_tls`] over an RSA-keyed
+    /// [`ava_network::identity::Identity`] — avalanchego mints its real
+    /// local-network stakers with RSA keys (PKCS#1) — must produce a signer
+    /// whose output verifies against the cert via the SAME
+    /// `ava_crypto::staking::check_signature` path real peers use. Unlike
+    /// [`staking_identity`]'s ECDSA-only closure, this conversion must work
+    /// for BOTH key families avalanchego mints, since a live validator's
+    /// genesis staker slot can be either.
+    #[test]
+    fn staking_identity_from_tls_signs_with_an_rsa_identity() {
+        let cert = include_str!("../../../ava-network/tests/testdata/rsa_staker.crt");
+        let key = include_str!("../../../ava-network/tests/testdata/rsa_staker.key");
+        let identity =
+            ava_network::identity::Identity::from_pem(cert, key).expect("Identity::from_pem(rsa)");
+
+        let (staking_id, node_id) =
+            staking_identity_from_tls(&identity).expect("staking_identity_from_tls(rsa)");
+
+        assert_eq!(
+            node_id,
+            staking::node_id_from_cert(identity.cert_der()),
+            "derived node id matches node_id_from_cert"
+        );
+
+        let msg = b"avalanche proposervm header";
+        let sig = (staking_id.signer)(msg).expect("rsa sign");
+
+        let parsed_cert =
+            staking::parse_certificate(&staking_id.certificate).expect("parse rsa cert");
+        staking::check_signature(&parsed_cert, msg, &sig)
+            .expect("rsa signature verifies under PKCS#1v1.5/SHA-256");
+    }
 }

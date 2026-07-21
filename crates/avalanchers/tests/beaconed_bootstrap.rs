@@ -287,6 +287,7 @@ async fn follower_bootstraps_through_real_beacon_gate() {
             token.clone(),
             None,                  // beacon: no gate.
             Some(BTreeMap::new()), // beaconless ⇒ short-circuit to NormalOp.
+            None,
         )
         .await
         .expect("boot beacon");
@@ -327,6 +328,7 @@ async fn follower_bootstraps_through_real_beacon_gate() {
         follower_token.clone(),
         follower.gate.clone(), // REAL BeaconManager gate (the point of this test).
         Some(frontier_beacons),
+        None,
     )
     .await
     .expect("boot follower");
