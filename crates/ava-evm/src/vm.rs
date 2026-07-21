@@ -998,17 +998,14 @@ impl Vm for EvmVm {
                 let op_token = push_op_token.clone();
                 let beat = Arc::clone(&push_cycle_beat);
                 async move {
-                    // Liveness heartbeat (task 16 live debugging): proves the
-                    // push loop is still being polled even when every cycle is
-                    // empty — one line per ~100 cycles (~10s at the default
-                    // 100ms cadence).
+                    // Liveness heartbeat: proves the push loop is still being
+                    // polled even when every cycle is empty — one line per
+                    // ~100 cycles (~10s at the default 100ms cadence). Trace
+                    // level: only wanted when specifically hunting a wedged
+                    // push loop (as T16's live debugging was).
                     let n = beat.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if n.is_multiple_of(100) {
-                        tracing::debug!(
-                            cycle = n,
-                            pool = ?Arc::as_ptr(&mempool),
-                            "C-Chain tx-gossip push loop heartbeat"
-                        );
+                        tracing::trace!(cycle = n, "C-Chain tx-gossip push loop heartbeat");
                     }
                     // Drains newly-admitted local/remote txs into the push
                     // queue (Go's `ethTxPool.Subscribe` forwarding,

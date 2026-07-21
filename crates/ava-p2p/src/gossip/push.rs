@@ -343,7 +343,10 @@ where
             .client
             .app_gossip(token, cfg, msg.encode_to_vec())
             .await;
-        tracing::debug!(batch = n, ok = res.is_ok(), "push gossip: send returned");
+        // Success is implied by the send line; failures propagate to the
+        // cycle-error log in the caller. Trace only bridges the two when
+        // hunting a hang inside `app_gossip` itself.
+        tracing::trace!(batch = n, ok = res.is_ok(), "push gossip: send returned");
         res
     }
 

@@ -338,15 +338,6 @@ impl EthRpc {
             ..AdmissionRules::default()
         };
         let hash = self.mempool.lock().add_local(recovered, &sender, &rules)?;
-        // T16 live-debugging pointer fingerprint: which pool instance did this
-        // RPC admission write to? Compared against the push-loop drain's
-        // fingerprint to split "one pool, impossible" vs "two VM instances".
-        tracing::debug!(
-            tx = %hash,
-            pool = ?std::sync::Arc::as_ptr(&self.mempool),
-            outbox_hint = self.mempool.lock().len(),
-            "RPC add_local admitted"
-        );
         Ok(data(hash.as_slice()))
     }
 

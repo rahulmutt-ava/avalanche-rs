@@ -227,14 +227,16 @@ async fn mixed_network_single_beacon() {
 #[cfg(feature = "live")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingRaceOutcome {
-    /// The observer's mempool showed the tx pending (`blockHash == null`)
-    /// before it was mined — gossip proven.
+    /// The observer's mempool showed at least one burst tx pending
+    /// (`blockHash == null`) before it was mined — gossip proven.
     Pending,
-    /// The observer never showed the tx pending, but it WAS already mined by
-    /// the time we checked — even a pre-armed, 50ms-cadence poll lost the
-    /// race (expected to be rare; tolerated as inconclusive, not a failure).
+    /// The observer never showed ANY burst tx pending, but every one of them
+    /// WAS already mined by the time we checked — even a pre-armed,
+    /// 50ms-cadence poll lost every race (expected to be rare now that the
+    /// burst spans multiple block intervals; tolerated as inconclusive, not
+    /// a failure).
     MinedBeforePending,
-    /// The observer showed the tx neither pending nor mined within the poll
+    /// The observer showed some tx neither pending nor mined within the poll
     /// window — genuine non-delivery.
     NeitherObserved,
 }
@@ -244,7 +246,7 @@ enum PendingRaceOutcome {
 /// own mempool received the tx via `app_gossip`, not merely learned of it
 /// after the fact by processing an already-accepted block.
 ///
-/// T16 live finding: the original design called `submit_c_transfer` (build +
+/// T16 live finding #1: the original design called `submit_c_transfer` (build +
 /// submit in one RPC round trip) and only THEN started polling `to_api`. On
 /// this net blocks mine in well under a second, so the submission call itself
 /// could consume the entire pending window before the first poll ever ran —
@@ -253,17 +255,31 @@ enum PendingRaceOutcome {
 /// [`submit_raw`]): the tx hash is known the instant it is signed (client-side,
 /// no RPC needed), so the observer's pending-poll is spawned as its own task
 /// and PRE-ARMED — running and already mid-poll — *before* the source node
-/// ever sees the tx, eliminating the submission-to-first-poll gap entirely.
-/// [`await_c_pending_tx`]'s own cadence is now 50ms (was 1s), comfortably
-/// inside `app_gossip`'s ~100ms push period.
+/// ever sees the tx. [`await_c_pending_tx`]'s cadence is 50ms.
 ///
-/// Retries with a fresh tx up to 3× on [`PendingRaceOutcome::MinedBeforePending`]
-/// (inconclusive about gossip, not a failure) — expected to be a rare path now
-/// that pre-arming closes the dominant race.
+/// T16 live finding #2 (run 9, preserved logs): even pre-armed, a SINGLE tx
+/// cannot reliably win the race. Measured end-to-end on a failing run: submit
+/// → Go push 96ms (the 100ms push cadence working as designed) → admitted
+/// into the Rust mempool same-millisecond → block accepted **7ms later**. A
+/// 7ms pending window is unobservable at any sane poll cadence, and a tx that
+/// mines before the source's first 100ms push tick is (correctly) dropped
+/// from the outbox entirely, so it never gossips at all. Fixed by submitting
+/// a BURST of nonce-consecutive txs per attempt: the first tx(s) may instant-
+/// mine, but every tx submitted after a block lands must wait out the
+/// proposervm min-block-delay before the next block can take it — a
+/// seconds-wide pending window on the observer that a 50ms poll cannot miss.
+/// One observed-pending tx from the burst proves delivery (on the observer,
+/// `add_remote` — and hence a pending-tagged pool entry — is reachable ONLY
+/// via the gossip path; block import never populates the mempool).
+///
+/// Retries the whole burst up to 3× on
+/// [`PendingRaceOutcome::MinedBeforePending`] (inconclusive about gossip, not
+/// a failure) — expected to be rare now that the burst spans block intervals.
 ///
 /// # Panics
-/// Panics if a tx is observed neither pending nor mined on `to_api` within the
-/// poll window, or if the race resolves `MinedBeforePending` on all 3 attempts.
+/// Panics if some tx is observed neither pending nor mined on `to_api` within
+/// the poll window, or if every burst resolves `MinedBeforePending` on all 3
+/// attempts.
 #[cfg(feature = "live")]
 async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &str) {
     use std::time::Duration;
@@ -272,46 +288,84 @@ async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &st
         await_c_pending_tx, await_c_receipt, build_c_transfer, submit_raw,
     };
 
+    /// Txs per attempt. Spaced 150ms apart the burst spans ~1s — comfortably
+    /// across at least one min-block-delay boundary on this net.
+    const BURST: usize = 6;
+
     for attempt in 0..3u32 {
-        // Build + hash locally BEFORE submitting anything.
-        let (raw_hex, tx_hash) = build_c_transfer(from_api)
-            .await
-            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: build_c_transfer: {e}"));
+        let mut polls = Vec::with_capacity(BURST);
+        let mut hashes = Vec::with_capacity(BURST);
+        for i in 0..BURST {
+            // Build + hash locally BEFORE submitting anything. Sequential
+            // build-then-submit keeps the pending-tag nonce advancing across
+            // the burst (each build sees the previous submissions pooled).
+            let (raw_hex, tx_hash) = build_c_transfer(from_api).await.unwrap_or_else(|e| {
+                panic!("{label} attempt {attempt} tx {i}: build_c_transfer: {e}")
+            });
 
-        // Pre-arm the observer's pending-poll as its own task — it starts
-        // polling `to_api` immediately, BEFORE the source node has even seen
-        // the tx, so there is no submission-to-first-poll gap left to race.
-        let observer_api = to_api.to_owned();
-        let observer_hash = tx_hash.clone();
-        let pending_task = tokio::spawn(async move {
-            await_c_pending_tx(&observer_api, &observer_hash, Duration::from_secs(20)).await
-        });
+            // Pre-arm the observer's pending-poll as its own task — polling
+            // `to_api` BEFORE the source node has even seen this tx, so there
+            // is no submission-to-first-poll gap left to race.
+            let observer_api = to_api.to_owned();
+            let observer_hash = tx_hash.clone();
+            polls.push(tokio::spawn(async move {
+                await_c_pending_tx(&observer_api, &observer_hash, Duration::from_secs(20)).await
+            }));
 
-        submit_raw(from_api, &raw_hex)
-            .await
-            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: submit_raw: {e}"));
+            submit_raw(from_api, &raw_hex)
+                .await
+                .unwrap_or_else(|e| panic!("{label} attempt {attempt} tx {i}: submit_raw: {e}"));
+            hashes.push(tx_hash);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
         eprintln!(
-            "{label} attempt {attempt}: submitted {tx_hash} to {from_api} \
-             (pending-poll on {to_api} pre-armed before submission)"
+            "{label} attempt {attempt}: burst of {BURST} txs submitted to {from_api} \
+             ({} .. {}; pending-polls on {to_api} pre-armed before each submission)",
+            hashes[0],
+            hashes[BURST - 1],
         );
 
-        let pending_seen = pending_task
-            .await
-            .unwrap_or_else(|e| {
-                panic!("{label} attempt {attempt}: pending-poll task panicked: {e}")
-            })
-            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_pending_tx: {e}"));
+        // The polls run concurrently; one observed-pending tx proves gossip.
+        let mut pending_hash = None;
+        for (i, poll) in polls.into_iter().enumerate() {
+            let seen = poll
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("{label} attempt {attempt} tx {i}: pending-poll task panicked: {e}")
+                })
+                .unwrap_or_else(|e| {
+                    panic!("{label} attempt {attempt} tx {i}: await_c_pending_tx: {e}")
+                });
+            if seen {
+                pending_hash = Some(hashes[i].clone());
+                break;
+            }
+        }
 
-        let outcome = if pending_seen {
+        let outcome = if let Some(h) = pending_hash {
+            eprintln!(
+                "{label} attempt {attempt}: {h} observed PENDING on {to_api} — gossip proven"
+            );
             PendingRaceOutcome::Pending
         } else {
-            // Never observed pending even pre-armed — check whether it raced
-            // ahead (mined too fast for even a 50ms-cadence poll) rather than
-            // never arriving at all.
-            let mined = await_c_receipt(to_api, &tx_hash, Duration::from_secs(5))
-                .await
-                .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_receipt: {e}"));
-            if mined {
+            // No tx was ever observed pending even pre-armed — split "every
+            // single one mined too fast" (inconclusive race) from "some tx
+            // never arrived at all" (genuine non-delivery).
+            let mut all_mined = true;
+            for (i, h) in hashes.iter().enumerate() {
+                let mined = await_c_receipt(to_api, h, Duration::from_secs(5))
+                    .await
+                    .unwrap_or_else(|e| {
+                        panic!("{label} attempt {attempt} tx {i}: await_c_receipt: {e}")
+                    });
+                if !mined {
+                    all_mined = false;
+                    eprintln!(
+                        "{label} attempt {attempt}: {h} neither pending nor mined on {to_api}"
+                    );
+                }
+            }
+            if all_mined {
                 PendingRaceOutcome::MinedBeforePending
             } else {
                 PendingRaceOutcome::NeitherObserved
@@ -319,32 +373,26 @@ async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &st
         };
 
         match outcome {
-            PendingRaceOutcome::Pending => {
-                eprintln!(
-                    "{label} attempt {attempt}: {tx_hash} observed PENDING on {to_api} — \
-                     gossip proven"
-                );
-                return;
-            }
+            PendingRaceOutcome::Pending => return,
             PendingRaceOutcome::MinedBeforePending => {
                 eprintln!(
-                    "{label} attempt {attempt}: {tx_hash} was already mined on {to_api} before \
-                     the pre-armed pending-poll caught it (rare, sub-50ms delivery) — retrying \
-                     with a fresh tx"
+                    "{label} attempt {attempt}: all {BURST} burst txs were already mined on \
+                     {to_api} before the pre-armed pending-polls caught any of them \
+                     (inconclusive) — retrying with a fresh burst"
                 );
                 continue;
             }
             PendingRaceOutcome::NeitherObserved => {
                 panic!(
-                    "{label} attempt {attempt}: {tx_hash} never appeared pending NOR mined on \
-                     {to_api} within the poll window — gossip did not deliver it"
+                    "{label} attempt {attempt}: some burst tx appeared neither pending NOR \
+                     mined on {to_api} within the poll window — gossip did not deliver it"
                 );
             }
         }
     }
     panic!(
-        "{label}: gossip raced ahead of the pre-armed pending-poll (MinedBeforePending) on all \
-         3 attempts"
+        "{label}: every burst raced ahead of the pre-armed pending-polls (MinedBeforePending) \
+         on all 3 attempts"
     );
 }
 
@@ -468,7 +516,9 @@ async fn mixed_network_tx_gossip() {
 ///
 /// Bounded retry (Stage 2): proposervm windowing rotates proposers, and (per
 /// (c)) gossip means a competing Go proposer can pick up and mine the same tx
-/// first. Each of the (up to 6) attempts submits a FRESH transfer — rather
+/// first. Each of the (up to 20; see the in-loop rationale — the windower
+/// schedule is deterministic per height, so a wider single run beats re-runs)
+/// attempts submits a FRESH transfer — rather
 /// than re-polling the same one — so a Go-proposed inclusion doesn't retire
 /// the tx before the Rust proposer window opens; the loop keeps going until
 /// the index API confirms a Rust-signed block shipped one of our txs. If it
@@ -525,10 +575,22 @@ async fn mixed_network_rust_proposes() {
     // mined ANYWHERE (per pre-flight (c), gossip means a Go validator can win
     // the race), then identify the ACTUAL proposer of the block that carried
     // it by parsing the accepted container off the Go index API. Retry with a
-    // fresh tx (bounded, 6 attempts) until a Rust-signed block is confirmed.
+    // fresh tx until a Rust-signed block is confirmed.
+    //
+    // Attempt bound (T16 live finding, runs rp1/rp2): the post-Durango
+    // windower's slot-0 proposer is a deterministic function of
+    // (chainID, blockHeight) — and this fixture's chainID is genesis-derived,
+    // hence identical on every boot. Two consecutive failing runs replayed
+    // the SAME proposer at heights 2..=5, so re-running the test re-explores
+    // the same heights and can never succeed where the previous run failed;
+    // the only way to reach a Rust-scheduled height is to mine FURTHER within
+    // one run. Each attempt consumes ~1 height; at ~1/5 per height (5 equal-
+    // stake validators, per-height pseudorandom draws), 20 attempts leave
+    // P(never Rust-scheduled) = (4/5)^20 ≈ 1.2% — and a fail after 20 fresh
+    // heights is itself strong evidence of a real proposal bug, not luck.
     let mut tx_hash = String::new();
     let mut proposer_matched = false;
-    for attempt in 0..6u32 {
+    for attempt in 0..20u32 {
         // If the previous attempt's tx is still sitting pending in the Rust
         // mempool, submitting a fresh transfer now would read the same
         // "latest" nonce and collide with it (rejected as an underpriced
@@ -627,7 +689,7 @@ async fn mixed_network_rust_proposes() {
     }
     assert!(
         proposer_matched,
-        "no Rust-proposed block ever included one of our txs within 6 attempts (last tx {tx_hash})"
+        "no Rust-proposed block ever included one of our txs within 20 attempts (last tx {tx_hash})"
     );
 
     // The Rust-proposed block must be accepted network-wide: the same tx is

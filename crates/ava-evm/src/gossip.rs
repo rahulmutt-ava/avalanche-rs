@@ -252,6 +252,14 @@ impl Set<GossipEthTx> for EthTxGossipSet {
                 .add_remote(tx, &account, &self.rules)
                 .map_err(|e| ava_p2p::Error::Set(e.to_string()))?;
         }
+        // Permanent live-forensics hook (T16): `add_remote` is the ONLY path
+        // by which a tx enters this pool from the network — block import
+        // never populates the mempool — so this line is per-tx proof that
+        // gossip (push or pull) delivered it, orderable against the sender's
+        // own send log and the block-accept timestamp. T16's live runs
+        // measured a 7ms pending window on this net; this log is what made
+        // that diagnosable. Bounded: one line per gossip-admitted tx.
+        tracing::debug!(%hash, "gossip: admitted remote tx into mempool");
 
         // (2) Snapshot the pool's current ids (a second, brief mempool lock,
         // dropped before the bloom lock below is taken) so the refill
