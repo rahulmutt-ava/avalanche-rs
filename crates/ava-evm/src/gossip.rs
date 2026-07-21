@@ -225,15 +225,23 @@ impl Set<GossipEthTx> for EthTxGossipSet {
 
         // (3) Bloom add + reset-if-needed, using only the local snapshot —
         // no mempool call while `bloom` is locked.
+        //
+        // A `reset_if_needed` failure is logged, not propagated: the mempool
+        // admission above already succeeded, so this `add` must report
+        // success regardless (bloom's own doc: on error, the existing filter
+        // — which already has `id` added, just above — is left unchanged).
+        // Mirrors Go's `Subscribe` event loop (`eth_gossiper.go:98-102`),
+        // which logs `ResetBloomFilterIfNeeded`'s error and `continue`s
+        // rather than failing the (separate, synchronous) `Add` call.
         let mut bloom = self.bloom.lock();
         bloom.add(&id);
-        bloom
-            .reset_if_needed(count_hint, &mut |add| {
-                for known in &known_ids {
-                    add(known);
-                }
-            })
-            .map_err(|e| ava_p2p::Error::Set(e.to_string()))?;
+        if let Err(err) = bloom.reset_if_needed(count_hint, &mut |add| {
+            for known in &known_ids {
+                add(known);
+            }
+        }) {
+            tracing::warn!(error = %err, "failed to reset gossip bloom filter");
+        }
 
         Ok(())
     }
