@@ -79,6 +79,26 @@ pub enum AppCall {
     },
 }
 
+/// A recorded call into [`TestVm`]'s [`Connector`] impl, observable via
+/// [`TestVmObserver::conn_calls`] (Task 8 adapter tests: proves an
+/// `InboundOp::Connected`/`Disconnected` reached the VM through the engine
+/// adapter).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConnCall {
+    /// A `connected` call.
+    Connected {
+        /// The connecting node.
+        node: NodeId,
+        /// The peer's advertised application version.
+        version: Application,
+    },
+    /// A `disconnected` call.
+    Disconnected {
+        /// The disconnecting node.
+        node: NodeId,
+    },
+}
+
 /// The shared, mutable state behind a [`TestVm`] and its [`TestBlock`]s.
 ///
 /// A `TestBlock::accept` reaches back into this state to advance
@@ -95,6 +115,8 @@ struct Inner {
     last_accepted: Id,
     /// Calls recorded by `TestVm`'s `AppHandler` impl, in call order.
     app_calls: Vec<AppCall>,
+    /// Calls recorded by `TestVm`'s `Connector` impl, in call order.
+    conn_calls: Vec<ConnCall>,
     /// The currently preferred (leaf) block.
     preference: Id,
 }
@@ -267,6 +289,17 @@ impl TestVmObserver {
             .app_calls
             .clone()
     }
+
+    /// The calls recorded so far by the VM's `Connector` impl, in call order
+    /// (Task 8 adapter tests).
+    #[must_use]
+    pub fn conn_calls(&self) -> Vec<ConnCall> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .conn_calls
+            .clone()
+    }
 }
 
 impl TestVm {
@@ -406,13 +439,17 @@ impl Connector for TestVm {
     async fn connected(
         &mut self,
         _token: &CancellationToken,
-        _node: NodeId,
-        _version: Application,
+        node: NodeId,
+        version: Application,
     ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.conn_calls.push(ConnCall::Connected { node, version });
         Ok(())
     }
 
-    async fn disconnected(&mut self, _token: &CancellationToken, _node: NodeId) -> Result<()> {
+    async fn disconnected(&mut self, _token: &CancellationToken, node: NodeId) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.conn_calls.push(ConnCall::Disconnected { node });
         Ok(())
     }
 }

@@ -31,6 +31,25 @@ impl ava_engine::networking::ChainMessageSink for RecordingHandler {
     }
 }
 
+/// A handler that records the ops it received but rejects a configured node
+/// via `should_handle` (proves `connected`/`disconnected` respect the same ACL
+/// gate `handle_inbound` does).
+struct RejectingHandler {
+    pushed: Mutex<Vec<InboundOp>>,
+    rejected: NodeId,
+}
+
+#[async_trait]
+impl ava_engine::networking::ChainMessageSink for RejectingHandler {
+    async fn push(&self, _node: NodeId, op: InboundOp) {
+        self.pushed.lock().unwrap().push(op);
+    }
+
+    fn should_handle(&self, node: NodeId) -> bool {
+        node != self.rejected
+    }
+}
+
 fn chain_a() -> Id {
     Id::from([0xAA; 32])
 }
@@ -193,5 +212,90 @@ async fn fail_request_after_timer_already_fired_does_not_double_deliver() {
         1,
         "fail_request must NOT synthesize a second *Failed once the timer has \
          already claimed this request (exactly-once property)"
+    );
+}
+
+/// `connected_broadcasts_to_every_chain` — `ChainRouter::connected` delivers
+/// `InboundOp::Connected` to every registered chain sink (Go `chain_router.go`
+/// `Connected` broadcasting to `cr.chainHandlers`), and `disconnected` likewise
+/// with `InboundOp::Disconnected`. A handler whose `should_handle` rejects the
+/// node must not receive either (mirrors `handle_inbound`'s ACL gating).
+#[tokio::test(start_paused = true)]
+async fn connected_broadcasts_to_every_chain() {
+    let mgr = timeout_mgr();
+    let router = ChainRouter::new(mgr);
+
+    let chain_b = Id::from([0xCCu8; 32]);
+    let handler_a = Arc::new(RecordingHandler::default());
+    let handler_b = Arc::new(RecordingHandler::default());
+    router.add_chain(chain_a(), handler_a.clone());
+    router.add_chain(chain_b, handler_b.clone());
+
+    let node = NodeId::from([7u8; 20]);
+    let version = ava_version::application::Application::new("avalanchego".to_string(), 1, 2, 3);
+
+    router.connected(node, version.clone());
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        handler_a.pushed.lock().unwrap().as_slice(),
+        &[InboundOp::Connected {
+            version: version.clone()
+        }],
+        "chain A must receive Connected"
+    );
+    assert_eq!(
+        handler_b.pushed.lock().unwrap().as_slice(),
+        &[InboundOp::Connected {
+            version: version.clone()
+        }],
+        "chain B must receive Connected"
+    );
+
+    router.disconnected(node);
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        handler_a.pushed.lock().unwrap().as_slice(),
+        &[
+            InboundOp::Connected {
+                version: version.clone()
+            },
+            InboundOp::Disconnected
+        ],
+        "chain A must receive Disconnected"
+    );
+    assert_eq!(
+        handler_b.pushed.lock().unwrap().as_slice(),
+        &[InboundOp::Connected { version }, InboundOp::Disconnected],
+        "chain B must receive Disconnected"
+    );
+}
+
+/// `connected_respects_should_handle` — a chain whose `should_handle` rejects
+/// the connecting node receives neither `Connected` nor `Disconnected`.
+#[tokio::test(start_paused = true)]
+async fn connected_respects_should_handle() {
+    let mgr = timeout_mgr();
+    let router = ChainRouter::new(mgr);
+
+    let node = NodeId::from([8u8; 20]);
+    let rejecting = Arc::new(RejectingHandler {
+        pushed: Mutex::new(Vec::new()),
+        rejected: node,
+    });
+    router.add_chain(chain_a(), rejecting.clone());
+
+    let version = ava_version::application::Application::new("avalanchego".to_string(), 1, 0, 0);
+    router.connected(node, version);
+    router.disconnected(node);
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        rejecting.pushed.lock().unwrap().is_empty(),
+        "a rejected node's connected/disconnected must not reach the chain"
     );
 }

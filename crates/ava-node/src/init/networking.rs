@@ -96,10 +96,25 @@ impl InboundHandler for RouterBridge {
 impl ExternalHandler for RouterBridge {
     fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
         tracing::info!(%node_id, %version, %subnet_id, "peer connected");
+        // Broadcast to every chain the (once step 20 fills the slot) engine
+        // router knows about (Go `chain_router.go` `Connected`). Go filters
+        // the broadcast by `subnet_id == chain.Context().SubnetID` (or
+        // sybil-protection-disabled primary-network connects); the engine
+        // `Router` here has no subnet-scoped chain registry (same as
+        // `handle_inbound` above, which does not filter by subnet either), so
+        // this drops that filter — moot on today's 5-node primary-network-only
+        // deployment, and a documented follow-up if/when subnet-tracking chains
+        // are wired in.
+        if let Some(router) = self.engine_router() {
+            router.connected(node_id, version.clone());
+        }
     }
 
     fn disconnected(&self, node_id: NodeId) {
         tracing::info!(%node_id, "peer disconnected");
+        if let Some(router) = self.engine_router() {
+            router.disconnected(node_id);
+        }
     }
 }
 

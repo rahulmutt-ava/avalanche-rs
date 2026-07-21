@@ -264,6 +264,25 @@ where
                     log_engine_error("vm.app_request_failed", &crate::error::Error::from(err));
                 }
             }
+            // Peer lifecycle notifications reach the VM directly regardless of
+            // engine phase, mirroring the App-ops arms above (Go's
+            // `Bootstrapper.Connected`/`Disconnected` forward to `b.VM.Connected`/
+            // `Disconnected` before touching any bootstrap-only `StartupTracker`
+            // bookkeeping; that weighted-stake "enough connected to start"
+            // bookkeeping is a separate, not-yet-ported concern — see
+            // `tests/PORTING.md` — this arm only plumbs the VM notification).
+            InboundOp::Connected { version } => {
+                let mut vm = self.vm.lock().await;
+                if let Err(err) = vm.connected(&self.token, node, version).await {
+                    log_engine_error("vm.connected", &crate::error::Error::from(err));
+                }
+            }
+            InboundOp::Disconnected => {
+                let mut vm = self.vm.lock().await;
+                if let Err(err) = vm.disconnected(&self.token, node).await {
+                    log_engine_error("vm.disconnected", &crate::error::Error::from(err));
+                }
+            }
             // Ops the bootstrapper does not consume (queries, puts, other
             // failures) are dropped: they are not part of the boot state machine.
             _ => {}
@@ -442,6 +461,21 @@ where
                 let mut vm = self.vm.lock().await;
                 let app_err = ava_vm::app::AppError::new(code, message);
                 vm.app_request_failed(&self.token, node, request_id, app_err)
+                    .await
+                    .map_err(crate::error::Error::from)
+            }
+            // Peer lifecycle notifications reach the VM directly, bypassing
+            // consensus (mirrors the App-ops arms above; see the
+            // `BootstrapperEngineAdapter` arm for the StartupTracker scope note).
+            InboundOp::Connected { version } => {
+                let mut vm = self.vm.lock().await;
+                vm.connected(&self.token, node, version)
+                    .await
+                    .map_err(crate::error::Error::from)
+            }
+            InboundOp::Disconnected => {
+                let mut vm = self.vm.lock().await;
+                vm.disconnected(&self.token, node)
                     .await
                     .map_err(crate::error::Error::from)
             }

@@ -31,6 +31,9 @@ ava-message = { path = "../ava-message" }
 ava-network = { path = "../ava-network" }
 # Construct `proto/p2p` message fields (`prost::bytes::Bytes`) directly.
 bytes = { workspace = true }
+# `InboundOp::Connected` carries the peer's advertised
+# `version::Application` (Go `message.Connected`; chain_router.go `Connected`).
+ava-version = { path = "../ava-version" }
 
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -64,7 +67,6 @@ assert_matches = { workspace = true }
 ava-vm = { path = "../ava-vm", features = [ "testutil" ] }
 ava-snow = { path = "../ava-snow", features = [ "testutil" ] }
 ava-database = { path = "../ava-database" }
-ava-version = { path = "../ava-version" }
 tokio-util = { workspace = true, features = [ "time", "rt" ] }
 # Property tests for liveness / preference monotonicity.
 proptest = { workspace = true }

@@ -1010,6 +1010,158 @@ async fn bootstrap_adapter_routes_app_ops_to_vm() {
     );
 }
 
+/// `snowman_adapter_routes_connected_disconnected_to_vm` — `InboundOp::Connected`/
+/// `Disconnected` reach the VM's `Connector` impl through the adapter's shared
+/// `Arc<Mutex<V>>` (Task 8: peer connect/disconnect plumbed to the VM),
+/// mirroring `snowman_adapter_routes_app_ops_to_vm` for App ops.
+#[tokio::test]
+async fn snowman_adapter_routes_connected_disconnected_to_vm() {
+    use ava_vm::testutil::ConnCall;
+
+    let token = CancellationToken::new();
+    let snow_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let observer = snow_vm.observer();
+    let genesis_id = snow_vm.last_accepted(&token).await.expect("genesis");
+
+    let vm = Arc::new(AsyncMutex::new(snow_vm));
+    let sender = RecordingSender::new();
+
+    let getter = Arc::new(ava_engine::snowman::Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let (vmgr, _) = validators(1);
+    let mut params = DEFAULT_PARAMETERS;
+    params.k = 1;
+    params.alpha_preference = 1;
+    params.alpha_confidence = 1;
+    params.beta = 1;
+    params.concurrent_repolls = 1;
+    let consensus = Topological::new_default(SnowballFactory, params, genesis_id, 0).expect("topo");
+    let snow_engine = ava_engine::snowman::engine::SnowmanEngine::new(
+        ava_engine::snowman::engine::Config {
+            subnet_id: Id::EMPTY,
+            params,
+            vm: Arc::clone(&vm),
+            sender: Arc::clone(&sender),
+            validators: vmgr,
+            token: token.clone(),
+        },
+        Box::new(consensus),
+    );
+
+    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter, Arc::clone(&vm), token);
+    let node = NodeId::from([33u8; 20]);
+    let version = ava_version::application::Application::new("avalanchego", 1, 2, 3);
+
+    adapter
+        .handle(
+            node,
+            InboundOp::Connected {
+                version: version.clone(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            observer.conn_calls().last(),
+            Some(ConnCall::Connected { node: n, version: v }) if *n == node && *v == version
+        ),
+        "Connected must reach the VM's connected(), got {:?}",
+        observer.conn_calls()
+    );
+
+    adapter.handle(node, InboundOp::Disconnected).await;
+    assert!(
+        matches!(
+            observer.conn_calls().last(),
+            Some(ConnCall::Disconnected { node: n }) if *n == node
+        ),
+        "Disconnected must reach the VM's disconnected(), got {:?}",
+        observer.conn_calls()
+    );
+}
+
+/// `bootstrap_adapter_routes_connected_disconnected_to_vm` — the same
+/// `InboundOp::Connected`/`Disconnected` plumbing through the
+/// `BootstrapperEngineAdapter`, mirroring
+/// `snowman_adapter_routes_connected_disconnected_to_vm` for the bootstrap
+/// phase (Go forwards `Connected`/`Disconnected` to the VM regardless of
+/// engine phase).
+#[tokio::test]
+async fn bootstrap_adapter_routes_connected_disconnected_to_vm() {
+    use ava_engine::snowman::Getter;
+    use ava_vm::testutil::ConnCall;
+
+    let token = CancellationToken::new();
+    let boot_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let observer = boot_vm.observer();
+
+    let vm = Arc::new(AsyncMutex::new(boot_vm));
+    let sender = RecordingSender::new();
+    let getter = Arc::new(Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let ctx = Arc::new(ConsensusContext::new(
+        test_chain_context(),
+        "C".to_string(),
+        Arc::new(NoOpAcceptor),
+        Arc::new(NoOpAcceptor),
+    ));
+    let boot = Bootstrapper::new(BootConfig {
+        subnet_id: Id::EMPTY,
+        ctx,
+        vm: Arc::clone(&vm),
+        sender: Arc::clone(&sender),
+        beacons: BTreeMap::new(),
+        token: token.clone(),
+    });
+
+    let (transition_tx, _transition_rx) = transition_channel(8);
+    let mut adapter = BootstrapperEngineAdapter::new(
+        boot,
+        transition_tx,
+        0,
+        getter,
+        Arc::clone(&vm),
+        token.clone(),
+    );
+    let node = NodeId::from([44u8; 20]);
+    let version = ava_version::application::Application::new("avalanchego", 4, 5, 6);
+
+    adapter
+        .handle(
+            node,
+            InboundOp::Connected {
+                version: version.clone(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            observer.conn_calls().last(),
+            Some(ConnCall::Connected { node: n, version: v }) if *n == node && *v == version
+        ),
+        "Connected must reach the VM's connected() via the bootstrapper adapter, got {:?}",
+        observer.conn_calls()
+    );
+
+    adapter.handle(node, InboundOp::Disconnected).await;
+    assert!(
+        matches!(
+            observer.conn_calls().last(),
+            Some(ConnCall::Disconnected { node: n }) if *n == node
+        ),
+        "Disconnected must reach the VM's disconnected() via the bootstrapper adapter, got {:?}",
+        observer.conn_calls()
+    );
+}
+
 /// Yield enough times for the single-task select loop to drain queued work.
 async fn pump() {
     for _ in 0..32 {

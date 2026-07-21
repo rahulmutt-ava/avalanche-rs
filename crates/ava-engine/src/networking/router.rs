@@ -17,6 +17,7 @@ use async_trait::async_trait;
 
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_version::application::Application;
 use ava_vm::app::AppError;
 
 use super::timeout::{AdaptiveTimeoutManager, RequestId};
@@ -201,6 +202,21 @@ pub enum InboundOp {
         /// The peer's last-accepted height.
         accepted_height: u64,
     },
+
+    // --- Peer lifecycle (Task 8: chain_router.go Connected/Disconnected) ---
+    /// A peer connected, carrying its advertised application version (Go
+    /// `message.Connected`; `chain_router.go` `Connected` broadcasts this to
+    /// every chain the peer is relevant to). Classified `Sync` by
+    /// [`super::handler::HandlerMessage::classify`], matching Go's
+    /// `handleSyncMsg` dispatch of `*message.Connected`.
+    Connected {
+        /// The peer's advertised application version.
+        version: Application,
+    },
+    /// A peer disconnected (Go `message.Disconnected`; `chain_router.go`
+    /// `Disconnected` broadcasts this to every chain). Classified `Sync`,
+    /// matching Go's `handleSyncMsg` dispatch of `*message.Disconnected`.
+    Disconnected,
 }
 
 impl InboundOp {
@@ -319,6 +335,17 @@ pub trait Router: Send + Sync {
 
     /// Whether the router is healthy (no chain is unknown / over its limit).
     fn health_check(&self) -> bool;
+
+    /// Broadcast a peer-connected notification to every registered chain (Go
+    /// `chain_router.go` `Connected`). Default no-op so existing test `Router`
+    /// stubs (predating this method) keep compiling; [`ChainRouter`] overrides
+    /// it to actually broadcast.
+    fn connected(&self, _node: NodeId, _version: Application) {}
+
+    /// Broadcast a peer-disconnected notification to every registered chain
+    /// (Go `chain_router.go` `Disconnected`). Default no-op; see
+    /// [`Router::connected`].
+    fn disconnected(&self, _node: NodeId) {}
 }
 
 /// One process-wide router owning the `chain_id -> Handler` map and the request
@@ -340,6 +367,16 @@ impl ChainRouter {
 
     fn handler_for(&self, chain: Id) -> Option<Arc<dyn ChainMessageSink>> {
         self.chains.lock().ok()?.get(&chain).cloned()
+    }
+
+    /// A snapshot of every currently-registered chain handler (used to
+    /// broadcast peer lifecycle notifications; see
+    /// [`Router::connected`]/[`Router::disconnected`]).
+    fn all_handlers(&self) -> Vec<Arc<dyn ChainMessageSink>> {
+        self.chains
+            .lock()
+            .map(|chains| chains.values().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -423,6 +460,41 @@ impl Router for ChainRouter {
         // Healthy iff every registered chain is reachable; deeper queue-depth /
         // drop-rate accounting lands with the full handler wiring (06 §5.1).
         self.chains.lock().is_ok()
+    }
+
+    fn connected(&self, node: NodeId, version: Application) {
+        // Go's `chain_router.go` `Connected` filters by `chain.Context().SubnetID
+        // == subnetID` (or sybil-protection-disabled, primary network only).
+        // `ChainMessageSink` has no subnet-id accessor, so this router-layer
+        // broadcast is unconditionally all-chains; the only deployment today
+        // (a 5-node primary-network-only net) makes the two identical in
+        // practice — subnet-scoped filtering is a documented follow-up, not
+        // implemented here.
+        for handler in self.all_handlers() {
+            if !handler.should_handle(node) {
+                continue;
+            }
+            let version = version.clone();
+            // Sync trait method (mirrors `ExternalHandler::connected`), so the
+            // delivery itself is fire-and-forget on a detached task, exactly
+            // like the timeout/fail_request synthesis above.
+            tokio::spawn(async move {
+                handler.push(node, InboundOp::Connected { version }).await;
+            });
+        }
+    }
+
+    fn disconnected(&self, node: NodeId) {
+        // See the subnet-filtering note on `connected` above: this broadcasts
+        // to every registered chain, unconditionally.
+        for handler in self.all_handlers() {
+            if !handler.should_handle(node) {
+                continue;
+            }
+            tokio::spawn(async move {
+                handler.push(node, InboundOp::Disconnected).await;
+            });
+        }
     }
 }
 
