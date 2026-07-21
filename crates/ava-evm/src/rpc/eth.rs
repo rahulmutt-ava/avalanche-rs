@@ -79,21 +79,29 @@ pub enum BlockTag {
     Finalized,
     /// `earliest` — the genesis block (height 0).
     Earliest,
+    /// `pending` — the last-accepted block for tag→height resolution
+    /// ([`EthRpc::resolve_tag`]; Snowman has no pending *block* head), but
+    /// [`EthRpc::get_transaction_count`] special-cases this variant to return
+    /// the pool-aware nonce (coreth/geth `GetTransactionCount` parity — see
+    /// that method's docs).
+    Pending,
     /// An explicit block number.
     Number(u64),
 }
 
 impl BlockTag {
     /// Parses the JSON-RPC block-tag string forms (`latest`/`safe`/`finalized`/
-    /// `earliest`/`pending`) or a `0x`-hex / decimal number. `pending` maps to
-    /// `latest` (Snowman has no pending head).
+    /// `earliest`/`pending`) or a `0x`-hex / decimal number. `pending` is kept
+    /// as its own variant (see [`BlockTag::Pending`]) rather than collapsed
+    /// into `latest`, so pool-aware callers can distinguish it.
     ///
     /// # Errors
     /// Returns [`Error::GenesisParse`] (the crate's string-carrying variant) if
     /// the value is neither a known tag nor a parseable number.
     pub fn parse(s: &str) -> Result<Self> {
         match s {
-            "latest" | "pending" => Ok(BlockTag::Latest),
+            "latest" => Ok(BlockTag::Latest),
+            "pending" => Ok(BlockTag::Pending),
             "safe" => Ok(BlockTag::Safe),
             "finalized" => Ok(BlockTag::Finalized),
             "earliest" => Ok(BlockTag::Earliest),
@@ -197,7 +205,7 @@ impl EthRpc {
     /// Returns an error if the canonical-tip read fails.
     pub fn resolve_tag(&self, tag: BlockTag) -> Result<Option<u64>> {
         match tag {
-            BlockTag::Latest | BlockTag::Safe | BlockTag::Finalized => {
+            BlockTag::Latest | BlockTag::Safe | BlockTag::Finalized | BlockTag::Pending => {
                 self.canonical.last_canonical()
             }
             BlockTag::Earliest => Ok(Some(0)),
@@ -236,11 +244,25 @@ impl EthRpc {
 
     /// `eth_getTransactionCount` — the account nonce as a `0x`-quantity.
     ///
+    /// `tag == "pending"` returns the **pool-aware** next nonce (the
+    /// on-chain nonce plus any contiguous run of this sender's own pooled
+    /// txs), matching coreth/geth's `internal/ethapi/api.go`
+    /// `GetTransactionCount`: when `blockNrOrHash` resolves to
+    /// `rpc.PendingBlockNumber`, it calls `s.b.GetPoolNonce(ctx, address)`
+    /// instead of reading state (`internal/ethapi/api.go:1659-1667` in
+    /// `~/avalanchego/graft/coreth`). Every other tag reads the
+    /// last-accepted state, as before.
+    ///
     /// # Errors
     /// Returns an error if the Firewood read fails.
-    pub fn get_transaction_count(&self, addr: Address, _tag: BlockTag) -> Result<Value> {
+    pub fn get_transaction_count(&self, addr: Address, tag: BlockTag) -> Result<Value> {
         let view = self.state.view_tip()?;
-        let nonce = read_account(&view, &addr)?.map_or(0, |a| a.nonce);
+        let account_nonce = read_account(&view, &addr)?.map_or(0, |a| a.nonce);
+        let nonce = if tag == BlockTag::Pending {
+            self.mempool.lock().next_nonce(&addr, account_nonce)
+        } else {
+            account_nonce
+        };
         Ok(quantity(nonce))
     }
 
@@ -316,6 +338,15 @@ impl EthRpc {
             ..AdmissionRules::default()
         };
         let hash = self.mempool.lock().add_local(recovered, &sender, &rules)?;
+        // T16 live-debugging pointer fingerprint: which pool instance did this
+        // RPC admission write to? Compared against the push-loop drain's
+        // fingerprint to split "one pool, impossible" vs "two VM instances".
+        tracing::debug!(
+            tx = %hash,
+            pool = ?std::sync::Arc::as_ptr(&self.mempool),
+            outbox_hint = self.mempool.lock().len(),
+            "RPC add_local admitted"
+        );
         Ok(data(hash.as_slice()))
     }
 
@@ -892,7 +923,7 @@ mod tests {
     #[test]
     fn block_tag_parse_forms() {
         assert_eq!(BlockTag::parse("latest").expect("t"), BlockTag::Latest);
-        assert_eq!(BlockTag::parse("pending").expect("t"), BlockTag::Latest);
+        assert_eq!(BlockTag::parse("pending").expect("t"), BlockTag::Pending);
         assert_eq!(BlockTag::parse("safe").expect("t"), BlockTag::Safe);
         assert_eq!(
             BlockTag::parse("finalized").expect("t"),

@@ -413,6 +413,68 @@ fn send_raw_transaction_admits_and_returns_hash() {
     );
 }
 
+/// T16 Stage-B nonce-collision fix: `eth_getTransactionCount(addr, "pending")`
+/// must be pool-aware (coreth/geth `GetTransactionCount` parity:
+/// `internal/ethapi/api.go:1659-1667`, `rpc.PendingBlockNumber` ->
+/// `s.b.GetPoolNonce`), so a caller building a second tx right after
+/// submitting the first sees the *next* usable nonce instead of racing the
+/// still-unmined first tx onto the same nonce.
+#[test]
+fn get_transaction_count_pending_includes_pooled() {
+    let (_d, rpc, _mempool, _tx_index) = setup();
+
+    // Before any submission: pending == latest == the seeded nonce (0).
+    let latest_before = rpc
+        .get_transaction_count(funded_address(), BlockTag::Latest)
+        .expect("latest before");
+    let pending_before = rpc
+        .get_transaction_count(funded_address(), BlockTag::Pending)
+        .expect("pending before");
+    assert_eq!(latest_before, Value::String("0x0".to_owned()));
+    assert_eq!(pending_before, latest_before, "nothing pooled yet");
+
+    // (a) One pooled tx at nonce 0: pending must read 1 while latest (the
+    // Firewood-committed account nonce) is untouched — admission alone never
+    // mutates state; only block acceptance does.
+    rpc.send_raw_transaction(&funded_legacy_tx(0))
+        .expect("send_raw_transaction nonce 0");
+    let latest_after_one = rpc
+        .get_transaction_count(funded_address(), BlockTag::Latest)
+        .expect("latest after one");
+    let pending_after_one = rpc
+        .get_transaction_count(funded_address(), BlockTag::Pending)
+        .expect("pending after one");
+    assert_eq!(
+        latest_after_one, latest_before,
+        "latest must not move on mere admission"
+    );
+    assert_eq!(
+        pending_after_one,
+        Value::String("0x1".to_owned()),
+        "pending must include the one pooled tx"
+    );
+
+    // (b) A second pooled tx (nonce 1, contiguous with the first) bumps
+    // pending again, to 2 — still with latest unchanged.
+    rpc.send_raw_transaction(&funded_legacy_tx(1))
+        .expect("send_raw_transaction nonce 1");
+    let latest_after_two = rpc
+        .get_transaction_count(funded_address(), BlockTag::Latest)
+        .expect("latest after two");
+    let pending_after_two = rpc
+        .get_transaction_count(funded_address(), BlockTag::Pending)
+        .expect("pending after two");
+    assert_eq!(
+        latest_after_two, latest_before,
+        "latest must still not move"
+    );
+    assert_eq!(
+        pending_after_two,
+        Value::String("0x2".to_owned()),
+        "pending must include both pooled txs"
+    );
+}
+
 #[test]
 fn send_raw_transaction_maps_admission_errors() {
     let (_d, rpc, _mempool, _tx_index) = setup();

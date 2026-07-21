@@ -557,7 +557,13 @@ pub async fn build_c_transfer(api: &str) -> Result<(String, String), NetworkErro
     };
     let nonce: u64 = {
         let addr_hex = format!("{ewoq_addr:?}");
-        let params = format!(r#"["{addr_hex}","latest"]"#);
+        // T16 Stage-B nonce collision fix: "pending" (not "latest") so a tx
+        // this same session just admitted (pooled or freshly mined but not
+        // yet reflected via "latest" on this node) is accounted for. Go nodes
+        // have always supported "pending" natively; the Rust node's
+        // `eth_getTransactionCount` now does too (ava-evm rpc/eth.rs
+        // `get_transaction_count`, coreth/geth `GetTransactionCount` parity).
+        let params = format!(r#"["{addr_hex}","pending"]"#);
         let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionCount", &params)
             .await
             .map_err(|e| NetworkError::Timeout(format!("eth_getTransactionCount: {e}")))?;

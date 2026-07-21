@@ -1003,8 +1003,12 @@ impl Vm for EvmVm {
                     // empty — one line per ~100 cycles (~10s at the default
                     // 100ms cadence).
                     let n = beat.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if n % 100 == 0 {
-                        tracing::debug!(cycle = n, "C-Chain tx-gossip push loop heartbeat");
+                    if n.is_multiple_of(100) {
+                        tracing::debug!(
+                            cycle = n,
+                            pool = ?Arc::as_ptr(&mempool),
+                            "C-Chain tx-gossip push loop heartbeat"
+                        );
                     }
                     // Drains newly-admitted local/remote txs into the push
                     // queue (Go's `ethTxPool.Subscribe` forwarding,

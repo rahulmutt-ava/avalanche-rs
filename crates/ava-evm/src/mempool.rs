@@ -346,6 +346,20 @@ impl EvmMempool {
         }
     }
 
+    /// The pool-aware "pending" nonce for `address`: `account_nonce` plus the
+    /// length of any contiguous run of pooled nonces starting there — i.e.
+    /// the nonce a *new* submission from this sender should use next.
+    ///
+    /// This is the pool-aware read `eth_getTransactionCount(addr, "pending")`
+    /// needs (coreth/geth `internal/ethapi/api.go` `GetTransactionCount`:
+    /// `blockNr == rpc.PendingBlockNumber` -> `s.b.GetPoolNonce(ctx, address)`,
+    /// which walks the pool's per-sender queue the same way
+    /// [`Self::next_expected_nonce`] does here).
+    #[must_use]
+    pub fn next_nonce(&self, address: &Address, account_nonce: u64) -> u64 {
+        self.next_expected_nonce(address, account_nonce)
+    }
+
     /// The next nonce this sender may submit without gapping: the sender's
     /// on-chain `account_nonce` plus the length of any contiguous run of
     /// pooled nonces starting there.
