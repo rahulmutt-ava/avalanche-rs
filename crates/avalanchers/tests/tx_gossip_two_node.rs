@@ -31,15 +31,43 @@
 //!
 //! A tx submitted to node A could in principle reach node B two ways: tx
 //! gossip (the system under test) or consensus block propagation (A builds a
-//! block containing the tx; B accepts it). The second path is structurally
-//! impossible in this fixture: `boot_chain_with_sender` builds each chain's
-//! validator manager as SELF + `extra_beacons` only, and node A boots with an
-//! EMPTY beacon map — so A's C-Chain Snowman engine samples from {A} alone and
-//! never sends B a single consensus message (B lists A as a beacon, not vice
-//! versa). The only channel by which B can ever learn of a tx submitted to A
-//! is the tx-gossip system. If a future fixture change makes the validator
-//! sets symmetric (e.g. A also lists B as a beacon), these tests can regress
-//! to vacuous — re-derive this argument before changing the boot topology.
+//! block containing the tx; B accepts it). This doc originally argued the
+//! second path was structurally impossible because `boot_chain_with_sender`
+//! builds each chain's validator manager as SELF + `extra_beacons` only, and
+//! node A boots with an EMPTY beacon map — so A's C-Chain Snowman engine
+//! samples from {A} alone and never *initiates* a consensus message to B.
+//!
+//! **That argument is INCOMPLETE (cchain-tx-gossip task 16 finding).** It
+//! only rules out A pushing a consensus message to B; it says nothing about
+//! B *pulling* one from A. `boot_chain_with_sender` (`crates/avalanchers/src/
+//! wiring/chains.rs`, the `extra_beacons` loop) registers every explicit
+//! bootstrap beacon as a primary-network **validator**, so B's own validator
+//! manager contains {A, B} — meaning B's OWN Snowman/SAE consensus engine
+//! treats A as an ordinary validator peer it can fetch newly-proposed blocks
+//! from via the normal Get/Ancestors block-sync path, entirely independent
+//! of (and not gated by) the tx-gossip system. A throwaway diagnostic
+//! confirmed this empirically: with BOTH nodes' gossip cadences disabled
+//! (traced per-node — each disabled loop's one tick fires once at boot,
+//! before the tx exists, and never again), B still eventually observes the
+//! submitted tx **already mined** into its own block 1 (surfaced from the
+//! accepted-tx index, never having passed through B's own mempool) purely
+//! via consensus, while A's own tip stayed at genesis throughout.
+//!
+//! So: a bare "B's RPC eventually returns this tx, in ANY shape" is
+//! vacuous — it can be satisfied by consensus alone, with gossip completely
+//! dead, given enough wall-clock time. Only [`push_only_gossip_carries_tx`]
+//! currently closes this gap, by additionally requiring a genuine **pending**
+//! sighting (`blockHash: null`, every tx-body field populated straight from
+//! the pooled tx — see that test's doc comment for the full argument);
+//! consensus block-sync can never produce that shape, since it only ever
+//! delivers a tx already embedded in an accepted block. The other two tests
+//! in this file ([`push_gossip_carries_tx_between_two_real_nodes`],
+//! [`pull_gossip_reconciles_when_push_missed`]) still only assert "any
+//! sighting" and so are NOT airtight against this consensus-sync fallback —
+//! treat them as best-effort until hardened the same way. If a future
+//! fixture change makes the validator sets symmetric in the OTHER direction
+//! too (A also lists B as a beacon), re-derive this argument again before
+//! trusting any test in this file that does not check for a pending sighting.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
@@ -275,6 +303,26 @@ async fn spawn_two_nodes(
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
+    spawn_two_nodes_with_overrides(a_cchain_gossip_params, None).await
+}
+
+/// Like [`spawn_two_nodes`], but also allowing an override of node `b`'s
+/// queued C-Chain [`GossipParams`] (used by
+/// [`push_only_gossip_carries_tx`] to disable `b`'s pull so only push can
+/// carry a tx from `a` to `b`).
+async fn spawn_two_nodes_with_overrides(
+    a_cchain_gossip_params: Option<GossipParams>,
+    b_cchain_gossip_params: Option<GossipParams>,
+) -> (
+    Arc<Node>,
+    Vec<NetworkChainBootHandle>,
+    Arc<Node>,
+    Vec<NetworkChainBootHandle>,
+    tokio::task::JoinHandle<ava_network::Result<()>>,
+    tokio::task::JoinHandle<ava_network::Result<()>>,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
     let a_dir = tempfile::tempdir().unwrap();
     let b_dir = tempfile::tempdir().unwrap();
 
@@ -304,7 +352,10 @@ async fn spawn_two_nodes(
     .expect("node b Node::new");
     let mut beacons = BTreeMap::new();
     beacons.insert(a_id, 1u64);
-    let b_handles = boot(&b, beacons).await;
+    let b_handles = match b_cchain_gossip_params {
+        Some(params) => boot_with_cchain_gossip_params(&b, beacons, params).await,
+        None => boot(&b, beacons).await,
+    };
 
     let a_net = Arc::clone(&a.networking.net);
     let b_net = Arc::clone(&b.networking.net);
@@ -481,6 +532,114 @@ async fn pull_gossip_reconciles_when_push_missed() {
         got["hash"].as_str(),
         Some(tx_hash.as_str()),
         "the tx B observed via pull is the SAME tx submitted on A: {got:?}"
+    );
+
+    teardown(&a, &b, ad, bd).await;
+}
+
+/// **Push gossip carries a tx between two real nodes, with pull disabled on
+/// the observer.** The sibling `push_gossip_carries_tx_between_two_real_nodes`
+/// test does not disable B's pull cadence, so it cannot tell push and pull
+/// apart — B's periodic 1s pull could carry the tx on its own even if push
+/// were completely dead. This test closes that gap: B boots its C-Chain with
+/// pull effectively disabled (`pull_period: 1h`, via the task-14
+/// `EvmVm::with_gossip_params_for_test` seam threaded through
+/// [`spawn_two_nodes_with_overrides`]); A keeps the production 100ms push
+/// cadence. A tx admitted on A's pool can therefore ONLY reach B via push.
+///
+/// # Why this asserts a genuine **pending** sighting, not just "any" sighting
+/// (cchain-tx-gossip task 16 finding)
+///
+/// This file's top-of-file "non-vacuity" argument — that consensus block
+/// propagation from A to B is structurally impossible because A boots
+/// beaconless — is **incomplete**: `boot_chain_with_sender`
+/// (`crates/avalanchers/src/wiring/chains.rs`, the `extra_beacons` loop)
+/// registers every explicit bootstrap beacon as a primary-network
+/// **validator** too, so B's OWN validator manager contains {A, B}. That
+/// makes B, as a matter of ordinary Snowman/SAE consensus (not gossip), a
+/// legitimate peer to fetch a newly-proposed block from A via the normal
+/// Get/Ancestors block-sync path — entirely independent of, and not gated
+/// by, the C-Chain tx-gossip `GossipParams` this test overrides. A
+/// throwaway diagnostic during this investigation confirmed the gap
+/// empirically: with BOTH A's push and B's pull verifiably disabled (traced
+/// per-node — each loop's one disabled tick fires once at boot and never
+/// again), B still eventually observes the SAME tx **already mined** into
+/// its own block 1 (via the accepted-tx index, never having passed through
+/// its own mempool) while A's own tip stayed at genesis — i.e., ordinary
+/// consensus block-sync, not gossip, carried it.
+///
+/// This means a bare "`eth_getTransactionByHash` ever returns non-null" — as
+/// this test previously asserted — cannot distinguish genuine gossip
+/// delivery from that consensus-sync fallback and would silently keep
+/// "passing" even if push were completely dead, given enough wall-clock
+/// time. The fix: poll tightly (no inter-poll sleep) and require that B's
+/// RPC report the tx in the **pending** shape (`blockHash: null`, every
+/// tx-body field populated straight from the pooled `RecoveredTx` — see
+/// `rpc/eth.rs`'s `eth_getTransactionByHash` doc) at least once before it is
+/// ever mined. Consensus block-sync delivers a tx only already embedded in
+/// an accepted block, so it can NEVER produce a pending sighting — only
+/// genuine mempool-level admission (i.e., [`ava_p2p::gossip`]'s
+/// `Set::add`, called from the inbound `GossipHandler`) can. This was
+/// verified empirically too: repeated runs of this exact test reliably
+/// observe the pending shape before the mined shape, versus the
+/// both-disabled diagnostic never observing it once across 100k+ tight
+/// polls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn push_only_gossip_carries_tx() {
+    let b_gossip_params = GossipParams {
+        pull_period: Duration::from_secs(3600),
+        ..GossipParams::default()
+    };
+    let (a, a_handles, b, b_handles, ad, bd, _a_dir, _b_dir) =
+        spawn_two_nodes_with_overrides(None, Some(b_gossip_params)).await;
+
+    await_connected(&b, a.id).await;
+
+    let a_c = cchain_handle(&a_handles, a.c_chain_id);
+    let b_c = cchain_handle(&b_handles, b.c_chain_id);
+    await_normalop(a_c, Duration::from_secs(30)).await;
+    await_normalop(b_c, Duration::from_secs(30)).await;
+
+    let a_rpc = eth_rpc_service(a_c).await;
+    let b_rpc = eth_rpc_service(b_c).await;
+
+    let (raw_tx, tx_hash) = signed_ewoq_transfer(0);
+    send_raw_transaction(&a_rpc, &raw_tx, &tx_hash).await;
+
+    // Poll B as tightly as possible (bounded ~30s; production push_period is
+    // 100ms, so this should converge in well under a second if push actually
+    // reaches the wire) — no inter-poll sleep, so a genuinely-pending sighting
+    // (see the doc comment above) isn't missed to a 100ms polling gap.
+    let params = format!(r#"["{tx_hash}"]"#);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut seen: Option<Value> = None;
+    let mut ever_pending = false;
+    while tokio::time::Instant::now() < deadline {
+        let got = json_rpc(&b_rpc, "eth_getTransactionByHash", &params).await;
+        if !got.is_null() {
+            if got["blockHash"].is_null() {
+                ever_pending = true;
+                continue;
+            }
+            seen = Some(got);
+            break;
+        }
+    }
+    let got = seen.expect(
+        "push gossip must carry the tx from A to B within 30s even though B's pull is \
+         disabled (eth_getTransactionByHash stayed null on B)",
+    );
+    assert_eq!(
+        got["hash"].as_str(),
+        Some(tx_hash.as_str()),
+        "the tx B observed via push is the SAME tx submitted on A: {got:?}"
+    );
+    assert!(
+        ever_pending,
+        "B must observe the tx in the PENDING shape (blockHash: null) at least once before \
+         it is mined — a sighting that is ALWAYS already-mined is consistent with ordinary \
+         consensus block-sync (see this test's doc comment), not genuine push-gossip \
+         mempool admission, and would pass even with push completely broken"
     );
 
     teardown(&a, &b, ad, bd).await;

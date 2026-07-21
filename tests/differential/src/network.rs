@@ -732,7 +732,20 @@ impl Network {
                 key_file: staker.key,
                 bootstrap: Vec::new(), // filled below once the full set is known
                 signer_key_file: Some(crate::livenet::local_signer_key(idx)?),
-                extra_args: Vec::new(),
+                // cchain-tx-gossip task 16 live debugging (Probe 2): staker1
+                // (node 0, the beacon) gets `--log-level=verbo` — Go logs
+                // peer-level message-parse failures/drop reasons only at
+                // VERBO, and `node_args`'s baked-in `--log-level=debug`
+                // (`crate::livenet::node_args`) doesn't surface them. This
+                // flag comes after the baseline in the arg vector
+                // (`node_args` appends `extra_args` last), so it wins as the
+                // final `--log-level` occurrence. Widens ONLY staker1's log
+                // verbosity; does not change node behavior.
+                extra_args: if i == 0 {
+                    vec!["--log-level=verbo".to_owned()]
+                } else {
+                    Vec::new()
+                },
             });
         }
         // Each Go node bootstraps from the other four (full mesh ⇒ quorum).

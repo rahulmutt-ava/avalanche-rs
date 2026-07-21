@@ -1002,6 +1002,21 @@ impl Vm for EvmVm {
                     // channel, so the push cycle itself pulls the outbox
                     // each tick instead — see `EvmMempool::take_gossip_outbox`).
                     let outbox = mempool.lock().take_gossip_outbox();
+                    // Permanent live-debuggability hook (cchain-tx-gossip
+                    // task 16 live debugging): this crate's own push cycle is
+                    // the ONLY place a newly-admitted tx becomes a wire
+                    // `PushGossip` send, and prior live debugging burned
+                    // hours with no visibility into whether this closure
+                    // ever ran with non-empty work. Only logs when there is
+                    // something to report — a healthy idle node should not
+                    // spam a log line every `push_period`.
+                    if !outbox.is_empty() {
+                        tracing::debug!(
+                            node = %node_id,
+                            batch_size = outbox.len(),
+                            "C-Chain tx-gossip push: draining newly-admitted txs into the push queue"
+                        );
+                    }
                     for tx in outbox {
                         push.add(GossipEthTx(tx));
                     }
