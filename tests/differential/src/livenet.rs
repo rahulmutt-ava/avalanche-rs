@@ -95,8 +95,32 @@ pub struct NodeLaunch {
     pub extra_args: Vec<String>,
 }
 
+/// Extracts a flag token's key for de-duplication: `"--log-level"` from
+/// `"--log-level=verbo"`, or the whole token verbatim for a bare flag with no
+/// `=value` (e.g. a boolean switch).
+fn flag_key(arg: &str) -> &str {
+    arg.split('=').next().unwrap_or(arg)
+}
+
 /// The exact CLI flag vector for `launch` (mirrors specs/13; both binaries
 /// honor these identically).
+///
+/// ## De-duplication (task 16 live-debugging Probe 2 fix)
+///
+/// `extra_args` is meant to let a caller *override* one of the baked-in flags
+/// above (e.g. widening `--log-level` for one node) by appending its own
+/// occurrence after the baseline. An earlier version of this function relied
+/// on "the CLI parser breaks a repeated flag's tie by keeping the last
+/// occurrence" to make that work — true of clap's default `ArgAction::Set`,
+/// but never actually verified against `avalanchego`'s pflag/viper stack, and
+/// the live run this was built to unblock (Probe 2: `--log-level=verbo` on
+/// staker1) never observed a single VERBO line, i.e. the override silently
+/// did not take effect. Rather than chase which layer of which binary's flag
+/// stack breaks the tie which way, this function now removes the ambiguity
+/// entirely: after appending `extra_args`, every flag key that appears more
+/// than once is collapsed to its LAST occurrence, so the actual argv handed
+/// to either binary never contains the same flag twice — nothing for either
+/// parser to disagree about.
 #[must_use]
 pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
     let mut args = vec![
@@ -137,7 +161,19 @@ pub fn node_args(launch: &NodeLaunch) -> Vec<String> {
         args.push(format!("--bootstrap-ids={ids}"));
     }
     args.extend(launch.extra_args.iter().cloned());
-    args
+
+    // Collapse repeated flag keys to their LAST occurrence (see the doc
+    // comment above) — `extra_args` was appended last, so its entries win,
+    // and the surviving vector never repeats a flag key.
+    let mut seen = std::collections::HashSet::with_capacity(args.len());
+    let mut deduped = Vec::with_capacity(args.len());
+    for arg in args.into_iter().rev() {
+        if seen.insert(flag_key(&arg).to_owned()) {
+            deduped.push(arg);
+        }
+    }
+    deduped.reverse();
+    deduped
 }
 
 /// `n` distinct currently-free localhost TCP ports. Binds `:0`, reads the OS
@@ -1135,6 +1171,44 @@ mod tests {
         assert!(
             args.iter().any(|a| a == "--sybil-protection-enabled=false"),
             "extra_args appended verbatim to node_args"
+        );
+    }
+
+    /// Task 16 live-debugging Probe 2 regression: an `extra_args` override of
+    /// a flag `node_args` already bakes in (`--log-level=debug`) must appear
+    /// EXACTLY ONCE in the final argv, carrying the override's value — not
+    /// twice, relying on whichever binary's CLI parser breaks the tie. A
+    /// prior version of this file appended `extra_args` after the baseline
+    /// and trusted "the last repeated flag wins", which a live run then
+    /// falsified (zero VERBO lines from a staker given `--log-level=verbo`).
+    #[test]
+    fn node_args_override_dedupes_baked_in_flag_to_last_occurrence() {
+        let mut l = launch(Role::Beacon);
+        l.extra_args = vec!["--log-level=verbo".to_owned()];
+        let args = node_args(&l);
+
+        let occurrences: Vec<&String> = args
+            .iter()
+            .filter(|a| flag_key(a) == "--log-level")
+            .collect();
+        assert_eq!(
+            occurrences,
+            vec!["--log-level=verbo"],
+            "the baked-in --log-level=debug must be replaced, not duplicated: {args:?}"
+        );
+    }
+
+    /// A non-conflicting `extra_args` override leaves every baked-in flag
+    /// untouched (de-duplication only ever collapses a genuinely repeated
+    /// key).
+    #[test]
+    fn node_args_dedup_is_a_noop_without_a_conflicting_override() {
+        let mut l = launch(Role::Beacon);
+        l.extra_args = vec!["--sybil-protection-enabled=false".to_owned()];
+        let args = node_args(&l);
+        assert!(
+            args.iter().any(|a| a == "--log-level=debug"),
+            "the baked-in --log-level=debug survives when extra_args doesn't touch it: {args:?}"
         );
     }
 

@@ -337,9 +337,14 @@ where
         let msg = sdk::PushGossip {
             gossip: batch.into_iter().map(Bytes::from).collect(),
         };
-        self.client
+        let n = msg.gossip.len();
+        tracing::debug!(batch = n, "push gossip: sending PushGossip batch");
+        let res = self
+            .client
             .app_gossip(token, cfg, msg.encode_to_vec())
-            .await
+            .await;
+        tracing::debug!(batch = n, ok = res.is_ok(), "push gossip: send returned");
+        res
     }
 
     /// Runs one gossip cycle (Go `PushGossiper.Gossip`, `gossip.go:433-473`):

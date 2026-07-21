@@ -62,6 +62,19 @@
 //! reset (refilled from the already-collected `Vec`, no nested mempool call),
 //! unlock. This also means `Set::iterate`/`Set::has`/`Set::add` never call
 //! back into a `PushGossiper` synchronously while holding either lock.
+//!
+//! **Bound the `mempool` lock's hold time, not just its nesting (task 16
+//! live-debugging fix).** [`EthTxGossipSet::iterate`] follows the same
+//! snapshot-then-release shape as `add`'s step (2): the pull-request handler
+//! (the only production caller) marshals every visited tx into the response,
+//! work whose cost scales with pool size — holding `mempool` for that whole
+//! pass would hold it for exactly as long as the push loop's own
+//! `EvmMempool::take_gossip_outbox`/`PushGossiper::drain_push` need the SAME
+//! lock every cycle (`ava_p2p::gossip::push`'s module doc), so a busy pull
+//! responder under sustained concurrent load directly lengthens the push
+//! loop's worst-case wait. `iterate` now clones every pooled tx into a `Vec`
+//! under the lock, then runs the visitor over that snapshot with the lock
+//! already released.
 
 use std::sync::Arc;
 
@@ -288,10 +301,39 @@ impl Set<GossipEthTx> for EthTxGossipSet {
 
     /// `Iterate` (`eth_gossiper.go:130-134`): visits every pooled tx, wrapped
     /// as a [`GossipEthTx`].
+    ///
+    /// Snapshot-then-release (task 16 live-debugging fix): the only
+    /// production caller is [`ava_p2p::gossip::handler::GossipHandler::app_request`],
+    /// which calls `f` once per visited tx to marshal it (EIP-2718 encode)
+    /// into the pull-request response — work whose cost scales with the
+    /// pool's size, run for every inbound pull `AppRequest` a peer sends. An
+    /// earlier version held `self.mempool`'s lock for the ENTIRE call
+    /// (`self.mempool.lock().iterate(&mut |tx| f(...))`), i.e. for the whole
+    /// visit-and-marshal pass, directly lengthening how long a busy pull
+    /// responder holds the SAME lock [`Self::add`]/[`Self::has`] and — most
+    /// importantly — the push loop's own `EvmMempool::take_gossip_outbox`/
+    /// `drain_push` need every cycle (see the module doc's lock-order note
+    /// and `ava_p2p::gossip::push`'s module doc). Under sustained concurrent
+    /// pull load this directly extends the push loop's worst-case wait for
+    /// the mempool lock. This now takes the lock only long enough to clone
+    /// every pooled tx into a local `Vec` (mirrors [`Self::add`]'s own
+    /// pre-collect-then-release pattern), then runs `f` over the snapshot
+    /// with the lock already released.
     fn iterate(&self, f: &mut dyn FnMut(&GossipEthTx) -> bool) {
-        self.mempool
-            .lock()
-            .iterate(&mut |tx| f(&GossipEthTx(tx.clone())));
+        let snapshot: Vec<GossipEthTx> = {
+            let mempool = self.mempool.lock();
+            let mut items = Vec::with_capacity(mempool.len());
+            mempool.iterate(&mut |tx| {
+                items.push(GossipEthTx(tx.clone()));
+                true
+            });
+            items
+        };
+        for item in &snapshot {
+            if !f(item) {
+                break;
+            }
+        }
     }
 
     /// `BloomFilter` (`eth_gossiper.go:136-141`): the current

@@ -1020,7 +1020,11 @@ impl Vm for EvmVm {
                     for tx in outbox {
                         push.add(GossipEthTx(tx));
                     }
-                    push.gossip_cycle(&op_token).await
+                    let res = push.gossip_cycle(&op_token).await;
+                    if let Err(ref e) = res {
+                        tracing::debug!(error = %e, "C-Chain tx-gossip push cycle errored");
+                    }
+                    res
                 }
             },
         ));

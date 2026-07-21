@@ -736,11 +736,16 @@ impl Network {
                 // (node 0, the beacon) gets `--log-level=verbo` — Go logs
                 // peer-level message-parse failures/drop reasons only at
                 // VERBO, and `node_args`'s baked-in `--log-level=debug`
-                // (`crate::livenet::node_args`) doesn't surface them. This
-                // flag comes after the baseline in the arg vector
-                // (`node_args` appends `extra_args` last), so it wins as the
-                // final `--log-level` occurrence. Widens ONLY staker1's log
-                // verbosity; does not change node behavior.
+                // doesn't surface them. `node_args` now de-dupes repeated
+                // flag keys down to their last occurrence (a prior run of
+                // this exact override observed zero VERBO lines — the
+                // baked-in `--log-level=debug` was still winning somehow,
+                // see `node_args`'s doc for why this no longer relies on
+                // "the last repeated flag wins" being true of whichever CLI
+                // parser is on the receiving end), so this is the only
+                // `--log-level` occurrence `avalanchego` ever sees for
+                // staker1. Widens ONLY staker1's log verbosity; does not
+                // change node behavior.
                 extra_args: if i == 0 {
                     vec!["--log-level=verbo".to_owned()]
                 } else {

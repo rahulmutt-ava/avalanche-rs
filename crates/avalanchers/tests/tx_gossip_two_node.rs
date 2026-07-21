@@ -642,5 +642,171 @@ async fn push_only_gossip_carries_tx() {
          mempool admission, and would pass even with push completely broken"
     );
 
+    // Second sequential tx: the push loop must SURVIVE its first non-empty
+    // batch (live debugging found a one-drain-then-silent pattern — a loop
+    // that dies after its first send still passes a single-delivery assert).
+    let (raw_tx2, tx_hash2) = signed_ewoq_transfer(1);
+    send_raw_transaction(&a_rpc, &raw_tx2, &tx_hash2).await;
+    let params2 = format!(r#"["{tx_hash2}"]"#);
+    let deadline2 = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut second_seen = false;
+    while tokio::time::Instant::now() < deadline2 {
+        let got = json_rpc(&b_rpc, "eth_getTransactionByHash", &params2).await;
+        if !got.is_null() {
+            second_seen = true;
+            break;
+        }
+    }
+    assert!(
+        second_seen,
+        "push gossip must ALSO carry a SECOND tx submitted after the first was delivered — \
+         a push loop that dies after its first non-empty batch fails this leg \
+         (eth_getTransactionByHash stayed null on B for tx2 {tx_hash2})"
+    );
+
     teardown(&a, &b, ad, bd).await;
+}
+
+/// **Repro (task 16 live debugging): push loop must survive concurrent
+/// inbound App load.** `push_only_gossip_carries_tx` proved the push loop
+/// survives two sequential sends with near-zero concurrent App traffic — the
+/// live topology (5 Go validators + this Rust node) instead dies after AT
+/// MOST one non-empty push batch, and the only structural difference the
+/// live topology has that the two-node test doesn't is a *constant* stream of
+/// concurrent inbound `AppRequest`/`AppResponse` traffic hitting the source
+/// node's C-Chain while its push loop is independently trying to drain and
+/// send.
+///
+/// This test reproduces that shape offline: node `a` is the source (default
+/// `GossipParams`, so its push loop runs on the production 100ms cadence);
+/// node `b` is the checked observer, with pull disabled
+/// (`pull_period: 1h`) so a tx `b` observes can only have arrived via `a`'s
+/// push loop — same non-vacuity argument
+/// [`push_only_gossip_carries_tx`]'s doc comment makes. `HAMMER_COUNT`
+/// additional nodes also bootstrap off `a` with an aggressive pull cadence
+/// (`pull_period: 2ms`) and are never asked what they observed — they exist
+/// purely to keep `a`'s C-Chain fielding a continuous stream of concurrent
+/// inbound pull `AppRequest`s (and the `AppResponse`s `a` sends back),
+/// exactly the "every inbound App op takes the chain's VM mutex, inline,
+/// while `a`'s push loop separately needs the mempool lock the SAME
+/// `AppRequest` answers hold for their whole `Set::iterate` duration" shape
+/// task 16's fact-sheet flags as the leading suspect. `TX_COUNT` sequential
+/// txs are submitted to `a`; every one must reach `b` — a push loop that
+/// dies (or is merely starved forever) after its first non-empty batch under
+/// this load fails on tx #1 already.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn push_survives_concurrent_inbound_pull_load() {
+    const HAMMER_COUNT: usize = 4;
+    const TX_COUNT: u64 = 4;
+
+    let a_dir = tempfile::tempdir().unwrap();
+    let a_cfg = Arc::new(build_config(a_dir.path(), None));
+    let log_factory = ava_node::logging_test_factory(&a_cfg);
+    let a = Node::new(
+        Arc::clone(&a_cfg),
+        Arc::clone(&log_factory),
+        tokio::runtime::Handle::current(),
+    )
+    .await
+    .expect("node a Node::new");
+    let a_id = a.id;
+    let a_addr = a.networking.staking_address;
+    let a_handles = boot(&a, BTreeMap::new()).await;
+
+    let b_dir = tempfile::tempdir().unwrap();
+    let b_cfg = Arc::new(build_config(b_dir.path(), Some((a_id, a_addr))));
+    let b = Node::new(
+        Arc::clone(&b_cfg),
+        Arc::clone(&log_factory),
+        tokio::runtime::Handle::current(),
+    )
+    .await
+    .expect("node b Node::new");
+    let mut b_beacons = BTreeMap::new();
+    b_beacons.insert(a_id, 1u64);
+    let b_gossip_params = GossipParams {
+        pull_period: Duration::from_secs(3600),
+        ..GossipParams::default()
+    };
+    let b_handles = boot_with_cchain_gossip_params(&b, b_beacons, b_gossip_params).await;
+
+    // The hammer nodes: aggressive pull cadence against `a`, never checked
+    // for content — see the doc comment above.
+    let mut hammer_dirs = Vec::with_capacity(HAMMER_COUNT);
+    let mut hammer_nodes = Vec::with_capacity(HAMMER_COUNT);
+    let mut hammer_dispatch = Vec::with_capacity(HAMMER_COUNT);
+    for _ in 0..HAMMER_COUNT {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Arc::new(build_config(dir.path(), Some((a_id, a_addr))));
+        let node = Node::new(
+            Arc::clone(&cfg),
+            Arc::clone(&log_factory),
+            tokio::runtime::Handle::current(),
+        )
+        .await
+        .expect("hammer Node::new");
+        let mut beacons = BTreeMap::new();
+        beacons.insert(a_id, 1u64);
+        let hammer_params = GossipParams {
+            pull_period: Duration::from_millis(2),
+            ..GossipParams::default()
+        };
+        let handles = boot_with_cchain_gossip_params(&node, beacons, hammer_params).await;
+        let net = Arc::clone(&node.networking.net);
+        let dispatch = tokio::spawn(async move { net.dispatch().await });
+        hammer_nodes.push((node, handles));
+        hammer_dispatch.push(dispatch);
+        hammer_dirs.push(dir);
+    }
+
+    let a_net = Arc::clone(&a.networking.net);
+    let b_net = Arc::clone(&b.networking.net);
+    let ad = tokio::spawn(async move { a_net.dispatch().await });
+    let bd = tokio::spawn(async move { b_net.dispatch().await });
+
+    await_connected(&b, a_id).await;
+    for (node, _) in &hammer_nodes {
+        await_connected(node, a_id).await;
+    }
+
+    let a_c = cchain_handle(&a_handles, a.c_chain_id);
+    let b_c = cchain_handle(&b_handles, b.c_chain_id);
+    await_normalop(a_c, Duration::from_secs(30)).await;
+    await_normalop(b_c, Duration::from_secs(30)).await;
+    for (node, handles) in &hammer_nodes {
+        let c = cchain_handle(handles, node.c_chain_id);
+        await_normalop(c, Duration::from_secs(30)).await;
+    }
+
+    let a_rpc = eth_rpc_service(a_c).await;
+    let b_rpc = eth_rpc_service(b_c).await;
+
+    for nonce in 0..TX_COUNT {
+        let (raw_tx, tx_hash) = signed_ewoq_transfer(nonce);
+        send_raw_transaction(&a_rpc, &raw_tx, &tx_hash).await;
+
+        let params = format!(r#"["{tx_hash}"]"#);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let mut seen = false;
+        while tokio::time::Instant::now() < deadline {
+            let got = json_rpc(&b_rpc, "eth_getTransactionByHash", &params).await;
+            if !got.is_null() {
+                seen = true;
+                break;
+            }
+        }
+        assert!(
+            seen,
+            "push gossip must carry tx #{nonce} ({tx_hash}) from A to B within 20s while A \
+             concurrently fields inbound pull-gossip AppRequests from {HAMMER_COUNT} hammer \
+             nodes — a push loop that dies (or is starved forever) under concurrent App load \
+             fails this leg (eth_getTransactionByHash stayed null on B)"
+        );
+    }
+
+    teardown(&a, &b, ad, bd).await;
+    for ((node, _), dispatch) in hammer_nodes.into_iter().zip(hammer_dispatch) {
+        node.networking.net.start_close();
+        let _ = tokio::time::timeout(Duration::from_secs(10), dispatch).await;
+    }
 }
