@@ -737,10 +737,20 @@ impl EvmMempool {
     /// Filtering against `by_hash` here is what makes "the pool's own
     /// indexes remain the source of truth" actually true.
     pub fn take_gossip_outbox(&mut self) -> Vec<RecoveredTx> {
-        self.gossip_outbox
+        let pre = self.gossip_outbox.len();
+        let out: Vec<RecoveredTx> = self
+            .gossip_outbox
             .drain(..)
             .filter(|tx| self.by_hash.contains_key(tx.hash()))
-            .collect()
+            .collect();
+        if pre > 0 {
+            tracing::debug!(
+                pre,
+                post = out.len(),
+                "gossip outbox drained (post = still-pooled survivors)"
+            );
+        }
+        out
     }
 }
 

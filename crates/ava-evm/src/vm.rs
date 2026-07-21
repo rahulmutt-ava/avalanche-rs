@@ -987,6 +987,7 @@ impl Vm for EvmVm {
         // matching Go's own two `Every(...)` goroutines (`vm.go:818-828`).
         let evm_mempool = Arc::clone(&self.evm_mempool);
         let push_for_loop = Arc::clone(&push);
+        let push_cycle_beat = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let push_op_token = self.shared.gossip_token.clone();
         tokio::spawn(every(
             self.shared.gossip_token.clone(),
@@ -995,7 +996,16 @@ impl Vm for EvmVm {
                 let push = Arc::clone(&push_for_loop);
                 let mempool = Arc::clone(&evm_mempool);
                 let op_token = push_op_token.clone();
+                let beat = Arc::clone(&push_cycle_beat);
                 async move {
+                    // Liveness heartbeat (task 16 live debugging): proves the
+                    // push loop is still being polled even when every cycle is
+                    // empty — one line per ~100 cycles (~10s at the default
+                    // 100ms cadence).
+                    let n = beat.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if n % 100 == 0 {
+                        tracing::debug!(cycle = n, "C-Chain tx-gossip push loop heartbeat");
+                    }
                     // Drains newly-admitted local/remote txs into the push
                     // queue (Go's `ethTxPool.Subscribe` forwarding,
                     // `vm.go:773-778`; this port has no tx-pool subscription
