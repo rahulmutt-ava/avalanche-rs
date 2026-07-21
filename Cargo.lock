@@ -1273,6 +1273,7 @@ dependencies = [
  "ava-evm-reth",
  "ava-message",
  "ava-network",
+ "ava-proposervm",
  "ava-saevm-blocks",
  "ava-saevm-core",
  "ava-saevm-gastime",

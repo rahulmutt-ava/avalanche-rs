@@ -941,7 +941,17 @@ impl Network {
                 // makes the Rust node (slot 4) a real staker vs the 0-weight
                 // follower in `boot_mixed`.
                 signer_key_file: Some(crate::livenet::local_signer_key(idx)?),
-                extra_args: Vec::new(),
+                // Go slots (0-3) get `--index-enabled=true` so the T16 live
+                // tx-gossip / `mixed_network_rust_proposes` detection can query
+                // a Go node's `/ext/index/C/block` API
+                // (`livenet::proposer_of_accepted_container`) for the verified
+                // proposer of an accepted C-chain block. The Rust slot (4) does
+                // not need it — index queries only ever target a Go node.
+                extra_args: if i == 4 {
+                    Vec::new()
+                } else {
+                    vec!["--index-enabled=true".to_owned()]
+                },
             });
         }
         // Full mesh: each validator bootstraps from the other four (incl. the

@@ -70,6 +70,13 @@ ava-saevm-proxytime = { path = "../../crates/ava-saevm/proxytime" }
 ava-saevm-gastime = { path = "../../crates/ava-saevm/gastime" }
 ava-crypto = { path = "../../crates/ava-crypto" }
 ava-evm-reth = { path = "../../crates/ava-evm-reth" }
+# `livenet::proposer_of_accepted_container` (T16) hex-decodes an indexed C-chain
+# container and parses it as a proposervm block to read its verified proposer
+# (`block::codec::parse_without_verification` + post-fork `proposer()`). Like
+# `ava-network` above, this is normal (non-`cfg`-gated) library code — only the
+# *tests* that call it are gated behind the `live` feature — so it is a plain
+# dependency, not optional/feature-gated.
+ava-proposervm = { path = "../../crates/ava-proposervm" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 hex = { workspace = true }

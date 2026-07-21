@@ -26,6 +26,7 @@ rust_library(
         "//crates/ava-database:ava_database",
         "//crates/ava-evm-reth:ava_evm_reth",
         "//crates/ava-network:ava_network",
+        "//crates/ava-proposervm:ava_proposervm",
         "//crates/ava-saevm/blocks:ava_saevm_blocks",
         "//crates/ava-saevm/core:ava_saevm_core",
         "//crates/ava-saevm/gastime:ava_saevm_gastime",

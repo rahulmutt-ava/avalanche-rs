@@ -220,6 +220,140 @@ async fn mixed_network_single_beacon() {
     assert!(net.rust_follower().is_some(), "rust follower present");
 }
 
+/// Assert that a tx submitted to `from_api` surfaces as PENDING on `to_api`
+/// (`blockHash == null`, per [`await_c_pending_tx`]) — proof that `to_api`'s
+/// own mempool received the tx via `app_gossip`, not merely learned of it
+/// after the fact by processing an already-accepted block. Retries with a
+/// fresh tx up to 3× when the network races ahead of the 1 s poll interval
+/// (mined before any pending read lands) — that outcome is inconclusive about
+/// gossip, not a failure, so a fresh attempt gets a clean shot at observing the
+/// pending window.
+///
+/// # Panics
+/// Panics if a tx never appears pending NOR mined on `to_api` within the poll
+/// window, or if gossip races ahead of the poll window on all 3 attempts.
+#[cfg(feature = "live")]
+async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &str) {
+    use std::time::Duration;
+
+    use ava_differential::livenet::{await_c_pending_tx, await_c_receipt, submit_c_transfer};
+
+    for attempt in 0..3u32 {
+        let tx_hash = submit_c_transfer(from_api)
+            .await
+            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: submit_c_transfer: {e}"));
+        eprintln!(
+            "{label} attempt {attempt}: submitted {tx_hash}; polling {to_api} for pending-before-mined"
+        );
+        let pending_seen = await_c_pending_tx(to_api, &tx_hash, Duration::from_secs(30))
+            .await
+            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_pending_tx: {e}"));
+        if pending_seen {
+            eprintln!(
+                "{label} attempt {attempt}: {tx_hash} observed PENDING on {to_api} — gossip proven"
+            );
+            return;
+        }
+        // Never observed pending — check whether it raced ahead (mined too
+        // fast to ever be caught mid-flight) rather than never arriving.
+        let mined = await_c_receipt(to_api, &tx_hash, Duration::from_secs(5))
+            .await
+            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_receipt: {e}"));
+        if mined {
+            eprintln!(
+                "{label} attempt {attempt}: {tx_hash} was already mined on {to_api} before a \
+                 pending read landed (raced the poll interval) — retrying with a fresh tx"
+            );
+            continue;
+        }
+        panic!(
+            "{label} attempt {attempt}: {tx_hash} never appeared pending NOR mined on {to_api} \
+             within the poll window — gossip did not deliver it"
+        );
+    }
+    panic!("{label}: gossip raced ahead of the pending-poll window on all 3 attempts");
+}
+
+/// Live tx-gossip arm (T16): boot 4 Go + 1 Rust validator, then prove
+/// `app_gossip` genuinely propagates a submitted-but-unmined C-chain tx into a
+/// *peer*'s mempool in both directions (Go→Rust and Rust→Go) — the pending-tx
+/// detection [`assert_gossip_delivers_pending`] establishes, per node, BEFORE
+/// either tx is mined. This supersedes the old "no gossip path exists" premise
+/// `mixed_network_rust_proposes` relied on (see that test's rework, T16): with
+/// gossip now wired, `mixed_network_rust_proposes` must instead identify the
+/// proposer by parsing the accepted container off the Go index API.
+///
+/// Gated behind `live` + `#[ignore]`; needs `$AVALANCHEGO_PATH` + a built
+/// `avalanchers`. Never runs in CI / this sandbox — nightly/operator only.
+#[cfg(feature = "live")]
+#[tokio::test]
+#[ignore = "boots a live 4-Go + 1-Rust-validator net; needs $AVALANCHEGO_PATH; nightly only"]
+async fn mixed_network_tx_gossip() {
+    use std::time::Duration;
+
+    use ava_differential::livenet::await_same_c_height;
+    use ava_differential::network::Network;
+    use ava_differential::observation::Observation;
+
+    if std::env::var("AVALANCHEGO_PATH").is_err() {
+        eprintln!("AVALANCHEGO_PATH unset — skipping live mixed_network_tx_gossip");
+        return;
+    }
+
+    // Boot 4 Go + 1 Rust validator (same topology as `mixed_network_rust_proposes`);
+    // `boot_mixed_rust_validator` asserts the Rust node's NodeID == staker5 and
+    // awaits P/X/C bootstrap on all five nodes.
+    let net = Network::boot_mixed_rust_validator(0x0060_551D)
+        .await
+        .expect("4-Go + 1-Rust validator net boots + all five bootstrap P/X/C");
+    net.await_all_connected(Duration::from_secs(60))
+        .await
+        .expect("all five validators complete the TLS handshake / exchange PeerLists");
+
+    let go_api = net.nodes().first().expect("go staker1").api_base.clone();
+    let rust_api = net.nodes().last().expect("rust staker5").api_base.clone();
+
+    let before = await_same_c_height(&go_api, &rust_api, 0, Duration::from_secs(30))
+        .await
+        .expect("nodes agree on a starting C height");
+
+    // Stage A (Go -> Rust): a tx submitted only to the Go node must surface as
+    // PENDING in the Rust node's own mempool before it is mined.
+    assert_gossip_delivers_pending(&go_api, &rust_api, "Go->Rust").await;
+
+    // Stage B (Rust -> Go): the same property in the other direction.
+    assert_gossip_delivers_pending(&rust_api, &go_api, "Rust->Go").await;
+
+    // Close: both settle at the same advanced tip, no fork.
+    let after = await_same_c_height(
+        &go_api,
+        &rust_api,
+        before.saturating_add(1),
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("Go and Rust settle at the same C height after the gossiped txs");
+    assert!(
+        after > before,
+        "the gossiped txs must advance the C-chain tip: {before} -> {after}"
+    );
+
+    let go_obs = Observation::collect(&go_api)
+        .await
+        .expect("collect Go observation")
+        .normalized();
+    let rust_obs = Observation::collect(&rust_api)
+        .await
+        .expect("collect Rust observation")
+        .normalized();
+    assert_eq!(
+        go_obs, rust_obs,
+        "Go and Rust diverged — fork across the mixed validator net"
+    );
+
+    net.shutdown().await;
+}
+
 /// Live validator arm (M9.15 Task 8): boot 4 Go + 1 Rust *validator* net, then
 /// prove ≥1 Rust-proposed C-Chain block is accepted network-wide.
 ///
@@ -241,21 +375,31 @@ async fn mixed_network_single_beacon() {
 ///     `Vec::new()` is gone). Submit→wake→build→accept→receipt is offline
 ///     e2e-tested (ava-evm/tests/tx_pipeline.rs).
 ///
-/// (c) `app_gossip` is a no-op BY DESIGN (ava-evm vm.rs:612-619, user-approved
-///     deferral). THIS IS THE DETECTION MECHANISM: with (b) fixed a tx is now
-///     submittable to AND includable by the Rust node, and with no gossip a tx
-///     submitted ONLY to the Rust node never reaches a Go mempool — so it can be
-///     mined ONLY inside a Rust-PROPOSED block. Go validators, having empty
-///     C-chain mempools, build nothing; the C-chain tip advances (with this tx)
-///     iff the Rust node proposed. A Go-proposed block could therefore never
-///     carry this tx, so tx-inclusion network-wide is a sound proof of "Rust
-///     proposed it" (the premise now holds — it did not before the tx pipeline).
+/// (c) `app_gossip` NOW GOSSIPS (T16: the `ava-chains` forwarder + txgossip
+///     wiring landed after this test's original write-up — see
+///     `mixed_network_tx_gossip` above, which proves it directly). A tx
+///     submitted only to the Rust node's mempool can therefore ALSO be picked
+///     up by a Go validator's mempool and mined into a Go-proposed block, so
+///     "the tx is on-chain network-wide" is no longer, by itself, proof that
+///     RUST proposed it — the old exclusivity argument this test originally
+///     relied on ("no gossip path could have delivered it") no longer holds.
+///     T16 reworks detection accordingly: once the tx is mined ANYWHERE,
+///     `c_block_number_of_receipt` + `proposer_of_accepted_container` (the Go
+///     index API, `--index-enabled=true`, plus
+///     `ava_proposervm::block::codec::parse_without_verification`) read the
+///     ACTUAL verified proposer off the accepted container at that height and
+///     compare it against the Rust node's own NodeID (staker5); a bounded
+///     fresh-tx retry covers the case where gossip won the race and a Go
+///     validator proposed first.
 ///
-/// Bounded retry (Stage 2): proposervm windowing rotates proposers; with 5
-/// equal-stake validators the Rust proposer window recurs within a handful of
-/// blocks. The submitted tx sits in the Rust mempool across windows, so we just
-/// extend the receipt poll (6 × 60 s). If it never lands, the failure is a
-/// timeout with all five nodes' logs preserved (pin `TMPDIR`).
+/// Bounded retry (Stage 2): proposervm windowing rotates proposers, and (per
+/// (c)) gossip means a competing Go proposer can pick up and mine the same tx
+/// first. Each of the (up to 6) attempts submits a FRESH transfer — rather
+/// than re-polling the same one — so a Go-proposed inclusion doesn't retire
+/// the tx before the Rust proposer window opens; the loop keeps going until
+/// the index API confirms a Rust-signed block shipped one of our txs. If it
+/// never lands, the failure is a timeout with all five nodes' logs preserved
+/// (pin `TMPDIR`).
 ///
 /// Gated behind `live` + `#[ignore]`; needs `$AVALANCHEGO_PATH` + a built
 /// `avalanchers`. Never runs in CI / this sandbox — nightly/operator only.
@@ -265,9 +409,13 @@ async fn mixed_network_single_beacon() {
 async fn mixed_network_rust_proposes() {
     use std::time::Duration;
 
-    use ava_differential::livenet::{await_c_receipt, await_same_c_height, submit_c_transfer};
+    use ava_differential::livenet::{
+        LOCAL_VALIDATOR_NODE_IDS, await_c_receipt, await_same_c_height, c_block_number_of_receipt,
+        proposer_of_accepted_container, submit_c_transfer,
+    };
     use ava_differential::network::Network;
     use ava_differential::observation::Observation;
+    use ava_types::node_id::NodeId;
 
     if std::env::var("AVALANCHEGO_PATH").is_err() {
         eprintln!("AVALANCHEGO_PATH unset — skipping live mixed_network_rust_proposes");
@@ -277,6 +425,8 @@ async fn mixed_network_rust_proposes() {
     // Stage 1: boot 4 Go + 1 Rust validator; `boot_mixed_rust_validator` already
     // asserts the Rust node's NodeID == staker5 and awaits P/X/C bootstrap on
     // ALL five nodes (the Rust node is a validator now and must reach NormalOp).
+    // It also enables `--index-enabled=true` on the Go slots — required for the
+    // Stage 3 proposer lookup below.
     let net = Network::boot_mixed_rust_validator(0x9E0)
         .await
         .expect("4-Go + 1-Rust validator net boots + all five bootstrap P/X/C");
@@ -284,44 +434,108 @@ async fn mixed_network_rust_proposes() {
         .await
         .expect("all five validators complete the TLS handshake / exchange PeerLists");
 
-    // nodes()[0] = Go staker1 (reference); nodes().last() = Rust staker5.
+    // nodes()[0] = Go staker1 (reference, also the index-API host);
+    // nodes().last() = Rust staker5.
     let go_api = net.nodes().first().expect("go staker1").api_base.clone();
+    let go_index_api = go_api.clone();
     let rust_api = net.nodes().last().expect("rust staker5").api_base.clone();
+    let rust_node_id: NodeId = LOCAL_VALIDATOR_NODE_IDS[4]
+        .parse()
+        .expect("staker5's well-known NodeID string parses");
 
-    // Stage 2: submit the tx ONLY to the Rust node. Per pre-flight (c) it can be
-    // mined ONLY inside a Rust-proposed block.
     let before = await_same_c_height(&go_api, &rust_api, 0, Duration::from_secs(30))
         .await
         .expect("nodes agree on a starting C height");
 
-    let tx_hash = submit_c_transfer(&rust_api)
-        .await
-        .expect("eth_sendRawTransaction admitted into the Rust node's EVM mempool");
-    eprintln!("submitted tx {tx_hash} to the Rust validator only");
-
-    // Bounded retry over the proposervm window: the tx stays pending in the Rust
-    // mempool until the Rust node's proposer slot opens and it builds a block.
-    let mut mined_on_rust = false;
+    // Stage 2 + 3: submit the tx to the Rust node's mempool, wait for it to be
+    // mined ANYWHERE (per pre-flight (c), gossip means a Go validator can win
+    // the race), then identify the ACTUAL proposer of the block that carried
+    // it by parsing the accepted container off the Go index API. Retry with a
+    // fresh tx (bounded, 6 attempts) until a Rust-signed block is confirmed.
+    let mut tx_hash = String::new();
+    let mut proposer_matched = false;
     for attempt in 0..6u32 {
-        if await_c_receipt(&rust_api, &tx_hash, Duration::from_secs(60))
+        tx_hash = submit_c_transfer(&rust_api)
+            .await
+            .expect("eth_sendRawTransaction admitted into the Rust node's EVM mempool");
+        eprintln!("attempt {attempt}: submitted tx {tx_hash} to the Rust validator");
+
+        if !await_c_receipt(&rust_api, &tx_hash, Duration::from_secs(60))
             .await
             .expect("poll receipt on the Rust node")
         {
-            mined_on_rust = true;
-            eprintln!("attempt {attempt}: Rust node mined tx {tx_hash} (it proposed the block)");
+            eprintln!("attempt {attempt}: tx {tx_hash} not mined within 60 s — retry");
+            continue;
+        }
+
+        let n = c_block_number_of_receipt(&rust_api, &tx_hash)
+            .await
+            .expect("read the mined block number off the Rust node's own receipt");
+        // The linear C-chain indexer is 0-based; the block at height `n` is
+        // container index `n - 1`.
+        let primary_index = n.saturating_sub(1);
+        let mut proposer = proposer_of_accepted_container(&go_index_api, primary_index)
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "attempt {attempt}: proposer_of_accepted_container({primary_index}): {e}"
+                );
+                NodeId::default()
+            });
+        eprintln!(
+            "attempt {attempt}: tx {tx_hash} mined at C-height {n}; \
+             container[{primary_index}] proposer = {proposer}"
+        );
+
+        if proposer != rust_node_id {
+            // Parse/identity mismatch at the primary index: scan a small
+            // window around it (height/index off-by-one across an option
+            // block or an indexer lag) and log each container's proposer for
+            // diagnosis, picking the one that matches Rust if any does.
+            let scan_start = primary_index.saturating_sub(3);
+            let scan_end = n.saturating_add(1);
+            for scan in scan_start..=scan_end {
+                if scan == primary_index {
+                    continue;
+                }
+                match proposer_of_accepted_container(&go_index_api, scan).await {
+                    Ok(p) => {
+                        eprintln!("attempt {attempt}: scan container[{scan}] proposer = {p}");
+                        if p == rust_node_id {
+                            proposer = p;
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("attempt {attempt}: scan container[{scan}]: {e}");
+                    }
+                }
+            }
+        }
+
+        if proposer == rust_node_id {
+            proposer_matched = true;
+            eprintln!(
+                "attempt {attempt}: confirmed Rust (staker5) proposed the block including {tx_hash}"
+            );
             break;
         }
-        eprintln!("attempt {attempt}: Rust proposer window not yet hit; tx still pending — retry");
+        eprintln!(
+            "attempt {attempt}: the block including {tx_hash} was proposed by {proposer}, not \
+             Rust (staker5) — a Go validator won the gossip race; retry with a fresh tx"
+        );
     }
     assert!(
-        mined_on_rust,
-        "the Rust validator never proposed a block including tx {tx_hash} within 6×60 s \
-         (submitted-but-never-built ⇒ its proposer window never opened, or build failed)"
+        proposer_matched,
+        "no Rust-proposed block ever included one of our txs within 6 attempts (last tx {tx_hash})"
     );
 
     // The Rust-proposed block must be accepted network-wide: the same tx is
-    // on-chain per a Go validator's RPC (a Go node only has this tx because it
-    // accepted the Rust-proposed block — no gossip path could have delivered it).
+    // on-chain per a Go validator's RPC. Stage 3 above already independently
+    // confirmed (via the index API) that a RUST-signed block carried this tx;
+    // this just confirms network-wide finality of that same block — it is NOT
+    // "no gossip path could have delivered it" (T16 gossip exists now; see
+    // `mixed_network_tx_gossip`).
     let on_go = await_c_receipt(&go_api, &tx_hash, Duration::from_secs(60))
         .await
         .expect("poll receipt on the Go validator");

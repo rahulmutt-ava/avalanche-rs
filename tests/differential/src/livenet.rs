@@ -15,6 +15,8 @@ use ava_evm_reth::{
     Address, EvmSignature, RlpEncodable, SignableTransaction, TransactionSigned, TxKind, TxLegacy,
     U256,
 };
+use ava_proposervm::block::codec::{ParsedBlock, parse_without_verification};
+use ava_types::node_id::NodeId;
 use serde_json::Value;
 
 use crate::network::NetworkError;
@@ -582,6 +584,136 @@ pub async fn await_c_receipt(
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
+}
+
+/// Poll `eth_getTransactionByHash` for `tx_hash` on `api_base`'s C-chain RPC
+/// until it is visible with `blockHash == null` (admitted into this node's own
+/// mempool but not yet mined) — `Ok(true)` — or `within` elapses (`Ok(false)`).
+///
+/// This is the tx-gossip detection primitive (T16): a tx submitted to node A
+/// that becomes visible-and-pending on node B, *before* B ever mines it, proves
+/// B's mempool received the tx via gossip — as opposed to merely observing it
+/// after the fact inside an already-accepted block.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] only if `api_base` is not a valid URL.
+pub async fn await_c_pending_tx(
+    api_base: &str,
+    tx_hash: &str,
+    within: std::time::Duration,
+) -> Result<bool, NetworkError> {
+    let ep = rpc::Endpoint::parse(api_base)
+        .map_err(|e| NetworkError::Timeout(format!("await_c_pending_tx: bad url: {e}")))?;
+    let deadline = std::time::Instant::now()
+        .checked_add(within)
+        .ok_or_else(|| NetworkError::Timeout("deadline overflow".to_owned()))?;
+    loop {
+        let params = format!(r#"["{tx_hash}"]"#);
+        let pending = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionByHash", &params)
+            .await
+            .ok()
+            .is_some_and(|v| {
+                !v.is_null() && v.get("blockHash").is_none_or(serde_json::Value::is_null)
+            });
+        if pending {
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// The C-chain block number that mined `tx_hash`, per `api_base`'s
+/// `eth_getTransactionReceipt`.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] if `api_base` is not a valid URL, the RPC
+/// call fails, the receipt is missing (tx not yet mined), or `blockNumber`
+/// fails to parse as an `eth_blockNumber`-style hex quantity.
+pub async fn c_block_number_of_receipt(api_base: &str, tx_hash: &str) -> Result<u64, NetworkError> {
+    let ep = rpc::Endpoint::parse(api_base)
+        .map_err(|e| NetworkError::Timeout(format!("c_block_number_of_receipt: bad url: {e}")))?;
+    let params = format!(r#"["{tx_hash}"]"#);
+    let receipt = rpc::call(&ep, "/ext/bc/C/rpc", "eth_getTransactionReceipt", &params)
+        .await
+        .map_err(|e| NetworkError::Timeout(format!("eth_getTransactionReceipt: {e}")))?;
+    let block_number = receipt.get("blockNumber").cloned().ok_or_else(|| {
+        NetworkError::Timeout(format!(
+            "eth_getTransactionReceipt({tx_hash}): missing blockNumber (tx not mined?)"
+        ))
+    })?;
+    parse_eth_block_number(&block_number).ok_or_else(|| {
+        NetworkError::Timeout(format!(
+            "eth_getTransactionReceipt({tx_hash}): unparseable blockNumber {block_number}"
+        ))
+    })
+}
+
+/// The proposer of the accepted C-chain container (block) at the indexer's
+/// linear `index` (0-based), per the Go `index` API on `index_api_base`.
+///
+/// POSTs `index.getContainerByIndex` with
+/// `{"index":"<n>","encoding":"hex"}` to `/ext/index/C/block` — mirrors Go's
+/// `indexer.Client.GetContainerByIndex` (`~/avalanchego/indexer/client.go:64-79`),
+/// whose `GetContainerByIndexArgs.Index` is a `json.Uint64` (accepts either a
+/// quoted or bare decimal string on the wire, `~/avalanchego/utils/json/
+/// uint64.go`) and whose reply is a `FormattedContainer{id,bytes,timestamp,
+/// encoding,index}` (`~/avalanchego/indexer/service.go:23-28`); an out-of-range
+/// index surfaces as the Go-side `errNoContainerAtIndex` JSON-RPC error
+/// (`~/avalanchego/indexer/index.go:33`), which this function passes through
+/// as [`NetworkError::Timeout`].
+///
+/// The `bytes` field is hex-decoded (`0x`-prefixed per `encoding:"hex"`) and
+/// parsed as a proposervm block
+/// ([`ava_proposervm::block::codec::parse_without_verification`]). A signed
+/// post-fork block's proposer is its verified signer
+/// ([`ava_proposervm::block::post_fork::SignedBlock::proposer`] /
+/// `GraniteBlock::proposer`, both `NodeId::EMPTY` when unsigned). An `option`
+/// block (no signer field at all) and bytes that fail to parse as a
+/// proposervm-wrapped block at all (a pre-fork raw inner block, or any other
+/// decode failure) both report [`NodeId::default`] (the zero id, `==
+/// NodeId::EMPTY`) rather than erroring — the caller
+/// (`mixed_network_rust_proposes`) treats "no identifiable proposer" the same
+/// as "not our proposer" and retries with a fresh transfer.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] if `index_api_base` is not a valid URL,
+/// the RPC call fails (including an out-of-range index), or the `bytes` field
+/// is missing or not valid hex.
+pub async fn proposer_of_accepted_container(
+    index_api_base: &str,
+    index: u64,
+) -> Result<NodeId, NetworkError> {
+    let ep = rpc::Endpoint::parse(index_api_base).map_err(|e| {
+        NetworkError::Timeout(format!("proposer_of_accepted_container: bad url: {e}"))
+    })?;
+    let params = format!(r#"{{"index":"{index}","encoding":"hex"}}"#);
+    let reply = rpc::call(
+        &ep,
+        "/ext/index/C/block",
+        "index.getContainerByIndex",
+        &params,
+    )
+    .await
+    .map_err(|e| NetworkError::Timeout(format!("index.getContainerByIndex({index}): {e}")))?;
+    let bytes_hex = reply.get("bytes").and_then(Value::as_str).ok_or_else(|| {
+        NetworkError::Timeout(format!(
+            "index.getContainerByIndex({index}): missing bytes field"
+        ))
+    })?;
+    let raw = hex::decode(bytes_hex.strip_prefix("0x").unwrap_or(bytes_hex)).map_err(|e| {
+        NetworkError::Timeout(format!(
+            "index.getContainerByIndex({index}): bad hex bytes: {e}"
+        ))
+    })?;
+    Ok(match parse_without_verification(&raw) {
+        Ok(ParsedBlock::Signed(b)) => b.proposer(),
+        Ok(ParsedBlock::Granite(b)) => b.proposer(),
+        Ok(ParsedBlock::Option(_)) => NodeId::default(),
+        Err(_) => NodeId::default(),
+    })
 }
 
 /// Construct and sign a legacy EIP-155 self-transfer transaction, returning its
