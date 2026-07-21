@@ -875,11 +875,15 @@ async fn snowman_adapter_routes_app_ops_to_vm() {
     );
 }
 
-/// `bootstrap_adapter_routes_app_gossip_to_vm` — App ops reach the VM directly
+/// `bootstrap_adapter_routes_app_ops_to_vm` — all four inbound `AppRequest`/
+/// `AppResponse`/`AppGossip`/`AppRequestFailed` ops reach the VM directly
 /// through the `BootstrapperEngineAdapter` too, regardless of bootstrap phase
 /// (Go dispatches `AppHandler` off the chain Handler, not the bootstrapper).
+/// The Bootstrapper's App arms are hand-written separately from the Snowman
+/// adapter's (`snowman_adapter_routes_app_ops_to_vm`), so they need their own
+/// coverage — mirrors that test one-for-one for the bootstrapper adapter.
 #[tokio::test]
-async fn bootstrap_adapter_routes_app_gossip_to_vm() {
+async fn bootstrap_adapter_routes_app_ops_to_vm() {
     use ava_engine::snowman::Getter;
     use ava_vm::testutil::AppCall;
 
@@ -911,20 +915,97 @@ async fn bootstrap_adapter_routes_app_gossip_to_vm() {
     });
 
     let (transition_tx, _transition_rx) = transition_channel(8);
-    let mut adapter =
-        BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter, Arc::clone(&vm), token);
+    let mut adapter = BootstrapperEngineAdapter::new(
+        boot,
+        transition_tx,
+        0,
+        getter,
+        Arc::clone(&vm),
+        token.clone(),
+    );
     let node = NodeId::from([66u8; 20]);
 
+    // AppGossip.
     adapter
         .handle(node, InboundOp::AppGossip { bytes: vec![7, 7] })
         .await;
-
     assert!(
         matches!(
             observer.app_calls().last(),
             Some(AppCall::Gossip { node: n, bytes }) if *n == node && bytes == &vec![7u8, 7]
         ),
         "AppGossip must reach the VM's app_gossip via the bootstrapper adapter, got {:?}",
+        observer.app_calls()
+    );
+
+    // AppRequest: the deadline is Instant::now() (adapter-side) + deadline_nanos.
+    let before = std::time::Instant::now();
+    adapter
+        .handle(
+            node,
+            InboundOp::AppRequest {
+                request_id: 11,
+                deadline_nanos: 1_000_000_000,
+                bytes: vec![1, 1, 1],
+            },
+        )
+        .await;
+    match observer.app_calls().last() {
+        Some(AppCall::Request {
+            node: n,
+            request_id,
+            deadline,
+            bytes,
+        }) => {
+            assert_eq!(*n, node, "bootstrap app_request node");
+            assert_eq!(*request_id, 11, "bootstrap app_request request_id");
+            assert_eq!(bytes, &vec![1u8, 1, 1], "bootstrap app_request bytes");
+            assert!(
+                *deadline > before,
+                "deadline must be derived from a future monotonic Instant"
+            );
+        }
+        other => panic!("expected AppCall::Request via bootstrapper adapter, got {other:?}"),
+    }
+
+    // AppResponse.
+    adapter
+        .handle(
+            node,
+            InboundOp::AppResponse {
+                request_id: 12,
+                bytes: vec![2, 2],
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            observer.app_calls().last(),
+            Some(AppCall::Response { node: n, request_id: 12, bytes })
+                if *n == node && bytes == &vec![2u8, 2]
+        ),
+        "AppResponse must reach the VM's app_response via the bootstrapper adapter, got {:?}",
+        observer.app_calls()
+    );
+
+    // AppRequestFailed.
+    adapter
+        .handle(
+            node,
+            InboundOp::AppRequestFailed {
+                request_id: 13,
+                code: -1,
+                message: "timed out".to_string(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            observer.app_calls().last(),
+            Some(AppCall::RequestFailed { node: n, request_id: 13, code: -1, message })
+                if *n == node && message == "timed out"
+        ),
+        "AppRequestFailed must reach the VM's app_request_failed via the bootstrapper adapter, got {:?}",
         observer.app_calls()
     );
 }

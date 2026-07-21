@@ -6,8 +6,10 @@
 //!
 //! **The canonical goroutine→task mapping.** Each chain runs as **one tokio
 //! task** that owns the consensus state and drains, via `tokio::select!`:
-//! - a bounded `mpsc` of [`HandlerMessage`]s (sync ops run one-at-a-time holding
-//!   the state; async ops — `App*` — dispatch onto a bounded [`JoinSet`]);
+//! - a bounded `mpsc` of [`HandlerMessage`]s (sync AND async ops both dispatch
+//!   inline on this task today — see the [`MessageClass::Async`] arm of
+//!   [`ChainHandler::dispatch`] for why pool-based concurrent dispatch of
+//!   `App*` ops is deferred rather than spawned onto the [`JoinSet`]);
 //! - the VM→engine notification channel (`msg_from_vm`);
 //! - a gossip ticker.
 //!
@@ -35,9 +37,6 @@ use super::router::{ChainMessageSink, InboundOp};
 /// longer than this logs a warning.
 pub const SYNC_PROCESSING_TIME_WARN_LIMIT: Duration = Duration::from_secs(30);
 
-/// Maximum concurrent async (`App*`) message handlers (Go uses a worker pool).
-const ASYNC_CONCURRENCY: usize = 16;
-
 /// A message handed to the chain handler task: an inbound op from a peer plus its
 /// sync/async class.
 #[derive(Debug)]
@@ -51,7 +50,8 @@ pub struct HandlerMessage {
 }
 
 impl HandlerMessage {
-    /// Classify an op into sync (consensus, serialized) vs. async (App*, pooled).
+    /// Classify an op into sync (consensus, serialized) vs. async (`App*`;
+    /// delivered inline today — see [`MessageClass::Async`]).
     #[must_use]
     pub fn classify(node: NodeId, op: InboundOp) -> Self {
         let class = match &op {
@@ -261,9 +261,17 @@ impl ChainHandler {
         self.tracker.wait().await;
     }
 
-    /// Dispatch one message: sync ops run inline (serialized, holding the state);
-    /// async ops spawn onto the bounded pool.
-    async fn dispatch(&mut self, msg: HandlerMessage, async_pool: &mut JoinSet<()>) {
+    /// Dispatch one message to the active engine's [`ChainEngine::handle`].
+    ///
+    /// Both `Sync` and `Async` classes are delivered INLINE on this task today
+    /// (see the `MessageClass::Async` arm below for why `_async_pool` is not
+    /// spawned onto). This fixes a review finding (Task 7 follow-up): the
+    /// `Async` arm used to be a placeholder (`let _ = (node, op);`) that never
+    /// called `engine.handle()`, so every `App*` op reaching the handler via
+    /// the real `decode -> router -> sink -> dispatch` path was silently
+    /// dropped — only direct `adapter.handle()` unit tests exercised the
+    /// adapters' App arms.
+    async fn dispatch(&mut self, msg: HandlerMessage, _async_pool: &mut JoinSet<()>) {
         match msg.class {
             MessageClass::Sync => {
                 let start = tokio::time::Instant::now();
@@ -280,21 +288,24 @@ impl ChainHandler {
                 }
             }
             MessageClass::Async => {
-                // Bound concurrency: if the pool is full, reap one before adding.
-                while async_pool.len() >= ASYNC_CONCURRENCY {
-                    let _ = async_pool.join_next().await;
+                // App* ops are delivered to the active engine adapter's
+                // `handle()` INLINE, exactly like Sync, rather than spawned
+                // onto `_async_pool`. Spawning would need a `'static` future
+                // holding a mutable borrow of the boxed active `dyn
+                // ChainEngine`, which `EngineManager` does not expose (it owns
+                // engines directly, not behind `Arc<Mutex<..>>`); giving it
+                // that shape is a bigger architecture change, deferred rather
+                // than invented here. This costs nothing in practice: every
+                // App op already funnels through the SAME
+                // `Arc<tokio::sync::Mutex<V>>` the adapter holds
+                // (`engine_adapter.rs`), so cross-op ordering into the VM is
+                // serialized at that mutex regardless of whether the
+                // *handler* dispatches concurrently or serially. When
+                // pool-based concurrent dispatch is implemented, reintroduce
+                // `_async_pool.spawn(self.tracker.track_future(..))` here.
+                if let Some(engine) = self.engines.active_mut(self.state) {
+                    engine.handle(msg.node, msg.op).await;
                 }
-                // Async ops (App*) do not touch consensus state; in the full
-                // wiring (M3.11) these run against an Arc<Mutex<vm app handler>>.
-                // Here we record the work on the tracker so shutdown can drain it.
-                let tracker = self.tracker.clone();
-                let node = msg.node;
-                let op = msg.op;
-                async_pool.spawn(tracker.track_future(async move {
-                    // Placeholder app-message handling: the App* path is wired to
-                    // the VM's AppHandler in M3.11. Reference the captured values.
-                    let _ = (node, op);
-                }));
             }
         }
     }

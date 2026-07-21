@@ -8,7 +8,11 @@
 //! over the chain state. We model it as a bounded `mpsc` of [`HandlerMessage`]s
 //! carrying their [`MessageClass`]; the [`ChainHandler`](super::handler::ChainHandler)
 //! task drains it, running *sync* messages one-at-a-time (holding the consensus
-//! state) and dispatching *async* messages onto a bounded worker pool.
+//! state). *Async* messages are delivered the same way today (inline, in
+//! order) rather than onto a concurrent worker pool — see the
+//! `MessageClass::Async` arm of `ChainHandler::dispatch` for why pool-based
+//! concurrency is deferred rather than invented as part of wiring `App*` ops
+//! through to the VM (Task 7 follow-up).
 
 use tokio::sync::mpsc;
 
@@ -20,8 +24,11 @@ pub enum MessageClass {
     /// Consensus ops processed one-at-a-time, in order, holding the chain state
     /// (`Get`/`Put`/`PushQuery`/`PullQuery`/`Chits`/frontier/accepted/ancestors).
     Sync,
-    /// VM-specific or cross-chain ops processed concurrently on a worker pool
-    /// (`AppRequest`/`AppResponse`/`AppGossip`).
+    /// VM-specific or cross-chain ops (`AppRequest`/`AppResponse`/`AppGossip`/
+    /// `AppRequestFailed`), delivered off the consensus-serialization path.
+    /// Concurrent worker-pool dispatch is the target design (Go uses a
+    /// goroutine pool); today these are delivered inline, in order, on the
+    /// same handler task as `Sync` — see `ChainHandler::dispatch`.
     Async,
 }
 
