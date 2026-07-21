@@ -125,6 +125,12 @@ ava-saevm-hook = { path = "../ava-saevm/hook" }
 # when a verify-time receipt stash is missing (verify did not run in this
 # process — an accept-only replay/resume path).
 tracing = { workspace = true }
+# cchain-tx-gossip task 11: `Gossipable`/`Marshaller`/`Set` + `BloomSet` — the
+# gossip vocabulary `gossip.rs`'s `GossipEthTx`/`EthTxMarshaller`/
+# `EthTxGossipSet` implement over `EvmMempool` (ava-engine -> ava-network's
+# direct path-dep convention; there is no root `[workspace.dependencies]`
+# entry for internal crates, so this matches every other `ava-*` dep above).
+ava-p2p = { path = "../ava-p2p" }
 
 [dev-dependencies]
 assert_matches = { workspace = true }

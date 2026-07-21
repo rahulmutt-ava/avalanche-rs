@@ -53,6 +53,10 @@ pub mod vm;
 // (cchain-tx-pipeline design doc 2026-07-17, task 1).
 pub mod mempool;
 
+// C-Chain tx gossip: GossipEthTx + marshaller + bloom-backed Set over
+// EvmMempool (cchain-tx-gossip design doc, task 11).
+pub mod gossip;
+
 // Atomic X<->C txs: types/codec, mempool, backend, atomic trie, state hook,
 // semantic verify (G3, §6) — M6.14..M6.18.
 pub mod atomic;

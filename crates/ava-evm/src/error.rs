@@ -392,6 +392,13 @@ pub enum Error {
         /// The header's claimed `gas_used`.
         claimed: u64,
     },
+
+    /// `crate::gossip::EthTxGossipSet::new` (cchain-tx-gossip task 11): the
+    /// initial `ava_p2p::gossip::bloom::BloomSet` could not be constructed
+    /// (coreth `eth_gossiper.go:39-49` `NewGossipEthTxPool`'s
+    /// `gossip.NewBloomFilter` failure arm).
+    #[error("gossip bloom filter init: {0}")]
+    GossipBloomInit(String),
 }
 
 /// C-Chain VM result alias.
@@ -564,6 +571,12 @@ mod tests {
                 found: "bb".to_string()
             },
             Error::InvalidExtraPrefix { .. }
+        );
+
+        // Task 11 (gossip): bloom-init failure sentinel.
+        assert_matches!(
+            Error::GossipBloomInit("boom".to_string()),
+            Error::GossipBloomInit(_)
         );
     }
 }
