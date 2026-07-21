@@ -725,10 +725,22 @@ impl EvmMempool {
     /// first) so an undrained outbox cannot grow past the pool's own size —
     /// the outbox is only a hint for what to gossip; the pool's own indexes
     /// (`by_hash`/`by_sender`) remain the source of truth for what is
-    /// actually pooled, so dropping a hint here loses nothing but gossip
-    /// timeliness for that one tx.
+    /// actually pooled.
+    ///
+    /// Reconciliation: everything queued always LEAVES the outbox (the drain
+    /// semantics are unconditional — a tx is never re-offered on a later
+    /// call), but only txs still present in the pool are RETURNED. A tx can
+    /// be queued here and then replaced-by-fee-bump or capacity-evicted
+    /// before the next drain; the initial push cycle has no `Set::has()`
+    /// membership guard (unlike regossip, which does), so without this
+    /// filter a stale hash the pool can no longer serve would be broadcast.
+    /// Filtering against `by_hash` here is what makes "the pool's own
+    /// indexes remain the source of truth" actually true.
     pub fn take_gossip_outbox(&mut self) -> Vec<RecoveredTx> {
-        self.gossip_outbox.drain(..).collect()
+        self.gossip_outbox
+            .drain(..)
+            .filter(|tx| self.by_hash.contains_key(tx.hash()))
+            .collect()
     }
 }
 
@@ -1248,6 +1260,18 @@ mod tests {
             Some(true),
             "the incumbent must stay marked local (the failed add_remote must not overwrite it)"
         );
+
+        // MINOR 1 (review): the reverse direction must also dedup — a tx
+        // already admitted remotely must reject a later add_local of the
+        // identical hash.
+        let mut pool2 = EvmMempool::new(16);
+        let tx2 = signed_legacy_tx_from(0x22, 0, 2_000_000_000, 21_000, 1);
+        pool2
+            .add_remote(tx2.clone(), &sender, &rules)
+            .expect("remote admit");
+        let err2 = pool2.add_local(tx2, &sender, &rules).unwrap_err();
+        assert!(err2.to_string().contains("already known"), "got: {err2}");
+        assert_eq!(pool2.len(), 1, "duplicate local must not double-admit");
     }
 
     #[test]
@@ -1271,6 +1295,26 @@ mod tests {
         assert_eq!(pool.is_local(&local_hash), Some(true));
         assert_eq!(pool.is_local(&remote_hash), Some(false));
         assert_eq!(pool.is_local(&Default::default()), None);
+    }
+
+    #[test]
+    fn add_remote_rejects_wrong_chain_id() {
+        // MINOR 2 (review): add_remote must run the SAME validation body as
+        // add_local (via the shared `admit`) — exercise a check well before
+        // the local/remote branch point (chain-id agreement) so an
+        // accidental `if local { .. }` skip in `admit`'s checks would be
+        // caught here rather than only by the dedup test.
+        let mut pool = EvmMempool::new(16);
+        let tx = signed_legacy_tx_for_chain(9999, 0, 2_000_000_000, 21_000, 1);
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(18)),
+        };
+        let err = pool
+            .add_remote(tx, &sender, &AdmissionRules::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("chain"), "got: {err}");
+        assert_eq!(pool.len(), 0, "rejected remote tx must not be pooled");
     }
 
     #[test]
@@ -1341,6 +1385,101 @@ mod tests {
 
         let second = pool.take_gossip_outbox();
         assert!(second.is_empty(), "outbox is drained on take");
+    }
+
+    #[test]
+    fn take_gossip_outbox_skips_replaced_txs() {
+        // IMPORTANT 1 (review): the initial push cycle drains
+        // take_gossip_outbox() straight into the gossiper with no
+        // Set::has() membership guard (that guard only fires on regossip),
+        // so a tx that was admitted and then replaced-by-fee-bump before the
+        // outbox is drained must not be returned — the pool can no longer
+        // serve that hash, so broadcasting it would offer peers dead data.
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+
+        let tx_a = signed_legacy_tx_from(0x11, 0, 2_000_000_000, 21_000, 1);
+        let hash_a = *tx_a.hash();
+        pool.add_local(tx_a, &sender, &rules).expect("admit a");
+
+        // Same sender + nonce, strictly higher fee cap -> replaces A in
+        // place (the `same_nonce_replacement_requires_higher_fee...` test
+        // exercises this same path against the pool's own indexes).
+        let tx_a_replace = signed_legacy_tx_from(0x11, 0, 4_000_000_000, 21_000, 2);
+        let hash_a2 = *tx_a_replace.hash();
+        pool.add_local(tx_a_replace, &sender, &rules)
+            .expect("replace a");
+
+        let outbox = pool.take_gossip_outbox();
+        let outbox_hashes: Vec<_> = outbox.iter().map(|tx| *tx.hash()).collect();
+        assert!(
+            !outbox_hashes.contains(&hash_a),
+            "the replaced (no-longer-pooled) tx must not be pushed to gossip"
+        );
+        assert!(
+            outbox_hashes.contains(&hash_a2),
+            "the replacement (still-pooled) tx must be pushed"
+        );
+    }
+
+    #[test]
+    fn gossip_outbox_bounds_at_max_size() {
+        // IMPORTANT 2 (review): the outbox is capped at the pool's own
+        // `max_size` (oldest dropped first). To admit max_size + 2 txs with
+        // NO admission rejected, use max_size distinct senders (nonce 0
+        // each) with strictly increasing fee caps: once the pool is at
+        // capacity, each further admission's higher fee cap successfully
+        // evicts the pool's then-cheapest tx (`ErrTxPoolOverflow` eviction
+        // rule) rather than being rejected as PoolFull.
+        //
+        // NOTE (documented, per review's own caveat): with strictly
+        // increasing fees, the pool's OWN capacity eviction happens to drop
+        // exactly the same two oldest admissions the outbox's independent
+        // size bound would drop — so this scenario cannot fully isolate the
+        // outbox bound from pool-membership filtering in the same
+        // assertion. It still pins the documented end-to-end contract:
+        // `take_gossip_outbox()` never returns more than `max_size` entries,
+        // and the oldest admissions are the ones missing.
+        let max_size = 4;
+        let mut pool = EvmMempool::new(max_size);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+
+        let mut hashes = Vec::with_capacity(max_size + 2);
+        for i in 0..(max_size + 2) {
+            let byte = 0x10_u8.saturating_add(i as u8);
+            let gas_price =
+                1_000_000_000_u128.saturating_add((i as u128).saturating_mul(1_000_000_000));
+            let tx = signed_legacy_tx_from(byte, 0, gas_price, 21_000, 1);
+            hashes.push(*tx.hash());
+            pool.add_local(tx, &sender, &rules)
+                .unwrap_or_else(|err| panic!("admission {i} must succeed: {err}"));
+        }
+
+        let outbox = pool.take_gossip_outbox();
+        assert!(
+            outbox.len() <= max_size,
+            "take_gossip_outbox() must never exceed max_size ({max_size}), got {}",
+            outbox.len()
+        );
+        let outbox_hashes: Vec<_> = outbox.iter().map(|tx| *tx.hash()).collect();
+        assert!(
+            !outbox_hashes.contains(&hashes[0]) && !outbox_hashes.contains(&hashes[1]),
+            "the two oldest admissions must be dropped from the outbox"
+        );
+        for hash in &hashes[2..] {
+            assert!(
+                outbox_hashes.contains(hash),
+                "the remaining (newer) admissions must still be in the outbox"
+            );
+        }
     }
 
     #[test]
