@@ -67,6 +67,7 @@ use std::sync::Arc;
 
 use ava_evm_reth::{
     Address, B256, Decodable2718, Encodable2718, RecoveredTx, SignerRecoverable, TransactionSigned,
+    U256,
 };
 use ava_p2p::gossip::bloom::BloomSet;
 use ava_p2p::gossip::{Gossipable, Marshaller, Set};
@@ -75,6 +76,7 @@ use parking_lot::Mutex;
 
 use crate::error::Error;
 use crate::mempool::{AdmissionRules, EvmMempool, SenderAccount};
+use crate::state::FirewoodStateProvider;
 
 /// Minimum target elements a bloom filter is sized for (coreth
 /// `plugin/evm/config/constants.go:7` `TxGossipBloomMinTargetElements = 8 *
@@ -141,6 +143,37 @@ pub trait SenderAccountReader: Send + Sync {
     /// Returns an error if the account lookup fails (e.g. a Firewood read
     /// error in the real implementation).
     fn sender_account(&self, addr: &Address) -> crate::error::Result<SenderAccount>;
+}
+
+/// The Task 12 [`SenderAccountReader`] implementation: resolves a sender's
+/// current nonce/balance from the VM's shared committed Firewood state,
+/// reusing the exact `view_tip()` + `basic_account()` read pattern
+/// `rpc/eth.rs`'s `send_raw_transaction`/`read_account` use
+/// (`rpc/eth.rs:296-320`) — gossip-received tx admission checks the SAME
+/// on-chain account state the local RPC submission path does.
+pub struct VmSenderAccountReader(Arc<FirewoodStateProvider>);
+
+impl VmSenderAccountReader {
+    /// Builds a reader over the VM's shared Firewood state handle.
+    #[must_use]
+    pub fn new(state: Arc<FirewoodStateProvider>) -> Self {
+        Self(state)
+    }
+}
+
+impl SenderAccountReader for VmSenderAccountReader {
+    /// # Errors
+    /// Returns an error if the Firewood tip view or the account read fails.
+    fn sender_account(&self, addr: &Address) -> crate::error::Result<SenderAccount> {
+        use ava_evm_reth::AccountReader;
+
+        let view = self.0.view_tip()?;
+        let account = view.basic_account(addr)?;
+        Ok(SenderAccount {
+            nonce: account.as_ref().map_or(0, |a| a.nonce),
+            balance: account.as_ref().map_or(U256::ZERO, |a| a.balance),
+        })
+    }
 }
 
 /// A bloom-backed [`Set<GossipEthTx>`] over [`EvmMempool`] (Go

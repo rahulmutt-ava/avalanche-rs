@@ -59,13 +59,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio_util::sync::CancellationToken;
 
 use ava_database::{DynDatabase, MemDb};
 use ava_evm_reth::{Address, B256, Chain, ConsensusTx, EMPTY_ROOT_HASH};
+use ava_p2p::gossip::handler::GossipHandler;
+use ava_p2p::gossip::pull::PullGossiper;
+use ava_p2p::gossip::push::PushGossiper;
+use ava_p2p::gossip::{GossipParams, every};
+use ava_p2p::handler::TX_GOSSIP_HANDLER_ID;
+use ava_p2p::network::P2pNetwork;
 use ava_snow::{ChainContext, EngineState};
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
@@ -88,7 +94,8 @@ use crate::canonical::CanonicalStore;
 use crate::chainspec::{AvaChainSpec, CChainGenesis};
 use crate::error::Error;
 use crate::evmconfig::{AvaEvmConfig, AvaExecCtx, AvaNextBlockCtx};
-use crate::mempool::EvmMempool;
+use crate::gossip::{EthTxGossipSet, EthTxMarshaller, GossipEthTx, VmSenderAccountReader};
+use crate::mempool::{AdmissionRules, EvmMempool};
 use crate::receipts::AcceptedTxIndex;
 use crate::rpc::admin::AdminRpc;
 use crate::rpc::avax::{AcceptedAtomicTxIndex, AvaxRpc};
@@ -287,6 +294,22 @@ struct Shared {
     /// `verifyIntrinsicGas` (wrapped_block.go:376) — a wrap-time copy would
     /// be stale for blocks re-verified after bootstrap completes.
     bootstrapped: AtomicBool,
+    /// The cchain-tx-gossip p2p network + registered tx-gossip handler
+    /// (Task 12; coreth `vm.go:780-833` wiring order). `None` until
+    /// `initialize` builds it over the supplied `AppSender`; the
+    /// `AppHandler`/`Connector` impls delegate to the loaded value when
+    /// present, else no-op with a `tracing::debug!` (an inbound app message
+    /// or connect event arriving before `initialize` has nothing VM-side to
+    /// route to — mirrors the `ArcSwapOption`-backed late-binding precedent
+    /// `ava-network`'s `IpSigner::cached` uses for a similarly built-after-
+    /// construction value).
+    p2p: ArcSwapOption<P2pNetwork>,
+    /// Cancelled by `shutdown` to stop the two `initialize`-spawned gossip
+    /// loops (push+regossip cadence, pull cadence). A plain field (not
+    /// `Option`-wrapped): created once in `EvmVm::new`, so cancelling it
+    /// before `initialize` ever spawns a loop is just as harmless as
+    /// cancelling it after — there is simply nothing listening yet.
+    gossip_token: CancellationToken,
 }
 
 impl Shared {
@@ -431,6 +454,8 @@ impl EvmVm {
             evm_mempool: Arc::clone(&evm_mempool),
             clock: parking_lot::Mutex::new(Arc::new(RealClock)),
             bootstrapped: AtomicBool::new(false),
+            p2p: ArcSwapOption::from(None),
+            gossip_token: CancellationToken::new(),
         });
         let txpool = Arc::new(parking_lot::Mutex::new(AtomicMempool::new(
             4096,
@@ -646,51 +671,79 @@ impl EvmVm {
 }
 
 // ---------------------------------------------------------------------------
-// Vm supertraits (app / health / connector) — minimal, mirroring the avm/pchain
-// precedent. Inbound app messages are atomic-tx gossip (M6.16/M6.19 wire the
-// live handler); here they are accepted as no-ops until that lands.
+// Vm supertraits (app / health / connector) — mirroring the avm/pchain
+// precedent. Inbound app messages are the cchain-tx-gossip tx-gossip system
+// (Task 12): every method delegates to the `Shared::p2p` `P2pNetwork`'s
+// inherent `&self` dispatch methods (`network.rs`'s module doc explains why
+// `P2pNetwork` exposes those alongside its own `&mut self` trait impls — a
+// shared `Arc<P2pNetwork>` can never yield `&mut self`). Before `initialize`
+// builds the network (`p2p` still `None`), every method is a no-op — there is
+// nothing VM-side to route to yet.
 // ---------------------------------------------------------------------------
 
 #[async_trait]
 impl AppHandler for EvmVm {
     async fn app_request(
         &mut self,
-        _token: &CancellationToken,
-        _node: NodeId,
-        _request_id: u32,
-        _deadline: std::time::Instant,
-        _request: &[u8],
+        token: &CancellationToken,
+        node: NodeId,
+        request_id: u32,
+        deadline: std::time::Instant,
+        request: &[u8],
     ) -> VmResult<()> {
-        Ok(())
+        let Some(p2p) = self.shared.p2p.load_full() else {
+            tracing::debug!(%node, request_id, "app_request before gossip system initialized");
+            return Ok(());
+        };
+        p2p.handle_app_request(token, node, request_id, deadline, request)
+            .await
     }
 
     async fn app_request_failed(
         &mut self,
-        _token: &CancellationToken,
-        _node: NodeId,
-        _request_id: u32,
-        _err: AppError,
+        token: &CancellationToken,
+        node: NodeId,
+        request_id: u32,
+        err: AppError,
     ) -> VmResult<()> {
-        Ok(())
+        let Some(p2p) = self.shared.p2p.load_full() else {
+            tracing::debug!(
+                %node,
+                request_id,
+                "app_request_failed before gossip system initialized"
+            );
+            return Ok(());
+        };
+        p2p.handle_app_request_failed(token, node, request_id, err)
+            .await
     }
 
     async fn app_response(
         &mut self,
-        _token: &CancellationToken,
-        _node: NodeId,
-        _request_id: u32,
-        _response: &[u8],
+        token: &CancellationToken,
+        node: NodeId,
+        request_id: u32,
+        response: &[u8],
     ) -> VmResult<()> {
-        Ok(())
+        let Some(p2p) = self.shared.p2p.load_full() else {
+            tracing::debug!(%node, request_id, "app_response before gossip system initialized");
+            return Ok(());
+        };
+        p2p.handle_app_response(token, node, request_id, response)
+            .await
     }
 
     async fn app_gossip(
         &mut self,
-        _token: &CancellationToken,
-        _node: NodeId,
-        _msg: &[u8],
+        token: &CancellationToken,
+        node: NodeId,
+        msg: &[u8],
     ) -> VmResult<()> {
-        Ok(())
+        let Some(p2p) = self.shared.p2p.load_full() else {
+            tracing::debug!(%node, "app_gossip before gossip system initialized");
+            return Ok(());
+        };
+        p2p.handle_app_gossip(token, node, msg).await
     }
 }
 
@@ -705,15 +758,23 @@ impl HealthCheck for EvmVm {
 impl Connector for EvmVm {
     async fn connected(
         &mut self,
-        _token: &CancellationToken,
-        _node: NodeId,
-        _version: ava_version::application::Application,
+        token: &CancellationToken,
+        node: NodeId,
+        version: ava_version::application::Application,
     ) -> VmResult<()> {
-        Ok(())
+        let Some(p2p) = self.shared.p2p.load_full() else {
+            tracing::debug!(%node, "connected before gossip system initialized");
+            return Ok(());
+        };
+        p2p.handle_connected(token, node, version).await
     }
 
-    async fn disconnected(&mut self, _token: &CancellationToken, _node: NodeId) -> VmResult<()> {
-        Ok(())
+    async fn disconnected(&mut self, token: &CancellationToken, node: NodeId) -> VmResult<()> {
+        let Some(p2p) = self.shared.p2p.load_full() else {
+            tracing::debug!(%node, "disconnected before gossip system initialized");
+            return Ok(());
+        };
+        p2p.handle_disconnected(token, node).await
     }
 }
 
@@ -819,15 +880,117 @@ impl Vm for EvmVm {
         _upgrade_bytes: &[u8],
         _config_bytes: &[u8],
         _fxs: Vec<Fx>,
-        _app_sender: Arc<dyn AppSender>,
+        app_sender: Arc<dyn AppSender>,
     ) -> VmResult<()> {
         // Genesis-JSON parsing (alloc seeding + the upgrade schedule) is M6.8, and
         // it builds the provider/config/store collaborators this VM is constructed
         // over. Until that wiring lands, `EvmVm::new` is the construction seam
         // (the node bootstrap / tests supply the collaborators); `initialize` only
         // records the immutable chain context here.
+        let node_id = chain_ctx.node_id;
         self.ctx = Some(chain_ctx);
         self.engine_state = EngineState::Initializing;
+
+        // cchain-tx-gossip task 12: wire the C-Chain tx-gossip system over the
+        // app_sender the engine hands us here (coreth `vm.go:780-833`
+        // ordering — built AFTER the mempool/builder collaborators, which
+        // `EvmVm::new` already assembled above the engine ever calls
+        // `initialize`).
+        let network = P2pNetwork::new(node_id, app_sender);
+
+        let accounts: Arc<dyn crate::gossip::SenderAccountReader> =
+            Arc::new(VmSenderAccountReader::new(Arc::clone(&self.shared.state)));
+        let chain_id = {
+            use ava_evm_reth::EthChainSpec;
+            self.evm_config.chain_spec().chain().id()
+        };
+        let rules = AdmissionRules {
+            chain_id,
+            ..AdmissionRules::default()
+        };
+        let gossip_set = Arc::new(EthTxGossipSet::new(
+            Arc::clone(&self.evm_mempool),
+            accounts,
+            rules,
+        )?);
+
+        let params = GossipParams::default();
+        // Both the push and pull gossipers need their own `Client` bound to
+        // `TX_GOSSIP_HANDLER_ID`; `P2pNetwork::client` mints one WITHOUT
+        // registering a handler (Go `Network.NewClient`/`AddHandler` are
+        // likewise decoupled), which is what breaks the otherwise circular
+        // dependency: the `GossipHandler` we register below needs `push`
+        // already built (to forward newly-pushed items into it), so we can't
+        // get a `Client` from `add_handler` first.
+        let push = Arc::new(PushGossiper::new(
+            EthTxMarshaller,
+            Arc::clone(&gossip_set),
+            network.client(TX_GOSSIP_HANDLER_ID),
+            params.clone(),
+        ));
+        let pull = PullGossiper::new(
+            EthTxMarshaller,
+            Arc::clone(&gossip_set),
+            network.client(TX_GOSSIP_HANDLER_ID),
+            Arc::clone(&network),
+            params.clone(),
+        );
+        let handler = Arc::new(GossipHandler::new(
+            EthTxMarshaller,
+            Arc::clone(&gossip_set),
+            Some(Arc::clone(&push)),
+            params.clone(),
+        ));
+        network
+            .add_handler(TX_GOSSIP_HANDLER_ID, handler)
+            .map_err(|e| {
+                tracing::warn!(error = %e, "failed to register the C-Chain tx-gossip handler");
+                VmError::InvalidComponent("evm gossip handler registration failed")
+            })?;
+
+        // Two loops suffice: `PushGossiper::gossip_cycle` unconditionally
+        // drains BOTH the to-gossip queue and the due-regossip queue on every
+        // call (`ava-p2p`'s `gossip/push.rs`), so a third, separate regossip
+        // loop is unnecessary — the `push_period` cadence below covers both,
+        // matching Go's own two `Every(...)` goroutines (`vm.go:818-828`).
+        let evm_mempool = Arc::clone(&self.evm_mempool);
+        let push_for_loop = Arc::clone(&push);
+        let push_op_token = self.shared.gossip_token.clone();
+        tokio::spawn(every(
+            self.shared.gossip_token.clone(),
+            params.push_period,
+            move || {
+                let push = Arc::clone(&push_for_loop);
+                let mempool = Arc::clone(&evm_mempool);
+                let op_token = push_op_token.clone();
+                async move {
+                    // Drains newly-admitted local/remote txs into the push
+                    // queue (Go's `ethTxPool.Subscribe` forwarding,
+                    // `vm.go:773-778`; this port has no tx-pool subscription
+                    // channel, so the push cycle itself pulls the outbox
+                    // each tick instead — see `EvmMempool::take_gossip_outbox`).
+                    let outbox = mempool.lock().take_gossip_outbox();
+                    for tx in outbox {
+                        push.add(GossipEthTx(tx));
+                    }
+                    push.gossip_cycle(&op_token).await
+                }
+            },
+        ));
+
+        let pull = Arc::new(pull);
+        let pull_op_token = self.shared.gossip_token.clone();
+        tokio::spawn(every(
+            self.shared.gossip_token.clone(),
+            params.pull_period,
+            move || {
+                let pull = Arc::clone(&pull);
+                let op_token = pull_op_token.clone();
+                async move { pull.pull_cycle(&op_token).await }
+            },
+        ));
+
+        self.shared.p2p.store(Some(network));
         Ok(())
     }
 
@@ -842,6 +1005,10 @@ impl Vm for EvmVm {
     }
 
     async fn shutdown(&mut self, _token: &CancellationToken) -> VmResult<()> {
+        // Stops the two `initialize`-spawned gossip loops (cchain-tx-gossip
+        // task 12). `CancellationToken::cancel` is idempotent and harmless to
+        // call even if `initialize` never ran (no loop is listening yet).
+        self.shared.gossip_token.cancel();
         // Idempotent: clearing the processing tree releases the held proposals.
         self.shared.verified.clear();
         Ok(())

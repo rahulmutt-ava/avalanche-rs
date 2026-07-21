@@ -136,8 +136,17 @@ ava-p2p = { path = "../ava-p2p" }
 assert_matches = { workspace = true }
 proptest = { workspace = true }
 pretty_assertions = { workspace = true }
+# cchain-tx-gossip task 12: `tests/gossip_vm.rs` builds/decodes the raw
+# `ava_p2p::pb::sdk::{PushGossip,PullGossipRequest,PullGossipResponse}` wire
+# frames directly (the brief's black-box "hand-build the frame" test shape).
+bytes = { workspace = true }
+prost = { workspace = true }
 # The `tests/chainvm.rs` engine harness drives the async `ChainVm`/`Vm` surface.
-tokio = { workspace = true, features = [ "macros", "rt", "rt-multi-thread" ] }
+# `test-util` (cchain-tx-gossip task 12): `tests/gossip_vm.rs`'s
+# `local_submission_pushes_gossip` drives `#[tokio::test(start_paused = true)]`
+# + `tokio::time::sleep` under virtual time to observe the spawned push loop's
+# cadence without a real 100ms wall-clock wait.
+tokio = { workspace = true, features = [ "macros", "rt", "rt-multi-thread", "test-util" ] }
 tokio-util = { workspace = true }
 # Building the secp256k1fx TransferInput/TransferOutput/OutputOwners payloads the
 # atomic-tx golden-vector tests embed in the reused X-Chain fx component enums.

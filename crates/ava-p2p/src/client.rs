@@ -154,6 +154,14 @@ impl Drop for PendingGuard {
 /// mirroring Go's `Network.NewClient` being the sole way to obtain a
 /// `*Client`. Every `Client` returned for a given `P2pNetwork` shares that
 /// network's pending-request map and request-id counter.
+///
+/// `Clone` (all fields are `Arc`/`Vec<u8>`/`u64`): mirrors Go's `*Client`
+/// being freely reused by value (e.g. `gossip.NewSystem`,
+/// `network/p2p/gossip/system.go:151-166`, passes the SAME `client` to both
+/// `NewPullGossiper` and `NewPushGossiper`) — a gossip system built from one
+/// [`P2pNetwork::client`] call needs a `Client` for both its `PushGossiper`
+/// and `PullGossiper`, and each constructor consumes its `Client` by value.
+#[derive(Clone)]
 pub struct Client {
     handler_id: u64,
     prefix: Vec<u8>,

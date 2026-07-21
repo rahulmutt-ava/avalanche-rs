@@ -131,12 +131,29 @@ impl P2pNetwork {
             return Err(crate::Error::DuplicateHandler(handler_id));
         }
         handlers.insert(handler_id, handler);
-        Ok(Client::new(
+        Ok(self.client(handler_id))
+    }
+
+    /// Builds a [`Client`] bound to `handler_id`, independent of registering
+    /// a [`Handler`] for that id (Go `Network.NewClient`,
+    /// `network/p2p/network.go:128-136`, which is likewise decoupled from
+    /// `AddHandler`). [`Self::add_handler`] now delegates to this method.
+    ///
+    /// This is the seam a gossip system needs: its outbound `PushGossiper`/
+    /// `PullGossiper` each need a `Client` bound to the handler id BEFORE the
+    /// inbound `Handler` they forward newly-admitted items into (e.g. a
+    /// `GossipHandler` wired with `Some(push_gossiper)`) can itself be built
+    /// and registered — see `ava-evm`'s `EvmVm::initialize` (cchain-tx-gossip
+    /// task 12), which builds two `Client`s this way before its one
+    /// `add_handler` call.
+    #[must_use]
+    pub fn client(&self, handler_id: u64) -> Client {
+        Client::new(
             handler_id,
             self.sender.clone(),
             self.pending.clone(),
             self.request_id.clone(),
-        ))
+        )
     }
 
     /// Uniformly samples one connected peer, or `None` if there are none
