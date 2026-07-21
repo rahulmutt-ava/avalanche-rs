@@ -31,16 +31,23 @@ parking_lot = { workspace = true }
 # `&CancellationToken` on every Handler/AppHandler/Connector method.
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+# `PushGossip`/`PullGossipResponse`'s `repeated bytes` fields decode/encode as
+# `Vec<bytes::Bytes>` (build.rs's `.bytes(["."])`); the gossip drivers
+# (push/pull/handler) build and read these directly.
+bytes = { workspace = true }
+# `gossip::every` (Go `gossip.Every`) drives push/pull cycles off
+# `tokio::time::interval`, which also honors `#[tokio::test(start_paused =
+# true)]` virtual time for the gossip-loop tests.
+tokio = { workspace = true }
 
 [build-dependencies]
 # Compiles proto/sdk/sdk.proto into OUT_DIR (generated code is NOT committed).
 prost-build = { workspace = true }
 
 [dev-dependencies]
-# `bytes::Bytes` literals in the pinned wire-bytes round-trip test (src/pb.rs).
-bytes = { workspace = true }
-# Mux tests drive the `AppHandler`/`Connector` impls, which are `async fn`.
-tokio = { workspace = true, features = [ "macros", "rt" ] }
+# `test-util` enables `#[tokio::test(start_paused = true)]` virtual time for
+# the gossip-loop tests (`tests/gossip_loops.rs`).
+tokio = { workspace = true, features = [ "macros", "rt", "test-util" ] }
 
 [lints]
 workspace = true
