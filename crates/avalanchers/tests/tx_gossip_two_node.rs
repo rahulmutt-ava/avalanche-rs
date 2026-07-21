@@ -26,6 +26,20 @@
 //! the in-process service is the same handler a real HTTP mount would forward
 //! to, so this is a faithful "C-Chain RPC" call, not a bypass of it — only the
 //! JSON-RPC transport hop is skipped, not the RPC handler itself.
+//!
+//! # Why these asserts prove GOSSIP (non-vacuity)
+//!
+//! A tx submitted to node A could in principle reach node B two ways: tx
+//! gossip (the system under test) or consensus block propagation (A builds a
+//! block containing the tx; B accepts it). The second path is structurally
+//! impossible in this fixture: `boot_chain_with_sender` builds each chain's
+//! validator manager as SELF + `extra_beacons` only, and node A boots with an
+//! EMPTY beacon map — so A's C-Chain Snowman engine samples from {A} alone and
+//! never sends B a single consensus message (B lists A as a beacon, not vice
+//! versa). The only channel by which B can ever learn of a tx submitted to A
+//! is the tx-gossip system. If a future fixture change makes the validator
+//! sets symmetric (e.g. A also lists B as a beacon), these tests can regress
+//! to vacuous — re-derive this argument before changing the boot topology.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
