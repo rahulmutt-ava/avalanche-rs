@@ -16,7 +16,9 @@ thiserror = { workspace = true }
 ava-types = { path = "../ava-types" }
 # Hoisted bloom filter (`gossip::bloom::BloomSet` wraps `bloom::Filter` /
 # `bloom::ReadFilter` / `bloom::{hash,fill_random_pub,optimal_parameters,
-# estimate_count}` — Go `network/p2p/gossip/bloom.go` parity).
+# estimate_count}` — Go `network/p2p/gossip/bloom.go` parity), plus
+# `linked::LinkedHashmap` backing `gossip::push::DiscardedCache`'s
+# promote-on-hit LRU (Go `cache/lru.Cache` parity).
 ava-utils = { path = "../ava-utils" }
 # AppHandler/AppSender/AppError/Connector/SendConfig — the traits P2pNetwork
 # implements/consumes (specs 07 §2.2, §2.6).

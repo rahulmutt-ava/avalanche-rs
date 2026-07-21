@@ -116,6 +116,15 @@ impl TestSet {
     fn len(&self) -> usize {
         self.items.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
+
+    /// Removes `id`, simulating the item being mined/evicted out from under
+    /// a `PushGossiper` that still has it queued.
+    fn remove(&self, id: &Id) {
+        self.items
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+    }
 }
 
 impl Set<TestItem> for TestSet {
@@ -570,5 +579,225 @@ async fn every_runs_cycle_on_period_and_stops_on_cancel() {
         calls.load(Ordering::SeqCst) >= 3,
         "cycle ran at least 3 times over 3 periods, got {}",
         calls.load(Ordering::SeqCst)
+    );
+}
+
+/// Review follow-up: an item pushed once is re-sent via `regossip_cfg` once
+/// `regossip_period` has elapsed, and NOT before (Go `gossip.go:433-473`'s
+/// per-item `lastGossiped` throttle, `gossip.go:506-512`).
+#[tokio::test(start_paused = true)]
+async fn regossip_fires_after_period_with_regossip_cfg() {
+    let sender = Arc::new(RecordingSender::default());
+    let network = P2pNetwork::new(test_node(0), sender.clone());
+    let client = network
+        .add_handler(HANDLER_ID, Arc::new(NoopHandler))
+        .unwrap();
+
+    let id_a = indexed_id(1);
+    let set = Arc::new(TestSet::new());
+    set.add(TestItem(id_a)).unwrap();
+
+    let params = GossipParams::default();
+    let push = PushGossiper::new(TestMarshaller, set.clone(), client, params.clone());
+    push.add(TestItem(id_a));
+
+    let token = CancellationToken::new();
+    push.gossip_cycle(&token).await.unwrap();
+    {
+        let gossips = sender.gossips.lock().unwrap();
+        assert_eq!(gossips.len(), 1, "first cycle sends the initial push batch");
+        assert_eq!(
+            gossips.first().unwrap().0.validators,
+            params.push_cfg.validators,
+            "first send uses push_cfg"
+        );
+    }
+
+    // Immediately again: not yet due, must not resend.
+    push.gossip_cycle(&token).await.unwrap();
+    assert_eq!(
+        sender.gossips.lock().unwrap().len(),
+        1,
+        "regossip must not fire before regossip_period has elapsed"
+    );
+
+    tokio::time::advance(params.regossip_period + Duration::from_millis(1)).await;
+    push.gossip_cycle(&token).await.unwrap();
+
+    let gossips = sender.gossips.lock().unwrap();
+    assert_eq!(
+        gossips.len(),
+        2,
+        "regossip fires once regossip_period has elapsed"
+    );
+    let (cfg, bytes) = gossips.get(1).unwrap();
+    assert_eq!(
+        cfg.validators, params.regossip_cfg.validators,
+        "regossip cfg validators count"
+    );
+
+    let expected_prefix = protocol_prefix(HANDLER_ID);
+    let payload = bytes.get(expected_prefix.len()..).unwrap();
+    let decoded = sdk::PushGossip::decode(payload).unwrap();
+    assert_eq!(
+        decoded.gossip,
+        vec![Bytes::from(
+            TestMarshaller.marshal(&TestItem(id_a)).unwrap()
+        )],
+        "the same item is re-sent on regossip"
+    );
+}
+
+/// Review follow-up: pins the per-item regossip mechanism. A regossip
+/// backlog bigger than one `target_message_size` batch must drain across
+/// successive cycles, not wait a full extra `regossip_period` per batch.
+///
+/// This test MUST FAIL under the earlier cycle-level `last_regossip` gate:
+/// that version sets one `last_regossip` timestamp for the whole
+/// `PushGossiper` the instant *any* regossip send happens, so the very next
+/// cycle (only `push_period` later) finds regossip "not due" again and sends
+/// nothing — the second cycle's assertion below (`gossips.len() == 4`) would
+/// see `3` instead.
+#[tokio::test(start_paused = true)]
+async fn regossip_backlog_drains_across_cycles() {
+    let sender = Arc::new(RecordingSender::default());
+    let network = P2pNetwork::new(test_node(0), sender.clone());
+    let client = network
+        .add_handler(HANDLER_ID, Arc::new(NoopHandler))
+        .unwrap();
+
+    let id_a = indexed_id(1);
+    let id_b = indexed_id(2);
+    let set = Arc::new(TestSet::new());
+    set.add(TestItem(id_a)).unwrap();
+    set.add(TestItem(id_b)).unwrap();
+
+    // One marshaled `TestItem` is 32 bytes; a target smaller than that forces
+    // exactly one item per drain call (the loop always admits at least one
+    // item before re-checking the size bound against `target_message_size`).
+    let params = GossipParams {
+        target_message_size: 10,
+        regossip_period: Duration::from_millis(200),
+        ..GossipParams::default()
+    };
+
+    let push = PushGossiper::new(TestMarshaller, set.clone(), client, params.clone());
+    push.add(TestItem(id_a));
+    push.add(TestItem(id_b));
+
+    let token = CancellationToken::new();
+    // Two push cycles to move both items onto the regossip queue (each
+    // capped at one item by the small target size); neither is due for
+    // regossip yet (no time has advanced), so only the two push_cfg sends
+    // happen.
+    push.gossip_cycle(&token).await.unwrap();
+    push.gossip_cycle(&token).await.unwrap();
+    assert_eq!(
+        sender.gossips.lock().unwrap().len(),
+        2,
+        "both items pushed individually (capped by the small target size)"
+    );
+
+    tokio::time::advance(params.regossip_period + Duration::from_millis(1)).await;
+
+    // Cycle 1: both items are due, but the small target size caps the
+    // regossip drain at one item.
+    push.gossip_cycle(&token).await.unwrap();
+    assert_eq!(
+        sender.gossips.lock().unwrap().len(),
+        3,
+        "cycle 1's regossip drain sends exactly one of the two due items"
+    );
+
+    // ~push_period later — regossip_period has NOT elapsed again since
+    // cycle 1's regossip send. Under the per-item mechanism the *other*
+    // item's timestamp was never refreshed (it wasn't included in cycle
+    // 1's batch), so it is still overdue and drains now.
+    tokio::time::advance(params.push_period).await;
+    push.gossip_cycle(&token).await.unwrap();
+    let gossips = sender.gossips.lock().unwrap();
+    assert_eq!(
+        gossips.len(),
+        4,
+        "cycle 2 drains the remainder of the regossip backlog"
+    );
+
+    let expected_prefix = protocol_prefix(HANDLER_ID);
+    let mut regossiped_ids = HashSet::new();
+    for (cfg, bytes) in gossips.iter().skip(2) {
+        assert_eq!(
+            cfg.validators, params.regossip_cfg.validators,
+            "regossip cfg validators count"
+        );
+        let payload = bytes.get(expected_prefix.len()..).unwrap();
+        let decoded = sdk::PushGossip::decode(payload).unwrap();
+        assert_eq!(
+            decoded.gossip.len(),
+            1,
+            "each regossip cycle sends exactly one item (small target size)"
+        );
+        let marshaled = decoded.gossip.first().unwrap().clone();
+        let item = TestMarshaller.unmarshal(&marshaled).unwrap();
+        regossiped_ids.insert(item.0);
+    }
+    assert_eq!(
+        regossiped_ids,
+        HashSet::from([id_a, id_b]),
+        "both backlogged items were eventually regossiped, one per cycle"
+    );
+}
+
+/// Review follow-up: an item the set no longer `has()` by the time its
+/// regossip comes due is dropped rather than re-sent, and is recorded in the
+/// discarded cache — re-adding it later pretends it was just gossiped
+/// (Go `gossip.go:499-503,586-591`).
+#[tokio::test(start_paused = true)]
+async fn dropped_from_set_items_are_discarded_not_regossiped() {
+    let sender = Arc::new(RecordingSender::default());
+    let network = P2pNetwork::new(test_node(0), sender.clone());
+    let client = network
+        .add_handler(HANDLER_ID, Arc::new(NoopHandler))
+        .unwrap();
+
+    let id_a = indexed_id(1);
+    let set = Arc::new(TestSet::new());
+    set.add(TestItem(id_a)).unwrap();
+
+    let params = GossipParams::default();
+    let push = PushGossiper::new(TestMarshaller, set.clone(), client, params.clone());
+    push.add(TestItem(id_a));
+
+    let token = CancellationToken::new();
+    // First cycle pushes the item (the set still has it) and queues it for
+    // regossip.
+    push.gossip_cycle(&token).await.unwrap();
+    assert_eq!(sender.gossips.lock().unwrap().len(), 1);
+
+    // The set no longer has the item (mined/evicted).
+    set.remove(&id_a);
+
+    tokio::time::advance(params.regossip_period + Duration::from_millis(1)).await;
+    push.gossip_cycle(&token).await.unwrap();
+
+    assert_eq!(
+        sender.gossips.lock().unwrap().len(),
+        1,
+        "an item the set no longer has is dropped, not regossiped"
+    );
+
+    // Re-adding the id now finds it in the discarded cache and enqueues it
+    // straight onto the regossip queue with a fresh timestamp, pretending it
+    // was just gossiped (Go gossip.go:586-591) — so a gossip_cycle
+    // immediately afterward must NOT resend it yet. (If the discarded-cache
+    // routing were broken and `add` fell through to `to_gossip` instead,
+    // this next cycle's push drain would send it immediately and the
+    // assertion below would see `2`.)
+    set.add(TestItem(id_a)).unwrap();
+    push.add(TestItem(id_a));
+    push.gossip_cycle(&token).await.unwrap();
+    assert_eq!(
+        sender.gossips.lock().unwrap().len(),
+        1,
+        "re-added-from-discarded item is pretended freshly gossiped, not sent immediately"
     );
 }
