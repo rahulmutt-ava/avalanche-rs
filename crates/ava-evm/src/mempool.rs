@@ -210,6 +210,12 @@ impl Default for AdmissionRules {
 struct PoolEntry {
     tx: RecoveredTx,
     arrival: u64,
+    /// Whether this tx was admitted via [`EvmMempool::add_local`] (`true`) or
+    /// [`EvmMempool::add_remote`] (`false`) — origin tracking for the gossip
+    /// path (Task 11: a gossiped tx re-offered by the same peer that sent it
+    /// need not be re-broadcast to that peer; a locally-submitted tx must
+    /// always be broadcast).
+    local: bool,
 }
 
 /// One sender's current head-of-run priority, as tracked by the
@@ -262,6 +268,10 @@ pub struct EvmMempool {
     arrival_seq: u64,
     /// Wakes a builder driver when the pool gains a tx.
     notify: Arc<Notify>,
+    /// Txs admitted (local or remote) since the last [`Self::take_gossip_outbox`],
+    /// in admission order. See that method's docs for the coreth deviation
+    /// this implements and the bound applied here.
+    gossip_outbox: VecDeque<RecoveredTx>,
 }
 
 impl EvmMempool {
@@ -274,6 +284,7 @@ impl EvmMempool {
             by_hash: HashMap::new(),
             arrival_seq: 0,
             notify: Arc::new(Notify::new()),
+            gossip_outbox: VecDeque::new(),
         }
     }
 
@@ -301,6 +312,38 @@ impl EvmMempool {
     #[must_use]
     pub fn contains(&self, hash: &B256) -> bool {
         self.by_hash.contains_key(hash)
+    }
+
+    /// The pooled tx with hash `hash`, cloned out, or `None` if not pooled.
+    #[must_use]
+    pub fn get(&self, hash: &B256) -> Option<RecoveredTx> {
+        let (address, nonce) = self.by_hash.get(hash)?;
+        let entry = self.by_sender.get(address)?.get(nonce)?;
+        Some(entry.tx.clone())
+    }
+
+    /// Whether the pooled tx `hash` was admitted via [`Self::add_local`]
+    /// (`Some(true)`) or [`Self::add_remote`] (`Some(false)`); `None` if
+    /// `hash` is not pooled. Origin-tracking accessor for the gossip layer
+    /// (Task 11): a peer-provided tx (`local == false`) need not be
+    /// re-broadcast back to its origin.
+    #[must_use]
+    pub fn is_local(&self, hash: &B256) -> Option<bool> {
+        let (address, nonce) = self.by_hash.get(hash)?;
+        let entry = self.by_sender.get(address)?.get(nonce)?;
+        Some(entry.local)
+    }
+
+    /// Visits every pooled tx, in no particular order, calling `f(tx)` for
+    /// each; stops early the first time `f` returns `false`.
+    pub fn iterate(&self, f: &mut dyn FnMut(&RecoveredTx) -> bool) {
+        for pooled in self.by_sender.values() {
+            for entry in pooled.values() {
+                if !f(&entry.tx) {
+                    return;
+                }
+            }
+        }
     }
 
     /// The next nonce this sender may submit without gapping: the sender's
@@ -465,6 +508,37 @@ impl EvmMempool {
         sender: &SenderAccount,
         rules: &AdmissionRules,
     ) -> Result<B256, EvmMempoolError> {
+        self.admit(tx, sender, rules, true)
+    }
+
+    /// Validates and admits a tx received from a gossip peer. Runs the
+    /// identical admission body as [`Self::add_local`] (same rules,
+    /// same errors) — the only difference is [`PoolEntry::local`] is set to
+    /// `false`, which the gossip layer (Task 11's `Set`) uses to avoid
+    /// re-broadcasting a tx back to the peer it just arrived from. Returns
+    /// the tx's hash on admission.
+    ///
+    /// # Errors
+    /// See [`EvmMempoolError`].
+    pub fn add_remote(
+        &mut self,
+        tx: RecoveredTx,
+        sender: &SenderAccount,
+        rules: &AdmissionRules,
+    ) -> Result<B256, EvmMempoolError> {
+        self.admit(tx, sender, rules, false)
+    }
+
+    /// The shared admission body for [`Self::add_local`] and
+    /// [`Self::add_remote`]: identical validation, differing only in the
+    /// resulting [`PoolEntry::local`] flag.
+    fn admit(
+        &mut self,
+        tx: RecoveredTx,
+        sender: &SenderAccount,
+        rules: &AdmissionRules,
+        local: bool,
+    ) -> Result<B256, EvmMempoolError> {
         let hash = *tx.hash();
 
         // (1) Already known (coreth `core/txpool/errors.go` `ErrAlreadyKnown`).
@@ -613,16 +687,48 @@ impl EvmMempool {
         self.by_sender.entry(address).or_default().insert(
             tx_nonce,
             PoolEntry {
-                tx,
+                tx: tx.clone(),
                 arrival: self.arrival_seq,
+                local,
             },
         );
         self.by_hash.insert(hash, (address, tx_nonce));
+
+        // Push to the gossip outbox (local AND remote — see
+        // `take_gossip_outbox`'s docs), bounded by `max_size` so a fully
+        // undrained outbox cannot grow without limit.
+        self.gossip_outbox.push_back(tx);
+        while self.gossip_outbox.len() > self.max_size {
+            self.gossip_outbox.pop_front();
+        }
 
         // Signal a parked builder driver there is work (the `AtomicMempool`
         // `add_tx` precedent, `atomic/mempool.rs:342`).
         self.notify.notify_one();
         Ok(hash)
+    }
+
+    /// Drains and returns every tx admitted (via [`Self::add_local`] **or**
+    /// [`Self::add_remote`]) since the last call to this method — the feed
+    /// the push gossiper (Task 11) drains to decide what to broadcast.
+    ///
+    /// DIVERGENCE (documented): coreth's push gossiper subscribes directly to
+    /// the `legacypool`'s tx-event feed (`core/txpool/txpool.go`
+    /// `SubscribeTransactions`), which streams newly-added txs as they land.
+    /// This pool has no subscription channel; instead every admission simply
+    /// appends to an in-pool outbox queue that callers periodically drain.
+    /// The observable effect is the same — a newly admitted tx is made
+    /// available to be pushed — but delivery is pull-based (drain-on-demand)
+    /// rather than push-based (event stream).
+    ///
+    /// Bound: the outbox is capped at `max_size` entries (oldest dropped
+    /// first) so an undrained outbox cannot grow past the pool's own size —
+    /// the outbox is only a hint for what to gossip; the pool's own indexes
+    /// (`by_hash`/`by_sender`) remain the source of truth for what is
+    /// actually pooled, so dropping a hint here loses nothing but gossip
+    /// timeliness for that one tx.
+    pub fn take_gossip_outbox(&mut self) -> Vec<RecoveredTx> {
+        self.gossip_outbox.drain(..).collect()
     }
 }
 
@@ -1116,6 +1222,148 @@ mod tests {
             "nonce 2 > included nonce 1 must be retained"
         );
         assert_eq!(pool.len(), 1, "EvmMempool::len() after on_block_accepted");
+    }
+
+    #[test]
+    fn add_remote_dedups_against_local() {
+        // add_remote runs the identical admission body as add_local; a hash
+        // already admitted locally must be rejected as AlreadyKnown when
+        // resubmitted via add_remote (and vice versa would also hold, but
+        // this is the gossip-relevant direction: a locally-submitted tx must
+        // not be re-admitted from a gossiped copy).
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(18)),
+        };
+        let tx = signed_legacy_tx(0, 2_000_000_000, 21_000, 1);
+        pool.add_local(tx.clone(), &sender, &rules)
+            .expect("local admit");
+        let err = pool.add_remote(tx.clone(), &sender, &rules).unwrap_err();
+        assert!(err.to_string().contains("already known"), "got: {err}");
+        assert_eq!(pool.len(), 1, "duplicate remote must not double-admit");
+        assert_eq!(
+            pool.is_local(tx.hash()),
+            Some(true),
+            "the incumbent must stay marked local (the failed add_remote must not overwrite it)"
+        );
+    }
+
+    #[test]
+    fn add_remote_marks_entry_non_local() {
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(18)),
+        };
+        let local_tx = signed_legacy_tx_from(0x11, 0, 2_000_000_000, 21_000, 1);
+        let remote_tx = signed_legacy_tx_from(0x22, 0, 2_000_000_000, 21_000, 1);
+        let local_hash = *local_tx.hash();
+        let remote_hash = *remote_tx.hash();
+
+        pool.add_local(local_tx, &sender, &rules)
+            .expect("add_local");
+        pool.add_remote(remote_tx, &sender, &rules)
+            .expect("add_remote");
+
+        assert_eq!(pool.is_local(&local_hash), Some(true));
+        assert_eq!(pool.is_local(&remote_hash), Some(false));
+        assert_eq!(pool.is_local(&Default::default()), None);
+    }
+
+    #[test]
+    fn iterate_yields_all_pooled() {
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+        let a0 = signed_legacy_tx_from(0x11, 0, 5_000_000_000, 21_000, 1);
+        let b0 = signed_legacy_tx_from(0x22, 0, 5_000_000_000, 21_000, 1);
+        let hash_a0 = *a0.hash();
+        let hash_b0 = *b0.hash();
+        pool.add_local(a0, &sender, &rules).expect("admit a0");
+        pool.add_local(b0, &sender, &rules).expect("admit b0");
+
+        let mut seen: Vec<_> = Vec::new();
+        pool.iterate(&mut |tx| {
+            seen.push(*tx.hash());
+            true
+        });
+        seen.sort();
+        let mut expected = vec![hash_a0, hash_b0];
+        expected.sort();
+        assert_eq!(
+            seen, expected,
+            "EvmMempool::iterate() must visit every pooled tx"
+        );
+    }
+
+    #[test]
+    fn iterate_stops_when_f_returns_false() {
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+        let a0 = signed_legacy_tx_from(0x11, 0, 5_000_000_000, 21_000, 1);
+        let b0 = signed_legacy_tx_from(0x22, 0, 5_000_000_000, 21_000, 1);
+        pool.add_local(a0, &sender, &rules).expect("admit a0");
+        pool.add_local(b0, &sender, &rules).expect("admit b0");
+
+        let mut count = 0;
+        pool.iterate(&mut |_tx| {
+            count += 1;
+            false
+        });
+        assert_eq!(count, 1, "EvmMempool::iterate() must stop on first false");
+    }
+
+    #[test]
+    fn take_gossip_outbox_drains_once() {
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(19)),
+        };
+        let a0 = signed_legacy_tx_from(0x11, 0, 5_000_000_000, 21_000, 1);
+        let b0 = signed_legacy_tx_from(0x22, 0, 5_000_000_000, 21_000, 1);
+        pool.add_local(a0, &sender, &rules).expect("admit a0");
+        pool.add_local(b0, &sender, &rules).expect("admit b0");
+
+        let outbox = pool.take_gossip_outbox();
+        assert_eq!(outbox.len(), 2, "both admissions land in the outbox");
+
+        let second = pool.take_gossip_outbox();
+        assert!(second.is_empty(), "outbox is drained on take");
+    }
+
+    #[test]
+    fn get_returns_pooled_tx() {
+        let mut pool = EvmMempool::new(16);
+        let rules = AdmissionRules::default();
+        let sender = SenderAccount {
+            nonce: 0,
+            balance: U256::from(10u128.pow(18)),
+        };
+        let tx = signed_legacy_tx(0, 2_000_000_000, 21_000, 1);
+        let hash = *tx.hash();
+        pool.add_local(tx, &sender, &rules).expect("admit");
+
+        let got = pool
+            .get(&hash)
+            .expect("EvmMempool::get() must return pooled tx");
+        assert_eq!(*got.hash(), hash);
+
+        assert!(
+            pool.get(&Default::default()).is_none(),
+            "EvmMempool::get() must return None for an unpooled hash"
+        );
     }
 
     #[test]
