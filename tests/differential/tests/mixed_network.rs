@@ -410,8 +410,8 @@ async fn mixed_network_rust_proposes() {
     use std::time::Duration;
 
     use ava_differential::livenet::{
-        LOCAL_VALIDATOR_NODE_IDS, await_c_receipt, await_same_c_height, c_block_number_of_receipt,
-        proposer_of_accepted_container, submit_c_transfer,
+        LOCAL_VALIDATOR_NODE_IDS, await_c_pending_tx, await_c_receipt, await_same_c_height,
+        c_block_number_of_receipt, proposer_of_accepted_container, submit_c_transfer,
     };
     use ava_differential::network::Network;
     use ava_differential::observation::Observation;
@@ -455,10 +455,36 @@ async fn mixed_network_rust_proposes() {
     let mut tx_hash = String::new();
     let mut proposer_matched = false;
     for attempt in 0..6u32 {
-        tx_hash = submit_c_transfer(&rust_api)
-            .await
-            .expect("eth_sendRawTransaction admitted into the Rust node's EVM mempool");
-        eprintln!("attempt {attempt}: submitted tx {tx_hash} to the Rust validator");
+        // If the previous attempt's tx is still sitting pending in the Rust
+        // mempool, submitting a fresh transfer now would read the same
+        // "latest" nonce and collide with it (rejected as an underpriced
+        // replacement) — worse, `submit_c_transfer`'s `.expect` would then
+        // panic the test on exactly the race condition this retry loop exists
+        // to tolerate. Skip the fresh submission and keep polling the existing
+        // tx instead; it can still be mined in the next proposer window.
+        let still_pending = !tx_hash.is_empty()
+            && await_c_pending_tx(&rust_api, &tx_hash, Duration::from_secs(1))
+                .await
+                .unwrap_or(false);
+        if still_pending {
+            eprintln!(
+                "attempt {attempt}: previous tx {tx_hash} still pending in the Rust mempool — \
+                 skipping a fresh submission (same nonce would collide) and re-polling it"
+            );
+        } else {
+            match submit_c_transfer(&rust_api).await {
+                Ok(h) => {
+                    tx_hash = h;
+                    eprintln!("attempt {attempt}: submitted tx {tx_hash} to the Rust validator");
+                }
+                Err(e) => {
+                    eprintln!(
+                        "attempt {attempt}: submit_c_transfer failed ({e}) — retrying next attempt"
+                    );
+                    continue;
+                }
+            }
+        }
 
         if !await_c_receipt(&rust_api, &tx_hash, Duration::from_secs(60))
             .await

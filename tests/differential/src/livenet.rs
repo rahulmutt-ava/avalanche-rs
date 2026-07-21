@@ -665,8 +665,13 @@ pub async fn c_block_number_of_receipt(api_base: &str, tx_hash: &str) -> Result<
 /// (`~/avalanchego/indexer/index.go:33`), which this function passes through
 /// as [`NetworkError::Timeout`].
 ///
-/// The `bytes` field is hex-decoded (`0x`-prefixed per `encoding:"hex"`) and
-/// parsed as a proposervm block
+/// The `bytes` field is `0x`-prefixed hex per `encoding:"hex"`, but Go's
+/// `formatting.Encode`'s `Hex`/`HexC` branch does NOT hex-encode the container
+/// bytes directly: it first APPENDS a 4-byte checksum (the last 4 bytes of
+/// `sha256(container)`) and only then hex-encodes `container || checksum`
+/// (`~/avalanchego/utils/formatting/encoding.go:101-110`,
+/// `hashing.Checksum`). [`decode_indexed_container`] strips and verifies that
+/// suffix before the remaining bytes are parsed as a proposervm block
 /// ([`ava_proposervm::block::codec::parse_without_verification`]). A signed
 /// post-fork block's proposer is its verified signer
 /// ([`ava_proposervm::block::post_fork::SignedBlock::proposer`] /
@@ -676,12 +681,15 @@ pub async fn c_block_number_of_receipt(api_base: &str, tx_hash: &str) -> Result<
 /// decode failure) both report [`NodeId::default`] (the zero id, `==
 /// NodeId::EMPTY`) rather than erroring — the caller
 /// (`mixed_network_rust_proposes`) treats "no identifiable proposer" the same
-/// as "not our proposer" and retries with a fresh transfer.
+/// as "not our proposer" and retries with a fresh transfer. A checksum
+/// mismatch is NOT folded into that same "no proposer" default — a corrupt or
+/// truncated indexer reply is a real bug, not an ordinary unsigned/pre-fork
+/// block, so it is surfaced loudly as an `Err`.
 ///
 /// # Errors
 /// Returns [`NetworkError::Timeout`] if `index_api_base` is not a valid URL,
-/// the RPC call fails (including an out-of-range index), or the `bytes` field
-/// is missing or not valid hex.
+/// the RPC call fails (including an out-of-range index), the `bytes` field is
+/// missing or not valid hex, or the trailing checksum does not verify.
 pub async fn proposer_of_accepted_container(
     index_api_base: &str,
     index: u64,
@@ -703,17 +711,57 @@ pub async fn proposer_of_accepted_container(
             "index.getContainerByIndex({index}): missing bytes field"
         ))
     })?;
-    let raw = hex::decode(bytes_hex.strip_prefix("0x").unwrap_or(bytes_hex)).map_err(|e| {
-        NetworkError::Timeout(format!(
-            "index.getContainerByIndex({index}): bad hex bytes: {e}"
-        ))
-    })?;
+    let raw = decode_indexed_container(bytes_hex)
+        .map_err(|e| NetworkError::Timeout(format!("index.getContainerByIndex({index}): {e}")))?;
     Ok(match parse_without_verification(&raw) {
         Ok(ParsedBlock::Signed(b)) => b.proposer(),
         Ok(ParsedBlock::Granite(b)) => b.proposer(),
         Ok(ParsedBlock::Option(_)) => NodeId::default(),
         Err(_) => NodeId::default(),
     })
+}
+
+/// Length of the Go `hashing.Checksum` suffix that `formatting.Encode`'s
+/// `Hex`/`HexC` branch appends before hex-encoding (`~/avalanchego/utils/
+/// formatting/encoding.go:101-110`).
+const HEX_CHECKSUM_LEN: usize = 4;
+
+/// Hex-decodes an `encoding:"hex"` container `bytes` field and strips +
+/// VERIFIES the trailing Go checksum suffix.
+///
+/// Go's `formatting.Encode(Hex, container)` computes `checked := container ||
+/// last4(sha256(container))` and hex-encodes `checked` — NOT `container`
+/// directly (`~/avalanchego/utils/formatting/encoding.go:101-110`). Decoding
+/// must therefore strip the last 4 bytes and verify them against
+/// `sha256(container)` before the remaining bytes are meaningful container
+/// bytes; `ava_crypto::hashing::checksum` is the same byte-exact port of Go's
+/// `hashing.Checksum` that `ava-utils`' CB58 codec uses for the analogous
+/// base58 checksum.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] if `bytes_hex` is not valid hex, decodes
+/// to fewer than [`HEX_CHECKSUM_LEN`] bytes, or the trailing checksum does not
+/// match `sha256` of the leading bytes (a corrupt or truncated reply).
+fn decode_indexed_container(bytes_hex: &str) -> Result<Vec<u8>, NetworkError> {
+    let decoded = hex::decode(bytes_hex.strip_prefix("0x").unwrap_or(bytes_hex))
+        .map_err(|e| NetworkError::Timeout(format!("bad hex bytes: {e}")))?;
+    if decoded.len() < HEX_CHECKSUM_LEN {
+        return Err(NetworkError::Timeout(format!(
+            "{} bytes shorter than the {HEX_CHECKSUM_LEN}-byte Go hex checksum",
+            decoded.len()
+        )));
+    }
+    let split = decoded.len().saturating_sub(HEX_CHECKSUM_LEN);
+    let (container, got_checksum) = decoded.split_at(split);
+    let want_checksum = ava_crypto::hashing::checksum(container, HEX_CHECKSUM_LEN);
+    if got_checksum != want_checksum.as_slice() {
+        return Err(NetworkError::Timeout(format!(
+            "checksum mismatch: got {}, want {} (corrupt/truncated indexer reply)",
+            hex::encode(got_checksum),
+            hex::encode(&want_checksum)
+        )));
+    }
+    Ok(container.to_vec())
 }
 
 /// Construct and sign a legacy EIP-155 self-transfer transaction, returning its
@@ -1035,6 +1083,72 @@ mod tests {
         assert_eq!(
             LOCAL_VALIDATOR_NODE_IDS[0], "NodeID-7Xhw2mDxuDS44j42TCB6U5579esbSt3Lg",
             "staker1 is the first validator (matches the genesis order)"
+        );
+    }
+
+    /// Build a Go-`formatting.Encode(Hex, container)`-shaped `0x`-prefixed hex
+    /// string: `container || last4(sha256(container))`, hex-encoded. Mirrors
+    /// `~/avalanchego/utils/formatting/encoding.go:101-110`.
+    fn go_hex_encode(container: &[u8]) -> String {
+        let checksum = ava_crypto::hashing::checksum(container, HEX_CHECKSUM_LEN);
+        let mut checked = container.to_vec();
+        checked.extend_from_slice(&checksum);
+        format!("0x{}", hex::encode(checked))
+    }
+
+    #[test]
+    fn decode_indexed_container_round_trips_go_style_checksum() {
+        // Regression: a real `index.getContainerByIndex` reply is
+        // `container || checksum`, NOT bare container bytes — decoding without
+        // stripping the checksum previously fed `container || checksum` into
+        // `parse_without_verification`, whose trailing-bytes guard rejects
+        // every real container (checksum mismatch -> false detection failure).
+        let container = b"a synthetic proposervm container payload".to_vec();
+        let encoded = go_hex_encode(&container);
+        let decoded = decode_indexed_container(&encoded).expect("round-trips");
+        assert_eq!(
+            decoded, container,
+            "checksum stripped, container recovered exactly"
+        );
+    }
+
+    #[test]
+    fn decode_indexed_container_rejects_corrupted_checksum() {
+        let container = b"another synthetic container".to_vec();
+        let mut encoded_bytes = {
+            let checksum = ava_crypto::hashing::checksum(&container, HEX_CHECKSUM_LEN);
+            let mut checked = container.clone();
+            checked.extend_from_slice(&checksum);
+            checked
+        };
+        // Corrupt the last checksum byte.
+        let last_byte = encoded_bytes
+            .last_mut()
+            .expect("encoded_bytes has a checksum tail");
+        *last_byte ^= 0xFF;
+        let encoded = format!("0x{}", hex::encode(&encoded_bytes));
+        let err = decode_indexed_container(&encoded).expect_err("corrupted checksum must error");
+        assert!(
+            format!("{err}").contains("checksum mismatch"),
+            "error names the checksum mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_indexed_container_rejects_too_short_for_checksum() {
+        // 3 bytes total: shorter than the 4-byte checksum alone.
+        let encoded = "0xaabbcc";
+        assert!(
+            decode_indexed_container(encoded).is_err(),
+            "fewer bytes than the checksum length must error, not panic on subtraction"
+        );
+    }
+
+    #[test]
+    fn decode_indexed_container_rejects_bad_hex() {
+        assert!(
+            decode_indexed_container("0xnothex").is_err(),
+            "non-hex payload must error"
         );
     }
 }
