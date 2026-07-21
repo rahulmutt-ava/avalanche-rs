@@ -743,9 +743,15 @@ where
         token.clone(),
     ));
     let (transition_tx, transition_rx) = transition_channel(8);
-    let boot_adapter =
-        BootstrapperEngineAdapter::new(bootstrapper, transition_tx, 0, Arc::clone(&getter));
-    let snowman_adapter = SnowmanEngineAdapter::new(engine, getter);
+    let boot_adapter = BootstrapperEngineAdapter::new(
+        bootstrapper,
+        transition_tx,
+        0,
+        Arc::clone(&getter),
+        Arc::clone(&vm),
+        token.clone(),
+    );
+    let snowman_adapter = SnowmanEngineAdapter::new(engine, getter, Arc::clone(&vm), token.clone());
 
     let mut engines = EngineManager::new(EngineType::Snowman);
     engines.register(EngineState::Bootstrapping, Box::new(boot_adapter));

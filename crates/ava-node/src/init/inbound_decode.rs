@@ -6,9 +6,10 @@
 //! [`decode_inbound`] maps an [`ava_message::codec::InboundMessage`] (from the
 //! network layer) to an [`EngineInboundMessage`] (for the engine router). It
 //! returns `None` for ops the engine does not consume (Ping/Pong/Handshake/
-//! PeerList/AppRequest/AppResponse/AppGossip/AppError/StateSummary/* and any op
-//! with no matching [`InboundOp`] variant), so the router can silently drop
-//! them.
+//! PeerList/StateSummary/* and any op with no matching [`InboundOp`] variant),
+//! so the router can silently drop them. `AppRequest`/`AppResponse`/
+//! `AppGossip`/`AppError` decode to `InboundOp::AppRequest`/`AppResponse`/
+//! `AppGossip`/`AppRequestFailed` (Task 7: engine inbound App routing).
 //!
 //! This is the decode half of the network→consensus boundary (specs/06 §5.1).
 //! The encode half is [`ava_engine::networking::sender::OutboundSender`].
@@ -26,7 +27,7 @@ use ava_types::node_id::NodeId;
 /// for the engine router.
 ///
 /// Returns `None` for ops the engine does not handle (Ping/Pong/Handshake/
-/// PeerList/GetPeerList and App/StateSummary ops), or when a required field
+/// PeerList/GetPeerList and StateSummary ops), or when a required field
 /// (chain id, container id) is malformed/missing (wrong byte length).
 ///
 /// # Design note
@@ -152,6 +153,41 @@ pub fn decode_inbound(node: NodeId, msg: &InboundMessage) -> Option<EngineInboun
             (chain, op)
         }
 
+        // --- App messages (Task 7: engine inbound App routing) ------------------
+        M::AppRequest(m) => {
+            let chain = parse_id(m.chain_id.as_ref())?;
+            let op = InboundOp::AppRequest {
+                request_id: m.request_id,
+                deadline_nanos: m.deadline,
+                bytes: m.app_bytes.to_vec(),
+            };
+            (chain, op)
+        }
+        M::AppResponse(m) => {
+            let chain = parse_id(m.chain_id.as_ref())?;
+            let op = InboundOp::AppResponse {
+                request_id: m.request_id,
+                bytes: m.app_bytes.to_vec(),
+            };
+            (chain, op)
+        }
+        M::AppGossip(m) => {
+            let chain = parse_id(m.chain_id.as_ref())?;
+            let op = InboundOp::AppGossip {
+                bytes: m.app_bytes.to_vec(),
+            };
+            (chain, op)
+        }
+        M::AppError(m) => {
+            let chain = parse_id(m.chain_id.as_ref())?;
+            let op = InboundOp::AppRequestFailed {
+                request_id: m.request_id,
+                code: m.error_code,
+                message: m.error_message.clone(),
+            };
+            (chain, op)
+        }
+
         // --- Non-consensus ops (peer layer / not yet in InboundOp) ---------------
         // Ping/Pong/Handshake/GetPeerList/PeerList are handled by the peer actor
         // inline and never reach the router — but guard here defensively.
@@ -160,11 +196,6 @@ pub fn decode_inbound(node: NodeId, msg: &InboundMessage) -> Option<EngineInboun
         | M::Handshake(_)
         | M::GetPeerList(_)
         | M::PeerList(_)
-        // App ops have no InboundOp live variants yet (only *Failed timeout stubs).
-        | M::AppRequest(_)
-        | M::AppResponse(_)
-        | M::AppGossip(_)
-        | M::AppError(_)
         // StateSummary bootstrap has no InboundOp variants yet.
         | M::GetStateSummaryFrontier(_)
         | M::StateSummaryFrontier(_)
@@ -301,14 +332,85 @@ mod tests {
     }
 
     #[test]
-    fn drops_app_request() {
+    fn decodes_app_request() {
         let msg = parse(p2p::message::Message::AppRequest(p2p::AppRequest {
             chain_id: chain_bytes(),
             request_id: 1,
             deadline: 1_000_000_000,
             app_bytes: Bytes::from_static(&[0x01, 0x02]),
         }));
-        assert!(decode_inbound(NodeId::from([5u8; 20]), &msg).is_none());
+        let node = NodeId::from([5u8; 20]);
+        let got = decode_inbound(node, &msg).expect("decode");
+        assert_eq!(got.chain, chain());
+        assert_eq!(got.node, node);
+        assert_eq!(
+            got.op,
+            InboundOp::AppRequest {
+                request_id: 1,
+                deadline_nanos: 1_000_000_000,
+                bytes: vec![0x01, 0x02],
+            }
+        );
+    }
+
+    #[test]
+    fn decodes_app_response() {
+        let msg = parse(p2p::message::Message::AppResponse(p2p::AppResponse {
+            chain_id: chain_bytes(),
+            request_id: 2,
+            app_bytes: Bytes::from_static(&[0x03, 0x04]),
+        }));
+        let node = NodeId::from([15u8; 20]);
+        let got = decode_inbound(node, &msg).expect("decode");
+        assert_eq!(got.chain, chain());
+        assert_eq!(got.node, node);
+        assert_eq!(
+            got.op,
+            InboundOp::AppResponse {
+                request_id: 2,
+                bytes: vec![0x03, 0x04],
+            }
+        );
+    }
+
+    #[test]
+    fn decodes_app_gossip() {
+        let msg = parse(p2p::message::Message::AppGossip(p2p::AppGossip {
+            chain_id: chain_bytes(),
+            app_bytes: Bytes::from_static(&[0x05, 0x06]),
+        }));
+        let node = NodeId::from([16u8; 20]);
+        let got = decode_inbound(node, &msg).expect("decode");
+        assert_eq!(got.chain, chain());
+        assert_eq!(got.node, node);
+        assert_eq!(
+            got.op,
+            InboundOp::AppGossip {
+                bytes: vec![0x05, 0x06],
+            }
+        );
+    }
+
+    #[test]
+    fn decodes_app_error() {
+        let msg = parse(p2p::message::Message::AppError(p2p::AppError {
+            chain_id: chain_bytes(),
+            request_id: 3,
+            error_code: 7,
+            error_message: "boom".to_string(),
+        }));
+        let node = NodeId::from([17u8; 20]);
+        let got = decode_inbound(node, &msg).expect("decode");
+        assert_eq!(got.chain, chain());
+        assert_eq!(got.node, node);
+        assert_eq!(
+            got.op,
+            InboundOp::AppRequestFailed {
+                request_id: 3,
+                code: 7,
+                message: "boom".to_string(),
+            }
+        );
     }
 
     #[test]

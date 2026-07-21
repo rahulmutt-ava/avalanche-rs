@@ -305,7 +305,7 @@ async fn frontier_discovery_completes_when_one_beacon_never_answers() {
         token.clone(),
     ));
     let (transition_tx, transition_rx) = transition_channel(8);
-    let adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+    let adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter, vm, token.clone());
 
     let mut engines = EngineManager::new(EngineType::Snowman);
     engines.register(EngineState::Bootstrapping, Box::new(adapter));
@@ -490,9 +490,9 @@ async fn unsent_app_request_fails_immediately() {
         .expect("send_app_request");
 
     let delivered = wait_until(Duration::from_secs(1), || {
-        sink.snapshot()
-            .iter()
-            .any(|(n, o)| *n == b && matches!(o, InboundOp::AppRequestFailed { request_id: 21 }))
+        sink.snapshot().iter().any(|(n, o)| {
+            *n == b && matches!(o, InboundOp::AppRequestFailed { request_id: 21, .. })
+        })
     })
     .await;
     assert!(

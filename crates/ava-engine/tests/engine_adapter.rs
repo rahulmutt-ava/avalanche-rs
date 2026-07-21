@@ -121,18 +121,26 @@ async fn handler_drives_bootstrap_then_normal_op() {
 
     // ---- Transition channel + adapters (each with a Getter sharing its Arcs) ----
     let boot_getter = Arc::new(ava_engine::snowman::Getter::new(
-        boot_vm_arc,
+        Arc::clone(&boot_vm_arc),
         Arc::clone(&boot_sender),
         token.clone(),
     ));
     let snow_getter = Arc::new(ava_engine::snowman::Getter::new(
-        snow_vm_arc,
+        Arc::clone(&snow_vm_arc),
         Arc::clone(&snow_sender),
         token.clone(),
     ));
     let (transition_tx, transition_rx) = transition_channel(8);
-    let boot_adapter = BootstrapperEngineAdapter::new(boot, transition_tx.clone(), 0, boot_getter);
-    let snow_adapter = SnowmanEngineAdapter::new(snow_engine, snow_getter);
+    let boot_adapter = BootstrapperEngineAdapter::new(
+        boot,
+        transition_tx.clone(),
+        0,
+        boot_getter,
+        boot_vm_arc,
+        token.clone(),
+    );
+    let snow_adapter =
+        SnowmanEngineAdapter::new(snow_engine, snow_getter, snow_vm_arc, token.clone());
 
     let mut mgr = EngineManager::new(EngineType::Snowman);
     mgr.register(EngineState::Bootstrapping, Box::new(boot_adapter));
@@ -363,7 +371,7 @@ async fn bootstrap_adapter_answers_get_accepted_frontier_via_getter() {
 
     // Build the adapter under test.
     let (transition_tx, _transition_rx) = transition_channel(8);
-    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter, vm, token);
 
     // The node that sends the inbound GetAcceptedFrontier request.
     let node = NodeId::from([42u8; 20]);
@@ -427,7 +435,7 @@ async fn snowman_adapter_answers_get_accepted_frontier_via_getter() {
         Box::new(consensus),
     );
 
-    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter);
+    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter, vm, token);
 
     let node = NodeId::from([99u8; 20]);
     adapter
@@ -488,7 +496,7 @@ async fn snowman_adapter_get_ops_routed_to_getter() {
         Box::new(consensus),
     );
 
-    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter);
+    let mut adapter = SnowmanEngineAdapter::new(snow_engine, getter, vm, token);
     let node = NodeId::from([77u8; 20]);
 
     // GetAcceptedFrontier → AcceptedFrontier(genesis_id)
@@ -601,7 +609,7 @@ async fn bootstrap_adapter_get_ops_routed_to_getter() {
     });
 
     let (transition_tx, _transition_rx) = transition_channel(8);
-    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter, vm, token);
     let node = NodeId::from([55u8; 20]);
 
     // GetAcceptedFrontier → AcceptedFrontier(genesis_id)
@@ -710,7 +718,7 @@ async fn adapter_dispatches_get_accepted_frontier_failed() {
     ));
     // Keep the transition receiver alive so `after()`'s transition send never errors.
     let (transition_tx, _transition_rx) = transition_channel(8);
-    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter);
+    let mut adapter = BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter, vm_arc, token);
 
     adapter.start().await; // sends GetAcceptedFrontier (request id 1)
     let _ = sender.drain();
@@ -733,6 +741,191 @@ async fn adapter_dispatches_get_accepted_frontier_failed() {
     assert!(
         sent.iter().any(|s| matches!(s, Sent::GetAccepted { .. })),
         "the failed op must be dispatched and complete the frontier phase, got {sent:?}"
+    );
+}
+
+/// `snowman_adapter_routes_app_ops_to_vm` — the four inbound `AppRequest`/
+/// `AppResponse`/`AppGossip`/`AppRequestFailed` ops reach the VM's `AppHandler`
+/// through the adapter's shared `Arc<Mutex<V>>` (Task 7: engine inbound App
+/// routing), rather than being dropped or routed to the consensus engine.
+#[tokio::test]
+async fn snowman_adapter_routes_app_ops_to_vm() {
+    use ava_vm::testutil::AppCall;
+
+    let token = CancellationToken::new();
+    let snow_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let observer = snow_vm.observer();
+    let genesis_id = snow_vm.last_accepted(&token).await.expect("genesis");
+
+    let vm = Arc::new(AsyncMutex::new(snow_vm));
+    let sender = RecordingSender::new();
+
+    let getter = Arc::new(ava_engine::snowman::Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let (vmgr, _) = validators(1);
+    let mut params = DEFAULT_PARAMETERS;
+    params.k = 1;
+    params.alpha_preference = 1;
+    params.alpha_confidence = 1;
+    params.beta = 1;
+    params.concurrent_repolls = 1;
+    let consensus = Topological::new_default(SnowballFactory, params, genesis_id, 0).expect("topo");
+    let snow_engine = ava_engine::snowman::engine::SnowmanEngine::new(
+        ava_engine::snowman::engine::Config {
+            subnet_id: Id::EMPTY,
+            params,
+            vm: Arc::clone(&vm),
+            sender: Arc::clone(&sender),
+            validators: vmgr,
+            token: token.clone(),
+        },
+        Box::new(consensus),
+    );
+
+    let mut adapter =
+        SnowmanEngineAdapter::new(snow_engine, getter, Arc::clone(&vm), token.clone());
+    let node = NodeId::from([88u8; 20]);
+
+    // AppGossip.
+    adapter
+        .handle(node, InboundOp::AppGossip { bytes: vec![9, 9] })
+        .await;
+    assert!(
+        matches!(
+            observer.app_calls().last(),
+            Some(AppCall::Gossip { node: n, bytes }) if *n == node && bytes == &vec![9u8, 9]
+        ),
+        "AppGossip must reach the VM's app_gossip, got {:?}",
+        observer.app_calls()
+    );
+
+    // AppRequest: the deadline is Instant::now() (adapter-side) + deadline_nanos.
+    let before = std::time::Instant::now();
+    adapter
+        .handle(
+            node,
+            InboundOp::AppRequest {
+                request_id: 5,
+                deadline_nanos: 1_000_000_000,
+                bytes: vec![1, 2, 3],
+            },
+        )
+        .await;
+    match observer.app_calls().last() {
+        Some(AppCall::Request {
+            node: n,
+            request_id,
+            deadline,
+            bytes,
+        }) => {
+            assert_eq!(*n, node, "app_request node");
+            assert_eq!(*request_id, 5, "app_request request_id");
+            assert_eq!(bytes, &vec![1u8, 2, 3], "app_request bytes");
+            assert!(
+                *deadline > before,
+                "deadline must be derived from a future monotonic Instant"
+            );
+        }
+        other => panic!("expected AppCall::Request, got {other:?}"),
+    }
+
+    // AppResponse.
+    adapter
+        .handle(
+            node,
+            InboundOp::AppResponse {
+                request_id: 6,
+                bytes: vec![4, 5],
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            observer.app_calls().last(),
+            Some(AppCall::Response { node: n, request_id: 6, bytes })
+                if *n == node && bytes == &vec![4u8, 5]
+        ),
+        "AppResponse must reach the VM's app_response, got {:?}",
+        observer.app_calls()
+    );
+
+    // AppRequestFailed.
+    adapter
+        .handle(
+            node,
+            InboundOp::AppRequestFailed {
+                request_id: 7,
+                code: -1,
+                message: "timed out".to_string(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(
+            observer.app_calls().last(),
+            Some(AppCall::RequestFailed { node: n, request_id: 7, code: -1, message })
+                if *n == node && message == "timed out"
+        ),
+        "AppRequestFailed must reach the VM's app_request_failed, got {:?}",
+        observer.app_calls()
+    );
+}
+
+/// `bootstrap_adapter_routes_app_gossip_to_vm` — App ops reach the VM directly
+/// through the `BootstrapperEngineAdapter` too, regardless of bootstrap phase
+/// (Go dispatches `AppHandler` off the chain Handler, not the bootstrapper).
+#[tokio::test]
+async fn bootstrap_adapter_routes_app_gossip_to_vm() {
+    use ava_engine::snowman::Getter;
+    use ava_vm::testutil::AppCall;
+
+    let token = CancellationToken::new();
+    let boot_vm: TestVm = init_test_vm(&token).await.expect("init vm");
+    let observer = boot_vm.observer();
+
+    let vm = Arc::new(AsyncMutex::new(boot_vm));
+    let sender = RecordingSender::new();
+    let getter = Arc::new(Getter::new(
+        Arc::clone(&vm),
+        Arc::clone(&sender),
+        token.clone(),
+    ));
+
+    let ctx = Arc::new(ConsensusContext::new(
+        test_chain_context(),
+        "C".to_string(),
+        Arc::new(NoOpAcceptor),
+        Arc::new(NoOpAcceptor),
+    ));
+    let boot = Bootstrapper::new(BootConfig {
+        subnet_id: Id::EMPTY,
+        ctx,
+        vm: Arc::clone(&vm),
+        sender: Arc::clone(&sender),
+        beacons: BTreeMap::new(),
+        token: token.clone(),
+    });
+
+    let (transition_tx, _transition_rx) = transition_channel(8);
+    let mut adapter =
+        BootstrapperEngineAdapter::new(boot, transition_tx, 0, getter, Arc::clone(&vm), token);
+    let node = NodeId::from([66u8; 20]);
+
+    adapter
+        .handle(node, InboundOp::AppGossip { bytes: vec![7, 7] })
+        .await;
+
+    assert!(
+        matches!(
+            observer.app_calls().last(),
+            Some(AppCall::Gossip { node: n, bytes }) if *n == node && bytes == &vec![7u8, 7]
+        ),
+        "AppGossip must reach the VM's app_gossip via the bootstrapper adapter, got {:?}",
+        observer.app_calls()
     );
 }
 

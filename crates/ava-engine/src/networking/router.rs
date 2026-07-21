@@ -17,6 +17,7 @@ use async_trait::async_trait;
 
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
+use ava_vm::app::AppError;
 
 use super::timeout::{AdaptiveTimeoutManager, RequestId};
 
@@ -114,6 +115,36 @@ pub enum InboundOp {
     AppRequestFailed {
         /// Wire request ID.
         request_id: u32,
+        /// Application-defined error code (`ava_vm::app::AppError::TIMEOUT` on
+        /// timeout synthesis; an app-supplied code when decoded from a wire
+        /// `AppError`).
+        code: i32,
+        /// Human-readable error message.
+        message: String,
+    },
+
+    // --- App messages (Task 7: engine inbound App routing) -----------------
+    /// `AppRequest` — VM-defined request; `deadline_nanos` is the wire-relative
+    /// deadline (converted to a monotonic `Instant` by the adapter).
+    AppRequest {
+        /// Wire request ID.
+        request_id: u32,
+        /// Wire-relative deadline, in nanoseconds.
+        deadline_nanos: u64,
+        /// VM-defined request bytes.
+        bytes: Vec<u8>,
+    },
+    /// `AppResponse` to an `AppRequest` we issued.
+    AppResponse {
+        /// Wire request ID.
+        request_id: u32,
+        /// VM-defined response bytes.
+        bytes: Vec<u8>,
+    },
+    /// `AppGossip` — VM-defined gossip (no request id).
+    AppGossip {
+        /// VM-defined gossip bytes.
+        bytes: Vec<u8>,
     },
 
     // --- Bootstrap / consensus responses (M4.30a) --------------------------
@@ -193,7 +224,17 @@ impl InboundOp {
             op::GET_ACCEPTED_FRONTIER => InboundOp::GetAcceptedFrontierFailed { request_id },
             op::GET_ACCEPTED => InboundOp::GetAcceptedFailed { request_id },
             op::QUERY => InboundOp::QueryFailed { request_id },
-            op::APP_REQUEST => InboundOp::AppRequestFailed { request_id },
+            op::APP_REQUEST => {
+                // Framework timeout synthesis: the peer never answered our
+                // AppRequest, so the VM sees the same `ErrTimeout` sentinel it
+                // would get on any other transport (`AppError::TIMEOUT` = -1).
+                let timeout = AppError::timeout();
+                InboundOp::AppRequestFailed {
+                    request_id,
+                    code: timeout.code,
+                    message: timeout.message,
+                }
+            }
             op::GET_STATE_SUMMARY_FRONTIER => {
                 InboundOp::GetStateSummaryFrontierFailed { request_id }
             }

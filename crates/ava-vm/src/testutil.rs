@@ -34,6 +34,51 @@ use crate::fx::Fx;
 use crate::health::HealthCheck;
 use crate::vm::{HttpHandler, Vm, VmEvent};
 
+/// A recorded call into [`TestVm`]'s [`AppHandler`] impl, observable via
+/// [`TestVmObserver::app_calls`] (Task 7 adapter tests: proves an `InboundOp`
+/// App variant reached the VM through the engine adapter).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppCall {
+    /// An `app_request` call.
+    Request {
+        /// The requesting node.
+        node: NodeId,
+        /// Wire request ID.
+        request_id: u32,
+        /// The converted deadline.
+        deadline: Instant,
+        /// The request bytes.
+        bytes: Vec<u8>,
+    },
+    /// An `app_request_failed` call.
+    RequestFailed {
+        /// The node the failed request was addressed to.
+        node: NodeId,
+        /// Wire request ID.
+        request_id: u32,
+        /// The error code carried by the failure.
+        code: i32,
+        /// The error message carried by the failure.
+        message: String,
+    },
+    /// An `app_response` call.
+    Response {
+        /// The responding node.
+        node: NodeId,
+        /// Wire request ID.
+        request_id: u32,
+        /// The response bytes.
+        bytes: Vec<u8>,
+    },
+    /// An `app_gossip` call.
+    Gossip {
+        /// The gossiping node.
+        node: NodeId,
+        /// The gossip bytes.
+        bytes: Vec<u8>,
+    },
+}
+
 /// The shared, mutable state behind a [`TestVm`] and its [`TestBlock`]s.
 ///
 /// A `TestBlock::accept` reaches back into this state to advance
@@ -48,6 +93,8 @@ struct Inner {
     accepted_at_height: BTreeMap<u64, Id>,
     /// The id of the last accepted block.
     last_accepted: Id,
+    /// Calls recorded by `TestVm`'s `AppHandler` impl, in call order.
+    app_calls: Vec<AppCall>,
     /// The currently preferred (leaf) block.
     preference: Id,
 }
@@ -209,6 +256,17 @@ impl TestVmObserver {
             .unwrap_or_else(|e| e.into_inner())
             .last_accepted
     }
+
+    /// The calls recorded so far by the VM's `AppHandler` impl, in call order
+    /// (Task 7 adapter tests).
+    #[must_use]
+    pub fn app_calls(&self) -> Vec<AppCall> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .app_calls
+            .clone()
+    }
 }
 
 impl TestVm {
@@ -273,40 +331,65 @@ impl AppHandler for TestVm {
     async fn app_request(
         &mut self,
         _token: &CancellationToken,
-        _node: NodeId,
-        _request_id: u32,
-        _deadline: Instant,
-        _request: &[u8],
+        node: NodeId,
+        request_id: u32,
+        deadline: Instant,
+        request: &[u8],
     ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.app_calls.push(AppCall::Request {
+            node,
+            request_id,
+            deadline,
+            bytes: request.to_vec(),
+        });
         Ok(())
     }
 
     async fn app_request_failed(
         &mut self,
         _token: &CancellationToken,
-        _node: NodeId,
-        _request_id: u32,
-        _err: AppError,
+        node: NodeId,
+        request_id: u32,
+        err: AppError,
     ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.app_calls.push(AppCall::RequestFailed {
+            node,
+            request_id,
+            code: err.code,
+            message: err.message,
+        });
         Ok(())
     }
 
     async fn app_response(
         &mut self,
         _token: &CancellationToken,
-        _node: NodeId,
-        _request_id: u32,
-        _response: &[u8],
+        node: NodeId,
+        request_id: u32,
+        response: &[u8],
     ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.app_calls.push(AppCall::Response {
+            node,
+            request_id,
+            bytes: response.to_vec(),
+        });
         Ok(())
     }
 
     async fn app_gossip(
         &mut self,
         _token: &CancellationToken,
-        _node: NodeId,
-        _msg: &[u8],
+        node: NodeId,
+        msg: &[u8],
     ) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.app_calls.push(AppCall::Gossip {
+            node,
+            bytes: msg.to_vec(),
+        });
         Ok(())
     }
 }

@@ -119,7 +119,11 @@ async fn async_op_runs_on_pool_and_drains() {
     // AppRequestFailed is classified async.
     sink.push(
         NodeId::from([3u8; 20]),
-        InboundOp::AppRequestFailed { request_id: 9 },
+        InboundOp::AppRequestFailed {
+            request_id: 9,
+            code: 0,
+            message: String::new(),
+        },
     )
     .await;
     for _ in 0..8 {

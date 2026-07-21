@@ -22,9 +22,11 @@
 //! `tests/PORTING.md`.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex as AsyncMutex, mpsc};
+use tokio_util::sync::CancellationToken;
 
 use ava_snow::state::EngineState;
 use ava_types::node_id::NodeId;
@@ -39,6 +41,15 @@ use crate::error::Result;
 use crate::snowman::bootstrap::Bootstrapper;
 use crate::snowman::engine::SnowmanEngine;
 use crate::snowman::getter::Getter;
+
+/// Convert a wire-relative deadline (nanoseconds from now) into a monotonic
+/// [`Instant`] (determinism-lint-safe: `Instant::now()` is monotonic, never
+/// wall-clock). Saturates to "now" on overflow rather than panicking.
+fn deadline_from_nanos(deadline_nanos: u64) -> Instant {
+    Instant::now()
+        .checked_add(Duration::from_nanos(deadline_nanos))
+        .unwrap_or_else(Instant::now)
+}
 
 /// Build the transition channel handed to engine adapters (`tx` clones) and the
 /// [`ChainHandler`](super::handler::ChainHandler) (`rx`). An adapter sends the
@@ -63,6 +74,13 @@ pub struct BootstrapperEngineAdapter<V, S> {
     transition: mpsc::Sender<EngineState>,
     start_req_id: u32,
     getter: Arc<Getter<V, S>>,
+    /// The same typed VM `Arc` the bootstrapper/getter share (not a second
+    /// wrap): App ops are forwarded straight to the VM's `AppHandler`.
+    vm: Arc<AsyncMutex<V>>,
+    /// Cancellation token threaded into each `AppHandler` call (`Bootstrapper`/
+    /// `Getter`/`SnowmanEngine` hold their own copy internally; the adapter
+    /// needs its own since `ChainEngine::handle` takes no token).
+    token: CancellationToken,
 }
 
 impl<V, S> BootstrapperEngineAdapter<V, S>
@@ -72,19 +90,25 @@ where
 {
     /// Wrap `boot`, requesting transitions on `transition`. `start_req_id` is the
     /// request id passed to [`Bootstrapper::start`] when the handler activates
-    /// this engine. `getter` answers inbound `Get*` requests.
+    /// this engine. `getter` answers inbound `Get*` requests. `vm` is the same
+    /// shared VM `Arc` the bootstrapper/getter hold — App ops are dispatched to
+    /// it directly. `token` is threaded into each `AppHandler` call.
     #[must_use]
     pub fn new(
         boot: Bootstrapper<V, S>,
         transition: mpsc::Sender<EngineState>,
         start_req_id: u32,
         getter: Arc<Getter<V, S>>,
+        vm: Arc<AsyncMutex<V>>,
+        token: CancellationToken,
     ) -> Self {
         Self {
             boot,
             transition,
             start_req_id,
             getter,
+            vm,
+            token,
         }
     }
 
@@ -197,7 +221,50 @@ where
                 let res = self.boot.get_accepted_failed(node, request_id).await;
                 self.after("bootstrap.get_accepted_failed", res).await;
             }
-            // Ops the bootstrapper does not consume (queries, puts, app, other
+            // App messages are VM-defined and reach the VM directly regardless
+            // of engine phase (Go dispatches AppHandler off the chain Handler,
+            // not the bootstrapper/consensus engine).
+            InboundOp::AppRequest {
+                request_id,
+                deadline_nanos,
+                bytes,
+            } => {
+                let deadline = deadline_from_nanos(deadline_nanos);
+                let mut vm = self.vm.lock().await;
+                if let Err(err) = vm
+                    .app_request(&self.token, node, request_id, deadline, &bytes)
+                    .await
+                {
+                    log_engine_error("vm.app_request", &crate::error::Error::from(err));
+                }
+            }
+            InboundOp::AppResponse { request_id, bytes } => {
+                let mut vm = self.vm.lock().await;
+                if let Err(err) = vm.app_response(&self.token, node, request_id, &bytes).await {
+                    log_engine_error("vm.app_response", &crate::error::Error::from(err));
+                }
+            }
+            InboundOp::AppGossip { bytes } => {
+                let mut vm = self.vm.lock().await;
+                if let Err(err) = vm.app_gossip(&self.token, node, &bytes).await {
+                    log_engine_error("vm.app_gossip", &crate::error::Error::from(err));
+                }
+            }
+            InboundOp::AppRequestFailed {
+                request_id,
+                code,
+                message,
+            } => {
+                let mut vm = self.vm.lock().await;
+                let app_err = ava_vm::app::AppError::new(code, message);
+                if let Err(err) = vm
+                    .app_request_failed(&self.token, node, request_id, app_err)
+                    .await
+                {
+                    log_engine_error("vm.app_request_failed", &crate::error::Error::from(err));
+                }
+            }
+            // Ops the bootstrapper does not consume (queries, puts, other
             // failures) are dropped: they are not part of the boot state machine.
             _ => {}
         }
@@ -208,6 +275,11 @@ where
 pub struct SnowmanEngineAdapter<V, S, M> {
     engine: SnowmanEngine<V, S, M>,
     getter: Arc<Getter<V, S>>,
+    /// The same typed VM `Arc` the engine/getter share (not a second wrap):
+    /// App ops are forwarded straight to the VM's `AppHandler`.
+    vm: Arc<AsyncMutex<V>>,
+    /// Cancellation token threaded into each `AppHandler` call.
+    token: CancellationToken,
 }
 
 impl<V, S, M> SnowmanEngineAdapter<V, S, M>
@@ -217,10 +289,22 @@ where
     M: ValidatorManager,
 {
     /// Wrap `engine` for handler dispatch in `EngineState::NormalOp`. `getter`
-    /// answers inbound `Get*` requests during normal operation.
+    /// answers inbound `Get*` requests during normal operation. `vm` is the
+    /// same shared VM `Arc` the engine/getter hold — App ops are dispatched to
+    /// it directly. `token` is threaded into each `AppHandler` call.
     #[must_use]
-    pub fn new(engine: SnowmanEngine<V, S, M>, getter: Arc<Getter<V, S>>) -> Self {
-        Self { engine, getter }
+    pub fn new(
+        engine: SnowmanEngine<V, S, M>,
+        getter: Arc<Getter<V, S>>,
+        vm: Arc<AsyncMutex<V>>,
+        token: CancellationToken,
+    ) -> Self {
+        Self {
+            engine,
+            getter,
+            vm,
+            token,
+        }
     }
 }
 
@@ -323,6 +407,43 @@ where
                         accepted_height,
                     )
                     .await
+            }
+            // App messages are VM-defined and reach the VM directly, bypassing
+            // consensus (Go dispatches AppHandler off the chain Handler, not
+            // the engine).
+            InboundOp::AppRequest {
+                request_id,
+                deadline_nanos,
+                bytes,
+            } => {
+                let deadline = deadline_from_nanos(deadline_nanos);
+                let mut vm = self.vm.lock().await;
+                vm.app_request(&self.token, node, request_id, deadline, &bytes)
+                    .await
+                    .map_err(crate::error::Error::from)
+            }
+            InboundOp::AppResponse { request_id, bytes } => {
+                let mut vm = self.vm.lock().await;
+                vm.app_response(&self.token, node, request_id, &bytes)
+                    .await
+                    .map_err(crate::error::Error::from)
+            }
+            InboundOp::AppGossip { bytes } => {
+                let mut vm = self.vm.lock().await;
+                vm.app_gossip(&self.token, node, &bytes)
+                    .await
+                    .map_err(crate::error::Error::from)
+            }
+            InboundOp::AppRequestFailed {
+                request_id,
+                code,
+                message,
+            } => {
+                let mut vm = self.vm.lock().await;
+                let app_err = ava_vm::app::AppError::new(code, message);
+                vm.app_request_failed(&self.token, node, request_id, app_err)
+                    .await
+                    .map_err(crate::error::Error::from)
             }
             // Bootstrap-only ops and other failures are not part of the
             // normal-operation state machine: drop them.

@@ -55,7 +55,10 @@ impl HandlerMessage {
     #[must_use]
     pub fn classify(node: NodeId, op: InboundOp) -> Self {
         let class = match &op {
-            InboundOp::AppRequestFailed { .. } => MessageClass::Async,
+            InboundOp::AppRequestFailed { .. }
+            | InboundOp::AppRequest { .. }
+            | InboundOp::AppResponse { .. }
+            | InboundOp::AppGossip { .. } => MessageClass::Async,
             _ => MessageClass::Sync,
         };
         Self { node, op, class }
