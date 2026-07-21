@@ -915,23 +915,28 @@ impl Vm for EvmVm {
         )?);
 
         let params = GossipParams::default();
-        // Both the push and pull gossipers need their own `Client` bound to
+        // Both the push and pull gossipers need a `Client` bound to
         // `TX_GOSSIP_HANDLER_ID`; `P2pNetwork::client` mints one WITHOUT
         // registering a handler (Go `Network.NewClient`/`AddHandler` are
         // likewise decoupled), which is what breaks the otherwise circular
         // dependency: the `GossipHandler` we register below needs `push`
         // already built (to forward newly-pushed items into it), so we can't
-        // get a `Client` from `add_handler` first.
+        // get a `Client` from `add_handler` first. Mint exactly ONE `Client`
+        // and `.clone()` it for the second gossiper — matching Go's
+        // `gossip.NewSystem` (`network/p2p/gossip/system.go:151-166`), which
+        // builds a single `client` and passes that SAME value to both
+        // `NewPullGossiper` and `NewPushGossiper`.
+        let client = network.client(TX_GOSSIP_HANDLER_ID);
         let push = Arc::new(PushGossiper::new(
             EthTxMarshaller,
             Arc::clone(&gossip_set),
-            network.client(TX_GOSSIP_HANDLER_ID),
+            client.clone(),
             params.clone(),
         ));
         let pull = PullGossiper::new(
             EthTxMarshaller,
             Arc::clone(&gossip_set),
-            network.client(TX_GOSSIP_HANDLER_ID),
+            client,
             Arc::clone(&network),
             params.clone(),
         );
