@@ -455,8 +455,10 @@ pub async fn drive_c_transfer(go_api: &str) -> Result<(), NetworkError> {
     };
 
     // 3. Build and sign a legacy self-transfer (value=0; a no-op that still
-    //    produces a finalized block when mined).
-    let raw_tx = build_signed_raw_tx(nonce, gas_price, ewoq_addr)?;
+    //    produces a finalized block when mined). The locally-computed hash is
+    //    unused here (this function submits from and polls the same node), so
+    //    it is discarded in favor of the RPC-echoed hash below.
+    let (raw_tx, _local_hash) = build_signed_raw_tx(nonce, gas_price, ewoq_addr)?;
 
     // 4. Issue via eth_sendRawTransaction.
     let tx_hash: String = {
@@ -494,17 +496,24 @@ pub async fn drive_c_transfer(go_api: &str) -> Result<(), NetworkError> {
     }
 }
 
-/// Submit one C-chain legacy value transfer (ewoq → ewoq) to `api`'s C-chain
-/// RPC and return the tx hash **without** waiting for the receipt. The split
-/// from [`drive_c_transfer`] lets a caller submit to one node and then poll the
-/// receipt on a *different* node (the `mixed_network_rust_proposes` detection:
-/// submit to Rust, confirm the tx surfaces network-wide).
+/// Build (sign) one C-chain legacy value transfer (ewoq → ewoq) against
+/// `api`'s current nonce/gas-price, but do NOT submit it — returns the raw
+/// `0x`-prefixed RLP hex ready for [`submit_raw`] alongside the
+/// locally-computed tx hash.
+///
+/// T16 tx-gossip race fix: the signing happens entirely client-side, so the
+/// hash is known before the tx ever touches the network. Splitting "build" from
+/// "submit" lets a caller start polling an *observer* node's mempool for this
+/// exact hash BEFORE submitting to the source node, eliminating the
+/// submission-to-first-poll gap — on a sub-second-block-time net that gap
+/// alone can lose the race to a block that gossips + mines before a
+/// post-submission poll ever gets a chance to observe the pending state.
 ///
 /// # Errors
 /// Returns [`NetworkError::Timeout`] on any RPC failure or parse error.
-pub async fn submit_c_transfer(api: &str) -> Result<String, NetworkError> {
+pub async fn build_c_transfer(api: &str) -> Result<(String, String), NetworkError> {
     let ep = rpc::Endpoint::parse(api)
-        .map_err(|e| NetworkError::Timeout(format!("submit_c_transfer: bad url: {e}")))?;
+        .map_err(|e| NetworkError::Timeout(format!("build_c_transfer: bad url: {e}")))?;
 
     let ewoq_addr = {
         let key = ewoq_key()?;
@@ -539,15 +548,43 @@ pub async fn submit_c_transfer(api: &str) -> Result<String, NetworkError> {
             .map_err(|e| NetworkError::Timeout(format!("gas price parse: {e}")))?;
         if raw == 0 { 1_000_000_000 } else { raw }
     };
-    let raw_tx = build_signed_raw_tx(nonce, gas_price, ewoq_addr)?;
-    let hex = format!("0x{}", hex::encode(&raw_tx));
-    let params = format!(r#"["{hex}"]"#);
+    let (raw_tx, tx_hash) = build_signed_raw_tx(nonce, gas_price, ewoq_addr)?;
+    let raw_hex = format!("0x{}", hex::encode(&raw_tx));
+    Ok((raw_hex, tx_hash))
+}
+
+/// Submit a previously-[`build_c_transfer`]-built raw tx to `api` via
+/// `eth_sendRawTransaction`, returning the tx hash the node echoes back.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] on any RPC failure or parse error.
+pub async fn submit_raw(api: &str, raw_hex: &str) -> Result<String, NetworkError> {
+    let ep = rpc::Endpoint::parse(api)
+        .map_err(|e| NetworkError::Timeout(format!("submit_raw: bad url: {e}")))?;
+    let params = format!(r#"["{raw_hex}"]"#);
     let v = rpc::call(&ep, "/ext/bc/C/rpc", "eth_sendRawTransaction", &params)
         .await
         .map_err(|e| NetworkError::Timeout(format!("eth_sendRawTransaction: {e}")))?;
     v.as_str().map(str::to_owned).ok_or_else(|| {
         NetworkError::Timeout("eth_sendRawTransaction: expected string tx hash".to_owned())
     })
+}
+
+/// Submit one C-chain legacy value transfer (ewoq → ewoq) to `api`'s C-chain
+/// RPC and return the tx hash **without** waiting for the receipt. The split
+/// from [`drive_c_transfer`] lets a caller submit to one node and then poll the
+/// receipt on a *different* node (the `mixed_network_rust_proposes` detection:
+/// submit to Rust, confirm the tx surfaces network-wide).
+///
+/// A thin composition of [`build_c_transfer`] + [`submit_raw`]; callers that
+/// need the tx hash before submission (the T16 pre-armed pending-poll race
+/// fix) should call those two directly instead.
+///
+/// # Errors
+/// Returns [`NetworkError::Timeout`] on any RPC failure or parse error.
+pub async fn submit_c_transfer(api: &str) -> Result<String, NetworkError> {
+    let (raw_hex, _local_hash) = build_c_transfer(api).await?;
+    submit_raw(api, &raw_hex).await
 }
 
 /// Poll `eth_getTransactionReceipt` for `tx_hash` on `api`'s C-chain RPC until a
@@ -586,14 +623,28 @@ pub async fn await_c_receipt(
     }
 }
 
+/// Poll cadence for [`await_c_pending_tx`] (T16). A live run
+/// (`mixed_network_tx_gossip`, 2026-07) found all 3 Go→Rust attempts hit
+/// "already mined" with a 1 s cadence: this net mines blocks in well under a
+/// second, so a full 1 s gap between polls could step clean over the entire
+/// pending window between submission and mining. `app_gossip`'s own push
+/// period is ~100ms, so 50ms keeps at least one full poll inside every gossip
+/// delivery window without hammering the node.
+const PENDING_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Poll `eth_getTransactionByHash` for `tx_hash` on `api_base`'s C-chain RPC
 /// until it is visible with `blockHash == null` (admitted into this node's own
 /// mempool but not yet mined) — `Ok(true)` — or `within` elapses (`Ok(false)`).
+/// The first read fires immediately (no initial sleep); subsequent reads are
+/// spaced by [`PENDING_POLL_INTERVAL`].
 ///
 /// This is the tx-gossip detection primitive (T16): a tx submitted to node A
 /// that becomes visible-and-pending on node B, *before* B ever mines it, proves
 /// B's mempool received the tx via gossip — as opposed to merely observing it
-/// after the fact inside an already-accepted block.
+/// after the fact inside an already-accepted block. Callers on a fast-block net
+/// should start this poll BEFORE submitting the tx (see
+/// [`build_c_transfer`]/[`submit_raw`]) so there is no submission-to-first-poll
+/// gap for a sub-second block time to win.
 ///
 /// # Errors
 /// Returns [`NetworkError::Timeout`] only if `api_base` is not a valid URL.
@@ -621,7 +672,7 @@ pub async fn await_c_pending_tx(
         if std::time::Instant::now() >= deadline {
             return Ok(false);
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(PENDING_POLL_INTERVAL).await;
     }
 }
 
@@ -764,9 +815,22 @@ fn decode_indexed_container(bytes_hex: &str) -> Result<Vec<u8>, NetworkError> {
     Ok(container.to_vec())
 }
 
-/// Construct and sign a legacy EIP-155 self-transfer transaction, returning its
-/// raw RLP-encoded bytes ready for `eth_sendRawTransaction`.
-fn build_signed_raw_tx(nonce: u64, gas_price: u128, to: Address) -> Result<Vec<u8>, NetworkError> {
+/// Construct and sign a legacy EIP-155 self-transfer transaction, returning
+/// its raw RLP-encoded bytes (ready for `eth_sendRawTransaction`) alongside
+/// its locally-computed tx hash (`0x`-prefixed lowercase hex, read straight
+/// off the signed envelope via `TransactionSigned::hash`).
+///
+/// Computing the hash locally — the signing already happens client-side, so
+/// nothing about it depends on any node — lets a caller know a tx's identity
+/// BEFORE it is ever submitted (T16: this is what lets
+/// [`build_c_transfer`]'s caller pre-arm an observer's pending-poll ahead of
+/// submission, closing the submit-to-first-poll race a sub-second block time
+/// can otherwise win outright).
+fn build_signed_raw_tx(
+    nonce: u64,
+    gas_price: u128,
+    to: Address,
+) -> Result<(Vec<u8>, String), NetworkError> {
     let key = ewoq_key()?;
 
     let tx = TxLegacy {
@@ -790,9 +854,10 @@ fn build_signed_raw_tx(nonce: u64, gas_price: u128, to: Address) -> Result<Vec<u
     let sig = EvmSignature::new(r, s, rsv[64] == 1);
     let signed = TransactionSigned::Legacy(tx.into_signed(sig));
 
+    let tx_hash = format!("{}", signed.hash());
     let mut out = Vec::new();
     signed.encode(&mut out);
-    Ok(out)
+    Ok((out, tx_hash))
 }
 
 /// Load the well-known ewoq private key.

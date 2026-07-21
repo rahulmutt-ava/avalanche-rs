@@ -220,58 +220,132 @@ async fn mixed_network_single_beacon() {
     assert!(net.rust_follower().is_some(), "rust follower present");
 }
 
-/// Assert that a tx submitted to `from_api` surfaces as PENDING on `to_api`
+/// How a single gossip-pending race attempt resolved (T16 diagnostic split —
+/// a live run found the old submit-then-poll ordering false-FAILED on a
+/// sub-second-block-time net, and a bare bool collapsed two very different
+/// causes into the same "mined" branch).
+#[cfg(feature = "live")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingRaceOutcome {
+    /// The observer's mempool showed the tx pending (`blockHash == null`)
+    /// before it was mined — gossip proven.
+    Pending,
+    /// The observer never showed the tx pending, but it WAS already mined by
+    /// the time we checked — even a pre-armed, 50ms-cadence poll lost the
+    /// race (expected to be rare; tolerated as inconclusive, not a failure).
+    MinedBeforePending,
+    /// The observer showed the tx neither pending nor mined within the poll
+    /// window — genuine non-delivery.
+    NeitherObserved,
+}
+
+/// Assert that a tx built against `from_api` surfaces as PENDING on `to_api`
 /// (`blockHash == null`, per [`await_c_pending_tx`]) — proof that `to_api`'s
 /// own mempool received the tx via `app_gossip`, not merely learned of it
-/// after the fact by processing an already-accepted block. Retries with a
-/// fresh tx up to 3× when the network races ahead of the 1 s poll interval
-/// (mined before any pending read lands) — that outcome is inconclusive about
-/// gossip, not a failure, so a fresh attempt gets a clean shot at observing the
-/// pending window.
+/// after the fact by processing an already-accepted block.
+///
+/// T16 live finding: the original design called `submit_c_transfer` (build +
+/// submit in one RPC round trip) and only THEN started polling `to_api`. On
+/// this net blocks mine in well under a second, so the submission call itself
+/// could consume the entire pending window before the first poll ever ran —
+/// all 3 Go→Rust attempts hit "already mined" even though gossip was working.
+/// Fixed by decoupling build from submit ([`build_c_transfer`] /
+/// [`submit_raw`]): the tx hash is known the instant it is signed (client-side,
+/// no RPC needed), so the observer's pending-poll is spawned as its own task
+/// and PRE-ARMED — running and already mid-poll — *before* the source node
+/// ever sees the tx, eliminating the submission-to-first-poll gap entirely.
+/// [`await_c_pending_tx`]'s own cadence is now 50ms (was 1s), comfortably
+/// inside `app_gossip`'s ~100ms push period.
+///
+/// Retries with a fresh tx up to 3× on [`PendingRaceOutcome::MinedBeforePending`]
+/// (inconclusive about gossip, not a failure) — expected to be a rare path now
+/// that pre-arming closes the dominant race.
 ///
 /// # Panics
-/// Panics if a tx never appears pending NOR mined on `to_api` within the poll
-/// window, or if gossip races ahead of the poll window on all 3 attempts.
+/// Panics if a tx is observed neither pending nor mined on `to_api` within the
+/// poll window, or if the race resolves `MinedBeforePending` on all 3 attempts.
 #[cfg(feature = "live")]
 async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &str) {
     use std::time::Duration;
 
-    use ava_differential::livenet::{await_c_pending_tx, await_c_receipt, submit_c_transfer};
+    use ava_differential::livenet::{
+        await_c_pending_tx, await_c_receipt, build_c_transfer, submit_raw,
+    };
 
     for attempt in 0..3u32 {
-        let tx_hash = submit_c_transfer(from_api)
+        // Build + hash locally BEFORE submitting anything.
+        let (raw_hex, tx_hash) = build_c_transfer(from_api)
             .await
-            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: submit_c_transfer: {e}"));
+            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: build_c_transfer: {e}"));
+
+        // Pre-arm the observer's pending-poll as its own task — it starts
+        // polling `to_api` immediately, BEFORE the source node has even seen
+        // the tx, so there is no submission-to-first-poll gap left to race.
+        let observer_api = to_api.to_owned();
+        let observer_hash = tx_hash.clone();
+        let pending_task = tokio::spawn(async move {
+            await_c_pending_tx(&observer_api, &observer_hash, Duration::from_secs(20)).await
+        });
+
+        submit_raw(from_api, &raw_hex)
+            .await
+            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: submit_raw: {e}"));
         eprintln!(
-            "{label} attempt {attempt}: submitted {tx_hash}; polling {to_api} for pending-before-mined"
+            "{label} attempt {attempt}: submitted {tx_hash} to {from_api} \
+             (pending-poll on {to_api} pre-armed before submission)"
         );
-        let pending_seen = await_c_pending_tx(to_api, &tx_hash, Duration::from_secs(30))
+
+        let pending_seen = pending_task
             .await
+            .unwrap_or_else(|e| {
+                panic!("{label} attempt {attempt}: pending-poll task panicked: {e}")
+            })
             .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_pending_tx: {e}"));
-        if pending_seen {
-            eprintln!(
-                "{label} attempt {attempt}: {tx_hash} observed PENDING on {to_api} — gossip proven"
-            );
-            return;
+
+        let outcome = if pending_seen {
+            PendingRaceOutcome::Pending
+        } else {
+            // Never observed pending even pre-armed — check whether it raced
+            // ahead (mined too fast for even a 50ms-cadence poll) rather than
+            // never arriving at all.
+            let mined = await_c_receipt(to_api, &tx_hash, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_receipt: {e}"));
+            if mined {
+                PendingRaceOutcome::MinedBeforePending
+            } else {
+                PendingRaceOutcome::NeitherObserved
+            }
+        };
+
+        match outcome {
+            PendingRaceOutcome::Pending => {
+                eprintln!(
+                    "{label} attempt {attempt}: {tx_hash} observed PENDING on {to_api} — \
+                     gossip proven"
+                );
+                return;
+            }
+            PendingRaceOutcome::MinedBeforePending => {
+                eprintln!(
+                    "{label} attempt {attempt}: {tx_hash} was already mined on {to_api} before \
+                     the pre-armed pending-poll caught it (rare, sub-50ms delivery) — retrying \
+                     with a fresh tx"
+                );
+                continue;
+            }
+            PendingRaceOutcome::NeitherObserved => {
+                panic!(
+                    "{label} attempt {attempt}: {tx_hash} never appeared pending NOR mined on \
+                     {to_api} within the poll window — gossip did not deliver it"
+                );
+            }
         }
-        // Never observed pending — check whether it raced ahead (mined too
-        // fast to ever be caught mid-flight) rather than never arriving.
-        let mined = await_c_receipt(to_api, &tx_hash, Duration::from_secs(5))
-            .await
-            .unwrap_or_else(|e| panic!("{label} attempt {attempt}: await_c_receipt: {e}"));
-        if mined {
-            eprintln!(
-                "{label} attempt {attempt}: {tx_hash} was already mined on {to_api} before a \
-                 pending read landed (raced the poll interval) — retrying with a fresh tx"
-            );
-            continue;
-        }
-        panic!(
-            "{label} attempt {attempt}: {tx_hash} never appeared pending NOR mined on {to_api} \
-             within the poll window — gossip did not deliver it"
-        );
     }
-    panic!("{label}: gossip raced ahead of the pending-poll window on all 3 attempts");
+    panic!(
+        "{label}: gossip raced ahead of the pre-armed pending-poll (MinedBeforePending) on all \
+         3 attempts"
+    );
 }
 
 /// Live tx-gossip arm (T16): boot 4 Go + 1 Rust validator, then prove
