@@ -501,6 +501,135 @@ fn data_hex(bytes: &[u8]) -> Value {
     Value::String(format!("0x{}", hex::encode(bytes)))
 }
 
+// ─── eth_getTransactionByHash (pool-pending + mined) ─────────────────────────
+// (cchain-tx-gossip task 13, over Task 1's EvmMempool + Task 3's
+// AcceptedTxIndex — the same seams `eth_sendRawTransaction`/
+// `eth_getTransactionReceipt` above already exercise.)
+
+#[test]
+fn get_transaction_by_hash_unknown_is_null() {
+    let (_d, rpc, _mempool, _tx_index) = setup();
+    let unknown = B256::repeat_byte(0x66);
+    assert_eq!(
+        rpc.get_transaction_by_hash(unknown).expect("lookup"),
+        Value::Null,
+        "an unknown hash must return a null result, not an error (coreth: nil, nil)"
+    );
+}
+
+#[test]
+fn get_transaction_by_hash_pending_has_null_block_hash() {
+    let (_d, rpc, _mempool, _tx_index) = setup();
+    let raw = funded_legacy_tx(0);
+
+    // The tx's own hash + signature, decoded independently of the RPC path
+    // (the same "decode as a test oracle" convention
+    // `send_raw_transaction_admits_and_returns_hash` uses above), so this
+    // test verifies the handler's `v`/`r`/`s` against a value it derives
+    // itself, not just against whatever the handler happens to emit.
+    let decoded =
+        TransactionSigned::decode_2718(&mut raw.as_ref()).expect("decode_2718 (test oracle)");
+    let want_hash = *decoded.tx_hash();
+    let sig = decoded.signature();
+    let y_parity = u64::from(sig.v());
+    let want_v = U256::from(CHAIN_ID) * U256::from(2u64) + U256::from(35u64) + U256::from(y_parity);
+
+    rpc.send_raw_transaction(&raw)
+        .expect("send_raw_transaction");
+
+    let got = rpc
+        .get_transaction_by_hash(want_hash)
+        .expect("get_transaction_by_hash");
+    assert_eq!(
+        got["blockHash"],
+        Value::Null,
+        "a pooled (un-mined) tx has no block yet — coreth pending shape"
+    );
+    assert_eq!(got["blockNumber"], Value::Null);
+    assert_eq!(got["transactionIndex"], Value::Null);
+    assert_eq!(got["hash"], data_hex(want_hash.as_slice()));
+    assert_eq!(got["nonce"], "0x0");
+    assert_eq!(got["from"], data_hex(funded_address().as_slice()));
+    assert_eq!(got["to"], data_hex(alice().as_slice()));
+    assert_eq!(got["value"], "0x1");
+    assert_eq!(got["gas"], "0x5208", "21000 gas (funded_legacy_tx)");
+    assert_eq!(
+        got["gasPrice"], "0x77359400",
+        "2 gwei gas price (funded_legacy_tx)"
+    );
+    assert_eq!(got["input"], "0x");
+    assert_eq!(got["type"], "0x0", "legacy tx type");
+    assert_eq!(
+        got["chainId"],
+        Value::String(format!("0x{CHAIN_ID:x}")),
+        "protected (EIP-155) legacy tx must report chainId"
+    );
+    assert_eq!(got["r"], Value::String(format!("0x{:x}", sig.r())));
+    assert_eq!(got["s"], Value::String(format!("0x{:x}", sig.s())));
+    assert_eq!(
+        got["v"],
+        Value::String(format!("0x{want_v:x}")),
+        "EIP-155 chain-id-encoded v"
+    );
+}
+
+#[test]
+fn get_transaction_by_hash_mined_reports_available_fields_only() {
+    // The mined path resolves through the SAME AcceptedTxIndex seam
+    // `get_transaction_receipt_null_when_unknown_then_served_after_accept`
+    // above seeds directly (no live block-builder harness exists in this
+    // test module to actually mine a block; see that test's precedent).
+    let (_d, rpc, _mempool, tx_index) = setup();
+
+    let tx_hash = B256::repeat_byte(0x43);
+    let block_hash = B256::repeat_byte(0x05);
+    let to = Address::repeat_byte(0xEE);
+    let from = funded_address();
+    tx_index.record(vec![TxReceiptRecord {
+        tx_hash,
+        block_hash,
+        block_number: 5,
+        tx_index: 2,
+        from,
+        to: Some(to),
+        contract_address: None,
+        gas_used: 21_000,
+        cumulative_gas_used: 21_000,
+        effective_gas_price: 2_000_000_000,
+        success: true,
+        logs: Vec::new(),
+        tx_type: 0,
+        first_log_index: 0,
+    }]);
+
+    let got = rpc
+        .get_transaction_by_hash(tx_hash)
+        .expect("get_transaction_by_hash");
+
+    // Available from the TxReceiptRecord: real, not fabricated.
+    assert_eq!(got["blockHash"], data_hex(block_hash.as_slice()));
+    assert_eq!(got["blockNumber"], "0x5");
+    assert_eq!(got["transactionIndex"], "0x2");
+    assert_eq!(got["hash"], data_hex(tx_hash.as_slice()));
+    assert_eq!(got["from"], data_hex(from.as_slice()));
+    assert_eq!(got["to"], data_hex(to.as_slice()));
+    assert_eq!(got["type"], "0x0");
+
+    // NOT reconstructable today (CanonicalStore does not persist the block's
+    // Txs RLP list — see EthRpc::get_transaction_by_hash's doc comment for
+    // the honest gap): reported as null, never fabricated.
+    for field in [
+        "nonce", "value", "gas", "gasPrice", "input", "v", "r", "s", "chainId",
+    ] {
+        assert_eq!(
+            got[field],
+            Value::Null,
+            "mined tx-body field {field:?} must be null (unreachable without \
+             block-body storage), not a fabricated value"
+        );
+    }
+}
+
 // ─── debug_traceTransaction (deferred) ───────────────────────────────────────
 
 #[test]

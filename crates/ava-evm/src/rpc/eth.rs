@@ -47,9 +47,9 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, ConfigureEvm, Decodable2718, EMPTY_ROOT_HASH, Evm, ExecutionResult,
-    KECCAK_EMPTY, Output, ProviderError, SignerRecoverable, StateProviderDatabase,
-    TransactionSigned, TxEnv, TxKind, U256, logs_bloom,
+    Address, B256, Bytes, ConfigureEvm, ConsensusTx, Decodable2718, EMPTY_ROOT_HASH, Evm,
+    ExecutionResult, KECCAK_EMPTY, Output, ProviderError, RecoveredTx, SignerRecoverable,
+    StateProviderDatabase, TransactionSigned, TxEnv, TxKind, Typed2718, U256, logs_bloom,
 };
 use parking_lot::Mutex;
 use ruint::aliases::U256 as RuintU256;
@@ -61,7 +61,7 @@ use crate::error::{Error, Result};
 use crate::evmconfig::{AvaEvmConfig, AvaFeeState, AvaNextBlockCtx};
 use crate::feerules;
 use crate::mempool::{AdmissionRules, EvmMempool, SenderAccount};
-use crate::receipts::AcceptedTxIndex;
+use crate::receipts::{AcceptedTxIndex, TxReceiptRecord};
 use crate::state::FirewoodStateProvider;
 
 // ─── Block tags ──────────────────────────────────────────────────────────────
@@ -386,6 +386,49 @@ impl EthRpc {
         }))
     }
 
+    /// `eth_getTransactionByHash` — resolves `hash` against the accepted-tx
+    /// index first (coreth `internal/ethapi/api.go` `GetTransactionByHash`'s
+    /// finalized-tx branch, `s.b.GetTransaction`), then the EVM mempool (its
+    /// pool branch, `s.b.GetPoolTransaction`), returning `null` if neither
+    /// knows `hash` (coreth returns `(nil, nil)` there too — never an error
+    /// for an unknown hash).
+    ///
+    /// The **pool** shape is the FULL geth `RPCTransaction` (coreth
+    /// `newRPCTransaction`/`NewRPCTransaction` with a zero block hash): every
+    /// tx-body field is available from the pooled [`RecoveredTx`], so only
+    /// the block-location fields are the pending sentinel (`null` —
+    /// `blockHash`/`blockNumber`/`transactionIndex`, matching geth: an
+    /// un-mined tx has no block yet).
+    ///
+    /// The **mined** shape is intentionally PARTIAL. [`AcceptedTxIndex`] only
+    /// retains a [`TxReceiptRecord`] per accepted tx (hash / block location /
+    /// `from`/`to` / gas used / tx type — see [`crate::receipts`]), not the
+    /// tx's own signed body: [`CanonicalStore`] persists only the header
+    /// commitment + `ext_data` (the atomic-tx batch), never the block's `Txs`
+    /// RLP list — the same documented gap [`crate::vm::EvmVm`]'s `get_block`
+    /// cites (full block-body storage is deferred to the reth-db
+    /// history-schema wiring, M6.23/M6.24 follow-up). So a mined tx's
+    /// `nonce`/`value`/`gas`/`gasPrice` (or `maxFeePerGas`/
+    /// `maxPriorityFeePerGas`)/`input`/`v`/`r`/`s`/`chainId` are reported as
+    /// `null` rather than fabricated — a DEVIATION from geth/coreth, which
+    /// always populates every field for a mined tx. Closing this gap needs
+    /// the same block-body persistence already tracked as a follow-up
+    /// elsewhere in this crate; it is not invented here.
+    ///
+    /// # Errors
+    /// Currently infallible (both lookups return `Option`, never an error),
+    /// but returns [`Result`] for API symmetry with the other handlers (the
+    /// same convention [`Self::get_transaction_receipt`] uses).
+    pub fn get_transaction_by_hash(&self, hash: B256) -> Result<Value> {
+        if let Some(rec) = self.tx_index.get(&hash) {
+            return Ok(mined_tx_json_partial(&rec));
+        }
+        if let Some(tx) = self.mempool.lock().get(&hash) {
+            return Ok(pending_tx_json(&tx));
+        }
+        Ok(Value::Null)
+    }
+
     // ─── eth_call / eth_estimateGas ────────────────────────────────────────────
 
     /// `eth_call` — execute a read-only call against the latest accepted state and
@@ -646,6 +689,119 @@ fn call_output(output: &Output) -> &[u8] {
         Output::Call(bytes) => bytes,
         Output::Create(bytes, _) => bytes,
     }
+}
+
+// ─── eth_getTransactionByHash JSON shapes ───────────────────────────────────
+
+/// The FULL pending-tx `RPCTransaction` shape (coreth `newRPCTransaction`
+/// called with a zero block hash): every field the tx itself carries is
+/// populated from `tx`; `blockHash`/`blockNumber`/`transactionIndex` are the
+/// geth "not yet mined" sentinel (`null`).
+///
+/// Field presence per tx type mirrors coreth's `newRPCTransaction` switch on
+/// `tx.Type()`, keyed here off [`ConsensusTx::gas_price`] (`Some` for a
+/// legacy or EIP-2930 tx — both carry a single `gasPrice`; `None` for a
+/// fee-market tx, which instead carries `maxFeePerGas`/`maxPriorityFeePerGas`
+/// and reports `gasPrice` as the fee cap since no base fee is known yet for
+/// an un-mined tx — coreth's `else { result.GasPrice = tx.GasFeeCap() }`
+/// branch).
+fn pending_tx_json(tx: &RecoveredTx) -> Value {
+    let inner = tx.inner();
+    let sig = inner.signature();
+    let ty = inner.ty();
+    let y_parity = u64::from(sig.v());
+    let chain_id = ConsensusTx::chain_id(inner);
+
+    let mut obj = json!({
+        "blockHash": Value::Null,
+        "blockNumber": Value::Null,
+        "transactionIndex": Value::Null,
+        "hash": data(tx.hash().as_slice()),
+        "nonce": quantity(ConsensusTx::nonce(inner)),
+        "from": data(tx.signer().as_slice()),
+        "to": ConsensusTx::to(inner).map_or(Value::Null, |a| data(a.as_slice())),
+        "value": quantity_u256(ConsensusTx::value(inner)),
+        "gas": quantity(ConsensusTx::gas_limit(inner)),
+        "input": data(ConsensusTx::input(inner)),
+        "type": quantity(u64::from(ty)),
+        "r": quantity_u256(sig.r()),
+        "s": quantity_u256(sig.s()),
+    });
+
+    match ConsensusTx::gas_price(inner) {
+        Some(gas_price) => {
+            obj["gasPrice"] = quantity_u128(gas_price);
+            if ty == 0 {
+                // Legacy: `v` is EIP-155 chain-id-encoded when protected
+                // (coreth `tx.RawSignatureValues()`), else the bare 27/28;
+                // `chainId` is included only when protected (coreth
+                // `newRPCTransaction`'s `LegacyTxType` arm: `if id.Sign() !=
+                // 0`).
+                obj["v"] = match chain_id {
+                    Some(cid) => quantity_u256(legacy_wire_v(cid, y_parity)),
+                    None => quantity(27u64.saturating_add(y_parity)),
+                };
+                if let Some(cid) = chain_id {
+                    obj["chainId"] = quantity(cid);
+                }
+            } else {
+                // EIP-2930: `v` is the bare y-parity (coreth
+                // `RawSignatureValues` for any typed tx), `chainId` always
+                // present.
+                obj["v"] = quantity(y_parity);
+                obj["chainId"] = quantity(chain_id.unwrap_or(0));
+            }
+        }
+        None => {
+            // A fee-market tx (EIP-1559/4844/7702).
+            let max_fee = ConsensusTx::max_fee_per_gas(inner);
+            let tip = ConsensusTx::max_priority_fee_per_gas(inner).unwrap_or(max_fee);
+            obj["gasPrice"] = quantity_u128(max_fee);
+            obj["maxFeePerGas"] = quantity_u128(max_fee);
+            obj["maxPriorityFeePerGas"] = quantity_u128(tip);
+            obj["v"] = quantity(y_parity);
+            obj["chainId"] = quantity(chain_id.unwrap_or(0));
+        }
+    }
+    obj
+}
+
+/// The wire `v` for a PROTECTED legacy tx (coreth `RawSignatureValues`):
+/// `chain_id * 2 + 35 + y_parity` (EIP-155). Widened to [`U256`] (via
+/// saturating arithmetic, never expected to saturate for a real chain id) so
+/// no chain id can overflow this computation.
+fn legacy_wire_v(chain_id: u64, y_parity: u64) -> U256 {
+    U256::from(chain_id)
+        .saturating_mul(U256::from(2u64))
+        .saturating_add(U256::from(35u64))
+        .saturating_add(U256::from(y_parity))
+}
+
+/// The PARTIAL mined-tx shape built from a [`TxReceiptRecord`] alone (see
+/// [`EthRpc::get_transaction_by_hash`]'s docs for why this is partial, not
+/// fabricated, and what closes the gap).
+fn mined_tx_json_partial(rec: &TxReceiptRecord) -> Value {
+    json!({
+        "blockHash": data(rec.block_hash.as_slice()),
+        "blockNumber": quantity(rec.block_number),
+        "transactionIndex": quantity(rec.tx_index),
+        "hash": data(rec.tx_hash.as_slice()),
+        "from": data(rec.from.as_slice()),
+        "to": rec.to.map_or(Value::Null, |a| data(a.as_slice())),
+        "type": quantity(u64::from(rec.tx_type)),
+        // NOT reconstructable from the receipt record alone (see the doc
+        // comment on `EthRpc::get_transaction_by_hash`) — reported as `null`
+        // rather than fabricated.
+        "nonce": Value::Null,
+        "value": Value::Null,
+        "gas": Value::Null,
+        "gasPrice": Value::Null,
+        "input": Value::Null,
+        "v": Value::Null,
+        "r": Value::Null,
+        "s": Value::Null,
+        "chainId": Value::Null,
+    })
 }
 
 // ─── JSON encoding (Ethereum JSON-RPC conventions) ──────────────────────────────

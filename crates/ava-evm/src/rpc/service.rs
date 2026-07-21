@@ -181,6 +181,10 @@ impl EthHttpService {
                 let hash = b256_param(params, 0)?;
                 domain(self.eth.get_transaction_receipt(hash))
             }
+            "eth_getTransactionByHash" => {
+                let hash = b256_param(params, 0)?;
+                domain(self.eth.get_transaction_by_hash(hash))
+            }
             other => Err(Failure {
                 code: code::METHOD_NOT_FOUND,
                 message: format!("the method {other} does not exist/is not available"),
