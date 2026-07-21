@@ -33,8 +33,8 @@ impl InboundHandler for TestHandler {
 
 #[async_trait::async_trait]
 impl ExternalHandler for TestHandler {
-    fn connected(&self, _node_id: NodeId, _version: &AppVersion, _subnet_id: Id) {}
-    fn disconnected(&self, _node_id: NodeId) {}
+    async fn connected(&self, _node_id: NodeId, _version: &AppVersion, _subnet_id: Id) {}
+    async fn disconnected(&self, _node_id: NodeId) {}
 }
 
 #[test]

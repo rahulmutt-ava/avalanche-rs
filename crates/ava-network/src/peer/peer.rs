@@ -501,7 +501,7 @@ impl Peer {
 
         match inbound.message {
             M::Handshake(h) => self.handle_handshake(h),
-            M::PeerList(pl) => self.handle_peer_list(pl),
+            M::PeerList(pl) => self.handle_peer_list(pl).await,
             M::GetPeerList(gpl) => self.handle_get_peer_list(gpl),
             M::Ping(ping) => self.handle_ping(ping),
             M::Pong(pong) => self.handle_pong(pong),

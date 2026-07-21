@@ -262,7 +262,7 @@ impl NetworkImpl {
             if let Some(m) = &this.metrics {
                 m.observe_disconnected();
             }
-            this.peer_config.router.disconnected(node);
+            this.peer_config.router.disconnected(node).await;
         });
     }
 

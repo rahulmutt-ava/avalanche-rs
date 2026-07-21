@@ -194,7 +194,7 @@ impl Peer {
     /// track each `ClaimedIpPort` (a bad signed IP is dropped, not fatal — Go
     /// logs and skips). If we have processed the peer's `Handshake` and the
     /// handshake is not yet finished, complete it.
-    pub(crate) fn handle_peer_list(self: &Arc<Self>, pl: p2p::PeerList) -> crate::Result<()> {
+    pub(crate) async fn handle_peer_list(self: &Arc<Self>, pl: p2p::PeerList) -> crate::Result<()> {
         let now = self.cfg.clock.unix();
         for claimed in &pl.claimed_ip_ports {
             // Track only verified claims; ignore (don't disconnect on) a bad one.
@@ -208,7 +208,7 @@ impl Peer {
         );
 
         if self.got_handshake.load(Ordering::Acquire) && !self.finished_handshake.is_cancelled() {
-            self.finish_handshake();
+            self.finish_handshake().await;
         }
         Ok(())
     }
@@ -295,7 +295,15 @@ impl Peer {
 
     /// Finalize the handshake: latch `finished_handshake` and notify the router
     /// (`ExternalHandler::connected`) for each shared subnet (`specs/05` §3.7).
-    fn finish_handshake(self: &Arc<Self>) {
+    ///
+    /// Awaits the router's `connected` call to completion before returning
+    /// (review follow-up, Task 8): this function is only ever called from
+    /// `handle_peer_list`, itself only ever called (awaited) from the peer's
+    /// single-threaded inbound read loop (`Peer::handle_inbound`), so by the
+    /// time this returns, the `Connected` notification has been fully
+    /// delivered to every chain and the read loop is safe to move on to the
+    /// next inbound frame from this peer.
+    async fn finish_handshake(self: &Arc<Self>) {
         self.finished_handshake.cancel();
 
         let version = self
@@ -316,7 +324,8 @@ impl Peer {
         // M2.14/M2.15 notify on the primary network.
         self.cfg
             .router
-            .connected(self.id, &version, ava_types::id::Id::default());
+            .connected(self.id, &version, ava_types::id::Id::default())
+            .await;
     }
 }
 

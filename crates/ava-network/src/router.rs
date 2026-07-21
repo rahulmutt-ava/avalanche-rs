@@ -41,12 +41,25 @@ pub trait InboundHandler: Send + Sync {
 
 /// Adds peer lifecycle to [`InboundHandler`]. The `Network` calls these; `06`'s
 /// ChainRouter implements it.
+///
+/// **Ordering note (review follow-up on Task 8):** both methods are `async`
+/// and MUST be awaited by the caller before it proceeds — Go's
+/// `chain_router.Connected`/`Disconnected` push into every chain handler
+/// synchronously before returning, and callers here (`Peer::finish_handshake`,
+/// `NetworkImpl::spawn_watcher`) rely on that same per-call
+/// completion-before-return: a peer's `Connected` notification must be fully
+/// delivered before any of that peer's later inbound ops are forwarded, or a
+/// consensus engine could observe an inbound op from a node it hasn't been
+/// told is `Connected` yet. A detached (`tokio::spawn`-and-forget) impl breaks
+/// this guarantee even though the trait signature can't see it — see
+/// `ava_engine::networking::router::ChainRouter::connected`/`disconnected` for
+/// the concrete fix.
 #[async_trait::async_trait]
 pub trait ExternalHandler: InboundHandler {
     /// A peer finished its handshake and shares `subnet_id` with us. Invoked once
     /// per tracked subnet the peer shares (Go iterates subnets).
-    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id);
+    async fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id);
 
     /// A peer disconnected (its last actor task dropped).
-    fn disconnected(&self, node_id: NodeId);
+    async fn disconnected(&self, node_id: NodeId);
 }

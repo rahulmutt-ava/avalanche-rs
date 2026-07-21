@@ -340,12 +340,31 @@ pub trait Router: Send + Sync {
     /// `chain_router.go` `Connected`). Default no-op so existing test `Router`
     /// stubs (predating this method) keep compiling; [`ChainRouter`] overrides
     /// it to actually broadcast.
-    fn connected(&self, _node: NodeId, _version: Application) {}
+    ///
+    /// **`async` and MUST be awaited to completion by the caller** (review
+    /// follow-up, Task 8): Go's `chain_router.Connected` pushes into every
+    /// chain handler synchronously before returning, and callers here
+    /// (`ava-network`'s `Peer::finish_handshake`, itself awaited inline from
+    /// the peer's single-threaded inbound read loop) rely on that same
+    /// per-call completion-before-return guarantee — a later inbound op from
+    /// the same peer must never be forwarded to a chain before that chain has
+    /// finished observing this peer's `Connected`. An earlier revision of this
+    /// method used a detached `tokio::spawn` per chain, which broke that
+    /// guarantee (the spawned push could still be pending when the caller
+    /// returned and the read loop moved on to the next inbound frame) even
+    /// though nothing in the trait signature could catch it — hence the
+    /// explicit callout here. Note this only orders each *call*, not
+    /// concurrent *callers*: two racing `connected`/`disconnected` calls (e.g.
+    /// a flapping peer's disconnect racing its reconnect) may still interleave
+    /// arbitrarily across chains, exactly as they would racing on two Go
+    /// goroutines — that part of Go's behavior is not, and was never meant to
+    /// be, serialized.
+    async fn connected(&self, _node: NodeId, _version: Application) {}
 
     /// Broadcast a peer-disconnected notification to every registered chain
     /// (Go `chain_router.go` `Disconnected`). Default no-op; see
-    /// [`Router::connected`].
-    fn disconnected(&self, _node: NodeId) {}
+    /// [`Router::connected`] for the same per-call-must-be-awaited contract.
+    async fn disconnected(&self, _node: NodeId) {}
 }
 
 /// One process-wide router owning the `chain_id -> Handler` map and the request
@@ -462,7 +481,7 @@ impl Router for ChainRouter {
         self.chains.lock().is_ok()
     }
 
-    fn connected(&self, node: NodeId, version: Application) {
+    async fn connected(&self, node: NodeId, version: Application) {
         // Go's `chain_router.go` `Connected` filters by `chain.Context().SubnetID
         // == subnetID` (or sybil-protection-disabled, primary network only).
         // `ChainMessageSink` has no subnet-id accessor, so this router-layer
@@ -470,30 +489,37 @@ impl Router for ChainRouter {
         // (a 5-node primary-network-only net) makes the two identical in
         // practice — subnet-scoped filtering is a documented follow-up, not
         // implemented here.
+        //
+        // `all_handlers()` snapshots the chain map and releases the mutex
+        // guard before returning, so no lock is held across the `.await`
+        // below (review follow-up, Task 8: each push is now awaited inline,
+        // NOT spawned onto a detached task — see the doc on `Router::connected`
+        // for why that matters: it restores Go's per-call
+        // completion-before-return guarantee that a spawn silently broke).
         for handler in self.all_handlers() {
             if !handler.should_handle(node) {
                 continue;
             }
-            let version = version.clone();
-            // Sync trait method (mirrors `ExternalHandler::connected`), so the
-            // delivery itself is fire-and-forget on a detached task, exactly
-            // like the timeout/fail_request synthesis above.
-            tokio::spawn(async move {
-                handler.push(node, InboundOp::Connected { version }).await;
-            });
+            handler
+                .push(
+                    node,
+                    InboundOp::Connected {
+                        version: version.clone(),
+                    },
+                )
+                .await;
         }
     }
 
-    fn disconnected(&self, node: NodeId) {
+    async fn disconnected(&self, node: NodeId) {
         // See the subnet-filtering note on `connected` above: this broadcasts
-        // to every registered chain, unconditionally.
+        // to every registered chain, unconditionally. Each push is awaited
+        // inline, same rationale as `connected`.
         for handler in self.all_handlers() {
             if !handler.should_handle(node) {
                 continue;
             }
-            tokio::spawn(async move {
-                handler.push(node, InboundOp::Disconnected).await;
-            });
+            handler.push(node, InboundOp::Disconnected).await;
         }
     }
 }

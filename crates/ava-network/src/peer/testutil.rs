@@ -102,11 +102,16 @@ impl InboundHandler for RecordingRouter {
 
 #[async_trait::async_trait]
 impl ExternalHandler for RecordingRouter {
-    fn connected(&self, node_id: NodeId, _version: &AppVersion, _subnet_id: ava_types::id::Id) {
+    async fn connected(
+        &self,
+        node_id: NodeId,
+        _version: &AppVersion,
+        _subnet_id: ava_types::id::Id,
+    ) {
         self.connected.lock().push(node_id);
     }
 
-    fn disconnected(&self, node_id: NodeId) {
+    async fn disconnected(&self, node_id: NodeId) {
         self.disconnected.lock().push(node_id);
     }
 }

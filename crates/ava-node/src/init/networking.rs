@@ -94,7 +94,7 @@ impl InboundHandler for RouterBridge {
 
 #[async_trait::async_trait]
 impl ExternalHandler for RouterBridge {
-    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
+    async fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
         tracing::info!(%node_id, %version, %subnet_id, "peer connected");
         // Broadcast to every chain the (once step 20 fills the slot) engine
         // router knows about (Go `chain_router.go` `Connected`). Go filters
@@ -105,15 +105,21 @@ impl ExternalHandler for RouterBridge {
         // this drops that filter — moot on today's 5-node primary-network-only
         // deployment, and a documented follow-up if/when subnet-tracking chains
         // are wired in.
+        //
+        // Awaited to completion (review follow-up, Task 8): the caller
+        // (`Peer::finish_handshake`, itself awaited from the peer's single
+        // inbound read loop) relies on this returning only once every chain's
+        // `Connected` push has landed, so a later inbound op from the same
+        // peer can never be observed by a chain before its `Connected`.
         if let Some(router) = self.engine_router() {
-            router.connected(node_id, version.clone());
+            router.connected(node_id, version.clone()).await;
         }
     }
 
-    fn disconnected(&self, node_id: NodeId) {
+    async fn disconnected(&self, node_id: NodeId) {
         tracing::info!(%node_id, "peer disconnected");
         if let Some(router) = self.engine_router() {
-            router.disconnected(node_id);
+            router.disconnected(node_id).await;
         }
     }
 }
@@ -152,7 +158,7 @@ impl InboundHandler for InsecureValidatorManager {
 
 #[async_trait::async_trait]
 impl ExternalHandler for InsecureValidatorManager {
-    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
+    async fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
         if subnet_id == PRIMARY_NETWORK_ID {
             // Sybil protection is disabled: a fake TxID (the padded NodeID,
             // like Go) marks the connection-derived registration.
@@ -164,17 +170,17 @@ impl ExternalHandler for InsecureValidatorManager {
                 tracing::debug!(%node_id, error = %e, "failed to add insecure validator");
             }
         }
-        self.inner.connected(node_id, version, subnet_id);
+        self.inner.connected(node_id, version, subnet_id).await;
     }
 
-    fn disconnected(&self, node_id: NodeId) {
+    async fn disconnected(&self, node_id: NodeId) {
         if let Err(e) = self
             .vdrs
             .remove_weight(PRIMARY_NETWORK_ID, node_id, self.weight)
         {
             tracing::debug!(%node_id, error = %e, "failed to remove insecure validator");
         }
-        self.inner.disconnected(node_id);
+        self.inner.disconnected(node_id).await;
     }
 }
 
@@ -240,7 +246,7 @@ impl InboundHandler for BeaconManager {
 
 #[async_trait::async_trait]
 impl ExternalHandler for BeaconManager {
-    fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
+    async fn connected(&self, node_id: NodeId, version: &AppVersion, subnet_id: Id) {
         if subnet_id == PRIMARY_NETWORK_ID
             && self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0
         {
@@ -264,10 +270,10 @@ impl ExternalHandler for BeaconManager {
                 let _ = self.on_sufficiently_connected.send(true);
             }
         }
-        self.inner.connected(node_id, version, subnet_id);
+        self.inner.connected(node_id, version, subnet_id).await;
     }
 
-    fn disconnected(&self, node_id: NodeId) {
+    async fn disconnected(&self, node_id: NodeId) {
         // Remove by id (a spurious disconnect for an un-counted node is a
         // no-op — the set never goes "negative"). The gate is one-shot (Go
         // `onSufficientlyConnected` parity): once fired it never downgrades, so
@@ -275,7 +281,7 @@ impl ExternalHandler for BeaconManager {
         if self.beacons.get_weight(PRIMARY_NETWORK_ID, node_id) != 0 {
             self.conns.lock().remove(&node_id);
         }
-        self.inner.disconnected(node_id);
+        self.inner.disconnected(node_id).await;
     }
 }
 
@@ -613,8 +619,8 @@ mod tests {
 
     #[async_trait]
     impl ExternalHandler for NoopHandler {
-        fn connected(&self, _n: NodeId, _v: &AppVersion, _s: Id) {}
-        fn disconnected(&self, _n: NodeId) {}
+        async fn connected(&self, _n: NodeId, _v: &AppVersion, _s: Id) {}
+        async fn disconnected(&self, _n: NodeId) {}
     }
 
     /// A stub `ValidatorManager` that returns weight=1 only for node_ids in
@@ -713,14 +719,14 @@ mod tests {
         let bm = BeaconManager::new(inner, beacons, 2, tx);
 
         let v = ava_version::CURRENT.clone();
-        bm.connected(non_beacon, &v, PRIMARY_NETWORK_ID); // ignored: not a beacon
+        bm.connected(non_beacon, &v, PRIMARY_NETWORK_ID).await; // ignored: not a beacon
         assert!(
             !*rx.borrow_and_update(),
             "non-beacon must not fire the gate"
         );
-        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID); // 1/2
+        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID).await; // 1/2
         assert!(!*rx.borrow_and_update(), "one beacon < required_conns");
-        bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID); // 2/2
+        bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID).await; // 2/2
         assert!(*rx.borrow_and_update(), "gate fires at required_conns");
     }
 
@@ -737,16 +743,16 @@ mod tests {
         let bm = BeaconManager::new(Arc::new(NoopHandler), beacons, 4, tx);
         let v = ava_version::CURRENT.clone();
 
-        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID);
-        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID); // duplicate — must not count twice
-        bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID);
-        bm.connected(beacon_ids[2], &v, PRIMARY_NETWORK_ID);
+        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID).await;
+        bm.connected(beacon_ids[0], &v, PRIMARY_NETWORK_ID).await; // duplicate — must not count twice
+        bm.connected(beacon_ids[1], &v, PRIMARY_NETWORK_ID).await;
+        bm.connected(beacon_ids[2], &v, PRIMARY_NETWORK_ID).await;
         assert!(
             !*rx.borrow_and_update(),
             "3 distinct beacons < required 4 despite 4 raw connects"
         );
 
-        bm.connected(beacon_ids[3], &v, PRIMARY_NETWORK_ID); // 4th DISTINCT beacon
+        bm.connected(beacon_ids[3], &v, PRIMARY_NETWORK_ID).await; // 4th DISTINCT beacon
         assert!(*rx.borrow_and_update(), "gate fires at 4 distinct beacons");
     }
 
@@ -762,9 +768,9 @@ mod tests {
         let bm = BeaconManager::new(Arc::new(NoopHandler), beacons, 4, tx);
         let v = ava_version::CURRENT.clone();
 
-        bm.disconnected(beacon_ids[4]); // spurious: never connected
+        bm.disconnected(beacon_ids[4]).await; // spurious: never connected
         for id in &beacon_ids[0..4] {
-            bm.connected(*id, &v, PRIMARY_NETWORK_ID);
+            bm.connected(*id, &v, PRIMARY_NETWORK_ID).await;
         }
         assert!(
             *rx.borrow_and_update(),
@@ -787,7 +793,8 @@ mod tests {
         for id in beacon_ids {
             let bm = Arc::clone(&bm);
             handles.push(tokio::spawn(async move {
-                bm.connected(id, &ava_version::CURRENT.clone(), PRIMARY_NETWORK_ID);
+                bm.connected(id, &ava_version::CURRENT.clone(), PRIMARY_NETWORK_ID)
+                    .await;
             }));
         }
         for h in handles {
@@ -799,9 +806,14 @@ mod tests {
         );
     }
 
-    /// A recording stub that captures every [`EngineInboundMessage`] it receives.
+    /// A recording stub that captures every [`EngineInboundMessage`] it receives,
+    /// plus every `connected`/`disconnected` call (review follow-up, Task 8:
+    /// proves `RouterBridge::connected`/`disconnected` actually forward to the
+    /// engine router rather than just logging).
     struct RecordingRouter {
         received: Arc<Mutex<Vec<EngineInboundMessage>>>,
+        connected_calls: Arc<Mutex<Vec<(NodeId, ava_version::Application)>>>,
+        disconnected_calls: Arc<Mutex<Vec<NodeId>>>,
     }
 
     impl RecordingRouter {
@@ -810,6 +822,8 @@ mod tests {
             (
                 Self {
                     received: Arc::clone(&store),
+                    connected_calls: Arc::new(Mutex::new(Vec::new())),
+                    disconnected_calls: Arc::new(Mutex::new(Vec::new())),
                 },
                 store,
             )
@@ -835,6 +849,14 @@ mod tests {
 
         fn health_check(&self) -> bool {
             true
+        }
+
+        async fn connected(&self, node: NodeId, version: ava_version::Application) {
+            self.connected_calls.lock().unwrap().push((node, version));
+        }
+
+        async fn disconnected(&self, node: NodeId) {
+            self.disconnected_calls.lock().unwrap().push(node);
         }
     }
 
@@ -884,6 +906,38 @@ mod tests {
         assert_eq!(got.chain, chain);
         assert_eq!(got.node, sender);
         assert_eq!(got.op, InboundOp::GetAcceptedFrontier { request_id: 42 });
+    }
+
+    /// `router_bridge_forwards_connected_disconnected_to_engine_router` — review
+    /// follow-up (Task 8): `RouterBridge::connected`/`disconnected` must
+    /// forward to the engine router (once its slot is filled), not just log.
+    /// Deleting the `router.connected(...)`/`router.disconnected(...)` calls in
+    /// `RouterBridge`'s `ExternalHandler` impl must fail this test.
+    #[tokio::test]
+    async fn router_bridge_forwards_connected_disconnected_to_engine_router() {
+        let bridge = Arc::new(RouterBridge::new());
+        let (recording, _store) = RecordingRouter::new();
+        let connected_calls = Arc::clone(&recording.connected_calls);
+        let disconnected_calls = Arc::clone(&recording.disconnected_calls);
+        bridge.set_engine_router(Arc::new(recording));
+
+        let node = NodeId::from([0x22u8; 20]);
+        let version = ava_version::CURRENT.clone();
+        bridge.connected(node, &version, PRIMARY_NETWORK_ID).await;
+        bridge.disconnected(node).await;
+
+        let connected = connected_calls.lock().unwrap();
+        assert_eq!(
+            connected.as_slice(),
+            &[(node, version)],
+            "RouterBridge::connected must forward (node, version) to the engine router"
+        );
+        let disconnected = disconnected_calls.lock().unwrap();
+        assert_eq!(
+            disconnected.as_slice(),
+            &[node],
+            "RouterBridge::disconnected must forward node to the engine router"
+        );
     }
 
     /// Verify that `track_bootstrappers` calls `track_beacon` for every
@@ -948,11 +1002,13 @@ mod tests {
         assert!(*rx.borrow_and_update(), "beaconless node: gate pre-fires");
         // The handler is returned unwrapped (no beacon to count) — connecting any
         // node must not panic and the gate stays true.
-        handler.connected(
-            NodeId::from([7u8; 20]),
-            &ava_version::CURRENT.clone(),
-            PRIMARY_NETWORK_ID,
-        );
+        handler
+            .connected(
+                NodeId::from([7u8; 20]),
+                &ava_version::CURRENT.clone(),
+                PRIMARY_NETWORK_ID,
+            )
+            .await;
 
         // Five beacons ⇒ required_conns == 4 ⇒ gate starts unfired.
         let beacon_ids: Vec<NodeId> = (1u8..=5).map(|b| NodeId::from([b; 20])).collect();
@@ -963,7 +1019,7 @@ mod tests {
         assert!(!*rx.borrow_and_update(), "5 beacons: gate starts closed");
         let v = ava_version::CURRENT.clone();
         for id in &beacon_ids[0..4] {
-            handler.connected(*id, &v, PRIMARY_NETWORK_ID);
+            handler.connected(*id, &v, PRIMARY_NETWORK_ID).await;
         }
         assert!(
             *rx.borrow_and_update(),

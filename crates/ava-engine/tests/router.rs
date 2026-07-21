@@ -234,9 +234,12 @@ async fn connected_broadcasts_to_every_chain() {
     let node = NodeId::from([7u8; 20]);
     let version = ava_version::application::Application::new("avalanchego".to_string(), 1, 2, 3);
 
-    router.connected(node, version.clone());
-    tokio::task::yield_now().await;
-    tokio::task::yield_now().await;
+    // `connected` is awaited to completion inline (no spawn): by the time this
+    // `.await` returns, every chain's push has already landed — no yield_now
+    // needed (review follow-up, Task 8; see `connected_orders_before_later_inbound_ops`
+    // for a test that actually depends on this completion-before-return
+    // guarantee).
+    router.connected(node, version.clone()).await;
 
     assert_eq!(
         handler_a.pushed.lock().unwrap().as_slice(),
@@ -253,9 +256,7 @@ async fn connected_broadcasts_to_every_chain() {
         "chain B must receive Connected"
     );
 
-    router.disconnected(node);
-    tokio::task::yield_now().await;
-    tokio::task::yield_now().await;
+    router.disconnected(node).await;
 
     assert_eq!(
         handler_a.pushed.lock().unwrap().as_slice(),
@@ -289,13 +290,72 @@ async fn connected_respects_should_handle() {
     router.add_chain(chain_a(), rejecting.clone());
 
     let version = ava_version::application::Application::new("avalanchego".to_string(), 1, 0, 0);
-    router.connected(node, version);
-    router.disconnected(node);
-    tokio::task::yield_now().await;
-    tokio::task::yield_now().await;
+    router.connected(node, version).await;
+    router.disconnected(node).await;
 
     assert!(
         rejecting.pushed.lock().unwrap().is_empty(),
         "a rejected node's connected/disconnected must not reach the chain"
+    );
+}
+
+/// `connected_orders_before_later_inbound_ops` — review follow-up (Task 8
+/// CRITICAL): `router.connected(node, v).await` MUST fully deliver the
+/// `Connected` push before returning, so a caller that immediately follows it
+/// with `router.handle_inbound(...)` for the same node (no yield in between —
+/// exactly the shape of `ava-network`'s `Peer::finish_handshake` awaiting
+/// `router.connected(...)` and then the read loop moving straight on to the
+/// next inbound frame) can never have that later op observed by the chain
+/// before `Connected` is.
+///
+/// This pins the fix, and would FAIL under the earlier `tokio::spawn`-per-push
+/// design: `router.connected(...)` there returned as soon as the spawn calls
+/// were issued, without waiting for the executor to ever poll them. Since
+/// `RecordingHandler::push` has no internal `.await` point, a directly-awaited
+/// push (from `handle_inbound`, called immediately after with no intervening
+/// yield) runs to completion in a single poll and can never be preempted by a
+/// spawned task that hasn't been scheduled yet — so the old code would record
+/// `[Get, Connected]` here instead of `[Connected, Get]`. On the current-thread
+/// flavor `#[tokio::test]` uses by default, this is not just "can" but
+/// deterministically WOULD happen, since a freshly spawned task never runs
+/// before the spawning task's current poll returns control to the executor.
+#[tokio::test]
+async fn connected_orders_before_later_inbound_ops() {
+    let mgr = timeout_mgr();
+    let router = ChainRouter::new(mgr);
+
+    let handler = Arc::new(RecordingHandler::default());
+    router.add_chain(chain_a(), handler.clone());
+
+    let node = NodeId::from([9u8; 20]);
+    let version = ava_version::application::Application::new("avalanchego".to_string(), 1, 2, 3);
+
+    // No yield between these two calls — the ordering guarantee must come
+    // from `connected` itself completing its pushes before returning, not
+    // from any accidental scheduling gap the test inserts.
+    router.connected(node, version.clone()).await;
+    router
+        .handle_inbound(InboundMessage {
+            node,
+            chain: chain_a(),
+            op: InboundOp::Get {
+                request_id: 1,
+                container_id: Id::from([1u8; 32]),
+            },
+        })
+        .await;
+
+    let pushed = handler.pushed.lock().unwrap();
+    assert_eq!(
+        pushed.as_slice(),
+        &[
+            InboundOp::Connected { version },
+            InboundOp::Get {
+                request_id: 1,
+                container_id: Id::from([1u8; 32]),
+            }
+        ],
+        "Connected must be observed by the chain strictly before a later \
+         inbound op from the same node, got {pushed:?}"
     );
 }
