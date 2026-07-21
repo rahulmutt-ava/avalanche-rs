@@ -26,8 +26,9 @@ use ava_evm::receipts::{AcceptedTxIndex, TxReceiptRecord};
 use ava_evm::rpc::eth::{BlockTag, CallRequest, EthRpc, FeeHistoryArgs};
 use ava_evm::state::FirewoodStateProvider;
 use ava_evm_reth::{
-    Address, B256, BundleState, Bytes, Chain, Decodable2718, Encodable2718, EvmSignature,
-    KECCAK_EMPTY, Log, SignableTransaction, TransactionSigned, TxKind, TxLegacy, U256, keccak256,
+    AccessList, AccessListItem, Address, B256, BundleState, Bytes, Chain, Decodable2718,
+    Encodable2718, EvmSignature, KECCAK_EMPTY, Log, SignableTransaction, TransactionSigned,
+    TxEip1559, TxKind, TxLegacy, U256, keccak256,
 };
 use serde_json::{Value, json};
 
@@ -86,6 +87,49 @@ fn funded_legacy_tx(nonce: u64) -> Bytes {
         gas_limit: 21_000,
         to: TxKind::Call(alice()),
         value: U256::from(1u64),
+        input: Bytes::new(),
+    })
+}
+
+/// Signs `tx` with [`funded_key`] as an EIP-1559 transaction (the same
+/// `signature_hash` -> `sign_hash` -> `into_signed` recipe [`sign_legacy`]
+/// uses, generic over [`SignableTransaction`]) and returns its EIP-2718
+/// raw bytes.
+fn sign_1559(tx: TxEip1559) -> Bytes {
+    let sig_hash = tx.signature_hash();
+    let rsv = funded_key().sign_hash(&sig_hash.0).expect("sign_hash");
+    let r = U256::from_be_slice(&rsv[..32]);
+    let s = U256::from_be_slice(&rsv[32..64]);
+    let sig = EvmSignature::new(r, s, rsv[64] == 1);
+    let signed = TransactionSigned::Eip1559(tx.into_signed(sig));
+    Bytes::from(signed.encoded_2718())
+}
+
+/// The one-entry access list [`funded_1559_tx`] signs into its tx (a single
+/// `contract()` address / one storage key), returned alongside the raw tx so
+/// tests can assert the RPC's `accessList` shape against a value they derive
+/// independently of the handler, not a re-statement of it.
+fn funded_1559_access_list() -> AccessList {
+    AccessList(vec![AccessListItem {
+        address: contract(),
+        storage_keys: vec![B256::repeat_byte(0x07)],
+    }])
+}
+
+/// A funded-signer EIP-1559 tx: `nonce`, a 2 gwei fee cap / 1 gwei tip (both
+/// above the pool's 1-wei tip floor), a one-entry access list
+/// ([`funded_1559_access_list`]) so the `accessList` JSON encoding is
+/// actually exercised, and `CHAIN_ID`.
+fn funded_1559_tx(nonce: u64) -> Bytes {
+    sign_1559(TxEip1559 {
+        chain_id: CHAIN_ID,
+        nonce,
+        gas_limit: 100_000,
+        max_fee_per_gas: 2_000_000_000,
+        max_priority_fee_per_gas: 1_000_000_000,
+        to: TxKind::Call(alice()),
+        value: U256::from(1u64),
+        access_list: funded_1559_access_list(),
         input: Bytes::new(),
     })
 }
@@ -571,6 +615,102 @@ fn get_transaction_by_hash_pending_has_null_block_hash() {
         Value::String(format!("0x{want_v:x}")),
         "EIP-155 chain-id-encoded v"
     );
+    assert!(
+        got.get("yParity").is_none(),
+        "a legacy tx must not carry yParity at all (coreth: no LegacyTxType \
+         switch arm sets it, and the struct tag is `omitempty`), got: {got:?}"
+    );
+    assert!(
+        got.get("accessList").is_none(),
+        "a legacy tx must not carry accessList at all (coreth: no \
+         LegacyTxType switch arm sets it, and the struct tag is \
+         `omitempty`), got: {got:?}"
+    );
+}
+
+#[test]
+fn get_transaction_by_hash_pending_1559_shape() {
+    let (_d, rpc, _mempool, _tx_index) = setup();
+    let raw = funded_1559_tx(0);
+    let access_list = funded_1559_access_list();
+
+    // Independent test oracle (same convention as the legacy pending test
+    // above): decode the envelope ourselves rather than trust the handler.
+    let decoded =
+        TransactionSigned::decode_2718(&mut raw.as_ref()).expect("decode_2718 (test oracle)");
+    let want_hash = *decoded.tx_hash();
+    let sig = decoded.signature();
+    let y_parity = u64::from(sig.v());
+
+    rpc.send_raw_transaction(&raw)
+        .expect("send_raw_transaction");
+
+    let got = rpc
+        .get_transaction_by_hash(want_hash)
+        .expect("get_transaction_by_hash");
+
+    assert_eq!(
+        got["blockHash"],
+        Value::Null,
+        "a pooled (un-mined) tx has no block yet — coreth pending shape"
+    );
+    assert_eq!(got["blockNumber"], Value::Null);
+    assert_eq!(got["transactionIndex"], Value::Null);
+    assert_eq!(got["hash"], data_hex(want_hash.as_slice()));
+    assert_eq!(got["type"], "0x2", "EIP-1559 tx type");
+    assert_eq!(
+        got["maxFeePerGas"], "0x77359400",
+        "2 gwei fee cap (funded_1559_tx)"
+    );
+    assert_eq!(
+        got["maxPriorityFeePerGas"], "0x3b9aca00",
+        "1 gwei tip (funded_1559_tx)"
+    );
+    assert_eq!(
+        got["gasPrice"], got["maxFeePerGas"],
+        "pending 1559: gasPrice reports the fee cap since no base fee is \
+         known yet for an un-mined tx (coreth `else {{ result.GasPrice = \
+         tx.GasFeeCap() }}`, internal/ethapi/api.go ~:1429)"
+    );
+    assert_eq!(
+        got["chainId"],
+        Value::String(format!("0x{CHAIN_ID:x}")),
+        "a typed tx always reports chainId (coreth api.go ~:1424/:1429)"
+    );
+    assert_eq!(
+        got["v"],
+        Value::String(format!("0x{y_parity:x}")),
+        "1559 v is the bare y-parity, not EIP-155-encoded (coreth \
+         RawSignatureValues for any typed tx)"
+    );
+    assert_eq!(
+        got["yParity"],
+        Value::String(format!("0x{y_parity:x}")),
+        "1559 must carry yParity alongside v (coreth \
+         internal/ethapi/api.go ~:1429, DynamicFeeTxType arm)"
+    );
+
+    let got_access_list = got["accessList"]
+        .as_array()
+        .expect("accessList must be an array");
+    assert_eq!(
+        got_access_list.len(),
+        access_list.0.len(),
+        "accessList must carry the tx's one entry"
+    );
+    assert_eq!(
+        got_access_list[0]["address"],
+        data_hex(access_list.0[0].address.as_slice())
+    );
+    let got_keys = got_access_list[0]["storageKeys"]
+        .as_array()
+        .expect("storageKeys must be an array");
+    assert_eq!(got_keys.len(), access_list.0[0].storage_keys.len());
+    assert_eq!(
+        got_keys[0],
+        data_hex(access_list.0[0].storage_keys[0].as_slice()),
+        "storageKeys entries must be hex-encoded (geth AccessTuple shape)"
+    );
 }
 
 #[test]
@@ -619,7 +759,17 @@ fn get_transaction_by_hash_mined_reports_available_fields_only() {
     // Txs RLP list — see EthRpc::get_transaction_by_hash's doc comment for
     // the honest gap): reported as null, never fabricated.
     for field in [
-        "nonce", "value", "gas", "gasPrice", "input", "v", "r", "s", "chainId",
+        "nonce",
+        "value",
+        "gas",
+        "gasPrice",
+        "input",
+        "v",
+        "r",
+        "s",
+        "chainId",
+        "yParity",
+        "accessList",
     ] {
         assert_eq!(
             got[field],

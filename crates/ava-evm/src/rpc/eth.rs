@@ -47,8 +47,8 @@
 use std::sync::Arc;
 
 use ava_evm_reth::{
-    Address, B256, Bytes, ConfigureEvm, ConsensusTx, Decodable2718, EMPTY_ROOT_HASH, Evm,
-    ExecutionResult, KECCAK_EMPTY, Output, ProviderError, RecoveredTx, SignerRecoverable,
+    AccessList, Address, B256, Bytes, ConfigureEvm, ConsensusTx, Decodable2718, EMPTY_ROOT_HASH,
+    Evm, ExecutionResult, KECCAK_EMPTY, Output, ProviderError, RecoveredTx, SignerRecoverable,
     StateProviderDatabase, TransactionSigned, TxEnv, TxKind, Typed2718, U256, logs_bloom,
 };
 use parking_lot::Mutex;
@@ -705,6 +705,14 @@ fn call_output(output: &Output) -> &[u8] {
 /// and reports `gasPrice` as the fee cap since no base fee is known yet for
 /// an un-mined tx — coreth's `else { result.GasPrice = tx.GasFeeCap() }`
 /// branch).
+///
+/// Every typed tx (EIP-2930/1559/4844/7702) additionally carries `yParity`
+/// (the bare boolean parity, `hexutil.Uint64`) and `accessList` — coreth's
+/// `AccessListTxType`/`DynamicFeeTxType`/`BlobTxType` switch arms each set
+/// `result.YParity = &yparity` and `result.Accesses = &al`
+/// (`internal/ethapi/api.go` ~:1422/:1429/:1445). A legacy tx has neither
+/// field (no `switch` arm sets them for `LegacyTxType`, and the struct tag is
+/// `omitempty`).
 fn pending_tx_json(tx: &RecoveredTx) -> Value {
     let inner = tx.inner();
     let sig = inner.signature();
@@ -747,13 +755,20 @@ fn pending_tx_json(tx: &RecoveredTx) -> Value {
             } else {
                 // EIP-2930: `v` is the bare y-parity (coreth
                 // `RawSignatureValues` for any typed tx), `chainId` always
-                // present.
+                // present, plus `yParity`/`accessList` (coreth
+                // `AccessListTxType` arm, api.go ~:1422).
                 obj["v"] = quantity(y_parity);
                 obj["chainId"] = quantity(chain_id.unwrap_or(0));
+                obj["yParity"] = quantity(y_parity);
+                if let Some(access_list) = ConsensusTx::access_list(inner) {
+                    obj["accessList"] = access_list_json(access_list);
+                }
             }
         }
         None => {
-            // A fee-market tx (EIP-1559/4844/7702).
+            // A fee-market tx (EIP-1559/4844/7702): `yParity`/`accessList`
+            // always present (coreth `DynamicFeeTxType`/`BlobTxType` arms,
+            // api.go ~:1429/:1445).
             let max_fee = ConsensusTx::max_fee_per_gas(inner);
             let tip = ConsensusTx::max_priority_fee_per_gas(inner).unwrap_or(max_fee);
             obj["gasPrice"] = quantity_u128(max_fee);
@@ -761,9 +776,35 @@ fn pending_tx_json(tx: &RecoveredTx) -> Value {
             obj["maxPriorityFeePerGas"] = quantity_u128(tip);
             obj["v"] = quantity(y_parity);
             obj["chainId"] = quantity(chain_id.unwrap_or(0));
+            obj["yParity"] = quantity(y_parity);
+            if let Some(access_list) = ConsensusTx::access_list(inner) {
+                obj["accessList"] = access_list_json(access_list);
+            }
         }
     }
     obj
+}
+
+/// Encodes an EIP-2930 [`AccessList`] as the geth JSON shape: an array of
+/// `{address, storageKeys}` objects (`core/types/access_list_tx.go`
+/// `AccessTuple`'s `json:"address"`/`json:"storageKeys"` tags), hex-encoded
+/// via [`data`].
+fn access_list_json(list: &AccessList) -> Value {
+    Value::Array(
+        list.0
+            .iter()
+            .map(|item| {
+                json!({
+                    "address": data(item.address.as_slice()),
+                    "storageKeys": item
+                        .storage_keys
+                        .iter()
+                        .map(|k| data(k.as_slice()))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
 }
 
 /// The wire `v` for a PROTECTED legacy tx (coreth `RawSignatureValues`):
@@ -801,6 +842,16 @@ fn mined_tx_json_partial(rec: &TxReceiptRecord) -> Value {
         "r": Value::Null,
         "s": Value::Null,
         "chainId": Value::Null,
+        // `yParity`/`accessList` are type-conditional in coreth — `omitempty`
+        // and absent entirely for a legacy tx (`internal/ethapi/api.go`
+        // ~:1378/:1383, no `LegacyTxType` switch arm sets them) — but for a
+        // typed mined tx (2930/1559/4844/7702) they too are NOT
+        // reconstructable from [`TxReceiptRecord`] alone (same gap as
+        // `v`/`r`/`s` above), so `null` here rather than fabricated for
+        // every tx type; the `rec.tx_type == 0` legacy case coincides with
+        // coreth's own omission.
+        "yParity": Value::Null,
+        "accessList": Value::Null,
     })
 }
 
