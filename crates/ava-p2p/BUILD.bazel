@@ -1,0 +1,106 @@
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "ava_p2p",
+    srcs = [
+        "src/client.rs",
+        "src/error.rs",
+        "src/gossip/bloom.rs",
+        "src/gossip/handler.rs",
+        "src/gossip/mod.rs",
+        "src/gossip/pull.rs",
+        "src/gossip/push.rs",
+        "src/handler.rs",
+        "src/lib.rs",
+        "src/network.rs",
+        "src/pb.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":build_script",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:bytes",
+        "@crates//:parking_lot",
+        "@crates//:prost",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "gossip_loops",
+    srcs = ["tests/gossip_loops.rs"],
+    compile_data = ["Cargo.toml"],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_p2p",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:bytes",
+        "@crates//:parking_lot",
+        "@crates//:prost",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "wire_goldens",
+    srcs = ["tests/wire_goldens.rs"],
+    compile_data = [
+        "../../tests/vectors/p2p_sdk/pull_gossip_request.bin",
+        "../../tests/vectors/p2p_sdk/pull_gossip_response.bin",
+        "../../tests/vectors/p2p_sdk/push_gossip_frame.bin",
+        "Cargo.toml",
+    ],
+    proc_macro_deps = ["@crates//:async-trait"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_p2p",
+        "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
+        "//crates/ava-version:ava_version",
+        "//crates/ava-vm:ava_vm",
+        "@crates//:bytes",
+        "@crates//:parking_lot",
+        "@crates//:prost",
+        "@crates//:thiserror",
+        "@crates//:tokio",
+        "@crates//:tokio-util",
+        "@crates//:tracing",
+    ],
+)
+
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_root = "build.rs",
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:prost-build"],
+)
+
+rust_test(
+    name = "ava_p2p_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_p2p",
+    proc_macro_deps = ["@crates//:async-trait"],
+    deps = [
+        "@crates//:bytes",
+        "@crates//:prost",
+        "@crates//:tokio",
+    ],
+)

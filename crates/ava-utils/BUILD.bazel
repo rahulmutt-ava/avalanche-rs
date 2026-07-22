@@ -5,6 +5,7 @@ rust_library(
     srcs = [
         "src/bag.rs",
         "src/bits.rs",
+        "src/bloom.rs",
         "src/cb58.rs",
         "src/clock.rs",
         "src/error.rs",
@@ -27,6 +28,7 @@ rust_library(
         "@crates//:indexmap",
         "@crates//:num-bigint",
         "@crates//:parking_lot",
+        "@crates//:ring",
         "@crates//:sha2",
         "@crates//:thiserror",
         "@crates//:tokio",
@@ -130,4 +132,10 @@ rust_test(
         ":ava_utils",
         "@crates//:assert_matches",
     ],
+)
+
+rust_test(
+    name = "ava_utils_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":ava_utils",
 )

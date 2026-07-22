@@ -158,3 +158,20 @@ rust_binary(
         "@crates//:criterion",
     ],
 )
+
+rust_test(
+    name = "envelope_goldens",
+    srcs = ["tests/envelope_goldens.rs"],
+    compile_data = [
+        "../../tests/vectors/message_envelope/app_gossip_envelope.bin",
+        "../../tests/vectors/message_envelope/app_request_envelope.bin",
+        "../../tests/vectors/p2p_sdk/push_gossip_frame.bin",
+        "Cargo.toml",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":ava_message",
+        "@crates//:bytes",
+        "@crates//:prost",
+    ],
+)

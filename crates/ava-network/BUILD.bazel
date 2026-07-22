@@ -43,6 +43,7 @@ rust_library(
         "//crates/ava-crypto:ava_crypto",
         "//crates/ava-message:ava_message",
         "//crates/ava-types:ava_types",
+        "//crates/ava-utils:ava_utils",
         "//crates/ava-version:ava_version",
         "@crates//:arc-swap",
         "@crates//:bytes",
