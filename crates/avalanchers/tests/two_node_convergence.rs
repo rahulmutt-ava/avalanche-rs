@@ -74,6 +74,9 @@ async fn boot(node: &Arc<Node>, beacons: BTreeMap<NodeId, u64>) -> Vec<NetworkCh
         beacons,
         None,
         None,
+        // T16: params `None` ⇒ k=1 (byte-identical to this test's pre-fix
+        // 2-node convergence; a real k=20 could not reach alpha here).
+        None,
     )
     .await
     .expect("drive_startup_chains_over_network")

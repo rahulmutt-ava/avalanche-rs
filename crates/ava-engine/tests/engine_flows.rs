@@ -105,6 +105,93 @@ async fn engine_records_poll_on_chits() {
     assert_eq!(engine.num_processing(), 0, "no processing blocks remain");
 }
 
+/// `engine_poll_bag_counts_sample_multiplicity` — the poll bag must weight each
+/// node by how many times it appears in the k-sample (Go `bag.Of(vdrIDs...)`),
+/// NOT by the validator's full stake weight. With 2 validators of weight 2 and
+/// `k == total weight == 4`, the sampler draws a full permutation of the 4
+/// weight units, so each validator appears EXACTLY twice. A single chit from
+/// ONE validator therefore contributes multiplicity 2 — below alpha_confidence
+/// 3 — so the block must NOT finalize until the second validator also replies.
+///
+/// Red-first regression: the pre-fix `send_query` built the poll bag from
+/// `get_weight` (full stake) per sampled occurrence, inflating one chit to
+/// `weight * multiplicity = 4 >= alpha`, which wrongly accepted the block off a
+/// single reply.
+#[tokio::test]
+async fn engine_poll_bag_counts_sample_multiplicity() {
+    let token = CancellationToken::new();
+    let mut params = default_params();
+    params.k = 4;
+    params.alpha_preference = 3;
+    params.alpha_confidence = 3;
+    params.beta = 1;
+    params.concurrent_repolls = 1;
+
+    // 2 validators, weight 2 each: total weight 4 == k, so sample(4) draws a
+    // full permutation of the weight units — each validator appears twice.
+    let mgr = std::sync::Arc::new(ava_validators::DefaultManager::new());
+    let node_a = ava_types::node_id::NodeId::from([1u8; 20]);
+    let node_b = ava_types::node_id::NodeId::from([2u8; 20]);
+    ava_validators::ValidatorManager::add_staker(
+        mgr.as_ref(),
+        ava_types::id::Id::EMPTY,
+        node_a,
+        None,
+        ava_types::id::Id::EMPTY,
+        2,
+    )
+    .expect("add validator a");
+    ava_validators::ValidatorManager::add_staker(
+        mgr.as_ref(),
+        ava_types::id::Id::EMPTY,
+        node_b,
+        None,
+        ava_types::id::Id::EMPTY,
+        2,
+    )
+    .expect("add validator b");
+
+    let (vm, genesis) = init_vm(&token).await;
+    let sender = support::RecordingSender::new();
+    let mut engine = build_engine(params, vm, sender.clone(), mgr, genesis, token.clone());
+
+    let child_bytes = encode_block(genesis, 1, b"c1");
+    let child_id = block_id(&child_bytes);
+    engine.put(node_a, 1, &child_bytes).await.expect("put c1");
+    assert_eq!(engine.num_processing(), 1, "child issued into consensus");
+
+    let req = engine.request_id();
+
+    // ONE chit from validator A: multiplicity 2 < alpha_confidence 3, so the
+    // block must remain processing (NOT accepted off a single reply).
+    engine
+        .chits(node_a, req, child_id, child_id, child_id, 1)
+        .await
+        .expect("chits a");
+    assert_eq!(
+        engine.consensus_last_accepted().0,
+        genesis,
+        "one chit (multiplicity 2 < alpha 3) must NOT finalize the block"
+    );
+    assert_eq!(
+        engine.num_processing(),
+        1,
+        "block still processing after a single chit"
+    );
+
+    // Second chit from B: total votes 2 + 2 = 4 >= alpha, beta 1 → accepted.
+    engine
+        .chits(node_b, req, child_id, child_id, child_id, 1)
+        .await
+        .expect("chits b");
+    assert_eq!(
+        engine.consensus_last_accepted().0,
+        child_id,
+        "both chits (total multiplicity 4 >= alpha) finalize the block"
+    );
+    assert_eq!(engine.num_processing(), 0, "no processing blocks remain");
+}
+
 /// `early_term_completes_poll` — a poll completes once outstanding responses can
 /// no longer change the alpha outcome (before every validator responds).
 #[tokio::test]

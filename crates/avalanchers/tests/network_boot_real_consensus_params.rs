@@ -2,17 +2,16 @@
 // See the file LICENSE for licensing terms.
 
 //! T16 regression test: a chain booted over the **production** network-boot
-//! seam ([`boot_chain_over_network_core_for_test`]) must carry the node's
-//! REAL staking identity into `ChainContext.node_id` — not a fresh throwaway
-//! cert generated on every boot.
+//! seam ([`boot_chain_over_network_core_for_test`]) must run the passed-in
+//! REAL consensus parameters (Go `snowball.DefaultParameters`: k=20,
+//! alpha=15, beta=20), NOT the single-node `k=1`/`alpha=1`/`beta=1` set — while
+//! a loopback boot ([`boot_chain_with_loopback`]) correctly keeps k=1.
 //!
-//! Live-proven bug: `boot_chain_with_sender`'s `staking_identity()` call
-//! generated a brand-new ECDSA cert on every invocation, so a networked
-//! chain's `ChainContext.node_id` never matched the identity the P2P layer
-//! actually handshaked with (`--staking-tls-cert-file`). The post-Durango
-//! windower schedules the REAL id, so `wait_for_slot_and_decide`'s
-//! `expected == self.ctx.node_id` could never be true and the node could
-//! never propose a signed block (live: 40+ heights, zero proposals).
+//! Live-proven bug: `boot_chain_with_sender` hard-coded `single_node_params()`
+//! for EVERY boot, so a networked chain on a 5-validator net finalized whichever
+//! block it preferred after ONE self-poll (k=1 instant finality), unilaterally
+//! ignoring the other 4 validators — a post-fork race then wedged the whole
+//! network (~5 kHz repoll storm, gossip starvation, test stall).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -25,6 +24,7 @@ use ava_message::codec::OutboundMessage;
 use ava_network::network::{
     Allower, GossipConfig, Network, PeerInfo, SendConfig as NetSendConfig, UptimeResult,
 };
+use ava_snow::snowball::DEFAULT_PARAMETERS;
 use ava_types::id::Id;
 use ava_types::node_id::NodeId;
 use ava_utils::clock::{Clock, RealClock};
@@ -32,7 +32,7 @@ use ava_vm::testutil::TestVm;
 use tokio_util::sync::CancellationToken;
 
 use avalanchers::wiring::chains::{
-    boot_chain_over_network_core_for_test, staking_identity_from_tls,
+    boot_chain_over_network_core_for_test, boot_chain_with_loopback,
 };
 
 struct AllowAll;
@@ -43,8 +43,7 @@ impl Allower for AllowAll {
 }
 
 /// A `Network` that drops everything: this test only needs the chain to
-/// assemble and expose its `ChainContext`, not to actually exchange wire
-/// messages.
+/// assemble and expose the parameters its engine was built with.
 #[derive(Default)]
 struct NoopNetwork;
 
@@ -81,20 +80,12 @@ impl Network for NoopNetwork {
     }
 }
 
-/// Boots a chain over [`boot_chain_over_network_core_for_test`] with a KNOWN,
-/// pre-resolved `ava_network::identity::Identity` (the stand-in for the
-/// node's real `--staking-tls-cert-file` identity), then asserts the
-/// assembled chain's `ChainContext.node_id` is the id DERIVED FROM THAT
-/// IDENTITY — never a randomly generated one.
-///
-/// This must FAIL against the unfixed `boot_chain_with_sender` (which called
-/// `staking_identity()` unconditionally, ignoring any supplied identity).
+/// The production network-boot seam threads the passed-in REAL consensus
+/// parameters into the assembled chain's engine — proved by the params the boot
+/// handle exposes. This must FAIL against the unfixed `boot_chain_with_sender`
+/// (which ignored any supplied params and always ran `single_node_params()`).
 #[tokio::test]
-async fn network_boot_carries_the_real_staking_identity_into_chain_context() {
-    let identity = ava_network::identity::Identity::generate().expect("Identity::generate");
-    let expected_node_id = ava_crypto::staking::node_id_from_cert(identity.cert_der());
-    let staking = staking_identity_from_tls(&identity).expect("staking_identity_from_tls");
-
+async fn network_boot_runs_real_consensus_params() {
     let chain_id = Id::EMPTY;
     let subnet_id = ava_types::constants::PRIMARY_NETWORK_ID;
     let network: Arc<dyn Network> = Arc::new(NoopNetwork);
@@ -130,20 +121,58 @@ async fn network_boot_carries_the_real_staking_identity_into_chain_context() {
         Arc::new(MemDb::new()),
         token.clone(),
         Some(BTreeMap::new()),
-        Some(staking),
-        // T16: params `None` ⇒ k=1; this test pins the staking identity seam,
-        // not the consensus-params seam (see network_boot_real_consensus_params).
         None,
+        // The REAL parameters the production `main.rs` path passes.
+        Some(DEFAULT_PARAMETERS),
     )
     .await
     .expect("boot_chain_over_network_core_for_test");
 
     assert_eq!(
-        handle.ctx.chain.node_id, expected_node_id,
-        "ChainContext.node_id must be derived from the supplied REAL staking \
-         identity, not a fresh throwaway generated cert"
+        handle.params, DEFAULT_PARAMETERS,
+        "the networked chain must run the passed-in real consensus parameters"
     );
+    assert_eq!(
+        handle.params.k, 20,
+        "Go DefaultParameters: k = 20 (not k=1)"
+    );
+    assert_eq!(handle.params.alpha_preference, 15, "alpha_preference = 15");
+    assert_eq!(handle.params.alpha_confidence, 15, "alpha_confidence = 15");
+    assert_eq!(handle.params.beta, 20, "beta = 20 (not beta=1)");
 
     token.cancel();
+    let _ = handle.join.await;
+}
+
+/// The loopback boot KEEPS k=1 — correct for a self-only chain (the node polls
+/// only itself and its own vote is definitive). The `single_node_params()`
+/// choice must NOT leak onto the networked path (asserted above) and, conversely,
+/// the real parameters must NOT leak onto the loopback path.
+#[tokio::test]
+async fn loopback_boot_keeps_k1() {
+    let handle = boot_chain_with_loopback(
+        ava_types::constants::LOCAL_ID,
+        Id::EMPTY,
+        ava_types::constants::PRIMARY_NETWORK_ID,
+        "test",
+        Id::EMPTY,
+        Id::EMPTY,
+        TestVm::new(),
+        b"genesis".to_vec(),
+        Arc::new(MemDb::new()),
+    )
+    .await
+    .expect("boot_chain_with_loopback");
+
+    assert_eq!(
+        handle.params.k, 1,
+        "a loopback / self-only chain must keep k=1"
+    );
+    assert_eq!(handle.params.alpha_preference, 1, "loopback alpha = 1");
+    assert_eq!(handle.params.beta, 1, "loopback beta = 1");
+
+    // Cancel the HANDLE's own token — a fresh local token cancels nothing and
+    // `join` would then never resolve (the hang this line replaces).
+    handle.token.cancel();
     let _ = handle.join.await;
 }

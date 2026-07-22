@@ -47,12 +47,14 @@ pub enum Error {
     #[error("missing validators for subnet")]
     MissingValidators,
 
-    /// The deterministic sampler could not satisfy the request (e.g. `size`
-    /// exceeds the validator count), mirroring Go's `sampler.Sample` returning
-    /// `ok == false`.
-    #[error("insufficient validators to sample {requested}")]
+    /// The deterministic sampler could not satisfy the request: `size` exceeds
+    /// the TOTAL WEIGHT of the set (the sampler draws weight units without
+    /// replacement, so the boundary is total weight, not validator count),
+    /// mirroring Go's `sampler.Sample` returning `ok == false` /
+    /// `errInsufficientWeight`.
+    #[error("insufficient weight to sample {requested}")]
     InsufficientValidators {
-        /// Number of validators requested.
+        /// Number of weight units (sample size) requested.
         requested: usize,
     },
 

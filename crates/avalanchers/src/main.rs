@@ -180,6 +180,20 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
             &node.config.staking_config.identity,
         )
         .context("failed to derive the node's staking identity for chain boot")?;
+        // T16 fix: every networked chain must run the node's REAL consensus
+        // parameters — the primary-network snow config resolved from the
+        // `--snow-*` flags (defaults = Go `snowball.DefaultParameters`: k=20,
+        // alpha=15, beta=20). Without this a networked chain ran k=1 and
+        // finalized unilaterally after one self-poll, ignoring the other
+        // validators (live-proven: a fork block finalized in 9ms on a
+        // 5-validator net). Fall back to `DEFAULT_PARAMETERS` if the primary
+        // subnet config is somehow absent, never to k=1.
+        let consensus_params = node
+            .config
+            .subnet_configs
+            .get(&ava_config::subnets::PRIMARY_NETWORK_ID)
+            .and_then(|c| c.snow_parameters.as_ref())
+            .map_or(ava_snow::snowball::DEFAULT_PARAMETERS, |p| p.to_snowball());
         let _chain_handles = avalanchers::wiring::chains::drive_startup_chains_over_network(
             &node.chain_manager,
             node.config.network_id,
@@ -194,6 +208,7 @@ fn run(config: ava_config::node::Config) -> anyhow::Result<i32> {
             // `serve()`, so the composed router carries the chain routes.
             Some(&node.api_server),
             Some(staking),
+            Some(consensus_params),
         )
         .await
         .context("failed to drive the startup chains")?;

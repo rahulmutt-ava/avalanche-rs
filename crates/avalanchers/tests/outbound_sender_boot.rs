@@ -149,6 +149,8 @@ async fn boot_over_network_carries_frontier_broadcast_out_to_the_network() {
         None,
         None,
         None,
+        // T16: params `None` ⇒ k=1 (byte-identical to this test's pre-fix boot).
+        None,
     )
     .await
     .expect("boot_chain_over_network");

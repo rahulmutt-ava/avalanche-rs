@@ -387,6 +387,20 @@ pub fn staking_identity_from_tls(
     ))
 }
 
+/// Resolves the consensus parameters a networked boot entry should run: the
+/// caller-supplied `params` when `Some`, else [`single_node_params`] (k=1).
+///
+/// The `None` fallback keeps every pre-T16 test caller of the networked boot
+/// entry points byte-identical to their old behavior (they used to hard-code
+/// [`single_node_params`] through the shared assembly core). Only the
+/// production node (`main.rs`) passes `Some(real_params)`, so a live networked
+/// chain samples/polls its `k` peers instead of finalizing unilaterally after
+/// a single k=1 self-poll (T16 fix). See commit 8571c0b for the identical
+/// `Option`-threading pattern used for the staking identity.
+fn network_params(params: Option<Parameters>) -> Parameters {
+    params.unwrap_or_else(single_node_params)
+}
+
 /// Single-node consensus parameters (k=1, one self-validator).
 fn single_node_params() -> Parameters {
     Parameters {
@@ -757,6 +771,11 @@ pub struct PChainBootHandle {
     /// loopback path did NOT pick up [`GenesisValidatorState`] (M9.15 proposal
     /// initiation P2 nested-insert #2 regression test).
     pub validator_state: Arc<dyn ValidatorState>,
+    /// The Snowball consensus parameters this chain's engine runs. A loopback
+    /// boot always gets [`single_node_params`] (k=1) — exposed so tests can
+    /// assert the loopback path did NOT pick up real multi-peer parameters
+    /// (T16 regression test).
+    pub params: Parameters,
 }
 
 /// Materializes the **real `ava_platformvm::PlatformVm`** (seeded from the
@@ -1177,6 +1196,11 @@ where
             // synthetic `FixedState` validator set built around it (T16 item 4
             // — no behavior change on this path).
             staking: None,
+            // Loopback / self-only chain: k=1 is correct (the node polls only
+            // itself and its own vote is definitive). The networked boot path
+            // ([`boot_chain_over_network_core`]) is the one that must run real
+            // multi-peer parameters (T16).
+            params: single_node_params(),
         },
         Arc::clone(&recording),
         router,
@@ -1215,6 +1239,7 @@ where
         vm: assembled.vm,
         _data_dir: data_dir,
         validator_state: assembled.validator_state,
+        params: assembled.params,
     })
 }
 
@@ -1262,6 +1287,15 @@ struct ChainAssemblySpec {
     /// the synthetic self-consistent `FixedState` validator set built around
     /// it.
     staking: Option<(StakingIdentity, NodeId)>,
+    /// The Snowball consensus parameters the chain's engine runs (T16 fix).
+    /// The loopback boot ([`boot_chain`]) passes [`single_node_params`] (k=1,
+    /// correct for a self-only chain); the production network boot
+    /// ([`boot_chain_over_network_core`]) passes the node's REAL parameters
+    /// (Go `DefaultParameters` / the resolved `--snow-*` flags) so a networked
+    /// chain samples/polls `k` peers and finalizes only on `alpha`/`beta`
+    /// agreement — NOT unilaterally after one k=1 self-poll (the live-proven
+    /// bug: a 5-validator net saw the Rust node finalize a fork block in 9ms).
+    params: Parameters,
 }
 
 /// The full chain identity a production network boot needs (the analogue of the
@@ -1276,6 +1310,12 @@ struct NetBootSpec {
     primary_alias: &'static str,
     avax_asset_id: Id,
     genesis_id: Id,
+    /// The REAL Snowball consensus parameters this networked chain runs (T16
+    /// fix) — Go `DefaultParameters` / the resolved `--snow-*` flags, threaded
+    /// down to [`ChainAssemblySpec::params`]. A networked chain MUST NOT run
+    /// [`single_node_params`] (k=1), or it finalizes unilaterally after one
+    /// self-poll and ignores the other validators.
+    params: Parameters,
 }
 
 /// The pieces a chain boot yields once the handler is started — shared by both
@@ -1297,6 +1337,11 @@ struct AssembledChain {
     /// handles ([`PChainBootHandle`]/[`NetworkChainBootHandle`]) so tests can
     /// assert on the live switch directly instead of by code-reading.
     validator_state: Arc<dyn ValidatorState>,
+    /// The Snowball consensus parameters the chain's engine was assembled with
+    /// (`spec.params`). Threaded out onto the boot handles so tests can assert
+    /// the network path runs the real `k`/`alpha`/`beta` and the loopback path
+    /// keeps k=1 (T16 fix).
+    params: Parameters,
 }
 
 /// The shared in-process chain-assembly core, generic over the inner
@@ -1449,7 +1494,7 @@ where
         token,
         spec.chain_id,
         spec.subnet_id,
-        single_node_params(),
+        spec.params,
         // The node's one persistent base db (Go's model: a single base DB,
         // `prefixdb`-namespaced per chain by `build_db_stack`). Bridged through
         // the object-safe `DynDb` so the generic `create_snowman_chain` runs
@@ -1473,6 +1518,7 @@ where
     .await?;
 
     let ctx = Arc::clone(&chain.ctx);
+    let params = spec.params;
     let beacon_nodes: Vec<NodeId> = beacons.keys().copied().collect();
     let vm_tx = chain.vm_tx.clone();
     let last_accepted_height = chain.last_accepted_height;
@@ -1525,6 +1571,7 @@ where
         sink,
         vm,
         validator_state: validator_state_handle,
+        params,
     })
 }
 
@@ -1590,6 +1637,13 @@ pub struct NetworkChainBootHandle {
     /// network path did NOT fall back to the loopback [`FixedState`] (M9.15
     /// proposal initiation P2 nested-insert #2 regression test).
     pub validator_state: Arc<dyn ValidatorState>,
+    /// The Snowball consensus parameters this chain's engine runs (T16 fix).
+    /// The production network boot carries the node's REAL parameters (Go
+    /// `DefaultParameters` / resolved `--snow-*` flags), NOT
+    /// [`single_node_params`] — exposed so a test can prove the networked seam
+    /// threads the passed-in `k`/`alpha`/`beta` instead of finalizing
+    /// unilaterally on a k=1 self-poll.
+    pub params: Parameters,
 }
 
 /// The production network-boot core: assemble one chain whose `Sender` is a real
@@ -1654,6 +1708,9 @@ where
             // proposer-window order, so it uses the real genesis validator set.
             use_genesis_validator_state: true,
             staking,
+            // Production network boot: run the REAL consensus parameters (T16
+            // fix) — the whole point of this path.
+            params: spec.params,
         },
         sender,
         router,
@@ -1680,6 +1737,7 @@ where
         vm: assembled.vm,
         _data_dir: None,
         validator_state: assembled.validator_state,
+        params: assembled.params,
     })
 }
 
@@ -1732,6 +1790,10 @@ where
 /// behavior — the existing standalone test callers of this function pass
 /// `None`).
 ///
+/// `params`: `Some(p)` ⇒ run the supplied REAL consensus parameters (T16 fix);
+/// `None` ⇒ [`single_node_params`] (k=1), byte-identical to the pre-fix
+/// behavior the existing standalone test callers rely on.
+///
 /// # Errors
 /// Propagates a VM-init / consensus-construction / identity / timeout-manager
 /// failure from [`boot_chain_with_sender`].
@@ -1748,6 +1810,7 @@ pub async fn boot_chain_over_network<V>(
     connectivity_gate: Option<watch::Receiver<bool>>,
     beacons: Option<BTreeMap<NodeId, u64>>,
     staking: Option<(StakingIdentity, NodeId)>,
+    params: Option<Parameters>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1780,6 +1843,7 @@ where
             primary_alias: "network",
             avax_asset_id: Id::EMPTY,
             genesis_id,
+            params: network_params(params),
         },
         router,
         clock,
@@ -1805,6 +1869,11 @@ where
 /// (T16 fix — the `network_boot_real_staking_identity` test uses this to
 /// prove the assembled chain's `ChainContext.node_id` matches a known
 /// identity); `None` ⇒ a fresh throwaway identity.
+///
+/// `params`: `Some(p)` ⇒ the networked chain runs the passed-in REAL consensus
+/// parameters (T16 fix — the `network_boot_real_consensus_params` test uses
+/// this to prove the seam threads `k`/`alpha`/`beta` instead of k=1); `None` ⇒
+/// [`single_node_params`] (k=1), byte-identical to the pre-fix behavior.
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub async fn boot_chain_over_network_core_for_test<V>(
@@ -1820,6 +1889,7 @@ pub async fn boot_chain_over_network_core_for_test<V>(
     token: CancellationToken,
     beacons: Option<BTreeMap<NodeId, u64>>,
     staking: Option<(StakingIdentity, NodeId)>,
+    params: Option<Parameters>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1834,6 +1904,7 @@ where
             primary_alias: "network",
             avax_asset_id: Id::EMPTY,
             genesis_id,
+            params: network_params(params),
         },
         router,
         clock,
@@ -1869,6 +1940,7 @@ pub async fn boot_chain_over_network_core_for_test_gated<V>(
     connectivity_gate: Option<watch::Receiver<bool>>,
     beacons: Option<BTreeMap<NodeId, u64>>,
     staking: Option<(StakingIdentity, NodeId)>,
+    params: Option<Parameters>,
 ) -> Result<NetworkChainBootHandle>
 where
     V: ava_vm::block::ChainVm + 'static,
@@ -1883,6 +1955,7 @@ where
             primary_alias: "network",
             avax_asset_id: Id::EMPTY,
             genesis_id,
+            params: network_params(params),
         },
         router,
         clock,
@@ -2162,6 +2235,10 @@ pub async fn drive_startup_chains_with_db(
 /// across all its chains, matching the P2P layer's handshake identity.
 /// `None` falls back to a fresh throwaway identity per chain.
 ///
+/// `params`: the node's REAL consensus parameters (T16 fix), applied to every
+/// queued chain — `Some(p)` on the production path (`main.rs`), `None` ⇒ k=1
+/// (byte-identical to the pre-fix test callers).
+///
 /// # Errors
 /// Propagates a chain boot failure (genesis / DB / VM-init / consensus / identity
 /// / timeout).
@@ -2176,9 +2253,11 @@ pub async fn run_queued_chains_over_network(
     beacons: BTreeMap<NodeId, u64>,
     api_server: Option<&Arc<HttpApiServer>>,
     staking: Option<(StakingIdentity, NodeId)>,
+    params: Option<Parameters>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     run_queued_chains_over_network_core(
         manager, network_id, base_db, network, router, gate, beacons, api_server, None, staking,
+        params,
     )
     .await
 }
@@ -2211,7 +2290,8 @@ pub async fn run_queued_chains_over_network_for_test(
 ) -> Result<Vec<NetworkChainBootHandle>> {
     // This test seam carries no real staking identity input (unchanged from
     // pre-T16 behavior — its callers exercise gossip-cadence overrides, not
-    // identity); each booted chain gets a fresh throwaway identity.
+    // identity); each booted chain gets a fresh throwaway identity and k=1
+    // consensus parameters (both `None`).
     run_queued_chains_over_network_core(
         manager,
         network_id,
@@ -2222,6 +2302,7 @@ pub async fn run_queued_chains_over_network_for_test(
         beacons,
         api_server,
         cchain_gossip_params,
+        None,
         None,
     )
     .await
@@ -2245,6 +2326,7 @@ async fn run_queued_chains_over_network_core(
     api_server: Option<&Arc<HttpApiServer>>,
     cchain_gossip_params: Option<ava_p2p::gossip::GossipParams>,
     staking: Option<(StakingIdentity, NodeId)>,
+    consensus_params: Option<Parameters>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     use ava_node::init::chain_manager::{avm_id, evm_id, platform_vm_id};
     use ava_snow::EngineState;
@@ -2252,6 +2334,12 @@ async fn run_queued_chains_over_network_core(
     let root_subnet_token = CancellationToken::new();
     let allower: Arc<dyn ava_network::network::Allower> = Arc::new(AllowAllPrimary);
     let clock: Arc<dyn Clock> = Arc::new(RealClock);
+    // The REAL consensus parameters every queued chain runs (T16 fix): Go
+    // `DefaultParameters` / the resolved `--snow-*` flags when `main.rs` passes
+    // `Some(..)`, else k=1 (byte-identical to the pre-fix test callers that
+    // pass `None`). Resolved ONCE — every critical chain on the primary network
+    // shares the primary-network snow config.
+    let consensus_params = network_params(consensus_params);
     let mut handles = Vec::new();
 
     for params in manager.queued_chains() {
@@ -2268,6 +2356,7 @@ async fn run_queued_chains_over_network_core(
                     primary_alias: "P",
                     avax_asset_id,
                     genesis_id,
+                    params: consensus_params,
                 },
                 Arc::clone(&router),
                 Arc::clone(&clock),
@@ -2295,6 +2384,7 @@ async fn run_queued_chains_over_network_core(
                     primary_alias: "X",
                     avax_asset_id,
                     genesis_id,
+                    params: consensus_params,
                 },
                 Arc::clone(&router),
                 Arc::clone(&clock),
@@ -2328,6 +2418,7 @@ async fn run_queued_chains_over_network_core(
                     primary_alias: "C",
                     avax_asset_id: Id::EMPTY,
                     genesis_id,
+                    params: consensus_params,
                 },
                 Arc::clone(&router),
                 Arc::clone(&clock),
@@ -2395,6 +2486,15 @@ async fn run_queued_chains_over_network_core(
 /// throwaway identity per chain (test callers that don't carry a real network
 /// identity).
 ///
+/// `params`: the node's REAL consensus parameters (T16 fix) — Go
+/// `DefaultParameters` / the resolved `--snow-*` flags, e.g. built from
+/// `config.subnet_configs[PRIMARY_NETWORK_ID].snow_parameters.to_snowball()`.
+/// Applied to every chain this call boots, so a live networked chain
+/// samples/polls its `k` peers and finalizes only on `alpha`/`beta` agreement
+/// instead of unilaterally after one k=1 self-poll. `None` falls back to k=1
+/// ([`single_node_params`]) — the byte-identical pre-fix behavior test callers
+/// rely on.
+///
 /// # Errors
 /// Propagates a chain boot failure from [`run_queued_chains_over_network`].
 #[allow(clippy::too_many_arguments)]
@@ -2408,9 +2508,10 @@ pub async fn drive_startup_chains_over_network(
     beacons: BTreeMap<NodeId, u64>,
     api_server: Option<&Arc<HttpApiServer>>,
     staking: Option<(StakingIdentity, NodeId)>,
+    params: Option<Parameters>,
 ) -> Result<Vec<NetworkChainBootHandle>> {
     run_queued_chains_over_network(
-        manager, network_id, base_db, network, router, gate, beacons, api_server, staking,
+        manager, network_id, base_db, network, router, gate, beacons, api_server, staking, params,
     )
     .await
 }

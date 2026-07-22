@@ -439,13 +439,18 @@ where
         let (_, last_accepted_height) = self.consensus.last_accepted();
         let next_height = last_accepted_height.saturating_add(1);
 
-        // Build the weighted validator bag for the poll.
+        // Build the poll bag from the k-sample's MULTIPLICITY (Go
+        // `vdrBag := bag.Of(vdrIDs...)`): a node's vote weight is the number of
+        // times it was drawn in this sample, NOT its full stake weight. The
+        // sampler already draws weight units without replacement, so a heavy
+        // validator naturally appears multiple times in `vdr_ids` and each
+        // occurrence adds one — reproducing Go's proportional-by-weight poll
+        // set. `vdr_set` collapses to the UNIQUE nodes so exactly one query is
+        // sent per node (Go `set.Of(vdrIDs...)`).
         let mut vdr_bag = Bag::new();
         let mut vdr_set = std::collections::HashSet::new();
         for node in &vdr_ids {
-            let weight = self.cfg.validators.get_weight(self.cfg.subnet_id, *node);
-            let weight = usize::try_from(weight).unwrap_or(usize::MAX).max(1);
-            vdr_bag.add_count(*node, weight);
+            vdr_bag.add(*node);
             vdr_set.insert(*node);
         }
 

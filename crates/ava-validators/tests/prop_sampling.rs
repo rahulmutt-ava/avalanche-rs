@@ -149,10 +149,19 @@ fn manager_tracks_subnets_and_samples() {
         assert!(*n == node(1) || *n == node(2));
     }
 
-    // Over-sampling fails.
+    // Go parity: sampling MORE than the validator count still succeeds while
+    // the TOTAL WEIGHT (30) suffices — the extra draws repeat validators
+    // proportionally to their weight (weight-unit sampling with duplicates).
+    let sampled3 = mgr.sample(subnet_a, 3).unwrap();
+    assert_eq!(sampled3.len(), 3);
+    for n in &sampled3 {
+        assert!(*n == node(1) || *n == node(2));
+    }
+
+    // Over-sampling past the TOTAL WEIGHT fails.
     assert_matches!(
-        mgr.sample(subnet_a, 3),
-        Err(Error::InsufficientValidators { requested: 3 })
+        mgr.sample(subnet_a, 31),
+        Err(Error::InsufficientValidators { requested: 31 })
     );
 
     // Unknown subnet samples to MissingValidators.
@@ -164,6 +173,87 @@ fn manager_tracks_subnets_and_samples() {
     // Remove all weight drops the validator.
     mgr.remove_weight(subnet_a, node(1), 10).unwrap();
     assert_eq!(mgr.num_validators(subnet_a), 1);
+}
+
+/// Go-parity: `Set::sample(k)` draws WEIGHT UNITS without replacement, so `k`
+/// may exceed the validator COUNT — a single validator whose weight spans
+/// multiple drawn weight positions appears MULTIPLE times in one sample. Go's
+/// `snow/validators/set.go` `sample` has NO `len()` guard: it defers entirely
+/// to `sampler.WeightedWithoutReplacement`, which returns duplicate indices in
+/// exactly this case. The old `size > self.validators.len()` guard wrongly
+/// rejected this — the live-proven `k=20`-on-5-validators bug (a networked
+/// node could not even sample its poll set).
+#[test]
+fn sample_exceeding_validator_count_succeeds_with_duplicates() {
+    let mut set = Set::new();
+    // 5 heavy, equally-weighted validators: total weight 5_000 >> k = 20.
+    for i in 0..5u32 {
+        set.add_staker(staker(i, 1_000)).unwrap();
+    }
+    let mut src = Mt19937_64::new();
+    src.seed(42);
+    let sampled = set
+        .sample(20, Box::new(src) as Box<dyn Source>)
+        .expect("sample(20) over 5 heavy validators must succeed (Go parity)");
+    assert_eq!(sampled.len(), 20, "the sample holds exactly k ids");
+    // Only 5 distinct validators exist, so 20 draws MUST repeat some of them
+    // (weight-unit sampling with duplicates).
+    let unique: HashSet<NodeId> = sampled.iter().copied().collect();
+    assert!(
+        unique.len() < sampled.len(),
+        "20 draws over 5 validators must repeat at least one id"
+    );
+    assert!(
+        unique.len() <= 5,
+        "no id outside the 5-validator set appears"
+    );
+}
+
+/// Go-parity boundary: sampling exactly the TOTAL WEIGHT succeeds (a full
+/// permutation of the weight units — each validator appears weight-many times),
+/// but sampling MORE than the total weight fails. Go returns
+/// `errInsufficientWeight`; our sampler yields `None`, surfaced as
+/// [`Error::InsufficientValidators`]. The failure boundary is TOTAL WEIGHT, not
+/// validator count.
+#[test]
+fn sample_boundary_is_total_weight_not_count() {
+    // 2 validators, total weight 6.
+    let build = || {
+        let mut set = Set::new();
+        set.add_staker(staker(1, 3)).unwrap();
+        set.add_staker(staker(2, 3)).unwrap();
+        set
+    };
+
+    // size == total weight (6 > count 2): succeeds with a full permutation.
+    let mut src = Mt19937_64::new();
+    src.seed(7);
+    let ok = build()
+        .sample(6, Box::new(src) as Box<dyn Source>)
+        .expect("sample(total_weight) must succeed even when it exceeds the count");
+    assert_eq!(ok.len(), 6);
+    let mut counts = std::collections::HashMap::new();
+    for id in &ok {
+        *counts.entry(*id).or_insert(0u32) += 1;
+    }
+    assert_eq!(
+        counts.get(&node(1)),
+        Some(&3),
+        "each weight-3 validator drawn 3x"
+    );
+    assert_eq!(
+        counts.get(&node(2)),
+        Some(&3),
+        "each weight-3 validator drawn 3x"
+    );
+
+    // size > total weight (7 > 6): fails on insufficient TOTAL WEIGHT.
+    let mut src = Mt19937_64::new();
+    src.seed(7);
+    assert_matches!(
+        build().sample(7, Box::new(src) as Box<dyn Source>),
+        Err(Error::InsufficientValidators { requested: 7 })
+    );
 }
 
 proptest! {

@@ -144,6 +144,7 @@ async fn inbound_frontier_request_routes_to_a_production_booted_chain() {
         token.clone(),
         Some(BTreeMap::new()),
         None,
+        None, // T16: params `None` ⇒ k=1 (byte-identical pre-fix boot).
     )
     .await
     .expect("boot");
@@ -234,6 +235,7 @@ async fn beaconed_boot_broadcasts_frontier_request_to_the_configured_beacon() {
         Some(rx),
         Some(beacons.clone()),
         None,
+        None, // T16: params `None` ⇒ k=1 (byte-identical pre-fix boot).
     )
     .await
     .expect("boot follower");

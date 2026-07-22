@@ -190,16 +190,23 @@ impl Set {
     /// non-deterministic poll sampling the caller passes an OS-seeded source; for
     /// the windower it passes a seeded gonum MT.
     ///
+    /// The sampler draws WEIGHT UNITS without replacement (Go
+    /// `snow/validators/set.go` `sample` → `sampler.WeightedWithoutReplacement`),
+    /// so `size` may exceed the validator COUNT: a validator whose weight spans
+    /// multiple drawn positions appears multiple times in the returned `Vec`.
+    /// The failure boundary is TOTAL WEIGHT, not count — requesting more than
+    /// the summed weight yields [`Error::InsufficientValidators`] (Go's
+    /// `errInsufficientWeight`). Deliberately NO `size > len()` guard: that
+    /// cap is a Go-parity bug (it broke `k`-sampling on a network with fewer
+    /// heavy validators than `k`).
+    ///
     /// # Errors
     /// - [`Error::MissingValidators`] if the set is empty.
-    /// - [`Error::InsufficientValidators`] if `size` exceeds the validator count.
+    /// - [`Error::InsufficientValidators`] if `size` exceeds the TOTAL WEIGHT.
     /// - [`Error::WeightOverflow`] if the weights sum overflows `u64`.
     pub fn sample(&self, size: usize, source: Box<dyn Source>) -> Result<Vec<NodeId>> {
         if self.validators.is_empty() {
             return Err(Error::MissingValidators);
-        }
-        if size > self.validators.len() {
-            return Err(Error::InsufficientValidators { requested: size });
         }
         let sorted = self.sorted_weights();
         let weights: Vec<u64> = sorted.iter().map(|(_, w)| *w).collect();

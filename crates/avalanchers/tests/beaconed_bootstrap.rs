@@ -288,6 +288,7 @@ async fn follower_bootstraps_through_real_beacon_gate() {
             None,                  // beacon: no gate.
             Some(BTreeMap::new()), // beaconless ⇒ short-circuit to NormalOp.
             None,
+            None, // T16: params `None` ⇒ k=1 (byte-identical pre-fix boot).
         )
         .await
         .expect("boot beacon");
@@ -329,6 +330,7 @@ async fn follower_bootstraps_through_real_beacon_gate() {
         follower.gate.clone(), // REAL BeaconManager gate (the point of this test).
         Some(frontier_beacons),
         None,
+        None, // T16: params `None` ⇒ k=1 (byte-identical pre-fix boot).
     )
     .await
     .expect("boot follower");

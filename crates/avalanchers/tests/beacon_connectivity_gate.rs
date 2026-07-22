@@ -113,6 +113,8 @@ async fn bootstrap_waits_for_sufficient_beacons_before_frontier() {
         Some(connected_rx),
         None,
         None,
+        // T16: params `None` ⇒ k=1 (byte-identical to this test's pre-fix boot).
+        None,
     )
     .await
     .expect("boot_chain_over_network");

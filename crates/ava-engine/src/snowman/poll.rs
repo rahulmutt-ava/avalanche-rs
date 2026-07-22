@@ -350,6 +350,37 @@ mod tests {
         assert_eq!(results.len(), 1);
     }
 
+    /// A poll whose sampled bag holds node X with multiplicity 2 counts X's
+    /// single chit reply as 2 votes toward alpha (Go `bag.Of(vdrIDs...)`
+    /// semantics: a node's vote weight is its multiplicity in the k-sample, not
+    /// 1 and not its stake weight). One reply from a multiplicity-2 node reaches
+    /// alpha_confidence 2 and terminates the poll before the other node replies.
+    #[test]
+    fn vote_multiplicity_counts_toward_alpha() {
+        let factory = EarlyTermFactory::new(2, 2);
+        let mut set = PollSet::new(factory);
+        // node(1) sampled TWICE, node(2) once (three sample multiplicities).
+        let mut bag = Bag::new();
+        bag.add_count(node(1), 2);
+        bag.add(node(2));
+        assert!(set.add(9, bag));
+
+        // A single chit from node(1) contributes multiplicity 2 == alpha, which
+        // finalizes the poll before node(2) responds.
+        let results = set.vote(9, node(1), id(5));
+        assert_eq!(
+            results.len(),
+            1,
+            "one multiplicity-2 chit must reach alpha 2 and complete the poll"
+        );
+        assert_eq!(
+            results[0].count(&id(5)),
+            2,
+            "the recorded vote is weighted by the node's sample multiplicity (2)"
+        );
+        assert!(set.is_empty());
+    }
+
     /// Polls drain in request-id order: an older unfinished poll blocks a newer
     /// finished one.
     #[test]
