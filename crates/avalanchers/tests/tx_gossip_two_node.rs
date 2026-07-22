@@ -790,20 +790,25 @@ async fn push_survives_concurrent_inbound_pull_load() {
 
         let params = format!(r#"["{tx_hash}"]"#);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        let mut seen = false;
+        // Same discrimination as `push_only_gossip_carries_tx` above: only a
+        // PENDING sighting (blockHash: null) proves push delivered the tx into
+        // B's mempool — an always-already-mined sighting is consistent with
+        // ordinary consensus block-sync and would keep this test green even
+        // with the push loop completely dead (T16 review finding).
+        let mut ever_pending = false;
         while tokio::time::Instant::now() < deadline {
             let got = json_rpc(&b_rpc, "eth_getTransactionByHash", &params).await;
-            if !got.is_null() {
-                seen = true;
+            if !got.is_null() && got["blockHash"].is_null() {
+                ever_pending = true;
                 break;
             }
         }
         assert!(
-            seen,
-            "push gossip must carry tx #{nonce} ({tx_hash}) from A to B within 20s while A \
-             concurrently fields inbound pull-gossip AppRequests from {HAMMER_COUNT} hammer \
-             nodes — a push loop that dies (or is starved forever) under concurrent App load \
-             fails this leg (eth_getTransactionByHash stayed null on B)"
+            ever_pending,
+            "push gossip must land tx #{nonce} ({tx_hash}) PENDING in B's mempool within 20s \
+             while A concurrently fields inbound pull-gossip AppRequests from {HAMMER_COUNT} \
+             hammer nodes — a push loop that dies (or is starved forever) under concurrent \
+             App load fails this leg (no pending-shape sighting on B)"
         );
     }
 
