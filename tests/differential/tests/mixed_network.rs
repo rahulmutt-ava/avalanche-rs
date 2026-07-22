@@ -321,13 +321,13 @@ async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &st
         eprintln!(
             "{label} attempt {attempt}: burst of {BURST} txs submitted to {from_api} \
              ({} .. {}; pending-polls on {to_api} pre-armed before each submission)",
-            hashes[0],
-            hashes[BURST - 1],
+            hashes.first().expect("burst is non-empty"),
+            hashes.last().expect("burst is non-empty"),
         );
 
         // The polls run concurrently; one observed-pending tx proves gossip.
         let mut pending_hash = None;
-        for (i, poll) in polls.into_iter().enumerate() {
+        for (i, (hash, poll)) in hashes.iter().zip(polls).enumerate() {
             let seen = poll
                 .await
                 .unwrap_or_else(|e| {
@@ -337,7 +337,7 @@ async fn assert_gossip_delivers_pending(from_api: &str, to_api: &str, label: &st
                     panic!("{label} attempt {attempt} tx {i}: await_c_pending_tx: {e}")
                 });
             if seen {
-                pending_hash = Some(hashes[i].clone());
+                pending_hash = Some(hash.clone());
                 break;
             }
         }
