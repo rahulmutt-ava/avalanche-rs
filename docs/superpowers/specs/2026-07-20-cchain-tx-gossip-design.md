@@ -214,3 +214,27 @@ flag.
 - **`InitiallyActiveTime` genesis nets activate everything:** gossip has no
   fork gating in coreth (protocol-level, not consensus), so no upgrade-schedule
   risk.
+
+## AS-BUILT notes (2026-07-22, branch closeout)
+
+- Built as designed through T15 (see `.superpowers/sdd/progress.md` for the per-task
+  record): `ava-p2p` crate with push/pull gossipers + BloomSet (Go `network/p2p` parity;
+  byte-exact Go-oracle wire goldens at `tests/vectors/p2p_sdk/`), engine App routing +
+  Connected/Disconnected, `VmAppSender`, `EvmMempool` remote admission + gossip outbox,
+  `EvmTxGossipSet`, `EvmVm` initialize-time wiring, `eth_getTransactionByHash`
+  (pool-pending full shape; mined = documented partial), two-node offline e2e.
+- T16 (live legs) deviations from the plan text, all evidence-driven:
+  - `assert_gossip_delivers_pending` uses a burst-of-6 (measured 7ms pending window
+    made the single-tx race unwinnable; commit d970f50).
+  - `mixed_network_rust_proposes` bound raised 6→20 (windower schedule deterministic
+    per height across boots).
+  - Three production fixes landed from live debugging: pull-answer mempool hold-time
+    (d22270f), pending-tag `eth_getTransactionCount` + harness pending nonce (b6d80a6),
+    networked-chain staking identity (8571c0b), real consensus params + weight-unit
+    sampling + poll vote-multiplicity (3f300ce).
+  - The three live legs are intentionally red at branch close (ship-correctness,
+    human decision 2026-07-22): with the identity+params fixes active, live
+    multi-validator finalization exposes a pre-existing gap now specced as
+    `2026-07-22-live-quorum-finalization-workstream.md` (those legs are its
+    acceptance gate). The gossip mechanism itself was proven live bidirectionally
+    pre-params (runs 8/10: pending-before-mined both directions, 96/54ms push).

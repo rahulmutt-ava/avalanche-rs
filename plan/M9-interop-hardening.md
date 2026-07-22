@@ -2041,8 +2041,19 @@ Waves 1, 2, 4, 5 each parallelize internally. Wave 0 must complete before any ot
 >   `EvmMempool` (coreth-parity admission), `eth_sendRawTransaction`/`eth_getTransactionReceipt`,
 >   receipts persisted at accept + `AcceptedTxIndex`, `build_block` packs mempool txs. Retires
 >   the "M6.23 reth-txpool `best_transactions`" reading — purpose-built pool with cited coreth
->   parity satisfies the intent. **Tx GOSSIP still deferred** (its own milestone; needs
->   engine-layer AppGossip/AppRequest routing — `InboundOp` has no App variants today).
+>   parity satisfies the intent. **Tx GOSSIP: LANDED 2026-07-22** (branch
+>   `cchain-tx-gossip`, spec `2026-07-20-cchain-tx-gossip-design`): `ava-p2p` SDK crate
+>   (push/pull gossipers, BloomSet, Client/handler mux — Go `network/p2p` parity, byte-exact
+>   wire goldens), engine `InboundOp` App variants + Connected/Disconnected end-to-end,
+>   `EvmMempool` remote admission + outbox, `EvmVm` gossip wiring, live bidirectional
+>   delivery proven (4-Go+1-Rust net). The live arc also uncovered and fixed two masked
+>   production bugs (throwaway staking identity on networked chains; k=1 consensus params
+>   ⇒ unilateral finality) — which exposed that genuine multi-validator finalization was
+>   never live-exercised: see `docs/superpowers/specs/2026-07-22-live-quorum-finalization-workstream.md`
+>   (OPEN follow-up; the three live mixed-net legs are its acceptance gate and are
+>   intentionally red until it lands — ship-correctness decision 2026-07-22). NOTE: all
+>   pre-2026-07-22 live "consensus" greens (incl. M9.15) were degenerate zero-contention
+>   runs under those two bugs; re-read their claims accordingly.
 > - **Proposal initiation** (nested insert #2, spec `2026-07-18-proposal-initiation-design`):
 >   a lock-free `PendingWorkWaiter` seam + per-chain forwarder task (Go
 >   `NotificationForwarder` parity) so a pending EVM tx triggers `build_block` in production
