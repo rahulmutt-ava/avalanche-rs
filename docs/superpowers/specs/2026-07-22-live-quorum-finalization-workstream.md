@@ -69,3 +69,12 @@ done; the workstream is done when these are green live.
 - Preserved live logs: scratchpad `txg-rp5` (both stalls), `txg-rp4` (the
   k=1 fork, for contrast). Note scratchpad dirs are session-lifetime — copy
   anything needed into the repo's docs before relying on them long-term.
+
+## Adjacent follow-up (final branch review, 2026-07-23)
+
+- T7 trade-off, now load-bearing: `App*` ops are delivered INLINE on the
+  per-chain consensus handler task (`ava-engine/src/networking/handler.rs`
+  Async arm) with no processing-time warn — a slow VM AppHandler (e.g. the
+  pull-answer marshal pass) head-of-line-blocks consensus. Fix alongside this
+  workstream (extend the sync warn-limit to the Async arm, or land the real
+  dispatch pool).
